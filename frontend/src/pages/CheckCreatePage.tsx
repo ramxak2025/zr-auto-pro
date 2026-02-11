@@ -272,15 +272,18 @@ function ServiceCatalog({ services, onSelect, onClose }: {
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div className="space-y-1.5">
             {categories.map(([cat, svcs]) => (
               <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
-                className="flex flex-col items-center rounded-2xl border border-gray-100 bg-white p-4 shadow-sm hover:shadow-md hover:border-emerald-200 active:scale-[0.97] transition-all text-center">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-xl mb-2">
+                className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3 hover:shadow-sm hover:border-emerald-200 active:bg-gray-50 transition-all text-left">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 flex-shrink-0 text-lg">
                   {CATEGORY_ICONS[cat] || <Wrench className="h-5 w-5 text-emerald-500" />}
                 </div>
-                <p className="text-sm font-semibold text-gray-900 leading-tight">{cat}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">{svcs.length} услуг</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">{cat}</p>
+                  <p className="text-[11px] text-gray-400">{svcs.length} услуг</p>
+                </div>
+                <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
               </button>
             ))}
           </div>
@@ -420,31 +423,26 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
             {displayProducts.length === 0 ? (
               <p className="text-sm text-gray-400 text-center py-10">Не найдено</p>
             ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
                 {displayProducts.map(renderProductCard)}
               </div>
             )}
           </>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {categories.map(([cat, prods]) => {
-              const previewImg = prods.find((p) => p.photo)?.photo;
-              return (
-                <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
-                  className="flex flex-col items-center rounded-2xl border border-gray-100 bg-white p-4 shadow-sm hover:shadow-md hover:border-amber-200 active:scale-[0.97] transition-all text-center">
-                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 mb-2 overflow-hidden">
-                    {previewImg ? (
-                      <img src={previewImg} alt={cat} className="w-full h-full object-cover rounded-2xl" />
-                    ) : (
-                      <span className="text-xl">{CATEGORY_ICONS[cat] || ''}</span>
-                    )}
-                    {!previewImg && !CATEGORY_ICONS[cat] && <FolderOpen className="h-6 w-6 text-gray-400" />}
-                  </div>
-                  <p className="text-sm font-semibold text-gray-900 leading-tight">{cat}</p>
-                  <p className="text-[11px] text-gray-400 mt-0.5">{prods.length} шт</p>
-                </button>
-              );
-            })}
+          <div className="space-y-1.5">
+            {categories.map(([cat, prods]) => (
+              <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
+                className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3 hover:shadow-sm hover:border-amber-200 active:bg-gray-50 transition-all text-left">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 flex-shrink-0 text-lg">
+                  {CATEGORY_ICONS[cat] || <FolderOpen className="h-5 w-5 text-amber-500" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">{cat}</p>
+                  <p className="text-[11px] text-gray-400">{prods.length} шт</p>
+                </div>
+                <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -604,7 +602,7 @@ export default function CheckCreatePage() {
         />
       )}
 
-      <div className="pb-28 md:pb-6">
+      <div className="pb-16 md:pb-6">
         {/* Header */}
         <div className="flex items-center gap-3 mb-5">
           <button onClick={() => navigate('/checks')}
@@ -625,7 +623,7 @@ export default function CheckCreatePage() {
               <ClientSearch onSelect={setSelectedClient} selectedClient={selectedClient}
                 onClear={() => { setSelectedClient(null); setSelectedCarId(''); }} />
               {selectedClient && (
-                <div className="grid gap-2.5 grid-cols-3">
+                <div className="grid gap-2.5 grid-cols-1 sm:grid-cols-3">
                   <div>
                     <label className="text-[11px] font-medium text-gray-500 mb-1 block">Авто *</label>
                     <select value={selectedCarId} onChange={(e) => setSelectedCarId(e.target.value)} disabled={cars.length === 0}

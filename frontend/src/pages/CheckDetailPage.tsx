@@ -133,26 +133,26 @@ export default function CheckDetailPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <button
             onClick={() => {
               const url = checksApi.getPrintUrl(id!);
               const token = localStorage.getItem('token');
               window.open(`${url}?token=${token}`, '_blank');
             }}
-            className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            className="flex items-center justify-center gap-2 rounded-lg border border-gray-300 h-9 w-9 sm:w-auto sm:px-4 sm:py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
           >
             <Printer className="h-4 w-4" />
-            Печать
+            <span className="hidden sm:inline">Печать</span>
           </button>
 
           {hasPermission('checks_delete') && (
             <button
               onClick={() => setDeleteOpen(true)}
-              className="flex items-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+              className="flex items-center justify-center gap-2 rounded-lg border border-red-300 h-9 w-9 sm:w-auto sm:px-4 sm:py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
             >
               <Trash2 className="h-4 w-4" />
-              Удалить
+              <span className="hidden sm:inline">Удалить</span>
             </button>
           )}
         </div>
@@ -246,57 +246,53 @@ export default function CheckDetailPage() {
         </div>
       </div>
 
-      {/* Services table */}
+      {/* Services */}
       {check.services && check.services.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="px-5 py-4 border-b border-gray-200">
-            <h2 className="text-base font-semibold text-gray-900">Услуги</h2>
+          <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-200">
+            <h2 className="text-sm sm:text-base font-semibold text-gray-900">Услуги</h2>
           </div>
-          <div className="overflow-x-auto">
+          {/* Mobile card list */}
+          <div className="md:hidden divide-y divide-gray-50">
+            {check.services.map((line, idx) => (
+              <div key={line.id || idx} className="flex items-center justify-between px-4 py-3">
+                <div className="min-w-0 flex-1 mr-3">
+                  <p className="text-sm text-gray-900 truncate">{line.name}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{formatMoney(line.price)} x {line.quantity}</p>
+                </div>
+                <span className="text-sm font-semibold text-gray-900 flex-shrink-0">{formatMoney(line.total)}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between px-4 py-3 bg-gray-50/50">
+              <span className="text-sm font-semibold text-gray-700">Итого услуги</span>
+              <span className="text-sm font-bold text-gray-900">{formatMoney(check.serviceTotal)}</span>
+            </div>
+          </div>
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50/50">
-                  <th className="px-5 py-3 text-left font-semibold text-gray-600">
-                    Название
-                  </th>
-                  <th className="px-5 py-3 text-right font-semibold text-gray-600">
-                    Цена
-                  </th>
-                  <th className="px-5 py-3 text-right font-semibold text-gray-600">
-                    Кол-во
-                  </th>
-                  <th className="px-5 py-3 text-right font-semibold text-gray-600">
-                    Сумма
-                  </th>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">Название</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Цена</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Кол-во</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Сумма</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {check.services.map((line, idx) => (
                   <tr key={line.id || idx}>
                     <td className="px-5 py-3 text-gray-900">{line.name}</td>
-                    <td className="px-5 py-3 text-right text-gray-600">
-                      {formatMoney(line.price)}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-600">
-                      {line.quantity}
-                    </td>
-                    <td className="px-5 py-3 text-right font-medium text-gray-900">
-                      {formatMoney(line.total)}
-                    </td>
+                    <td className="px-5 py-3 text-right text-gray-600">{formatMoney(line.price)}</td>
+                    <td className="px-5 py-3 text-right text-gray-600">{line.quantity}</td>
+                    <td className="px-5 py-3 text-right font-medium text-gray-900">{formatMoney(line.total)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-200 bg-gray-50/50">
-                  <td
-                    colSpan={3}
-                    className="px-5 py-3 text-right font-semibold text-gray-700"
-                  >
-                    Итого услуги:
-                  </td>
-                  <td className="px-5 py-3 text-right font-bold text-gray-900">
-                    {formatMoney(check.serviceTotal)}
-                  </td>
+                  <td colSpan={3} className="px-5 py-3 text-right font-semibold text-gray-700">Итого услуги:</td>
+                  <td className="px-5 py-3 text-right font-bold text-gray-900">{formatMoney(check.serviceTotal)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -304,57 +300,53 @@ export default function CheckDetailPage() {
         </div>
       )}
 
-      {/* Products table */}
+      {/* Products */}
       {check.products && check.products.length > 0 && (
         <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="px-5 py-4 border-b border-gray-200">
-            <h2 className="text-base font-semibold text-gray-900">Товары</h2>
+          <div className="px-4 sm:px-5 py-3 sm:py-4 border-b border-gray-200">
+            <h2 className="text-sm sm:text-base font-semibold text-gray-900">Товары</h2>
           </div>
-          <div className="overflow-x-auto">
+          {/* Mobile card list */}
+          <div className="md:hidden divide-y divide-gray-50">
+            {check.products.map((line, idx) => (
+              <div key={line.id || idx} className="flex items-center justify-between px-4 py-3">
+                <div className="min-w-0 flex-1 mr-3">
+                  <p className="text-sm text-gray-900 truncate">{line.name}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{formatMoney(line.sellPrice)} x {line.quantity}</p>
+                </div>
+                <span className="text-sm font-semibold text-gray-900 flex-shrink-0">{formatMoney(line.totalSell)}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between px-4 py-3 bg-gray-50/50">
+              <span className="text-sm font-semibold text-gray-700">Итого товары</span>
+              <span className="text-sm font-bold text-gray-900">{formatMoney(check.productTotal)}</span>
+            </div>
+          </div>
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50/50">
-                  <th className="px-5 py-3 text-left font-semibold text-gray-600">
-                    Название
-                  </th>
-                  <th className="px-5 py-3 text-right font-semibold text-gray-600">
-                    Цена продажи
-                  </th>
-                  <th className="px-5 py-3 text-right font-semibold text-gray-600">
-                    Кол-во
-                  </th>
-                  <th className="px-5 py-3 text-right font-semibold text-gray-600">
-                    Сумма
-                  </th>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">Название</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Цена</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Кол-во</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">Сумма</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {check.products.map((line, idx) => (
                   <tr key={line.id || idx}>
                     <td className="px-5 py-3 text-gray-900">{line.name}</td>
-                    <td className="px-5 py-3 text-right text-gray-600">
-                      {formatMoney(line.sellPrice)}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-600">
-                      {line.quantity}
-                    </td>
-                    <td className="px-5 py-3 text-right font-medium text-gray-900">
-                      {formatMoney(line.totalSell)}
-                    </td>
+                    <td className="px-5 py-3 text-right text-gray-600">{formatMoney(line.sellPrice)}</td>
+                    <td className="px-5 py-3 text-right text-gray-600">{line.quantity}</td>
+                    <td className="px-5 py-3 text-right font-medium text-gray-900">{formatMoney(line.totalSell)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-200 bg-gray-50/50">
-                  <td
-                    colSpan={3}
-                    className="px-5 py-3 text-right font-semibold text-gray-700"
-                  >
-                    Итого товары:
-                  </td>
-                  <td className="px-5 py-3 text-right font-bold text-gray-900">
-                    {formatMoney(check.productTotal)}
-                  </td>
+                  <td colSpan={3} className="px-5 py-3 text-right font-semibold text-gray-700">Итого товары:</td>
+                  <td className="px-5 py-3 text-right font-bold text-gray-900">{formatMoney(check.productTotal)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -363,8 +355,8 @@ export default function CheckDetailPage() {
       )}
 
       {/* Financial summary */}
-      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">
+      <div className="rounded-xl border border-gray-200 bg-white p-4 sm:p-5 shadow-sm">
+        <h2 className="text-sm sm:text-base font-semibold text-gray-900 mb-3 sm:mb-4">
           Финансовая сводка
         </h2>
         <div className="space-y-3 text-sm">

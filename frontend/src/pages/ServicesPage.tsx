@@ -247,20 +247,20 @@ export default function ServicesPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Услуги</h1>
-          <p className="text-sm text-gray-500 mt-1">Всего: {total}</p>
+          <h1 className="text-xl font-bold text-gray-900">Услуги</h1>
+          <p className="text-xs text-gray-400 mt-0.5">Всего: {total}</p>
         </div>
         <button
           onClick={openCreate}
-          className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700 active:scale-[0.97]"
         >
           <Plus className="h-4 w-4" />
-          Добавить услугу
+          <span className="hidden sm:inline">Добавить</span>
         </button>
       </div>
 
       {/* Search */}
-      <div className="max-w-sm">
+      <div className="max-w-full sm:max-w-sm">
         <SearchInput
           value={search}
           onChange={handleSearchChange}
@@ -300,50 +300,56 @@ export default function ServicesPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          {/* Mobile card list */}
+          <div className="md:hidden space-y-1.5">
+            {services.map((service) => (
+              <div key={service.id} className="flex items-center gap-3 bg-white rounded-xl border border-gray-100 px-3 py-3 shadow-sm">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 flex-shrink-0">
+                  <Wrench className="h-4 w-4 text-emerald-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{service.name}</p>
+                  {service.category && (
+                    <p className="text-[11px] text-gray-400 mt-0.5">{service.category}</p>
+                  )}
+                </div>
+                <span className="text-sm font-bold text-gray-900 flex-shrink-0">{formatMoney(service.defaultPrice)}</span>
+                <div className="flex items-center gap-0.5 flex-shrink-0">
+                  <button onClick={() => openEdit(service)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors">
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => setDeleteTarget(service)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50/50">
                     <th className="px-4 py-3 font-semibold text-gray-600">Название</th>
                     <th className="px-4 py-3 font-semibold text-gray-600">Категория</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Цена
-                    </th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Действия
-                    </th>
+                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Цена</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Действия</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {services.map((service) => (
-                    <tr
-                      key={service.id}
-                      className="transition-colors hover:bg-gray-50"
-                    >
-                      <td className="px-4 py-3 font-medium text-gray-900">
-                        {service.name}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {service.category || '\u2014'}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium text-gray-900">
-                        {formatMoney(service.defaultPrice)}
-                      </td>
+                    <tr key={service.id} className="transition-colors hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900">{service.name}</td>
+                      <td className="px-4 py-3 text-gray-600">{service.category || '\u2014'}</td>
+                      <td className="px-4 py-3 text-right font-medium text-gray-900">{formatMoney(service.defaultPrice)}</td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => openEdit(service)}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                            title="Редактировать"
-                          >
+                          <button onClick={() => openEdit(service)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600" title="Редактировать">
                             <Pencil className="h-4 w-4" />
                           </button>
-                          <button
-                            onClick={() => setDeleteTarget(service)}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                            title="Удалить"
-                          >
+                          <button onClick={() => setDeleteTarget(service)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600" title="Удалить">
                             <Trash2 className="h-4 w-4" />
                           </button>
                         </div>

@@ -439,16 +439,16 @@ function ProductRow({
       <span className="text-sm font-bold text-primary-600 flex-shrink-0">{formatMoney(product.sellPrice)}</span>
       {/* Actions */}
       <div className="flex items-center gap-0.5 flex-shrink-0">
-        <button onClick={onEdit} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors">
+        <button onClick={onEdit} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors">
           <Pencil className="h-3.5 w-3.5" />
         </button>
-        <button onClick={onWriteoff} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors">
+        <button onClick={onWriteoff} className="hidden sm:flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors">
           <PackageMinus className="h-3.5 w-3.5" />
         </button>
-        <button onClick={onInventory} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
+        <button onClick={onInventory} className="hidden sm:flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
           <ClipboardCheck className="h-3.5 w-3.5" />
         </button>
-        <button onClick={onDelete} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+        <button onClick={onDelete} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
