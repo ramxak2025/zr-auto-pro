@@ -276,7 +276,7 @@ export default function ClientsPage() {
         <SearchInput
           value={search}
           onChange={handleSearchChange}
-          placeholder="Поиск по ФИО или телефону..."
+          placeholder="ФИО, телефон или госномер авто..."
         />
       </div>
 

@@ -76,7 +76,26 @@ const getRoutes: RouteHandler[] = [
 
   // Clients
   (url) => {
-    if (url === '/api/clients' || url.startsWith('/api/clients?')) return ok(paginate(demoClients));
+    // Enrich clients with their cars for display
+    const enriched = demoClients.map((c) => ({
+      ...c,
+      cars: demoCars.filter((car) => car.clientId === c.id),
+    }));
+
+    if (url === '/api/clients' || url.startsWith('/api/clients?')) {
+      // Support search by name, phone, or car plate number
+      const searchParam = new URL(url, 'http://localhost').searchParams.get('search');
+      if (searchParam) {
+        const q = searchParam.toLowerCase();
+        const filtered = enriched.filter((c) => {
+          if (c.fullName.toLowerCase().includes(q)) return true;
+          if (c.phone.includes(q)) return true;
+          return c.cars.some((car) => car.plateNumber.toLowerCase().includes(q));
+        });
+        return ok(paginate(filtered));
+      }
+      return ok(paginate(enriched));
+    }
     const clientMatch = url.match(/^\/api\/clients\/([\w-]+)$/);
     if (clientMatch) {
       const client = demoClients.find((c) => c.id === clientMatch[1]) || demoClients[0];

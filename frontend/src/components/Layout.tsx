@@ -47,10 +47,11 @@ interface TabItem {
   matchPaths?: string[];
 }
 
-const mobileTabItems: TabItem[] = [
-  { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'] },
+/** Order: Журнал, Склад, КАССА (center), Клиенты, Ещё */
+const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
   { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
   { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
+  { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
   { label: 'Клиенты', path: '/clients', icon: Users, matchPaths: ['/clients'] },
   { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/', '/services', '/suppliers', '/salary', '/reports', '/users'] },
 ];
@@ -254,16 +255,40 @@ export default function Layout({ children }: { children: ReactNode }) {
 
       {/* ─── Mobile bottom tab bar ─── */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-gray-200 bg-white pb-[env(safe-area-inset-bottom)]">
-        <div className="flex items-stretch justify-around h-16">
+        <div className="flex items-end justify-around h-16 relative">
           {mobileTabItems.map((tab) => {
             const Icon = tab.icon;
             const active = isTabActive(tab, location.pathname);
+
+            // Center "Касса" button — elevated, prominent
+            if (tab.isCenter) {
+              return (
+                <NavLink
+                  key={tab.path}
+                  to={tab.path}
+                  className="flex flex-col items-center -mt-5"
+                >
+                  <div
+                    className={`flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition-all ${
+                      active
+                        ? 'bg-primary-600 text-white shadow-primary-300'
+                        : 'bg-primary-600 text-white shadow-primary-200'
+                    }`}
+                  >
+                    <Icon className="h-7 w-7" strokeWidth={2} />
+                  </div>
+                  <span className={`text-[10px] font-semibold mt-0.5 ${active ? 'text-primary-600' : 'text-primary-600'}`}>
+                    {tab.label}
+                  </span>
+                </NavLink>
+              );
+            }
 
             return (
               <NavLink
                 key={tab.path}
                 to={tab.path}
-                className="flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium transition-colors"
+                className="flex flex-1 flex-col items-center justify-center gap-0.5 pb-1 text-xs font-medium transition-colors"
               >
                 <Icon
                   className={`h-6 w-6 ${active ? 'text-primary-600' : 'text-gray-400'}`}

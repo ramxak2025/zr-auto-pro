@@ -14,14 +14,12 @@ import {
 import {
   clientsApi,
   checksApi,
-  usersApi,
   servicesApi,
   productsApi,
 } from '../api/services';
 import type {
   Client,
   Car,
-  User,
   Service,
   Product,
   CheckServiceLine,
@@ -105,7 +103,7 @@ function ClientSearch({ onSelect, selectedClient, onClear }: ClientSearchProps) 
             setIsOpen(true);
           }}
           onFocus={() => setIsOpen(true)}
-          placeholder="Поиск клиента по ФИО или телефону..."
+          placeholder="ФИО, телефон или госномер авто..."
           className="block w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
         />
       </div>
@@ -128,12 +126,12 @@ function ClientSearch({ onSelect, selectedClient, onClear }: ClientSearchProps) 
                   {client.fullName}
                 </p>
                 <p className="text-xs text-gray-500">{client.phone}</p>
+                {client.cars && client.cars.length > 0 && (
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {client.cars.map((c) => c.plateNumber).join(', ')}
+                  </p>
+                )}
               </div>
-              {client.cars && client.cars.length > 0 && (
-                <span className="text-xs text-gray-400">
-                  {client.cars.length} авто
-                </span>
-              )}
             </button>
           ))}
         </div>
@@ -183,7 +181,6 @@ export default function CheckCreatePage() {
   // Form state
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedCarId, setSelectedCarId] = useState('');
-  const [masterId, setMasterId] = useState('');
   const [mileage, setMileage] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PM.CASH);
@@ -197,15 +194,6 @@ export default function CheckCreatePage() {
   const [productLines, setProductLines] = useState<ProductLineData[]>([]);
 
   // ---- Queries ----
-
-  const { data: masters = [] } = useQuery<User[]>({
-    queryKey: ['masters'],
-    queryFn: async () => {
-      const res = await usersApi.getMasters();
-      return res.data;
-    },
-    staleTime: 5 * 60_000,
-  });
 
   const { data: servicesData } = useQuery<PaginatedResponse<Service>>({
     queryKey: ['services-all'],
@@ -345,10 +333,6 @@ export default function CheckCreatePage() {
       toast.error('Выберите автомобиль');
       return;
     }
-    if (!masterId) {
-      toast.error('Выберите мастера');
-      return;
-    }
     if (serviceLines.length === 0 && productLines.length === 0) {
       toast.error('Добавьте хотя бы одну услугу или товар');
       return;
@@ -391,7 +375,6 @@ export default function CheckCreatePage() {
     createMutation.mutate({
       clientId: selectedClient.id,
       carId: selectedCarId,
-      masterId,
       date,
       mileage: mileage ? parseInt(mileage) : undefined,
       services,
@@ -456,25 +439,6 @@ export default function CheckCreatePage() {
                 {cars.map((car) => (
                   <option key={car.id} value={car.id}>
                     {car.plateNumber} - {car.makeModel}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Master dropdown */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                Мастер <span className="text-red-500">*</span>
-              </label>
-              <select
-                value={masterId}
-                onChange={(e) => setMasterId(e.target.value)}
-                className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-              >
-                <option value="">Выберите мастера</option>
-                {masters.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.fullName}
                   </option>
                 ))}
               </select>
