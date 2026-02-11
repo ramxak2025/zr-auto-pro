@@ -393,7 +393,7 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 // Product Card — used in folder view
 // ---------------------------------------------------------------------------
 
-function ProductCard({
+function ProductRow({
   product,
   onEdit,
   onWriteoff,
@@ -409,42 +409,46 @@ function ProductCard({
   const isLow = product.stock <= product.minStock;
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden flex flex-col hover:shadow-lg transition-shadow">
-      {/* Image */}
-      <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center relative">
+    <div className="flex items-center gap-3 bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm transition-shadow">
+      {/* Thumbnail */}
+      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0 overflow-hidden">
         {product.photo ? (
-          <img src={product.photo} alt={product.name} className="w-full h-full object-cover" />
+          <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-lg" />
         ) : (
-          <Package className="h-10 w-10 text-gray-300" />
-        )}
-        {isLow && (
-          <div className="absolute top-2 left-2 flex items-center gap-1 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
-            <AlertTriangle className="h-3 w-3" />
-            Мало
-          </div>
+          <Package className="h-5 w-5 text-gray-300" />
         )}
       </div>
       {/* Info */}
-      <div className="flex-1 p-3 space-y-1.5">
-        <p className="text-sm font-semibold text-gray-900 line-clamp-2 leading-tight">{product.name}</p>
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-bold text-primary-600">{formatMoney(product.sellPrice)}</span>
-          <span className={`text-xs font-medium ${isLow ? 'text-red-600' : 'text-gray-400'}`}>{product.stock} шт</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
+          {isLow && (
+            <span className="flex items-center gap-0.5 bg-red-50 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0">
+              <AlertTriangle className="h-2.5 w-2.5" />
+              Мало
+            </span>
+          )}
         </div>
-        <p className="text-[11px] text-gray-400">Закуп: {formatMoney(product.costPrice)}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className={`text-xs ${isLow ? 'text-red-500' : 'text-gray-400'}`}>{product.stock} шт</span>
+          <span className="text-[10px] text-gray-300">·</span>
+          <span className="text-[11px] text-gray-400">Закуп: {formatMoney(product.costPrice)}</span>
+        </div>
       </div>
+      {/* Price */}
+      <span className="text-sm font-bold text-primary-600 flex-shrink-0">{formatMoney(product.sellPrice)}</span>
       {/* Actions */}
-      <div className="flex items-center border-t border-gray-50">
-        <button onClick={onEdit} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors text-[11px] font-medium">
+      <div className="flex items-center gap-0.5 flex-shrink-0">
+        <button onClick={onEdit} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors">
           <Pencil className="h-3.5 w-3.5" />
         </button>
-        <button onClick={onWriteoff} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors text-[11px] font-medium border-l border-gray-50">
+        <button onClick={onWriteoff} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors">
           <PackageMinus className="h-3.5 w-3.5" />
         </button>
-        <button onClick={onInventory} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors text-[11px] font-medium border-l border-gray-50">
+        <button onClick={onInventory} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
           <ClipboardCheck className="h-3.5 w-3.5" />
         </button>
-        <button onClick={onDelete} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors text-[11px] font-medium border-l border-gray-50">
+        <button onClick={onDelete} className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
@@ -655,24 +659,22 @@ export default function ProductsPage() {
           {/* Category title */}
           {showingCategory && (
             <div className="flex items-center gap-2.5">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-lg">
-                {CATEGORY_ICONS[activeCategory!] || <FolderOpen className="h-5 w-5 text-primary-500" />}
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-base">
+                {CATEGORY_ICONS[activeCategory!] || <FolderOpen className="h-4 w-4 text-primary-500" />}
               </div>
               <div>
-                <h2 className="text-lg font-bold text-gray-900">{activeCategory}</h2>
-                <p className="text-xs text-gray-400">{categoryProducts.length} товаров</p>
+                <h2 className="text-base font-bold text-gray-900">{activeCategory}</h2>
+                <p className="text-[11px] text-gray-400">{categoryProducts.length} товаров</p>
               </div>
             </div>
           )}
 
-          {/* Folder view — categories as cards */}
+          {/* Folder view — categories as list */}
           {showingFolders && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            <div className="space-y-1.5">
               {categoryGroups.map(([cat, products]) => {
                 const hasLow = products.some((p) => p.stock <= p.minStock);
                 const totalItems = products.length;
-                // Show first product image as category preview
-                const previewImg = products.find((p) => p.photo)?.photo;
 
                 return (
                   <button
@@ -682,33 +684,31 @@ export default function ProductsPage() {
                       setActiveCategory(cat);
                       setSearchText('');
                     }}
-                    className="relative flex flex-col items-center rounded-2xl border border-gray-100 bg-white p-4 shadow-sm
-                      hover:shadow-md hover:border-primary-200 active:scale-[0.97] transition-all text-center"
+                    className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3
+                      hover:shadow-sm hover:border-primary-200 active:bg-gray-50 transition-all text-left"
                   >
-                    {hasLow && (
-                      <div className="absolute top-2 right-2">
-                        <AlertTriangle className="h-4 w-4 text-orange-500" />
-                      </div>
-                    )}
-                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 mb-3 overflow-hidden">
-                      {previewImg ? (
-                        <img src={previewImg} alt={cat} className="w-full h-full object-cover rounded-2xl" />
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 flex-shrink-0">
+                      {CATEGORY_ICONS[cat] ? (
+                        <span className="text-lg">{CATEGORY_ICONS[cat]}</span>
                       ) : (
-                        <span className="text-2xl">{CATEGORY_ICONS[cat] || ''}</span>
-                      )}
-                      {!previewImg && !CATEGORY_ICONS[cat] && (
-                        <FolderOpen className="h-7 w-7 text-gray-400" />
+                        <FolderOpen className="h-5 w-5 text-primary-500" />
                       )}
                     </div>
-                    <p className="text-sm font-semibold text-gray-900 leading-tight">{cat}</p>
-                    <p className="text-[11px] text-gray-400 mt-1">{totalItems} товаров</p>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900">{cat}</p>
+                      <p className="text-[11px] text-gray-400">{totalItems} товаров</p>
+                    </div>
+                    {hasLow && (
+                      <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
+                    )}
+                    <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
                   </button>
                 );
               })}
             </div>
           )}
 
-          {/* Product cards grid (search or in-category view) */}
+          {/* Product list (search or in-category view) */}
           {(showingSearch || showingCategory) && (
             displayProducts.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-gray-400">
@@ -718,9 +718,9 @@ export default function ProductsPage() {
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              <div className="space-y-1.5">
                 {displayProducts.map((product) => (
-                  <ProductCard
+                  <ProductRow
                     key={product.id}
                     product={product}
                     onEdit={() => openEdit(product)}

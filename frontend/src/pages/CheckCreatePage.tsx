@@ -479,6 +479,8 @@ export default function CheckCreatePage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PM.CASH);
   const [comment, setComment] = useState('');
   const [discount, setDiscount] = useState('');
+  const [cashAmount, setCashAmount] = useState('');
+  const [cardAmount, setCardAmount] = useState('');
 
   const [serviceLines, setServiceLines] = useState<ServiceLineData[]>([]);
   const [productLines, setProductLines] = useState<ProductLineData[]>([]);
@@ -756,6 +758,48 @@ export default function CheckCreatePage() {
                   );
                 })}
               </div>
+
+              {/* Split payment for Нал + Карта */}
+              {paymentMethod === PM.CASH_CARD && (
+                <div className="rounded-xl bg-purple-50/50 border border-purple-100 p-3 space-y-2.5">
+                  <p className="text-[11px] font-semibold text-purple-700 uppercase tracking-wider">Разделение оплаты</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
+                        <Banknote className="h-3 w-3" />Наличные
+                      </label>
+                      <input type="number" value={cashAmount}
+                        onChange={(e) => {
+                          setCashAmount(e.target.value);
+                          const cash = parseFloat(e.target.value) || 0;
+                          const remaining = Math.max(0, grandTotal - cash);
+                          setCardAmount(remaining > 0 ? remaining.toString() : '');
+                        }}
+                        min="0" placeholder="0 ₽"
+                        className="block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/10" />
+                    </div>
+                    <div>
+                      <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
+                        <CreditCard className="h-3 w-3" />Карта
+                      </label>
+                      <input type="number" value={cardAmount}
+                        onChange={(e) => {
+                          setCardAmount(e.target.value);
+                          const card = parseFloat(e.target.value) || 0;
+                          const remaining = Math.max(0, grandTotal - card);
+                          setCashAmount(remaining > 0 ? remaining.toString() : '');
+                        }}
+                        min="0" placeholder="0 ₽"
+                        className="block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/10" />
+                    </div>
+                  </div>
+                  {grandTotal > 0 && (
+                    <p className="text-[10px] text-purple-500 text-center">
+                      Итого к оплате: {formatMoney(grandTotal)}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>

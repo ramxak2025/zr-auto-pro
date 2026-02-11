@@ -143,7 +143,15 @@ const getRoutes: RouteHandler[] = [
 
   // Checks
   (url) => {
-    if (url === '/api/checks' || url.startsWith('/api/checks?')) return ok(paginate(demoChecks));
+    if (url === '/api/checks' || url.startsWith('/api/checks?')) {
+      const params = new URLSearchParams(url.split('?')[1] || '');
+      const search = params.get('search');
+      let filtered = demoChecks;
+      if (search) {
+        filtered = demoChecks.filter((c) => String(c.number).includes(search));
+      }
+      return ok(paginate(filtered));
+    }
     const checkMatch = url.match(/^\/api\/checks\/([\w-]+)$/);
     if (checkMatch) return ok(demoChecks.find((c) => c.id === checkMatch[1]) || demoChecks[0]);
     return null;

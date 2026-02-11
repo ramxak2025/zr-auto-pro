@@ -35,15 +35,15 @@ function formatDate(dateStr: string): string {
 const PAYMENT_LABELS: Record<string, string> = {
   cash: 'Наличные',
   card: 'Карта',
-  transfer: 'Перевод',
-  mixed: 'Смешанная',
+  warranty: 'По гарантии',
+  cash_card: 'Нал + Карта',
 };
 
 const PAYMENT_BADGE_CLASSES: Record<string, string> = {
   cash: 'bg-green-50 text-green-700 border-green-200',
   card: 'bg-blue-50 text-blue-700 border-blue-200',
-  transfer: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-  mixed: 'bg-gray-50 text-gray-700 border-gray-200',
+  warranty: 'bg-orange-50 text-orange-700 border-orange-200',
+  cash_card: 'bg-purple-50 text-purple-700 border-purple-200',
 };
 
 // ---------------------------------------------------------------------------
@@ -124,10 +124,10 @@ export default function CheckDetailPage() {
             <ArrowLeft className="h-4 w-4" />
           </button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">
+            <h1 className="text-base md:text-lg font-bold text-gray-900">
               Чек #{check.number}
             </h1>
-            <p className="text-sm text-gray-500 mt-0.5">
+            <p className="text-xs text-gray-500 mt-0.5">
               от {formatDate(check.date)}
             </p>
           </div>

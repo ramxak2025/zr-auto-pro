@@ -13,7 +13,7 @@ import {
   MessageSquare,
   Tag,
   TrendingUp,
-  ShieldCheck,
+  Search,
 } from 'lucide-react';
 import { checksApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -170,6 +170,7 @@ export default function ChecksPage() {
 
   // Filters
   const [page, setPage] = useState(1);
+  const [searchNumber, setSearchNumber] = useState('');
   const [masterId, setMasterId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -190,6 +191,7 @@ export default function ChecksPage() {
     page,
     limit: LIMIT,
   };
+  if (searchNumber) queryParams.search = searchNumber;
   if (masterId) queryParams.masterId = masterId;
   if (dateFrom) queryParams.dateFrom = dateFrom;
   if (dateTo) queryParams.dateTo = dateTo;
@@ -218,7 +220,7 @@ export default function ChecksPage() {
     setPage(1);
   };
 
-  const hasFilters = !!(dateFrom || dateTo || masterId);
+  const hasFilters = !!(dateFrom || dateTo || masterId || searchNumber);
 
   return (
     <div className="space-y-4 md:space-y-6">
@@ -238,6 +240,18 @@ export default function ChecksPage() {
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Новый чек</span>
         </Link>
+      </div>
+
+      {/* Search */}
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <input
+          type="text"
+          value={searchNumber}
+          onChange={(e) => handleFilterChange(setSearchNumber, e.target.value)}
+          placeholder="Поиск по номеру чека..."
+          className="block w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-all focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10"
+        />
       </div>
 
       {/* Filters - collapsible on mobile */}
@@ -285,7 +299,7 @@ export default function ChecksPage() {
             {/* Master */}
             <div className="flex-1 min-w-0 md:flex-initial">
               <label className="block text-xs font-medium text-gray-500 mb-1">
-                Мастер
+                Сотрудник
               </label>
               <select
                 value={masterId}
@@ -293,7 +307,7 @@ export default function ChecksPage() {
                 className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 md:min-w-[180px]
                   focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
               >
-                <option value="">Все мастера</option>
+                <option value="">Все сотрудники</option>
                 {masters?.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.fullName}
@@ -307,6 +321,7 @@ export default function ChecksPage() {
               <button
                 type="button"
                 onClick={() => {
+                  setSearchNumber('');
                   setDateFrom('');
                   setDateTo('');
                   setMasterId('');
