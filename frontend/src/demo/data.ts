@@ -237,17 +237,20 @@ export const demoCars: Car[] = [
 ];
 
 // ---- Products ----
+const img = (text: string, bg = 'e2e8f0', fg = '475569') =>
+  `https://placehold.co/200x200/${bg}/${fg}?text=${encodeURIComponent(text)}`;
+
 export const demoProducts: Product[] = [
-  { id: 'prod-1', name: 'Масло моторное Castrol 5W-30 4L', category: 'Масла', costPrice: 2100, sellPrice: 3200, stock: 15, minStock: 5, createdAt: '2024-01-20T10:00:00Z' },
-  { id: 'prod-2', name: 'Фильтр масляный Toyota', category: 'Фильтры', costPrice: 350, sellPrice: 650, stock: 20, minStock: 5, createdAt: '2024-01-20T10:00:00Z' },
-  { id: 'prod-3', name: 'Фильтр воздушный универсальный', category: 'Фильтры', costPrice: 280, sellPrice: 550, stock: 12, minStock: 5, createdAt: '2024-01-20T10:00:00Z' },
-  { id: 'prod-4', name: 'Колодки тормозные передние ATE', category: 'Тормозная система', costPrice: 1800, sellPrice: 3100, stock: 8, minStock: 3, createdAt: '2024-02-10T10:00:00Z' },
-  { id: 'prod-5', name: 'Диски тормозные передние Brembo', category: 'Тормозная система', costPrice: 4200, sellPrice: 6800, stock: 4, minStock: 2, createdAt: '2024-02-10T10:00:00Z' },
-  { id: 'prod-6', name: 'Антифриз G12+ 5L', category: 'Жидкости', costPrice: 450, sellPrice: 850, stock: 10, minStock: 3, createdAt: '2024-02-15T10:00:00Z' },
-  { id: 'prod-7', name: 'Свеча зажигания NGK', category: 'Электрика', costPrice: 180, sellPrice: 380, stock: 30, minStock: 10, createdAt: '2024-02-20T10:00:00Z' },
-  { id: 'prod-8', name: 'Ремень ГРМ Continental', category: 'ГРМ', costPrice: 1500, sellPrice: 2800, stock: 3, minStock: 2, createdAt: '2024-03-01T10:00:00Z' },
-  { id: 'prod-9', name: 'Амортизатор задний KYB', category: 'Подвеска', costPrice: 3500, sellPrice: 5500, stock: 2, minStock: 2, createdAt: '2024-03-10T10:00:00Z' },
-  { id: 'prod-10', name: 'Жидкость тормозная DOT-4 1L', category: 'Жидкости', costPrice: 220, sellPrice: 450, stock: 8, minStock: 3, createdAt: '2024-03-15T10:00:00Z' },
+  { id: 'prod-1', name: 'Масло моторное Castrol 5W-30 4L', category: 'Масла', costPrice: 2100, sellPrice: 3200, stock: 15, minStock: 5, photo: img('Castrol\n5W-30', 'fef3c7', '92400e'), createdAt: '2024-01-20T10:00:00Z' },
+  { id: 'prod-2', name: 'Фильтр масляный Toyota', category: 'Фильтры', costPrice: 350, sellPrice: 650, stock: 20, minStock: 5, photo: img('Фильтр\nмасл.', 'dbeafe', '5b21b6'), createdAt: '2024-01-20T10:00:00Z' },
+  { id: 'prod-3', name: 'Фильтр воздушный универсальный', category: 'Фильтры', costPrice: 280, sellPrice: 550, stock: 12, minStock: 5, photo: img('Фильтр\nвозд.', 'dbeafe', '5b21b6'), createdAt: '2024-01-20T10:00:00Z' },
+  { id: 'prod-4', name: 'Колодки тормозные передние ATE', category: 'Тормозная система', costPrice: 1800, sellPrice: 3100, stock: 8, minStock: 3, photo: img('Колодки\nATE', 'fecaca', '991b1b'), createdAt: '2024-02-10T10:00:00Z' },
+  { id: 'prod-5', name: 'Диски тормозные передние Brembo', category: 'Тормозная система', costPrice: 4200, sellPrice: 6800, stock: 4, minStock: 2, photo: img('Диски\nBrembo', 'fecaca', '991b1b'), createdAt: '2024-02-10T10:00:00Z' },
+  { id: 'prod-6', name: 'Антифриз G12+ 5L', category: 'Жидкости', costPrice: 450, sellPrice: 850, stock: 10, minStock: 3, photo: img('Антифриз\nG12+', 'bfdbfe', '1e40af'), createdAt: '2024-02-15T10:00:00Z' },
+  { id: 'prod-7', name: 'Свеча зажигания NGK', category: 'Электрика', costPrice: 180, sellPrice: 380, stock: 30, minStock: 10, photo: img('Свеча\nNGK', 'fef9c3', '854d0e'), createdAt: '2024-02-20T10:00:00Z' },
+  { id: 'prod-8', name: 'Ремень ГРМ Continental', category: 'ГРМ', costPrice: 1500, sellPrice: 2800, stock: 3, minStock: 2, photo: img('Ремень\nГРМ', 'e2e8f0', '334155'), createdAt: '2024-03-01T10:00:00Z' },
+  { id: 'prod-9', name: 'Амортизатор задний KYB', category: 'Подвеска', costPrice: 3500, sellPrice: 5500, stock: 2, minStock: 2, photo: img('Аморт.\nKYB', 'd1fae5', '166534'), createdAt: '2024-03-10T10:00:00Z' },
+  { id: 'prod-10', name: 'Жидкость тормозная DOT-4 1L', category: 'Жидкости', costPrice: 220, sellPrice: 450, stock: 8, minStock: 3, photo: img('DOT-4', 'bfdbfe', '1e40af'), createdAt: '2024-03-15T10:00:00Z' },
 ];
 
 // ---- Services ----

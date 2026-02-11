@@ -254,30 +254,29 @@ export default function Layout({ children }: { children: ReactNode }) {
       </div>
 
       {/* ─── Mobile bottom tab bar ─── */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-gray-200 bg-white pb-[env(safe-area-inset-bottom)]">
-        <div className="flex items-end justify-around h-16 relative">
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+        <div className="flex items-center justify-around h-[68px] px-2">
           {mobileTabItems.map((tab) => {
             const Icon = tab.icon;
             const active = isTabActive(tab, location.pathname);
 
-            // Center "Касса" button — elevated, prominent
+            // Center "Касса" button — pill shape, gradient accent
             if (tab.isCenter) {
               return (
                 <NavLink
                   key={tab.path}
                   to={tab.path}
-                  className="flex flex-col items-center -mt-5"
+                  className="flex flex-col items-center -mt-6"
                 >
-                  <div
-                    className={`flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition-all ${
-                      active
-                        ? 'bg-primary-600 text-white shadow-primary-300'
-                        : 'bg-primary-600 text-white shadow-primary-200'
-                    }`}
-                  >
-                    <Icon className="h-7 w-7" strokeWidth={2} />
+                  <div className="relative">
+                    <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
+                    <div
+                      className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95"
+                    >
+                      <Icon className="h-6 w-6" strokeWidth={2.2} />
+                    </div>
                   </div>
-                  <span className={`text-[10px] font-semibold mt-0.5 ${active ? 'text-primary-600' : 'text-primary-600'}`}>
+                  <span className="text-[10px] font-bold mt-1 text-primary-600">
                     {tab.label}
                   </span>
                 </NavLink>
@@ -288,13 +287,15 @@ export default function Layout({ children }: { children: ReactNode }) {
               <NavLink
                 key={tab.path}
                 to={tab.path}
-                className="flex flex-1 flex-col items-center justify-center gap-0.5 pb-1 text-xs font-medium transition-colors"
+                className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors"
               >
-                <Icon
-                  className={`h-6 w-6 ${active ? 'text-primary-600' : 'text-gray-400'}`}
-                  strokeWidth={active ? 2.5 : 2}
-                />
-                <span className={active ? 'text-primary-600' : 'text-gray-500'}>
+                <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
+                  <Icon
+                    className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`}
+                    strokeWidth={active ? 2.2 : 1.8}
+                  />
+                </div>
+                <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>
                   {tab.label}
                 </span>
               </NavLink>

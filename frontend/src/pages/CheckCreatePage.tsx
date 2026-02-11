@@ -10,6 +10,11 @@ import {
   Search,
   Wrench,
   Package,
+  FolderOpen,
+  ChevronLeft,
+  ShoppingCart,
+  Minus,
+  X,
 } from 'lucide-react';
 import {
   clientsApi,
@@ -27,7 +32,8 @@ import type {
   PaymentMethod,
   PaginatedResponse,
 } from '../types';
-import { PaymentMethod as PM } from '../types';
+import { PaymentMethod as PM, UserRole } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 // ---------------------------------------------------------------------------
@@ -172,11 +178,260 @@ interface ProductLineData {
 }
 
 // ---------------------------------------------------------------------------
+// Product Catalog — folders (categories) + image cards
+// ---------------------------------------------------------------------------
+
+const CATEGORY_ICONS: Record<string, string> = {
+  'Масла': '🛢️',
+  'Фильтры': '🔧',
+  'Тормозная система': '🛞',
+  'Жидкости': '💧',
+  'Электрика': '⚡',
+  'ГРМ': '⛓️',
+  'Подвеска': '🔩',
+};
+
+interface ProductCatalogProps {
+  allProducts: Product[];
+  productLines: ProductLineData[];
+  onAdd: (product: Product) => void;
+  onUpdateQty: (key: string, qty: number) => void;
+  onRemove: (key: string) => void;
+  formatMoney: (v: number) => string;
+}
+
+function ProductCatalog({
+  allProducts,
+  productLines,
+  onAdd,
+  onUpdateQty,
+  onRemove,
+  formatMoney,
+}: ProductCatalogProps) {
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [productSearch, setProductSearch] = useState('');
+
+  // Group products by category
+  const categories = useMemo(() => {
+    const map = new Map<string, Product[]>();
+    for (const p of allProducts) {
+      const cat = p.category || 'Без категории';
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(p);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [allProducts]);
+
+  // Filtered products when searching
+  const searchResults = useMemo(() => {
+    if (!productSearch) return [];
+    const q = productSearch.toLowerCase();
+    return allProducts.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 20);
+  }, [productSearch, allProducts]);
+
+  const productsInCategory = activeCategory
+    ? (categories.find(([cat]) => cat === activeCategory)?.[1] || [])
+    : [];
+
+  // Helper: get quantity of a product in cart
+  function getCartQty(productId: string): number {
+    const line = productLines.find((l) => l.productId === productId);
+    return line?.quantity || 0;
+  }
+
+  function getCartLine(productId: string) {
+    return productLines.find((l) => l.productId === productId);
+  }
+
+  // Product card component
+  function ProductCard({ product }: { product: Product }) {
+    const qty = getCartQty(product.id);
+    const line = getCartLine(product.id);
+
+    return (
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+        {/* Image */}
+        <div className="aspect-square bg-gray-50 flex items-center justify-center relative">
+          {product.photo ? (
+            <img src={product.photo} alt={product.name} className="w-full h-full object-cover" />
+          ) : (
+            <Package className="h-10 w-10 text-gray-300" />
+          )}
+          {product.stock <= 0 && (
+            <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+              <span className="text-xs font-medium text-red-500">Нет в наличии</span>
+            </div>
+          )}
+          {qty > 0 && (
+            <div className="absolute top-1.5 right-1.5 flex items-center justify-center h-6 min-w-[24px] px-1 rounded-full bg-primary-600 text-white text-xs font-bold">
+              {qty}
+            </div>
+          )}
+        </div>
+        {/* Info */}
+        <div className="flex-1 p-2.5 flex flex-col">
+          <p className="text-xs font-medium text-gray-900 line-clamp-2 leading-tight mb-1">{product.name}</p>
+          <div className="mt-auto flex items-center justify-between">
+            <span className="text-sm font-bold text-gray-900">{formatMoney(product.sellPrice)}</span>
+            <span className="text-[10px] text-gray-400">{product.stock} шт</span>
+          </div>
+        </div>
+        {/* Add/qty buttons */}
+        <div className="px-2.5 pb-2.5">
+          {qty === 0 ? (
+            <button
+              type="button"
+              onClick={() => onAdd(product)}
+              disabled={product.stock <= 0}
+              className="w-full flex items-center justify-center gap-1 rounded-lg bg-primary-50 text-primary-700 px-3 py-1.5 text-xs font-semibold
+                hover:bg-primary-100 active:bg-primary-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Добавить
+            </button>
+          ) : (
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => line && onUpdateQty(line.key, qty - 1)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+              <span className="text-sm font-bold text-gray-900 min-w-[24px] text-center">{qty}</span>
+              <button
+                type="button"
+                onClick={() => onAdd(product)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-100 text-primary-700 hover:bg-primary-200 transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+      {/* Header + search */}
+      <div className="p-4 pb-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-base font-semibold text-gray-900">
+            <Package className="h-5 w-5 text-gray-400" />
+            Товары
+            {productLines.length > 0 && (
+              <span className="flex items-center justify-center h-5 min-w-[20px] px-1 rounded-full bg-primary-100 text-primary-700 text-[11px] font-bold">
+                {productLines.reduce((sum, l) => sum + l.quantity, 0)}
+              </span>
+            )}
+          </h2>
+          {activeCategory && (
+            <button
+              type="button"
+              onClick={() => setActiveCategory(null)}
+              className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Назад
+            </button>
+          )}
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={productSearch}
+            onChange={(e) => setProductSearch(e.target.value)}
+            placeholder="Поиск товара..."
+            className="block w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm text-gray-900 placeholder-gray-400
+              focus:border-primary-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-primary-500/20 transition-colors"
+          />
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="px-4 pb-4">
+        {/* Search results */}
+        {productSearch ? (
+          searchResults.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-6">Товары не найдены</p>
+          ) : (
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2.5">
+              {searchResults.map((p) => (
+                <ProductCard key={p.id} product={p} />
+              ))}
+            </div>
+          )
+        ) : activeCategory ? (
+          /* Products in category */
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2.5">
+            {productsInCategory.map((p) => (
+              <ProductCard key={p.id} product={p} />
+            ))}
+          </div>
+        ) : (
+          /* Category folders */
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {categories.map(([cat, products]) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setActiveCategory(cat)}
+                className="flex flex-col items-center gap-2 rounded-xl border border-gray-100 bg-gray-50 p-4 hover:bg-gray-100 hover:border-gray-200 active:bg-gray-200 transition-all"
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-sm text-2xl">
+                  {CATEGORY_ICONS[cat] || <FolderOpen className="h-6 w-6 text-gray-400" />}
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium text-gray-900 leading-tight">{cat}</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">{products.length} шт</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Cart summary — added products */}
+      {productLines.length > 0 && (
+        <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-2">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">В чеке:</p>
+          {productLines.map((line) => (
+            <div key={line.key} className="flex items-center gap-2 bg-white rounded-lg p-2 border border-gray-100">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">{line.name}</p>
+                <p className="text-xs text-gray-500">{line.quantity} × {formatMoney(line.sellPrice)}</p>
+              </div>
+              <span className="text-sm font-bold text-gray-900 flex-shrink-0">
+                {formatMoney(line.sellPrice * line.quantity)}
+              </span>
+              <button
+                type="button"
+                onClick={() => onRemove(line.key)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors flex-shrink-0"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
 export default function CheckCreatePage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isMaster = user?.role === UserRole.MASTER;
 
   // Form state
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
@@ -455,21 +710,27 @@ export default function CheckCreatePage() {
                 onChange={(e) => setMileage(e.target.value)}
                 min="0"
                 placeholder="0"
-                className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
               />
             </div>
 
-            {/* Date */}
+            {/* Date — masters see read-only current date */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Дата
               </label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-              />
+              {isMaster ? (
+                <div className="flex items-center rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                  {new Date(date).toLocaleDateString('ru-RU')}
+                </div>
+              ) : (
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                />
+              )}
             </div>
           </div>
         </div>
@@ -582,86 +843,39 @@ export default function CheckCreatePage() {
           )}
         </div>
 
-        {/* Products section */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-base font-semibold text-gray-900">
-              <Package className="h-5 w-5 text-gray-400" />
-              Товары
-            </h2>
-            <button
-              type="button"
-              onClick={addProductLine}
-              className="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 transition-colors"
-            >
-              <Plus className="h-4 w-4" />
-              Добавить товар
-            </button>
-          </div>
-
-          {productLines.length > 0 && (
-            <div className="space-y-3">
-              {productLines.map((line) => (
-                <div
-                  key={line.key}
-                  className="rounded-lg border border-gray-200 p-3 space-y-2"
-                >
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={line.productId}
-                      onChange={(e) => selectProduct(line.key, e.target.value)}
-                      className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                    >
-                      <option value="">Выберите товар</option>
-                      {allProducts.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} (остаток: {p.stock})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => removeProductLine(line.key)}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 flex-shrink-0"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={line.sellPrice}
-                      onChange={(e) =>
-                        updateProductLine(line.key, {
-                          sellPrice: parseFloat(e.target.value) || 0,
-                        })
-                      }
-                      min="0"
-                      step="0.01"
-                      placeholder="Цена продажи"
-                      className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                    />
-                    <input
-                      type="number"
-                      value={line.quantity}
-                      onChange={(e) =>
-                        updateProductLine(line.key, {
-                          quantity: parseInt(e.target.value) || 1,
-                        })
-                      }
-                      min="1"
-                      placeholder="Кол-во"
-                      className="w-20 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                    />
-                    <span className="w-24 text-right text-sm font-medium text-gray-900 flex-shrink-0">
-                      {formatMoney(line.sellPrice * line.quantity)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {/* Products section — catalog style */}
+        <ProductCatalog
+          allProducts={allProducts}
+          productLines={productLines}
+          onAdd={(product) => {
+            // If already in cart, increment quantity
+            const existing = productLines.find((l) => l.productId === product.id);
+            if (existing) {
+              updateProductLine(existing.key, { quantity: existing.quantity + 1 });
+            } else {
+              setProductLines((prev) => [
+                ...prev,
+                {
+                  key: crypto.randomUUID(),
+                  productId: product.id,
+                  name: product.name,
+                  sellPrice: product.sellPrice,
+                  costPrice: product.costPrice,
+                  quantity: 1,
+                },
+              ]);
+            }
+          }}
+          onUpdateQty={(key, qty) => {
+            if (qty <= 0) {
+              removeProductLine(key);
+            } else {
+              updateProductLine(key, { quantity: qty });
+            }
+          }}
+          onRemove={removeProductLine}
+          formatMoney={formatMoney}
+        />
 
         {/* Summary + Payment + Comment */}
         <div className="grid gap-6 lg:grid-cols-2">

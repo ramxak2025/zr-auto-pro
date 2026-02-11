@@ -12,7 +12,9 @@ import {
   Car,
 } from 'lucide-react';
 import { checksApi, usersApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import type { Check, User, PaymentMethod, PaginatedResponse } from '../types';
+import { UserRole } from '../types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -75,7 +77,7 @@ const LIMIT = 20;
 // Mobile card for a single check
 // ---------------------------------------------------------------------------
 
-function CheckCard({ check, onClick }: { check: Check; onClick: () => void }) {
+function CheckCard({ check, onClick, showProfit }: { check: Check; onClick: () => void; showProfit: boolean }) {
   return (
     <button
       type="button"
@@ -87,9 +89,16 @@ function CheckCard({ check, onClick }: { check: Check; onClick: () => void }) {
           <span className="text-sm font-bold text-gray-900">#{check.number}</span>
           <PaymentBadge method={check.paymentMethod} />
         </div>
-        <span className="text-base font-bold text-gray-900">
-          {formatMoney(check.totalRevenue)}
-        </span>
+        <div className="text-right">
+          <span className="text-base font-bold text-gray-900">
+            {formatMoney(check.totalRevenue)}
+          </span>
+          {showProfit && (
+            <p className={`text-xs font-medium ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+              {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+            </p>
+          )}
+        </div>
       </div>
       <div className="space-y-1">
         <p className="text-sm text-gray-700 font-medium">
@@ -120,6 +129,8 @@ function CheckCard({ check, onClick }: { check: Check; onClick: () => void }) {
 
 export default function ChecksPage() {
   const navigate = useNavigate();
+  const { user, hasPermission } = useAuth();
+  const canSeeProfit = hasPermission('profit_view');
 
   // Filters
   const [page, setPage] = useState(1);
@@ -298,6 +309,7 @@ export default function ChecksPage() {
                 key={check.id}
                 check={check}
                 onClick={() => navigate(`/checks/${check.id}`)}
+                showProfit={canSeeProfit}
               />
             ))}
           </div>
@@ -326,6 +338,11 @@ export default function ChecksPage() {
                     <th className="px-4 py-3 text-right font-semibold text-gray-600">
                       Сумма
                     </th>
+                    {canSeeProfit && (
+                      <th className="px-4 py-3 text-right font-semibold text-gray-600">
+                        Прибыль
+                      </th>
+                    )}
                     <th className="px-4 py-3 text-center font-semibold text-gray-600">
                       Оплата
                     </th>
@@ -358,6 +375,11 @@ export default function ChecksPage() {
                       <td className="px-4 py-3 text-right font-medium text-gray-900">
                         {formatMoney(check.totalRevenue)}
                       </td>
+                      {canSeeProfit && (
+                        <td className={`px-4 py-3 text-right font-medium ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                          {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-center">
                         <PaymentBadge method={check.paymentMethod} />
                       </td>
