@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
+import AdminLayout from './components/AdminLayout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import ClientsPage from './pages/ClientsPage';
@@ -16,6 +17,9 @@ import SupplierDetailPage from './pages/SupplierDetailPage';
 import SalaryPage from './pages/SalaryPage';
 import ReportsPage from './pages/ReportsPage';
 import UsersPage from './pages/UsersPage';
+import AdminDashboardPage from './pages/admin/AdminDashboardPage';
+import AdminTenantsPage from './pages/admin/AdminTenantsPage';
+import AdminTenantDetailPage from './pages/admin/AdminTenantDetailPage';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
@@ -30,6 +34,45 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function AppRoutes() {
+  const { isSuperAdmin } = useAuth();
+
+  if (isSuperAdmin) {
+    return (
+      <AdminLayout>
+        <Routes>
+          <Route path="/" element={<AdminDashboardPage />} />
+          <Route path="/tenants" element={<AdminTenantsPage />} />
+          <Route path="/tenants/:id" element={<AdminTenantDetailPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AdminLayout>
+    );
+  }
+
+  return (
+    <Layout>
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/clients" element={<ClientsPage />} />
+        <Route path="/clients/:id" element={<ClientDetailPage />} />
+        <Route path="/cars" element={<CarsPage />} />
+        <Route path="/checks" element={<ChecksPage />} />
+        <Route path="/checks/new" element={<CheckCreatePage />} />
+        <Route path="/checks/:id" element={<CheckDetailPage />} />
+        <Route path="/products" element={<ProductsPage />} />
+        <Route path="/services" element={<ServicesPage />} />
+        <Route path="/suppliers" element={<SuppliersPage />} />
+        <Route path="/suppliers/:id" element={<SupplierDetailPage />} />
+        <Route path="/salary" element={<SalaryPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/users" element={<UsersPage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Layout>
+  );
+}
+
 export default function App() {
   return (
     <Routes>
@@ -38,25 +81,7 @@ export default function App() {
         path="/*"
         element={
           <PrivateRoute>
-            <Layout>
-              <Routes>
-                <Route path="/" element={<DashboardPage />} />
-                <Route path="/clients" element={<ClientsPage />} />
-                <Route path="/clients/:id" element={<ClientDetailPage />} />
-                <Route path="/cars" element={<CarsPage />} />
-                <Route path="/checks" element={<ChecksPage />} />
-                <Route path="/checks/new" element={<CheckCreatePage />} />
-                <Route path="/checks/:id" element={<CheckDetailPage />} />
-                <Route path="/products" element={<ProductsPage />} />
-                <Route path="/services" element={<ServicesPage />} />
-                <Route path="/suppliers" element={<SuppliersPage />} />
-                <Route path="/suppliers/:id" element={<SupplierDetailPage />} />
-                <Route path="/salary" element={<SalaryPage />} />
-                <Route path="/reports" element={<ReportsPage />} />
-                <Route path="/users" element={<UsersPage />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </Layout>
+            <AppRoutes />
           </PrivateRoute>
         }
       />

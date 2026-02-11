@@ -17,6 +17,10 @@ export class Product {
   id: string;
 
   @Index()
+  @Column('uuid')
+  tenantId: string;
+
+  @Index()
   @Column()
   name: string;
 

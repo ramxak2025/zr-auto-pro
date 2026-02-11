@@ -6,6 +6,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
+  isSuperAdmin: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   hasPermission: (perm: keyof UserPermissions) => boolean;
@@ -56,14 +57,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const hasPermission = useCallback(
     (perm: keyof UserPermissions) => {
       if (!user) return false;
-      if (user.role === 'owner') return true;
+      if (user.role === 'superadmin' || user.role === 'owner') return true;
       return !!user.permissions?.[perm];
     },
     [user],
   );
 
+  const isSuperAdmin = user?.role === 'superadmin';
+
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout, hasPermission }}>
+    <AuthContext.Provider value={{ user, token, isLoading, isSuperAdmin, login, logout, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );

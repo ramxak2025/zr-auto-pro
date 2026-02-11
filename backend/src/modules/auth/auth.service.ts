@@ -41,6 +41,7 @@ export class AuthService {
       sub: user.id,
       username: user.username,
       role: user.role,
+      tenantId: user.tenantId,
     };
 
     return {
@@ -49,7 +50,7 @@ export class AuthService {
     };
   }
 
-  async register(dto: RegisterDto): Promise<Omit<User, 'password'>> {
+  async register(tenantId: string, dto: RegisterDto): Promise<Omit<User, 'password'>> {
     const existingUser = await this.usersService.findByUsername(dto.username);
 
     if (existingUser) {
@@ -58,7 +59,7 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
 
-    const user = await this.usersService.create({
+    const user = await this.usersService.create(tenantId, {
       ...dto,
       password: hashedPassword,
     });

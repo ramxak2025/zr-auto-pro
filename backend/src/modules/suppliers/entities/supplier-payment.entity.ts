@@ -13,6 +13,9 @@ export class SupplierPayment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Column('uuid')
+  tenantId: string;
+
   @ManyToOne(() => Supplier, (s) => s.payments)
   @JoinColumn({ name: 'supplierId' })
   supplier: Supplier;

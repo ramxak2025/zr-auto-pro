@@ -13,13 +13,18 @@ import {
 import { Client } from '../../clients/entities/client.entity';
 import { Check } from '../../checks/entities/check.entity';
 
+@Index(['plateNumber', 'tenantId'], { unique: true })
 @Entity('cars')
 export class Car {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @Index()
-  @Column({ unique: true })
+  @Column('uuid')
+  tenantId: string;
+
+  @Index()
+  @Column()
   plateNumber: string;
 
   @Column()

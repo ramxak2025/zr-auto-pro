@@ -12,16 +12,18 @@ export class ClientsService {
     private readonly repo: Repository<Client>,
   ) {}
 
-  async findAll(query: { page?: number; limit?: number; search?: string }) {
+  async findAll(tenantId: string, query: { page?: number; limit?: number; search?: string }) {
     const page = query.page || 1;
     const limit = query.limit || 20;
     const skip = (page - 1) * limit;
 
     const qb = this.repo.createQueryBuilder('client');
 
+    qb.where('client.tenantId = :tenantId', { tenantId });
+
     if (query.search) {
-      qb.where(
-        'client.fullName ILIKE :search OR client.phone ILIKE :search',
+      qb.andWhere(
+        '(client.fullName ILIKE :search OR client.phone ILIKE :search)',
         { search: `%${query.search}%` },
       );
     }
@@ -34,9 +36,9 @@ export class ClientsService {
     return { data, total, page, limit };
   }
 
-  async findById(id: string): Promise<Client> {
+  async findById(tenantId: string, id: string): Promise<Client> {
     const client = await this.repo.findOne({
-      where: { id },
+      where: { id, tenantId },
       relations: ['cars', 'checks'],
     });
 
@@ -47,34 +49,35 @@ export class ClientsService {
     return client;
   }
 
-  async findByPhone(phone: string): Promise<Client | null> {
-    return this.repo.findOne({ where: { phone } });
+  async findByPhone(tenantId: string, phone: string): Promise<Client | null> {
+    return this.repo.findOne({ where: { phone, tenantId } });
   }
 
-  async create(dto: CreateClientDto): Promise<Client> {
-    const client = this.repo.create(dto);
+  async create(tenantId: string, dto: CreateClientDto): Promise<Client> {
+    const client = this.repo.create({ ...dto, tenantId });
     return this.repo.save(client);
   }
 
-  async update(id: string, dto: UpdateClientDto): Promise<Client> {
-    const client = await this.findById(id);
+  async update(tenantId: string, id: string, dto: UpdateClientDto): Promise<Client> {
+    const client = await this.findById(tenantId, id);
     Object.assign(client, dto);
     return this.repo.save(client);
   }
 
-  async remove(id: string): Promise<void> {
-    const client = await this.findById(id);
+  async remove(tenantId: string, id: string): Promise<void> {
+    const client = await this.findById(tenantId, id);
     await this.repo.softRemove(client);
   }
 
-  async getClientStats(id: string) {
-    const client = await this.findById(id);
+  async getClientStats(tenantId: string, id: string) {
+    const client = await this.findById(tenantId, id);
 
     const result = await this.repo
       .createQueryBuilder('client')
       .leftJoin('client.checks', 'check')
       .select('COALESCE(SUM(check.totalRevenue), 0)', 'totalPayments')
       .where('client.id = :id', { id })
+      .andWhere('client.tenantId = :tenantId', { tenantId })
       .getRawOne();
 
     return {

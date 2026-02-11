@@ -22,7 +22,7 @@ export class UsersService {
     private readonly repo: Repository<User>,
   ) {}
 
-  async findAll(query: {
+  async findAll(tenantId: string, query: {
     page?: number;
     limit?: number;
     search?: string;
@@ -33,6 +33,8 @@ export class UsersService {
     const skip = (page - 1) * limit;
 
     const qb = this.repo.createQueryBuilder('user');
+
+    qb.where('user.tenantId = :tenantId', { tenantId });
 
     if (query.search) {
       qb.andWhere(
@@ -53,7 +55,20 @@ export class UsersService {
     return { data, total, page, limit };
   }
 
-  async findById(id: string): Promise<User> {
+  async findById(tenantId: string, id: string): Promise<User> {
+    const user = await this.repo.findOne({
+      where: { id, tenantId },
+      relations: ['checks'],
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User with ID "${id}" not found`);
+    }
+
+    return user;
+  }
+
+  async findByIdWithoutTenant(id: string): Promise<User> {
     const user = await this.repo.findOne({
       where: { id },
       relations: ['checks'],
@@ -70,9 +85,9 @@ export class UsersService {
     return this.repo.findOne({ where: { username } });
   }
 
-  async create(dto: CreateUserDto): Promise<User> {
+  async create(tenantId: string, dto: CreateUserDto): Promise<User> {
     const existing = await this.repo.findOne({
-      where: { username: dto.username },
+      where: { username: dto.username, tenantId },
     });
 
     if (existing) {
@@ -89,17 +104,18 @@ export class UsersService {
       ...dto,
       password: hashedPassword,
       permissions,
+      tenantId,
     });
 
     return this.repo.save(user);
   }
 
-  async update(id: string, dto: UpdateUserDto): Promise<User> {
-    const user = await this.findById(id);
+  async update(tenantId: string, id: string, dto: UpdateUserDto): Promise<User> {
+    const user = await this.findById(tenantId, id);
 
     if (dto.username && dto.username !== user.username) {
       const existing = await this.repo.findOne({
-        where: { username: dto.username },
+        where: { username: dto.username, tenantId },
       });
 
       if (existing) {
@@ -119,10 +135,11 @@ export class UsersService {
   }
 
   async updatePermissions(
+    tenantId: string,
     id: string,
     permissions: Partial<UserPermissions>,
   ): Promise<User> {
-    const user = await this.findById(id);
+    const user = await this.findById(tenantId, id);
 
     user.permissions = {
       ...user.permissions,
@@ -132,16 +149,17 @@ export class UsersService {
     return this.repo.save(user);
   }
 
-  async remove(id: string): Promise<void> {
-    const user = await this.findById(id);
+  async remove(tenantId: string, id: string): Promise<void> {
+    const user = await this.findById(tenantId, id);
     await this.repo.softRemove(user);
   }
 
-  async getMasters(): Promise<User[]> {
+  async getMasters(tenantId: string): Promise<User[]> {
     return this.repo.find({
       where: {
         role: UserRole.MASTER,
         isActive: true,
+        tenantId,
       },
       order: { fullName: 'ASC' },
     });

@@ -19,8 +19,8 @@ export class SalaryService {
     private readonly userRepo: Repository<User>,
   ) {}
 
-  async getMasterSalary(masterId: string, query: SalaryQuery) {
-    const master = await this.userRepo.findOne({ where: { id: masterId } });
+  async getMasterSalary(tenantId: string, masterId: string, query: SalaryQuery) {
+    const master = await this.userRepo.findOne({ where: { id: masterId, tenantId } });
     if (!master) {
       throw new NotFoundException(`Master with id ${masterId} not found`);
     }
@@ -45,6 +45,7 @@ export class SalaryService {
     const checks = await this.checkRepo.find({
       where: {
         masterId,
+        tenantId,
         date: Between(dateFrom, dateTo),
       },
       relations: ['client', 'car'],
@@ -86,17 +87,17 @@ export class SalaryService {
     };
   }
 
-  async getMasterSalarySummary(masterId: string) {
-    const master = await this.userRepo.findOne({ where: { id: masterId } });
+  async getMasterSalarySummary(tenantId: string, masterId: string) {
+    const master = await this.userRepo.findOne({ where: { id: masterId, tenantId } });
     if (!master) {
       throw new NotFoundException(`Master with id ${masterId} not found`);
     }
 
     const [today, week, month, total] = await Promise.all([
-      this.calculateEarnings(masterId, 'day'),
-      this.calculateEarnings(masterId, 'week'),
-      this.calculateEarnings(masterId, 'month'),
-      this.calculateEarnings(masterId, null),
+      this.calculateEarnings(tenantId, masterId, 'day'),
+      this.calculateEarnings(tenantId, masterId, 'week'),
+      this.calculateEarnings(tenantId, masterId, 'month'),
+      this.calculateEarnings(tenantId, masterId, null),
     ]);
 
     return {
@@ -109,9 +110,9 @@ export class SalaryService {
     };
   }
 
-  async getAllMastersSalary(query: { dateFrom?: string; dateTo?: string }) {
+  async getAllMastersSalary(tenantId: string, query: { dateFrom?: string; dateTo?: string }) {
     const masters = await this.userRepo.find({
-      where: { isActive: true },
+      where: { isActive: true, tenantId },
     });
 
     let dateFrom: Date | undefined;
@@ -132,6 +133,7 @@ export class SalaryService {
         const checks = await this.checkRepo.find({
           where: {
             masterId: master.id,
+            tenantId,
             date: Between(dateFrom, dateTo),
           },
         });
@@ -159,10 +161,11 @@ export class SalaryService {
   }
 
   private async calculateEarnings(
+    tenantId: string,
     masterId: string,
     period: 'day' | 'week' | 'month' | null,
   ) {
-    let whereCondition: any = { masterId };
+    let whereCondition: any = { masterId, tenantId };
 
     if (period) {
       const range = this.getDateRange(period);

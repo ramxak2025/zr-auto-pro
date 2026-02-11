@@ -21,6 +21,9 @@ export class StockMovement {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Column('uuid')
+  tenantId: string;
+
   @ManyToOne(() => Product)
   @JoinColumn({ name: 'productId' })
   product: Product;

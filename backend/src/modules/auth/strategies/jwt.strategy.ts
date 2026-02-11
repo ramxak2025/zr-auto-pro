@@ -8,6 +8,7 @@ export interface JwtPayload {
   sub: string;
   username: string;
   role: string;
+  tenantId?: string;
 }
 
 @Injectable()
@@ -24,13 +25,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
-    const user = await this.usersService.findById(payload.sub);
+    const tenantId = payload.tenantId;
+    const user = tenantId
+      ? await this.usersService.findById(tenantId, payload.sub)
+      : await this.usersService.findByIdWithoutTenant(payload.sub);
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('User not found or inactive');
     }
 
     const { password, ...result } = user;
-    return result;
+    return {
+      ...result,
+      tenantId: user.tenantId || payload.tenantId,
+    };
   }
 }

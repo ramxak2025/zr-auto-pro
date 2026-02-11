@@ -71,6 +71,7 @@ export class ReportsService {
   ) {}
 
   async getFinancialReport(
+    tenantId: string,
     query: FinancialReportQuery,
   ): Promise<FinancialReportResult> {
     const { dateFrom, dateTo } = query;
@@ -90,6 +91,7 @@ export class ReportsService {
         dateTo,
       })
       .andWhere('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId })
       .getRawOne();
 
     const revenue = parseFloat(result.revenue) || 0;
@@ -112,6 +114,7 @@ export class ReportsService {
   }
 
   async getSalesByMaster(
+    tenantId: string,
     query: DateRangeQuery,
   ): Promise<SalesByMasterResult[]> {
     const { dateFrom, dateTo } = query;
@@ -132,6 +135,7 @@ export class ReportsService {
         dateTo,
       })
       .andWhere('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId })
       .groupBy('check.masterId')
       .addGroupBy('user.fullName')
       .orderBy('revenue', 'DESC')
@@ -147,6 +151,7 @@ export class ReportsService {
   }
 
   async getSalesByService(
+    tenantId: string,
     query: DateRangeQuery,
   ): Promise<SalesByServiceResult[]> {
     const { dateFrom, dateTo } = query;
@@ -162,6 +167,7 @@ export class ReportsService {
         dateTo,
       })
       .andWhere('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId })
       .groupBy('cs.name')
       .orderBy('revenue', 'DESC')
       .getRawMany();
@@ -174,6 +180,7 @@ export class ReportsService {
   }
 
   async getSalesByProduct(
+    tenantId: string,
     query: DateRangeQuery,
   ): Promise<SalesByProductResult[]> {
     const { dateFrom, dateTo } = query;
@@ -194,6 +201,7 @@ export class ReportsService {
         dateTo,
       })
       .andWhere('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId })
       .groupBy('cp.name')
       .orderBy('revenue', 'DESC')
       .getRawMany();
@@ -207,7 +215,7 @@ export class ReportsService {
     }));
   }
 
-  async getDashboardStats(): Promise<DashboardStatsResult> {
+  async getDashboardStats(tenantId: string): Promise<DashboardStatsResult> {
     const now = new Date();
 
     const todayStart = new Date(now);
@@ -234,6 +242,7 @@ export class ReportsService {
         dateTo: todayEnd,
       })
       .andWhere('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId })
       .getRawOne();
 
     const weekResult = await this.checkRepo
@@ -244,6 +253,7 @@ export class ReportsService {
         dateTo: todayEnd,
       })
       .andWhere('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId })
       .getRawOne();
 
     const monthResult = await this.checkRepo
@@ -254,6 +264,7 @@ export class ReportsService {
         dateTo: todayEnd,
       })
       .andWhere('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId })
       .getRawOne();
 
     return {

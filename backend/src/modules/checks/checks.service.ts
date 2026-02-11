@@ -24,7 +24,7 @@ export class ChecksService {
     private productsService: ProductsService,
   ) {}
 
-  async findAll(query: {
+  async findAll(tenantId: string, query: {
     page?: number;
     limit?: number;
     masterId?: string;
@@ -42,7 +42,8 @@ export class ChecksService {
       .leftJoinAndSelect('check.car', 'car')
       .leftJoinAndSelect('check.services', 'services')
       .leftJoinAndSelect('check.products', 'products')
-      .where('check.deletedAt IS NULL');
+      .where('check.deletedAt IS NULL')
+      .andWhere('check.tenantId = :tenantId', { tenantId });
 
     if (query.masterId) {
       qb.andWhere('check.masterId = :masterId', { masterId: query.masterId });
@@ -68,22 +69,22 @@ export class ChecksService {
     return { data, total, page, limit };
   }
 
-  async findById(id: string) {
+  async findById(tenantId: string, id: string) {
     const check = await this.checkRepo.findOne({
-      where: { id },
+      where: { id, tenantId },
       relations: ['master', 'client', 'car', 'services', 'products'],
     });
     if (!check) throw new NotFoundException('Check not found');
     return check;
   }
 
-  async create(dto: CreateCheckDto, userId: string) {
-    const master = await this.userRepo.findOne({ where: { id: dto.masterId } });
+  async create(tenantId: string, dto: CreateCheckDto, userId: string) {
+    const master = await this.userRepo.findOne({ where: { id: dto.masterId, tenantId } });
     if (!master) throw new NotFoundException('Master not found');
 
     const serviceLines: CheckServiceEntity[] = (dto.services || []).map((s) => {
       const line = new CheckServiceEntity();
-      line.serviceId = s.serviceId || null;
+      line.serviceId = s.serviceId || null as any;
       line.name = s.name;
       line.price = s.price;
       line.quantity = s.quantity;
@@ -112,6 +113,7 @@ export class ChecksService {
     const profit = totalRevenue - totalCost;
 
     const check = this.checkRepo.create({
+      tenantId,
       masterId: dto.masterId,
       clientId: dto.clientId,
       carId: dto.carId,
@@ -136,6 +138,7 @@ export class ChecksService {
     for (const p of dto.products || []) {
       try {
         await this.productsService.adjustStock(
+          tenantId,
           p.productId,
           p.quantity,
           MovementType.EXPENSE,
@@ -148,17 +151,17 @@ export class ChecksService {
       }
     }
 
-    return this.findById(saved.id);
+    return this.findById(tenantId, saved.id);
   }
 
-  async update(id: string, dto: UpdateCheckDto) {
-    const check = await this.findById(id);
+  async update(tenantId: string, id: string, dto: UpdateCheckDto) {
+    const check = await this.findById(tenantId, id);
     Object.assign(check, dto);
     return this.checkRepo.save(check);
   }
 
-  async remove(id: string) {
-    const check = await this.findById(id);
+  async remove(tenantId: string, id: string) {
+    const check = await this.findById(tenantId, id);
     return this.checkRepo.softRemove(check);
   }
 }

@@ -1,3 +1,25 @@
+export interface Tenant {
+  id: string;
+  name: string;
+  slug?: string;
+  phone?: string;
+  address?: string;
+  email?: string;
+  description?: string;
+  logo?: string;
+  isActive: boolean;
+  maxUsers: number;
+  users?: User[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlatformStats {
+  totalTenants: number;
+  activeTenants: number;
+  totalUsers: number;
+}
+
 export interface User {
   id: string;
   username: string;
@@ -6,10 +28,13 @@ export interface User {
   salaryPercent: number;
   permissions: UserPermissions;
   isActive: boolean;
+  tenantId?: string;
+  tenant?: Tenant;
   createdAt: string;
 }
 
 export enum UserRole {
+  SUPERADMIN = 'superadmin',
   OWNER = 'owner',
   ADMIN = 'admin',
   MASTER = 'master',

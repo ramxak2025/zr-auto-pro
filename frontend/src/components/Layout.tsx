@@ -24,23 +24,33 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', path: '/', icon: LayoutDashboard },
-  { label: 'Clients', path: '/clients', icon: Users, permission: 'clients_view' },
-  { label: 'Checks', path: '/checks', icon: FileText, permission: 'checks_view' },
-  { label: 'Products', path: '/products', icon: Package, permission: 'warehouse_access' },
-  { label: 'Services', path: '/services', icon: Wrench },
-  { label: 'Suppliers', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
-  { label: 'Salary', path: '/salary', icon: Wallet },
-  { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
-  { label: 'Users', path: '/users', icon: Shield, permission: 'user_management' },
+  { label: 'Главная', path: '/', icon: LayoutDashboard },
+  { label: 'Клиенты', path: '/clients', icon: Users, permission: 'clients_view' },
+  { label: 'Заказ-наряды', path: '/checks', icon: FileText, permission: 'checks_view' },
+  { label: 'Склад', path: '/products', icon: Package, permission: 'warehouse_access' },
+  { label: 'Услуги', path: '/services', icon: Wrench },
+  { label: 'Поставщики', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
+  { label: 'Зарплата', path: '/salary', icon: Wallet },
+  { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
+  { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management' },
 ];
 
 const roleBadgeColors: Record<string, string> = {
+  superadmin: 'bg-red-50 text-red-700',
   owner: 'bg-purple-50 text-purple-700',
   admin: 'bg-blue-50 text-blue-700',
   master: 'bg-green-50 text-green-700',
   storekeeper: 'bg-yellow-50 text-yellow-700',
   accountant: 'bg-gray-100 text-gray-600',
+};
+
+const roleLabels: Record<string, string> = {
+  superadmin: 'Суперадмин',
+  owner: 'Владелец',
+  admin: 'Администратор',
+  master: 'Мастер',
+  storekeeper: 'Товаровед',
+  accountant: 'Бухгалтер',
 };
 
 function getPageTitle(pathname: string): string[] {
@@ -67,9 +77,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
 
   const breadcrumbs = getPageTitle(location.pathname);
-  const roleLabel = user?.role
-    ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
-    : '';
+  const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
@@ -80,9 +88,14 @@ export default function Layout({ children }: { children: ReactNode }) {
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-white">
             <Wrench className="h-5 w-5" />
           </div>
-          <span className="text-lg font-bold text-gray-900 tracking-tight">
-            ZR Auto Pro
-          </span>
+          <div className="min-w-0">
+            <span className="text-lg font-bold text-gray-900 tracking-tight block">
+              ZR Auto Pro
+            </span>
+            {user?.tenant && (
+              <span className="text-xs text-gray-500 truncate block">{user.tenant.name || ''}</span>
+            )}
+          </div>
         </div>
 
         {/* Navigation */}
@@ -177,7 +190,7 @@ export default function Layout({ children }: { children: ReactNode }) {
               title="Logout"
             >
               <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Logout</span>
+              <span className="hidden sm:inline">Выход</span>
             </button>
           </div>
         </header>

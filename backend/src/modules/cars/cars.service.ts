@@ -12,7 +12,7 @@ export class CarsService {
     private readonly repo: Repository<Car>,
   ) {}
 
-  async findAll(query: {
+  async findAll(tenantId: string, query: {
     page?: number;
     limit?: number;
     search?: string;
@@ -23,6 +23,8 @@ export class CarsService {
     const skip = (page - 1) * limit;
 
     const qb = this.repo.createQueryBuilder('car');
+
+    qb.where('car.tenantId = :tenantId', { tenantId });
 
     if (query.search) {
       qb.andWhere(
@@ -43,9 +45,9 @@ export class CarsService {
     return { data, total, page, limit };
   }
 
-  async findById(id: string): Promise<Car> {
+  async findById(tenantId: string, id: string): Promise<Car> {
     const car = await this.repo.findOne({
-      where: { id },
+      where: { id, tenantId },
       relations: ['client', 'checks'],
     });
 
@@ -56,29 +58,29 @@ export class CarsService {
     return car;
   }
 
-  async findByPlateNumber(plateNumber: string): Promise<Car | null> {
-    return this.repo.findOne({ where: { plateNumber } });
+  async findByPlateNumber(tenantId: string, plateNumber: string): Promise<Car | null> {
+    return this.repo.findOne({ where: { plateNumber, tenantId } });
   }
 
-  async create(dto: CreateCarDto): Promise<Car> {
-    const car = this.repo.create(dto);
+  async create(tenantId: string, dto: CreateCarDto): Promise<Car> {
+    const car = this.repo.create({ ...dto, tenantId });
     return this.repo.save(car);
   }
 
-  async update(id: string, dto: UpdateCarDto): Promise<Car> {
-    const car = await this.findById(id);
+  async update(tenantId: string, id: string, dto: UpdateCarDto): Promise<Car> {
+    const car = await this.findById(tenantId, id);
     Object.assign(car, dto);
     return this.repo.save(car);
   }
 
-  async remove(id: string): Promise<void> {
-    const car = await this.findById(id);
+  async remove(tenantId: string, id: string): Promise<void> {
+    const car = await this.findById(tenantId, id);
     await this.repo.softRemove(car);
   }
 
-  async findByClientId(clientId: string): Promise<Car[]> {
+  async findByClientId(tenantId: string, clientId: string): Promise<Car[]> {
     return this.repo.find({
-      where: { clientId },
+      where: { clientId, tenantId },
       order: { createdAt: 'DESC' },
     });
   }

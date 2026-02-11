@@ -22,7 +22,7 @@ export class ProductsService {
     private readonly movementRepo: Repository<StockMovement>,
   ) {}
 
-  async findAll(query: {
+  async findAll(tenantId: string, query: {
     page?: number;
     limit?: number;
     search?: string;
@@ -34,6 +34,8 @@ export class ProductsService {
     const skip = (page - 1) * limit;
 
     const qb = this.repo.createQueryBuilder('product');
+
+    qb.where('product.tenantId = :tenantId', { tenantId });
 
     if (query.search) {
       qb.andWhere('product.name ILIKE :search', {
@@ -59,9 +61,9 @@ export class ProductsService {
     return { data, total, page, limit };
   }
 
-  async findById(id: string): Promise<Product> {
+  async findById(tenantId: string, id: string): Promise<Product> {
     const product = await this.repo.findOne({
-      where: { id },
+      where: { id, tenantId },
       relations: ['supplier'],
     });
 
@@ -72,27 +74,28 @@ export class ProductsService {
     return product;
   }
 
-  async create(dto: CreateProductDto): Promise<Product> {
-    const product = this.repo.create(dto);
+  async create(tenantId: string, dto: CreateProductDto): Promise<Product> {
+    const product = this.repo.create({ ...dto, tenantId });
     return this.repo.save(product);
   }
 
-  async update(id: string, dto: UpdateProductDto): Promise<Product> {
-    const product = await this.findById(id);
+  async update(tenantId: string, id: string, dto: UpdateProductDto): Promise<Product> {
+    const product = await this.findById(tenantId, id);
     Object.assign(product, dto);
     return this.repo.save(product);
   }
 
-  async remove(id: string): Promise<void> {
-    const product = await this.findById(id);
+  async remove(tenantId: string, id: string): Promise<void> {
+    const product = await this.findById(tenantId, id);
     await this.repo.softRemove(product);
   }
 
-  async getCategories(): Promise<string[]> {
+  async getCategories(tenantId: string): Promise<string[]> {
     const results = await this.repo
       .createQueryBuilder('product')
       .select('DISTINCT product.category', 'category')
-      .where('product.category IS NOT NULL')
+      .where('product.tenantId = :tenantId', { tenantId })
+      .andWhere('product.category IS NOT NULL')
       .andWhere('product.category != :empty', { empty: '' })
       .orderBy('product.category', 'ASC')
       .getRawMany();
@@ -101,6 +104,7 @@ export class ProductsService {
   }
 
   async adjustStock(
+    tenantId: string,
     productId: string,
     quantity: number,
     type: MovementType,
@@ -108,7 +112,7 @@ export class ProductsService {
     reason?: string,
     referenceId?: string,
   ): Promise<StockMovement> {
-    const product = await this.findById(productId);
+    const product = await this.findById(tenantId, productId);
     const stockBefore = product.stock;
 
     let stockAfter: number;
@@ -142,6 +146,7 @@ export class ProductsService {
       reason,
       referenceId,
       userId,
+      tenantId,
     });
 
     await this.movementRepo.save(movement);
@@ -153,6 +158,7 @@ export class ProductsService {
   }
 
   async getMovements(
+    tenantId: string,
     productId: string,
     query: { page?: number; limit?: number },
   ): Promise<{ data: StockMovement[]; total: number; page: number; limit: number }> {
@@ -161,7 +167,7 @@ export class ProductsService {
     const skip = (page - 1) * limit;
 
     const [data, total] = await this.movementRepo.findAndCount({
-      where: { productId },
+      where: { productId, tenantId },
       order: { createdAt: 'DESC' },
       relations: ['user'],
       skip,
@@ -171,21 +177,24 @@ export class ProductsService {
     return { data, total, page, limit };
   }
 
-  async getLowStockProducts(): Promise<Product[]> {
+  async getLowStockProducts(tenantId: string): Promise<Product[]> {
     return this.repo
       .createQueryBuilder('product')
-      .where('product.stock <= product.minStock')
+      .where('product.tenantId = :tenantId', { tenantId })
+      .andWhere('product.stock <= product.minStock')
       .orderBy('product.name', 'ASC')
       .getMany();
   }
 
   async inventoryAdjust(
+    tenantId: string,
     productId: string,
     actualStock: number,
     userId: string,
     reason?: string,
   ): Promise<StockMovement> {
     return this.adjustStock(
+      tenantId,
       productId,
       actualStock,
       MovementType.INVENTORY,

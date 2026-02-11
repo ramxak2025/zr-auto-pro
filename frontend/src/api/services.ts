@@ -1,6 +1,8 @@
 import api from './axios';
 import type {
   User,
+  Tenant,
+  PlatformStats,
   Client,
   Car,
   Product,
@@ -24,6 +26,19 @@ export const authApi = {
   register: (data: { username: string; password: string; fullName: string; role: string; salaryPercent?: number }) =>
     api.post<User>('/auth/register', data),
   getProfile: () => api.get<User>('/auth/profile'),
+};
+
+// Admin - Tenants (SuperAdmin only)
+export const adminApi = {
+  getTenants: (params?: Record<string, any>) =>
+    api.get<PaginatedResponse<Tenant>>('/admin/tenants', { params }),
+  getTenant: (id: string) => api.get<Tenant>(`/admin/tenants/${id}`),
+  getStats: () => api.get<PlatformStats>('/admin/tenants/stats'),
+  createTenant: (data: any) => api.post<Tenant>('/admin/tenants', data),
+  updateTenant: (id: string, data: any) => api.patch<Tenant>(`/admin/tenants/${id}`, data),
+  activateTenant: (id: string) => api.post(`/admin/tenants/${id}/activate`),
+  deactivateTenant: (id: string) => api.post(`/admin/tenants/${id}/deactivate`),
+  deleteTenant: (id: string) => api.delete(`/admin/tenants/${id}`),
 };
 
 // Users

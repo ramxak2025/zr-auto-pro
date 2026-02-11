@@ -12,7 +12,7 @@ export class ServicesService {
     private readonly repo: Repository<Service>,
   ) {}
 
-  async findAll(query: {
+  async findAll(tenantId: string, query: {
     page?: number;
     limit?: number;
     search?: string;
@@ -22,7 +22,7 @@ export class ServicesService {
     const limit = Number(query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const where: any = { tenantId };
 
     if (query.search) {
       where.name = ILike(`%${query.search}%`);
@@ -42,8 +42,8 @@ export class ServicesService {
     return { data, total, page, limit };
   }
 
-  async findById(id: string): Promise<Service> {
-    const service = await this.repo.findOne({ where: { id } });
+  async findById(tenantId: string, id: string): Promise<Service> {
+    const service = await this.repo.findOne({ where: { id, tenantId } });
 
     if (!service) {
       throw new NotFoundException(`Service with ID "${id}" not found`);
@@ -52,27 +52,28 @@ export class ServicesService {
     return service;
   }
 
-  async create(dto: CreateServiceDto): Promise<Service> {
-    const service = this.repo.create(dto);
+  async create(tenantId: string, dto: CreateServiceDto): Promise<Service> {
+    const service = this.repo.create({ ...dto, tenantId });
     return this.repo.save(service);
   }
 
-  async update(id: string, dto: UpdateServiceDto): Promise<Service> {
-    const service = await this.findById(id);
+  async update(tenantId: string, id: string, dto: UpdateServiceDto): Promise<Service> {
+    const service = await this.findById(tenantId, id);
     Object.assign(service, dto);
     return this.repo.save(service);
   }
 
-  async remove(id: string): Promise<void> {
-    const service = await this.findById(id);
+  async remove(tenantId: string, id: string): Promise<void> {
+    const service = await this.findById(tenantId, id);
     await this.repo.softRemove(service);
   }
 
-  async getCategories(): Promise<string[]> {
+  async getCategories(tenantId: string): Promise<string[]> {
     const results = await this.repo
       .createQueryBuilder('service')
       .select('DISTINCT service.category', 'category')
-      .where('service.category IS NOT NULL')
+      .where('service.tenantId = :tenantId', { tenantId })
+      .andWhere('service.category IS NOT NULL')
       .andWhere('service.deletedAt IS NULL')
       .orderBy('service.category', 'ASC')
       .getRawMany();

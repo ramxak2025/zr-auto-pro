@@ -29,6 +29,10 @@ export class Check {
   id: string;
 
   @Index()
+  @Column('uuid')
+  tenantId: string;
+
+  @Index()
   @Column({ type: 'int', generated: 'increment' })
   number: number;
 

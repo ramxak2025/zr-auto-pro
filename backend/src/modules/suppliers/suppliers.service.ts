@@ -28,15 +28,17 @@ export class SuppliersService {
 
   // ─── Supplier CRUD ───────────────────────────────────────────
 
-  async findAll(query: { page?: number; limit?: number; search?: string }) {
+  async findAll(tenantId: string, query: { page?: number; limit?: number; search?: string }) {
     const page = query.page || 1;
     const limit = query.limit || 20;
     const skip = (page - 1) * limit;
 
     const qb = this.repo.createQueryBuilder('supplier');
 
+    qb.where('supplier.tenantId = :tenantId', { tenantId });
+
     if (query.search) {
-      qb.where('supplier.name ILIKE :search', {
+      qb.andWhere('supplier.name ILIKE :search', {
         search: `%${query.search}%`,
       });
     }
@@ -49,9 +51,9 @@ export class SuppliersService {
     return { data, total, page, limit };
   }
 
-  async findById(id: string): Promise<Supplier> {
+  async findById(tenantId: string, id: string): Promise<Supplier> {
     const supplier = await this.repo.findOne({
-      where: { id },
+      where: { id, tenantId },
       relations: ['deliveries', 'payments'],
     });
 
@@ -62,26 +64,26 @@ export class SuppliersService {
     return supplier;
   }
 
-  async create(dto: CreateSupplierDto): Promise<Supplier> {
-    const supplier = this.repo.create(dto);
+  async create(tenantId: string, dto: CreateSupplierDto): Promise<Supplier> {
+    const supplier = this.repo.create({ ...dto, tenantId });
     return this.repo.save(supplier);
   }
 
-  async update(id: string, dto: UpdateSupplierDto): Promise<Supplier> {
-    const supplier = await this.findById(id);
+  async update(tenantId: string, id: string, dto: UpdateSupplierDto): Promise<Supplier> {
+    const supplier = await this.findById(tenantId, id);
     Object.assign(supplier, dto);
     return this.repo.save(supplier);
   }
 
-  async remove(id: string): Promise<void> {
-    const supplier = await this.findById(id);
+  async remove(tenantId: string, id: string): Promise<void> {
+    const supplier = await this.findById(tenantId, id);
     await this.repo.softRemove(supplier);
   }
 
   // ─── Deliveries ──────────────────────────────────────────────
 
-  async createDelivery(dto: CreateDeliveryDto, userId?: string): Promise<Delivery> {
-    const supplier = await this.findById(dto.supplierId);
+  async createDelivery(tenantId: string, dto: CreateDeliveryDto, userId: string): Promise<Delivery> {
+    const supplier = await this.findById(tenantId, dto.supplierId);
 
     // Build delivery items and calculate totals
     const deliveryItems: Partial<DeliveryItem>[] = [];
@@ -105,6 +107,7 @@ export class SuppliersService {
       comment: dto.comment,
       date: dto.date || new Date(),
       totalAmount,
+      tenantId,
       items: deliveryItems as DeliveryItem[],
     });
 
@@ -113,6 +116,7 @@ export class SuppliersService {
     // For each item: adjust product stock and update costPrice
     for (const item of dto.items) {
       await this.productsService.adjustStock(
+        tenantId,
         item.productId,
         item.quantity,
         MovementType.INCOME,
@@ -122,7 +126,7 @@ export class SuppliersService {
       );
 
       // Update product costPrice to the delivery price
-      await this.productsService.update(item.productId, {
+      await this.productsService.update(tenantId, item.productId, {
         costPrice: item.price,
       });
     }
@@ -136,6 +140,7 @@ export class SuppliersService {
   }
 
   async getDeliveries(
+    tenantId: string,
     supplierId: string,
     query: { page?: number; limit?: number },
   ) {
@@ -144,7 +149,7 @@ export class SuppliersService {
     const skip = (page - 1) * limit;
 
     const [data, total] = await this.deliveryRepo.findAndCount({
-      where: { supplierId },
+      where: { supplierId, tenantId },
       order: { date: 'DESC' },
       skip,
       take: limit,
@@ -155,14 +160,15 @@ export class SuppliersService {
 
   // ─── Payments ────────────────────────────────────────────────
 
-  async createPayment(dto: CreatePaymentDto): Promise<SupplierPayment> {
-    const supplier = await this.findById(dto.supplierId);
+  async createPayment(tenantId: string, dto: CreatePaymentDto): Promise<SupplierPayment> {
+    const supplier = await this.findById(tenantId, dto.supplierId);
 
     const payment = this.paymentRepo.create({
       supplierId: dto.supplierId,
       amount: dto.amount,
       comment: dto.comment,
       date: dto.date || new Date(),
+      tenantId,
     });
 
     const savedPayment = await this.paymentRepo.save(payment);
@@ -176,6 +182,7 @@ export class SuppliersService {
   }
 
   async getPayments(
+    tenantId: string,
     supplierId: string,
     query: { page?: number; limit?: number },
   ) {
@@ -184,7 +191,7 @@ export class SuppliersService {
     const skip = (page - 1) * limit;
 
     const [data, total] = await this.paymentRepo.findAndCount({
-      where: { supplierId },
+      where: { supplierId, tenantId },
       order: { date: 'DESC' },
       skip,
       take: limit,

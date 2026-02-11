@@ -17,6 +17,10 @@ export class Supplier {
   id: string;
 
   @Index()
+  @Column('uuid')
+  tenantId: string;
+
+  @Index()
   @Column()
   name: string;
 

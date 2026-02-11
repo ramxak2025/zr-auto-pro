@@ -10,9 +10,11 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { TenantGuard } from './guards/tenant.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
 import { RequirePermissions } from './decorators/permissions.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { TenantId } from './decorators/tenant-id.decorator';
 import { User } from '../users/entities/user.entity';
 
 @Controller('auth')
@@ -38,10 +40,10 @@ export class AuthController {
   }
 
   @Post('register')
-  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @RequirePermissions('user_management')
-  async register(@Body() registerDto: RegisterDto) {
-    return this.authService.register(registerDto);
+  async register(@TenantId() tenantId: string, @Body() registerDto: RegisterDto) {
+    return this.authService.register(tenantId, registerDto);
   }
 
   @Get('profile')

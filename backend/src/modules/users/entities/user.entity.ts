@@ -6,11 +6,16 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   OneToMany,
+  ManyToOne,
+  JoinColumn,
+  Index,
 } from 'typeorm';
 import { Exclude } from 'class-transformer';
 import { Check } from '../../checks/entities/check.entity';
+import { Tenant } from '../../tenants/entities/tenant.entity';
 
 export enum UserRole {
+  SUPERADMIN = 'superadmin',
   OWNER = 'owner',
   ADMIN = 'admin',
   MASTER = 'master',
@@ -33,7 +38,21 @@ export interface UserPermissions {
   user_management: boolean;
 }
 
-export const DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
+export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
+  [UserRole.SUPERADMIN]: {
+    checks_view: true,
+    checks_create: true,
+    checks_edit: true,
+    checks_delete: true,
+    profit_view: true,
+    clients_view: true,
+    clients_edit: true,
+    warehouse_access: true,
+    suppliers_access: true,
+    financial_reports: true,
+    export_data: true,
+    user_management: true,
+  },
   [UserRole.OWNER]: {
     checks_view: true,
     checks_create: true,
@@ -132,6 +151,14 @@ export class User {
 
   @Column({ default: true })
   isActive: boolean;
+
+  @Index()
+  @ManyToOne(() => Tenant, (tenant) => tenant.users, { nullable: true, onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'tenantId' })
+  tenant: Tenant;
+
+  @Column('uuid', { nullable: true })
+  tenantId: string;
 
   @OneToMany(() => Check, (check) => check.master)
   checks: Check[];
