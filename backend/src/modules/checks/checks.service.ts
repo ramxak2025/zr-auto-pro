@@ -5,6 +5,7 @@ import { Check } from './entities/check.entity';
 import { CheckService as CheckServiceEntity } from './entities/check-service.entity';
 import { CheckProduct } from './entities/check-product.entity';
 import { User } from '../users/entities/user.entity';
+import { Tenant } from '../tenants/entities/tenant.entity';
 import { ProductsService } from '../products/products.service';
 import { MovementType } from '../products/entities/stock-movement.entity';
 import { CreateCheckDto } from './dto/create-check.dto';
@@ -21,6 +22,8 @@ export class ChecksService {
     private checkProductRepo: Repository<CheckProduct>,
     @InjectRepository(User)
     private userRepo: Repository<User>,
+    @InjectRepository(Tenant)
+    private tenantRepo: Repository<Tenant>,
     private productsService: ProductsService,
   ) {}
 
@@ -163,5 +166,10 @@ export class ChecksService {
   async remove(tenantId: string, id: string) {
     const check = await this.findById(tenantId, id);
     return this.checkRepo.softRemove(check);
+  }
+
+  async getTenantName(tenantId: string): Promise<string> {
+    const tenant = await this.tenantRepo.findOne({ where: { id: tenantId } });
+    return tenant?.name || 'Автосервис';
   }
 }

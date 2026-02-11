@@ -11,6 +11,7 @@ import {
   CreditCard,
   MessageSquare,
   Loader2,
+  Printer,
 } from 'lucide-react';
 import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -132,15 +133,29 @@ export default function CheckDetailPage() {
           </div>
         </div>
 
-        {hasPermission('checks_delete') && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setDeleteOpen(true)}
-            className="flex items-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+            onClick={() => {
+              const url = checksApi.getPrintUrl(id!);
+              const token = localStorage.getItem('token');
+              window.open(`${url}?token=${token}`, '_blank');
+            }}
+            className="flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
           >
-            <Trash2 className="h-4 w-4" />
-            Удалить
+            <Printer className="h-4 w-4" />
+            Печать
           </button>
-        )}
+
+          {hasPermission('checks_delete') && (
+            <button
+              onClick={() => setDeleteOpen(true)}
+              className="flex items-center gap-2 rounded-lg border border-red-300 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+            >
+              <Trash2 className="h-4 w-4" />
+              Удалить
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Info card */}

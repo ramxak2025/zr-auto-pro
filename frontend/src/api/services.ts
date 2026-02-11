@@ -112,6 +112,7 @@ export const checksApi = {
   create: (data: any) => api.post<Check>('/checks', data),
   update: (id: string, data: any) => api.patch<Check>(`/checks/${id}`, data),
   delete: (id: string) => api.delete(`/checks/${id}`),
+  getPrintUrl: (id: string) => `/api/checks/${id}/print`,
 };
 
 // Salary
@@ -143,6 +144,19 @@ export const suppliersApi = {
     api.get<PaginatedResponse<SupplierPayment>>(`/suppliers/${id}/payments`, { params }),
   createPayment: (id: string, data: any) =>
     api.post<SupplierPayment>(`/suppliers/${id}/payments`, data),
+};
+
+// Uploads
+export const uploadsApi = {
+  upload: (file: File, folder?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post<{ url: string }>(
+      `/uploads${folder ? `?folder=${folder}` : ''}`,
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    );
+  },
 };
 
 // Reports

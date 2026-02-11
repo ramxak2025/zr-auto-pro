@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, useRef, FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -10,8 +10,10 @@ import {
   PackageMinus,
   ClipboardCheck,
   AlertTriangle,
+  ImagePlus,
+  X,
 } from 'lucide-react';
-import { productsApi } from '../api/services';
+import { productsApi, uploadsApi } from '../api/services';
 import type { Product, PaginatedResponse } from '../types';
 import SearchInput from '../components/SearchInput';
 import Pagination from '../components/Pagination';
@@ -35,6 +37,7 @@ function formatMoney(value: number): string {
 interface ProductFormData {
   name: string;
   category: string;
+  photo?: string;
   costPrice: number;
   sellPrice: number;
   stock: number;
@@ -60,10 +63,30 @@ function ProductFormModal({
 }: ProductFormModalProps) {
   const [name, setName] = useState(product?.name || '');
   const [category, setCategory] = useState(product?.category || '');
+  const [photo, setPhoto] = useState(product?.photo || '');
+  const [uploading, setUploading] = useState(false);
   const [costPrice, setCostPrice] = useState(product?.costPrice?.toString() || '0');
   const [sellPrice, setSellPrice] = useState(product?.sellPrice?.toString() || '0');
   const [stock, setStock] = useState(product?.stock?.toString() || '0');
   const [minStock, setMinStock] = useState(product?.minStock?.toString() || '0');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handlePhotoUpload(file: File) {
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Максимальный размер файла: 5 МБ');
+      return;
+    }
+    setUploading(true);
+    try {
+      const res = await uploadsApi.upload(file, 'products');
+      setPhoto(res.data.url);
+      toast.success('Фото загружено');
+    } catch {
+      toast.error('Не удалось загрузить фото');
+    } finally {
+      setUploading(false);
+    }
+  }
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -74,6 +97,7 @@ function ProductFormModal({
     onSubmit({
       name: name.trim(),
       category: category.trim(),
+      photo: photo || undefined,
       costPrice: parseFloat(costPrice) || 0,
       sellPrice: parseFloat(sellPrice) || 0,
       stock: parseInt(stock) || 0,
@@ -89,6 +113,64 @@ function ProductFormModal({
       size="lg"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">
+            Фото товара
+          </label>
+          <div className="flex items-center gap-4">
+            {photo ? (
+              <div className="relative">
+                <img
+                  src={photo}
+                  alt="Фото товара"
+                  className="h-20 w-20 rounded-lg object-cover border border-gray-200"
+                />
+                <button
+                  type="button"
+                  onClick={() => setPhoto('')}
+                  className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-white hover:bg-red-600"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+                className="flex h-20 w-20 flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 text-gray-400 transition-colors hover:border-primary-400 hover:text-primary-500"
+              >
+                {uploading ? (
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                ) : (
+                  <>
+                    <ImagePlus className="h-6 w-6" />
+                    <span className="text-[10px] mt-1">Загрузить</span>
+                  </>
+                )}
+              </button>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handlePhotoUpload(file);
+                e.target.value = '';
+              }}
+            />
+            {!photo && (
+              <p className="text-xs text-gray-500">
+                JPEG, PNG, WebP. Макс. 5 МБ.
+                <br />
+                Все мастера смогут видеть фото.
+              </p>
+            )}
+          </div>
+        </div>
+
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
             Название <span className="text-red-500">*</span>
@@ -181,14 +263,14 @@ function ProductFormModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={isLoading}
+            disabled={isLoading || uploading}
             className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
           >
             Отмена
           </button>
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={isLoading || uploading}
             className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
           >
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -664,6 +746,7 @@ export default function ProductsPage() {
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50/50">
+                    <th className="px-4 py-3 font-semibold text-gray-600 w-12"></th>
                     <th className="px-4 py-3 font-semibold text-gray-600">Название</th>
                     <th className="px-4 py-3 font-semibold text-gray-600">Категория</th>
                     <th className="px-4 py-3 font-semibold text-gray-600 text-right">
@@ -691,6 +774,19 @@ export default function ProductsPage() {
                         key={product.id}
                         className="transition-colors hover:bg-gray-50"
                       >
+                        <td className="px-4 py-3">
+                          {product.photo ? (
+                            <img
+                              src={product.photo}
+                              alt={product.name}
+                              className="h-8 w-8 rounded object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-8 w-8 items-center justify-center rounded bg-gray-100 text-gray-400">
+                              <Package className="h-4 w-4" />
+                            </div>
+                          )}
+                        </td>
                         <td className="px-4 py-3 font-medium text-gray-900">
                           {product.name}
                         </td>
