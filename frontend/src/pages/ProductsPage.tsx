@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   ImagePlus,
   X,
+  ChevronDown,
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
 import type { Product, PaginatedResponse } from '../types';
@@ -629,84 +630,101 @@ export default function ProductsPage() {
   const total = productsData?.total || 0;
   const isMutating = createMutation.isPending || updateMutation.isPending;
 
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const hasFilters = !!(search || categoryFilter || lowStockOnly);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Склад</h1>
-          <p className="text-sm text-gray-500 mt-1">Всего: {total}</p>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Склад</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Всего: {total}</p>
         </div>
         <button
           onClick={openCreate}
-          className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
+          className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 md:px-4 py-2 md:py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
         >
           <Plus className="h-4 w-4" />
-          Добавить товар
+          <span className="hidden sm:inline">Добавить товар</span>
         </button>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-end gap-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-        <div className="w-64">
-          <SearchInput
-            value={search}
-            onChange={handleSearchChange}
-            placeholder="Поиск по названию..."
-          />
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+        {/* Mobile filter toggle */}
+        <button
+          type="button"
+          onClick={() => setFiltersOpen((v) => !v)}
+          className="md:hidden flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-gray-700"
+        >
+          <span>Фильтры{hasFilters ? ' (активны)' : ''}</span>
+          <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
+        </button>
+
+        <div className={`${filtersOpen ? 'block' : 'hidden'} md:block`}>
+          <div className="flex flex-col md:flex-row md:flex-wrap md:items-end gap-3 md:gap-4 p-4 pt-0 md:pt-4">
+            <div className="w-full md:w-64">
+              <SearchInput
+                value={search}
+                onChange={handleSearchChange}
+                placeholder="Поиск по названию..."
+              />
+            </div>
+
+            <div className="flex-1 min-w-0 md:flex-initial">
+              <label className="block text-xs font-medium text-gray-500 mb-1">
+                Категория
+              </label>
+              <select
+                value={categoryFilter}
+                onChange={(e) => {
+                  setCategoryFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 md:min-w-[180px] focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
+              >
+                <option value="">Все категории</option>
+                {categories.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <label className="flex items-center gap-2 pb-0.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={lowStockOnly}
+                onChange={(e) => {
+                  setLowStockOnly(e.target.checked);
+                  setPage(1);
+                }}
+                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span className="flex items-center gap-1.5 text-sm text-gray-700">
+                <AlertTriangle className="h-4 w-4 text-orange-500" />
+                Мало на складе
+              </span>
+            </label>
+
+            {hasFilters && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setCategoryFilter('');
+                  setLowStockOnly(false);
+                  setPage(1);
+                }}
+                className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors md:pb-0.5"
+              >
+                Сбросить
+              </button>
+            )}
+          </div>
         </div>
-
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">
-            Категория
-          </label>
-          <select
-            value={categoryFilter}
-            onChange={(e) => {
-              setCategoryFilter(e.target.value);
-              setPage(1);
-            }}
-            className="block rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 min-w-[180px] focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
-          >
-            <option value="">Все категории</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <label className="flex items-center gap-2 pb-0.5 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={lowStockOnly}
-            onChange={(e) => {
-              setLowStockOnly(e.target.checked);
-              setPage(1);
-            }}
-            className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-          />
-          <span className="flex items-center gap-1.5 text-sm text-gray-700">
-            <AlertTriangle className="h-4 w-4 text-orange-500" />
-            Мало на складе
-          </span>
-        </label>
-
-        {(search || categoryFilter || lowStockOnly) && (
-          <button
-            type="button"
-            onClick={() => {
-              setSearch('');
-              setCategoryFilter('');
-              setLowStockOnly(false);
-              setPage(1);
-            }}
-            className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors pb-0.5"
-          >
-            Сбросить
-          </button>
-        )}
       </div>
 
       {/* Content */}
@@ -741,7 +759,56 @@ export default function ProductsPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          {/* ─── Mobile card list ─── */}
+          <div className="md:hidden space-y-3">
+            {products.map((product) => {
+              const isLow = product.stock <= product.minStock;
+              return (
+                <div
+                  key={product.id}
+                  className="bg-white rounded-xl border border-gray-100 shadow-sm p-4"
+                >
+                  <div className="flex items-start gap-3">
+                    {product.photo ? (
+                      <img src={product.photo} alt={product.name} className="h-12 w-12 rounded-lg object-cover border border-gray-200" />
+                    ) : (
+                      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-100 text-gray-400 flex-shrink-0">
+                        <Package className="h-6 w-6" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
+                      {product.category && <p className="text-xs text-gray-500">{product.category}</p>}
+                      <div className="flex items-center gap-3 mt-1.5">
+                        <span className="text-sm font-medium text-gray-900">{formatMoney(product.sellPrice)}</span>
+                        <span className={`text-xs font-medium ${isLow ? 'text-red-600' : 'text-gray-500'}`}>
+                          {isLow && <AlertTriangle className="inline h-3 w-3 mr-0.5 -mt-0.5" />}
+                          {product.stock} шт.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-1 mt-3 pt-2 border-t border-gray-50">
+                    <button onClick={() => openEdit(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => setWriteoffTarget(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-orange-50 hover:text-orange-600">
+                      <PackageMinus className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => setInventoryTarget(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-blue-50 hover:text-blue-600">
+                      <ClipboardCheck className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => setDeleteTarget(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ─── Desktop table ─── */}
+          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>

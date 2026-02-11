@@ -404,14 +404,14 @@ export default function CheckCreatePage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <button
           onClick={() => navigate('/checks')}
           className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-600 transition-colors hover:bg-gray-50"
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <h1 className="text-2xl font-bold text-gray-900">Новый чек</h1>
+        <h1 className="text-xl md:text-2xl font-bold text-gray-900">Новый чек</h1>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -562,52 +562,56 @@ export default function CheckCreatePage() {
               {serviceLines.map((line) => (
                 <div
                   key={line.key}
-                  className="flex items-center gap-3 rounded-lg border border-gray-200 p-3"
+                  className="rounded-lg border border-gray-200 p-3 space-y-2"
                 >
-                  <input
-                    type="text"
-                    value={line.name}
-                    onChange={(e) =>
-                      updateServiceLine(line.key, { name: e.target.value })
-                    }
-                    placeholder="Название услуги"
-                    className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                  />
-                  <input
-                    type="number"
-                    value={line.price}
-                    onChange={(e) =>
-                      updateServiceLine(line.key, {
-                        price: parseFloat(e.target.value) || 0,
-                      })
-                    }
-                    min="0"
-                    step="0.01"
-                    placeholder="Цена"
-                    className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                  />
-                  <input
-                    type="number"
-                    value={line.quantity}
-                    onChange={(e) =>
-                      updateServiceLine(line.key, {
-                        quantity: parseInt(e.target.value) || 1,
-                      })
-                    }
-                    min="1"
-                    placeholder="Кол-во"
-                    className="w-20 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                  />
-                  <span className="w-28 text-right text-sm font-medium text-gray-900">
-                    {formatMoney(line.price * line.quantity)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeServiceLine(line.key)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={line.name}
+                      onChange={(e) =>
+                        updateServiceLine(line.key, { name: e.target.value })
+                      }
+                      placeholder="Название услуги"
+                      className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeServiceLine(line.key)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 flex-shrink-0"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={line.price}
+                      onChange={(e) =>
+                        updateServiceLine(line.key, {
+                          price: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                      min="0"
+                      step="0.01"
+                      placeholder="Цена"
+                      className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
+                    />
+                    <input
+                      type="number"
+                      value={line.quantity}
+                      onChange={(e) =>
+                        updateServiceLine(line.key, {
+                          quantity: parseInt(e.target.value) || 1,
+                        })
+                      }
+                      min="1"
+                      placeholder="Кол-во"
+                      className="w-20 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
+                    />
+                    <span className="w-24 text-right text-sm font-medium text-gray-900 flex-shrink-0">
+                      {formatMoney(line.price * line.quantity)}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -636,55 +640,59 @@ export default function CheckCreatePage() {
               {productLines.map((line) => (
                 <div
                   key={line.key}
-                  className="flex items-center gap-3 rounded-lg border border-gray-200 p-3"
+                  className="rounded-lg border border-gray-200 p-3 space-y-2"
                 >
-                  <select
-                    value={line.productId}
-                    onChange={(e) => selectProduct(line.key, e.target.value)}
-                    className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                  >
-                    <option value="">Выберите товар</option>
-                    {allProducts.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name} (остаток: {p.stock})
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="number"
-                    value={line.sellPrice}
-                    onChange={(e) =>
-                      updateProductLine(line.key, {
-                        sellPrice: parseFloat(e.target.value) || 0,
-                      })
-                    }
-                    min="0"
-                    step="0.01"
-                    placeholder="Цена продажи"
-                    className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                  />
-                  <input
-                    type="number"
-                    value={line.quantity}
-                    onChange={(e) =>
-                      updateProductLine(line.key, {
-                        quantity: parseInt(e.target.value) || 1,
-                      })
-                    }
-                    min="1"
-                    placeholder="Кол-во"
-                    className="w-20 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-                  />
-                  <span className="w-28 text-right text-sm font-medium text-gray-900">
-                    {formatMoney(line.sellPrice * line.quantity)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeProductLine(line.key)}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={line.productId}
+                      onChange={(e) => selectProduct(line.key, e.target.value)}
+                      className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
+                    >
+                      <option value="">Выберите товар</option>
+                      {allProducts.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} (остаток: {p.stock})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => removeProductLine(line.key)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 flex-shrink-0"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={line.sellPrice}
+                      onChange={(e) =>
+                        updateProductLine(line.key, {
+                          sellPrice: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                      min="0"
+                      step="0.01"
+                      placeholder="Цена продажи"
+                      className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
+                    />
+                    <input
+                      type="number"
+                      value={line.quantity}
+                      onChange={(e) =>
+                        updateProductLine(line.key, {
+                          quantity: parseInt(e.target.value) || 1,
+                        })
+                      }
+                      min="1"
+                      placeholder="Кол-во"
+                      className="w-20 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
+                    />
+                    <span className="w-24 text-right text-sm font-medium text-gray-900 flex-shrink-0">
+                      {formatMoney(line.sellPrice * line.quantity)}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -758,7 +766,7 @@ export default function CheckCreatePage() {
         </div>
 
         {/* Submit */}
-        <div className="flex items-center justify-end gap-3">
+        <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center sm:justify-end gap-3">
           <button
             type="button"
             onClick={() => navigate('/checks')}
@@ -769,7 +777,7 @@ export default function CheckCreatePage() {
           <button
             type="submit"
             disabled={createMutation.isPending}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
+            className="flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
           >
             {createMutation.isPending && (
               <Loader2 className="h-4 w-4 animate-spin" />

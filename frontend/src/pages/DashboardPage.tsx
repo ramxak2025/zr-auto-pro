@@ -87,7 +87,7 @@ function QuickActions() {
 
   const actions: QuickAction[] = [
     {
-      label: 'Новый заказ-наряд',
+      label: 'Новый чек',
       to: '/checks/new',
       icon: <PlusCircle className="h-5 w-5" />,
       permissionKey: 'checks_create',
@@ -99,7 +99,7 @@ function QuickActions() {
       permissionKey: 'clients_view',
     },
     {
-      label: 'Заказ-наряды',
+      label: 'Журнал чеков',
       to: '/checks',
       icon: <FileText className="h-5 w-5" />,
       permissionKey: 'checks_view',

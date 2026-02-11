@@ -255,24 +255,24 @@ export default function ClientsPage() {
   // ---- Render ----
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Клиенты</h1>
-          <p className="text-sm text-gray-500 mt-1">Всего: {total}</p>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Клиенты</h1>
+          <p className="text-sm text-gray-500 mt-0.5">Всего: {total}</p>
         </div>
         <button
           onClick={openCreate}
-          className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
+          className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 md:px-4 py-2 md:py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
         >
           <Plus className="h-4 w-4" />
-          Добавить клиента
+          <span className="hidden sm:inline">Добавить клиента</span>
         </button>
       </div>
 
       {/* Search */}
-      <div className="max-w-sm">
+      <div className="max-w-full md:max-w-sm">
         <SearchInput
           value={search}
           onChange={handleSearchChange}
@@ -312,7 +312,42 @@ export default function ClientsPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          {/* ─── Mobile card list ─── */}
+          <div className="md:hidden space-y-3">
+            {clients.map((client) => (
+              <button
+                key={client.id}
+                type="button"
+                onClick={() => navigate(`/clients/${client.id}`)}
+                className="w-full text-left bg-white rounded-xl border border-gray-100 shadow-sm p-4 hover:shadow-md active:bg-gray-50 transition-all"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{client.fullName}</p>
+                    <p className="text-sm text-gray-500 mt-0.5">{client.phone}</p>
+                  </div>
+                  <div className="flex items-center gap-1 ml-2">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openEdit(client); }}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(client); }}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">{formatDate(client.createdAt)}</p>
+              </button>
+            ))}
+          </div>
+
+          {/* ─── Desktop table ─── */}
+          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>
