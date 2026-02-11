@@ -1,0 +1,13 @@
+{
+  "name": "zr-auto-pro",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CRM + Warehouse + Financial accounting for auto service",
+  "scripts": {
+    "backend:dev": "cd backend && npm run start:dev",
+    "frontend:dev": "cd frontend && npm run dev",
+    "backend:build": "cd backend && npm run build",
+    "frontend:build": "cd frontend && npm run build",
+    "install:all": "cd backend && npm install && cd ../frontend && npm install"
+  }
+}

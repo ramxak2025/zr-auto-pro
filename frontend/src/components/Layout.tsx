@@ -1,0 +1,190 @@
+import { type ReactNode } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import {
+  LayoutDashboard,
+  Users,
+  FileText,
+  Package,
+  Wrench,
+  Truck,
+  Wallet,
+  BarChart3,
+  Shield,
+  LogOut,
+  ChevronRight,
+} from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import type { UserPermissions } from '../types';
+
+interface NavItem {
+  label: string;
+  path: string;
+  icon: typeof LayoutDashboard;
+  permission?: keyof UserPermissions;
+}
+
+const navItems: NavItem[] = [
+  { label: 'Dashboard', path: '/', icon: LayoutDashboard },
+  { label: 'Clients', path: '/clients', icon: Users, permission: 'clients_view' },
+  { label: 'Checks', path: '/checks', icon: FileText, permission: 'checks_view' },
+  { label: 'Products', path: '/products', icon: Package, permission: 'warehouse_access' },
+  { label: 'Services', path: '/services', icon: Wrench },
+  { label: 'Suppliers', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
+  { label: 'Salary', path: '/salary', icon: Wallet },
+  { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
+  { label: 'Users', path: '/users', icon: Shield, permission: 'user_management' },
+];
+
+const roleBadgeColors: Record<string, string> = {
+  owner: 'bg-purple-50 text-purple-700',
+  admin: 'bg-blue-50 text-blue-700',
+  master: 'bg-green-50 text-green-700',
+  storekeeper: 'bg-yellow-50 text-yellow-700',
+  accountant: 'bg-gray-100 text-gray-600',
+};
+
+function getPageTitle(pathname: string): string[] {
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments.length === 0) return ['Dashboard'];
+
+  const titles: string[] = [];
+  const first = segments[0].charAt(0).toUpperCase() + segments[0].slice(1);
+  titles.push(first);
+
+  if (segments.length > 1) {
+    if (segments[1] === 'new') {
+      titles.push('Create');
+    } else {
+      titles.push('Details');
+    }
+  }
+
+  return titles;
+}
+
+export default function Layout({ children }: { children: ReactNode }) {
+  const { user, logout, hasPermission } = useAuth();
+  const location = useLocation();
+
+  const breadcrumbs = getPageTitle(location.pathname);
+  const roleLabel = user?.role
+    ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
+    : '';
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-gray-50">
+      {/* Sidebar */}
+      <aside className="fixed inset-y-0 left-0 z-30 flex w-[260px] flex-col border-r border-gray-200 bg-white">
+        {/* Logo */}
+        <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-white">
+            <Wrench className="h-5 w-5" />
+          </div>
+          <span className="text-lg font-bold text-gray-900 tracking-tight">
+            ZR Auto Pro
+          </span>
+        </div>
+
+        {/* Navigation */}
+        <nav className="flex-1 overflow-y-auto px-3 py-4">
+          <ul className="space-y-1">
+            {navItems.map((item) => {
+              if (item.permission && !hasPermission(item.permission)) {
+                return null;
+              }
+
+              const Icon = item.icon;
+
+              return (
+                <li key={item.path}>
+                  <NavLink
+                    to={item.path}
+                    end={item.path === '/'}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                        isActive
+                          ? 'bg-primary-50 text-primary-700'
+                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      }`
+                    }
+                  >
+                    <Icon className="h-5 w-5 flex-shrink-0" />
+                    <span>{item.label}</span>
+                  </NavLink>
+                </li>
+              );
+            })}
+          </ul>
+        </nav>
+
+        {/* Sidebar footer */}
+        <div className="border-t border-gray-200 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
+              {user?.fullName?.charAt(0) || 'U'}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-gray-900">
+                {user?.fullName || 'User'}
+              </p>
+              <p className="truncate text-xs text-gray-500">{roleLabel}</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main area */}
+      <div className="flex flex-1 flex-col pl-[260px]">
+        {/* Top bar */}
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
+          {/* Breadcrumbs */}
+          <div className="flex items-center gap-1.5 text-sm">
+            {breadcrumbs.map((crumb, index) => (
+              <span key={index} className="flex items-center gap-1.5">
+                {index > 0 && (
+                  <ChevronRight className="h-4 w-4 text-gray-400" />
+                )}
+                <span
+                  className={
+                    index === breadcrumbs.length - 1
+                      ? 'font-semibold text-gray-900'
+                      : 'text-gray-500'
+                  }
+                >
+                  {crumb}
+                </span>
+              </span>
+            ))}
+          </div>
+
+          {/* User info + logout */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2.5">
+              <span className="text-sm font-medium text-gray-700">
+                {user?.fullName}
+              </span>
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                  roleBadgeColors[user?.role || ''] || 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                {roleLabel}
+              </span>
+            </div>
+            <button
+              onClick={logout}
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+              title="Logout"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Logout</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Page content */}
+        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+      </div>
+    </div>
+  );
+}
