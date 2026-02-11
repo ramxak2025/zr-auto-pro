@@ -1,8 +1,9 @@
 import { useState, FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Wrench, Eye, EyeOff, LogIn, Loader2 } from 'lucide-react';
+import { Wrench, Eye, EyeOff, LogIn, Loader2, Play } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { demoUser } from '../demo/data';
 
 export default function LoginPage() {
   const { user, isLoading: authLoading, login } = useAuth();
@@ -45,18 +46,28 @@ export default function LoginPage() {
     }
   };
 
+  const handleDemoLogin = () => {
+    localStorage.setItem('demo', 'true');
+    localStorage.setItem('token', 'demo-token');
+    localStorage.setItem('user', JSON.stringify(demoUser));
+    toast.success('Добро пожаловать в демо-режим!');
+    window.location.href = '/';
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-100 via-gray-50 to-blue-50 px-4">
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary-600 text-white mb-4 shadow-lg">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary-600 text-white mb-4 shadow-lg shadow-primary-600/25">
             <Wrench className="h-8 w-8" />
           </div>
           <h1 className="text-3xl font-bold text-gray-900 tracking-tight">
             ZR Auto Pro
           </h1>
-          <p className="mt-1 text-gray-500 text-sm">CRM для автосервиса</p>
+          <p className="mt-1.5 text-gray-500 text-sm">
+            CRM-система для управления автосервисом
+          </p>
         </div>
 
         {/* Card */}
@@ -142,6 +153,47 @@ export default function LoginPage() {
               {isSubmitting ? 'Вход...' : 'Войти'}
             </button>
           </form>
+
+          {/* Divider */}
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-200" />
+            </div>
+            <div className="relative flex justify-center text-xs">
+              <span className="bg-white px-3 text-gray-400">или</span>
+            </div>
+          </div>
+
+          {/* Demo button */}
+          <button
+            type="button"
+            onClick={handleDemoLogin}
+            className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary-300 bg-primary-50/50 px-4 py-2.5 text-sm font-semibold text-primary-700
+              hover:bg-primary-50 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2
+              transition-all"
+          >
+            <Play className="h-4 w-4" />
+            Демо-вход (без регистрации)
+          </button>
+          <p className="text-center text-xs text-gray-400 mt-2">
+            Посмотрите систему с демо-данными
+          </p>
+        </div>
+
+        {/* Features */}
+        <div className="mt-8 grid grid-cols-3 gap-3 text-center">
+          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-3">
+            <p className="text-lg font-bold text-gray-900">CRM</p>
+            <p className="text-[11px] text-gray-500 mt-0.5">Клиенты и авто</p>
+          </div>
+          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-3">
+            <p className="text-lg font-bold text-gray-900">Склад</p>
+            <p className="text-[11px] text-gray-500 mt-0.5">Учёт запчастей</p>
+          </div>
+          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-3">
+            <p className="text-lg font-bold text-gray-900">Отчёты</p>
+            <p className="text-[11px] text-gray-500 mt-0.5">Финансы и KPI</p>
+          </div>
         </div>
 
         {/* Footer */}

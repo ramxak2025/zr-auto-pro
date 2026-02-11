@@ -50,8 +50,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(() => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    localStorage.removeItem('demo');
     setToken(null);
     setUser(null);
+    window.location.href = '/login';
   }, []);
 
   const hasPermission = useCallback(
