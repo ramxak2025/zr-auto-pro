@@ -122,8 +122,8 @@ export interface CheckProductLine {
 export enum PaymentMethod {
   CASH = 'cash',
   CARD = 'card',
-  TRANSFER = 'transfer',
-  MIXED = 'mixed',
+  WARRANTY = 'warranty',
+  CASH_CARD = 'cash_card',
 }
 
 export interface Check {
@@ -140,6 +140,7 @@ export interface Check {
   services: CheckServiceLine[];
   products: CheckProductLine[];
   comment?: string;
+  discount?: number;
   paymentMethod: PaymentMethod;
   serviceTotal: number;
   productTotal: number;

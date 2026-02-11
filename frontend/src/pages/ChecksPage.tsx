@@ -10,6 +10,10 @@ import {
   ChevronRight,
   ChevronDown,
   Car,
+  MessageSquare,
+  Tag,
+  TrendingUp,
+  ShieldCheck,
 } from 'lucide-react';
 import { checksApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -46,13 +50,13 @@ const PAYMENT_BADGES: Record<
     label: 'Карта',
     className: 'bg-blue-50 text-blue-700 border-blue-200',
   },
-  transfer: {
-    label: 'Перевод',
-    className: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  warranty: {
+    label: 'Гарантия',
+    className: 'bg-orange-50 text-orange-700 border-orange-200',
   },
-  mixed: {
-    label: 'Смешанная',
-    className: 'bg-gray-50 text-gray-700 border-gray-200',
+  cash_card: {
+    label: 'Нал + Карта',
+    className: 'bg-purple-50 text-purple-700 border-purple-200',
   },
 };
 
@@ -77,29 +81,49 @@ const LIMIT = 20;
 // Mobile card for a single check
 // ---------------------------------------------------------------------------
 
+function truncateComment(text: string, maxLen = 60): string {
+  if (text.length <= maxLen) return text;
+  return text.slice(0, maxLen).trimEnd() + '…';
+}
+
 function CheckCard({ check, onClick, showProfit }: { check: Check; onClick: () => void; showProfit: boolean }) {
+  const hasDiscount = check.discount && check.discount > 0;
+  const hasComment = check.comment && check.comment.trim().length > 0;
+
   return (
     <button
       type="button"
       onClick={onClick}
       className="w-full text-left bg-white rounded-xl border border-gray-100 shadow-sm p-4 hover:shadow-md active:bg-gray-50 transition-all"
     >
+      {/* Top row: number + badges | amount + profit */}
       <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-bold text-gray-900">#{check.number}</span>
           <PaymentBadge method={check.paymentMethod} />
+          {hasDiscount && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-xs font-medium text-rose-600">
+              <Tag className="h-3 w-3" />
+              −{formatMoney(check.discount!)}
+            </span>
+          )}
         </div>
-        <div className="text-right">
+        <div className="text-right flex-shrink-0 ml-2">
           <span className="text-base font-bold text-gray-900">
             {formatMoney(check.totalRevenue)}
           </span>
           {showProfit && (
-            <p className={`text-xs font-medium ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-              {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
-            </p>
+            <div className="flex items-center justify-end gap-0.5">
+              <TrendingUp className={`h-3 w-3 ${check.profit >= 0 ? 'text-green-500' : 'text-red-400'}`} />
+              <span className={`text-xs font-semibold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+              </span>
+            </div>
           )}
         </div>
       </div>
+
+      {/* Client + car info */}
       <div className="space-y-1">
         <p className="text-sm text-gray-700 font-medium">
           {check.client?.fullName ?? 'Клиент не указан'}
@@ -111,6 +135,18 @@ function CheckCard({ check, onClick, showProfit }: { check: Check; onClick: () =
           </div>
         )}
       </div>
+
+      {/* Comment */}
+      {hasComment && (
+        <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-gray-50 px-2.5 py-1.5">
+          <MessageSquare className="h-3.5 w-3.5 text-gray-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-gray-500 leading-relaxed">
+            {truncateComment(check.comment!)}
+          </p>
+        </div>
+      )}
+
+      {/* Footer: date + master */}
       <div className="flex items-center justify-between mt-3 pt-2 border-t border-gray-50">
         <span className="text-xs text-gray-400">
           {formatDate(check.date)} {formatTime(check.createdAt)}
@@ -327,16 +363,19 @@ export default function ChecksPage() {
                       Дата
                     </th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-600">
-                      Клиент
-                    </th>
-                    <th className="px-4 py-3 text-left font-semibold text-gray-600">
-                      Автомобиль
+                      Клиент / Авто
                     </th>
                     <th className="px-4 py-3 text-left font-semibold text-gray-600">
                       Мастер
                     </th>
+                    <th className="px-4 py-3 text-left font-semibold text-gray-600 max-w-[200px]">
+                      Комментарий
+                    </th>
                     <th className="px-4 py-3 text-right font-semibold text-gray-600">
                       Сумма
+                    </th>
+                    <th className="px-4 py-3 text-right font-semibold text-gray-600">
+                      Скидка
                     </th>
                     {canSeeProfit && (
                       <th className="px-4 py-3 text-right font-semibold text-gray-600">
@@ -349,42 +388,73 @@ export default function ChecksPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {checks.map((check) => (
-                    <tr
-                      key={check.id}
-                      onClick={() => navigate(`/checks/${check.id}`)}
-                      className="cursor-pointer hover:bg-gray-50 transition-colors"
-                    >
-                      <td className="px-4 py-3 font-medium text-gray-900">
-                        #{check.number}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {formatDate(check.date)}
-                      </td>
-                      <td className="px-4 py-3 text-gray-900">
-                        {check.client?.fullName ?? '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {check.car
-                          ? `${check.car.plateNumber} ${check.car.makeModel}`
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {check.master?.fullName ?? '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium text-gray-900">
-                        {formatMoney(check.totalRevenue)}
-                      </td>
-                      {canSeeProfit && (
-                        <td className={`px-4 py-3 text-right font-medium ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                          {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+                  {checks.map((check) => {
+                    const hasDiscount = check.discount && check.discount > 0;
+                    const hasComment = check.comment && check.comment.trim().length > 0;
+
+                    return (
+                      <tr
+                        key={check.id}
+                        onClick={() => navigate(`/checks/${check.id}`)}
+                        className="cursor-pointer hover:bg-gray-50 transition-colors group"
+                      >
+                        <td className="px-4 py-3 font-medium text-gray-900">
+                          #{check.number}
                         </td>
-                      )}
-                      <td className="px-4 py-3 text-center">
-                        <PaymentBadge method={check.paymentMethod} />
-                      </td>
-                    </tr>
-                  ))}
+                        <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                          {formatDate(check.date)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-gray-900 font-medium">{check.client?.fullName ?? '—'}</div>
+                          {check.car && (
+                            <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
+                              <Car className="h-3 w-3" />
+                              {check.car.plateNumber} {check.car.makeModel}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-gray-600">
+                          {check.master?.fullName ?? '—'}
+                        </td>
+                        <td className="px-4 py-3 max-w-[200px]">
+                          {hasComment ? (
+                            <div className="flex items-start gap-1.5">
+                              <MessageSquare className="h-3.5 w-3.5 text-gray-300 flex-shrink-0 mt-0.5" />
+                              <span className="text-xs text-gray-500 leading-relaxed truncate" title={check.comment}>
+                                {truncateComment(check.comment!, 50)}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium text-gray-900 whitespace-nowrap">
+                          {formatMoney(check.totalRevenue)}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {hasDiscount ? (
+                            <span className="inline-flex items-center gap-0.5 text-xs font-medium text-rose-600">
+                              <Tag className="h-3 w-3" />
+                              −{formatMoney(check.discount!)}
+                            </span>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                        {canSeeProfit && (
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
+                            <span className={`inline-flex items-center gap-0.5 font-medium ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              <TrendingUp className={`h-3.5 w-3.5 ${check.profit >= 0 ? 'text-green-500' : 'text-red-400'}`} />
+                              {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+                            </span>
+                          </td>
+                        )}
+                        <td className="px-4 py-3 text-center">
+                          <PaymentBadge method={check.paymentMethod} />
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

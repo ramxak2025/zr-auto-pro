@@ -1,4 +1,4 @@
-import { useState, useRef, FormEvent } from 'react';
+import { useState, useMemo, useRef, FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -12,16 +12,14 @@ import {
   AlertTriangle,
   ImagePlus,
   X,
-  ChevronDown,
+  Search,
+  ChevronLeft,
+  FolderOpen,
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
 import type { Product, PaginatedResponse } from '../types';
-import SearchInput from '../components/SearchInput';
-import Pagination from '../components/Pagination';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import EmptyState from '../components/EmptyState';
-import LoadingSpinner from '../components/LoadingSpinner';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -30,6 +28,16 @@ import LoadingSpinner from '../components/LoadingSpinner';
 function formatMoney(value: number): string {
   return value.toLocaleString('ru-RU') + ' \u20BD';
 }
+
+const CATEGORY_ICONS: Record<string, string> = {
+  'Масла': '🛢️',
+  'Фильтры': '🔧',
+  'Тормозная система': '🛞',
+  'Жидкости': '💧',
+  'Электрика': '⚡',
+  'ГРМ': '⛓️',
+  'Подвеска': '🔩',
+};
 
 // ---------------------------------------------------------------------------
 // Product Form Modal
@@ -124,7 +132,7 @@ function ProductFormModal({
                 <img
                   src={photo}
                   alt="Фото товара"
-                  className="h-20 w-20 rounded-lg object-cover border border-gray-200"
+                  className="h-20 w-20 rounded-xl object-cover border border-gray-200"
                 />
                 <button
                   type="button"
@@ -139,7 +147,7 @@ function ProductFormModal({
                 type="button"
                 disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
-                className="flex h-20 w-20 flex-col items-center justify-center rounded-lg border-2 border-dashed border-gray-300 text-gray-400 transition-colors hover:border-primary-400 hover:text-primary-500"
+                className="flex h-20 w-20 flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 text-gray-400 transition-colors hover:border-primary-400 hover:text-primary-500"
               >
                 {uploading ? (
                   <Loader2 className="h-6 w-6 animate-spin" />
@@ -162,13 +170,6 @@ function ProductFormModal({
                 e.target.value = '';
               }}
             />
-            {!photo && (
-              <p className="text-xs text-gray-500">
-                JPEG, PNG, WebP. Макс. 5 МБ.
-                <br />
-                Все мастера смогут видеть фото.
-              </p>
-            )}
           </div>
         </div>
 
@@ -181,7 +182,7 @@ function ProductFormModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Название товара"
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
         </div>
 
@@ -195,7 +196,7 @@ function ProductFormModal({
             onChange={(e) => setCategory(e.target.value)}
             placeholder="Категория"
             list="product-categories"
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
           <datalist id="product-categories">
             {categories.map((c) => (
@@ -207,7 +208,7 @@ function ProductFormModal({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Закупочная цена
+              Закуп. цена
             </label>
             <input
               type="number"
@@ -215,7 +216,7 @@ function ProductFormModal({
               onChange={(e) => setCostPrice(e.target.value)}
               min="0"
               step="0.01"
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
           <div>
@@ -228,7 +229,7 @@ function ProductFormModal({
               onChange={(e) => setSellPrice(e.target.value)}
               min="0"
               step="0.01"
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
         </div>
@@ -243,7 +244,7 @@ function ProductFormModal({
               value={stock}
               onChange={(e) => setStock(e.target.value)}
               min="0"
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
           <div>
@@ -255,7 +256,7 @@ function ProductFormModal({
               value={minStock}
               onChange={(e) => setMinStock(e.target.value)}
               min="0"
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
         </div>
@@ -265,14 +266,14 @@ function ProductFormModal({
             type="button"
             onClick={onClose}
             disabled={isLoading || uploading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
           >
             Отмена
           </button>
           <button
             type="submit"
             disabled={isLoading || uploading}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
+            className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
           >
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
             {product ? 'Сохранить' : 'Создать'}
@@ -295,31 +296,16 @@ interface WriteoffModalProps {
   isLoading: boolean;
 }
 
-function WriteoffModal({
-  isOpen,
-  onClose,
-  product,
-  onSubmit,
-  isLoading,
-}: WriteoffModalProps) {
+function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: WriteoffModalProps) {
   const [quantity, setQuantity] = useState('1');
   const [reason, setReason] = useState('');
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const qty = parseInt(quantity);
-    if (!qty || qty <= 0) {
-      toast.error('Введите количество');
-      return;
-    }
-    if (qty > product.stock) {
-      toast.error('Количество превышает остаток');
-      return;
-    }
-    if (!reason.trim()) {
-      toast.error('Укажите причину списания');
-      return;
-    }
+    if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
+    if (qty > product.stock) { toast.error('Количество превышает остаток'); return; }
+    if (!reason.trim()) { toast.error('Укажите причину списания'); return; }
     onSubmit({ quantity: qty, reason: reason.trim() });
   }
 
@@ -328,54 +314,22 @@ function WriteoffModal({
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-sm text-gray-600">
           Товар: <span className="font-medium text-gray-900">{product.name}</span>
-          <br />
-          Текущий остаток:{' '}
-          <span className="font-medium text-gray-900">{product.stock}</span>
+          <br />Остаток: <span className="font-medium text-gray-900">{product.stock}</span>
         </p>
-
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Количество <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="number"
-            value={quantity}
-            onChange={(e) => setQuantity(e.target.value)}
-            min="1"
-            max={product.stock}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Количество *</label>
+          <input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} min="1" max={product.stock}
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
         </div>
-
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Причина <span className="text-red-500">*</span>
-          </label>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={3}
-            placeholder="Укажите причину списания..."
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина *</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="Причина списания..."
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
         </div>
-
         <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-orange-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            Списать
+          <button type="button" onClick={onClose} disabled={isLoading} className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Отмена</button>
+          <button type="submit" disabled={isLoading} className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Списать
           </button>
         </div>
       </form>
@@ -395,27 +349,15 @@ interface InventoryModalProps {
   isLoading: boolean;
 }
 
-function InventoryModal({
-  isOpen,
-  onClose,
-  product,
-  onSubmit,
-  isLoading,
-}: InventoryModalProps) {
+function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: InventoryModalProps) {
   const [actualStock, setActualStock] = useState(product.stock.toString());
   const [reason, setReason] = useState('');
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const actual = parseInt(actualStock);
-    if (isNaN(actual) || actual < 0) {
-      toast.error('Введите корректный остаток');
-      return;
-    }
-    if (!reason.trim()) {
-      toast.error('Укажите причину инвентаризации');
-      return;
-    }
+    if (isNaN(actual) || actual < 0) { toast.error('Введите корректный остаток'); return; }
+    if (!reason.trim()) { toast.error('Укажите причину'); return; }
     onSubmit({ actualStock: actual, reason: reason.trim() });
   }
 
@@ -424,53 +366,22 @@ function InventoryModal({
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-sm text-gray-600">
           Товар: <span className="font-medium text-gray-900">{product.name}</span>
-          <br />
-          Текущий остаток (в системе):{' '}
-          <span className="font-medium text-gray-900">{product.stock}</span>
+          <br />В системе: <span className="font-medium text-gray-900">{product.stock}</span>
         </p>
-
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Фактический остаток <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="number"
-            value={actualStock}
-            onChange={(e) => setActualStock(e.target.value)}
-            min="0"
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Фактический остаток *</label>
+          <input type="number" value={actualStock} onChange={(e) => setActualStock(e.target.value)} min="0"
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
         </div>
-
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Причина <span className="text-red-500">*</span>
-          </label>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={3}
-            placeholder="Укажите причину корректировки..."
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина *</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="Причина корректировки..."
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
         </div>
-
         <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            Провести инвентаризацию
+          <button type="button" onClick={onClose} disabled={isLoading} className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Отмена</button>
+          <button type="submit" disabled={isLoading} className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Провести
           </button>
         </div>
       </form>
@@ -479,18 +390,77 @@ function InventoryModal({
 }
 
 // ---------------------------------------------------------------------------
-// Main Page
+// Product Card — used in folder view
 // ---------------------------------------------------------------------------
 
-const LIMIT = 20;
+function ProductCard({
+  product,
+  onEdit,
+  onWriteoff,
+  onInventory,
+  onDelete,
+}: {
+  product: Product;
+  onEdit: () => void;
+  onWriteoff: () => void;
+  onInventory: () => void;
+  onDelete: () => void;
+}) {
+  const isLow = product.stock <= product.minStock;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden flex flex-col hover:shadow-lg transition-shadow">
+      {/* Image */}
+      <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center relative">
+        {product.photo ? (
+          <img src={product.photo} alt={product.name} className="w-full h-full object-cover" />
+        ) : (
+          <Package className="h-10 w-10 text-gray-300" />
+        )}
+        {isLow && (
+          <div className="absolute top-2 left-2 flex items-center gap-1 bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
+            <AlertTriangle className="h-3 w-3" />
+            Мало
+          </div>
+        )}
+      </div>
+      {/* Info */}
+      <div className="flex-1 p-3 space-y-1.5">
+        <p className="text-sm font-semibold text-gray-900 line-clamp-2 leading-tight">{product.name}</p>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-bold text-primary-600">{formatMoney(product.sellPrice)}</span>
+          <span className={`text-xs font-medium ${isLow ? 'text-red-600' : 'text-gray-400'}`}>{product.stock} шт</span>
+        </div>
+        <p className="text-[11px] text-gray-400">Закуп: {formatMoney(product.costPrice)}</p>
+      </div>
+      {/* Actions */}
+      <div className="flex items-center border-t border-gray-50">
+        <button onClick={onEdit} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors text-[11px] font-medium">
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+        <button onClick={onWriteoff} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors text-[11px] font-medium border-l border-gray-50">
+          <PackageMinus className="h-3.5 w-3.5" />
+        </button>
+        <button onClick={onInventory} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors text-[11px] font-medium border-l border-gray-50">
+          <ClipboardCheck className="h-3.5 w-3.5" />
+        </button>
+        <button onClick={onDelete} className="flex-1 flex items-center justify-center gap-1 py-2.5 text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors text-[11px] font-medium border-l border-gray-50">
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Page — Folder-based warehouse view
+// ---------------------------------------------------------------------------
 
 export default function ProductsPage() {
   const queryClient = useQueryClient();
 
-  const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [searchText, setSearchText] = useState('');
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
 
   // Modal state
   const [formOpen, setFormOpen] = useState(false);
@@ -501,26 +471,17 @@ export default function ProductsPage() {
 
   // ---- Queries ----
 
-  const queryParams: Record<string, any> = {
-    page,
-    limit: LIMIT,
-  };
-  if (search) queryParams.search = search;
-  if (categoryFilter) queryParams.category = categoryFilter;
-  if (lowStockOnly) queryParams.lowStock = true;
-
   const {
     data: productsData,
     isLoading,
-    isError,
   } = useQuery<PaginatedResponse<Product>>({
-    queryKey: ['products', queryParams],
+    queryKey: ['products', { limit: 1000 }],
     queryFn: async () => {
-      const res = await productsApi.getAll(queryParams);
+      const res = await productsApi.getAll({ limit: 1000 });
       return res.data;
     },
-    keepPreviousData: true,
-  } as any);
+    staleTime: 60_000,
+  });
 
   const { data: categories = [] } = useQuery<string[]>({
     queryKey: ['product-categories'],
@@ -530,6 +491,31 @@ export default function ProductsPage() {
     },
     staleTime: 5 * 60_000,
   });
+
+  const allProducts = productsData?.data || [];
+
+  // Group by category
+  const categoryGroups = useMemo(() => {
+    const map = new Map<string, Product[]>();
+    for (const p of allProducts) {
+      const cat = p.category || 'Без категории';
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(p);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [allProducts]);
+
+  // Search results
+  const searchResults = useMemo(() => {
+    if (!searchText) return [];
+    const q = searchText.toLowerCase();
+    return allProducts.filter((p) => p.name.toLowerCase().includes(q));
+  }, [searchText, allProducts]);
+
+  // Products in active category
+  const categoryProducts = activeCategory
+    ? (categoryGroups.find(([cat]) => cat === activeCategory)?.[1] || [])
+    : [];
 
   // ---- Mutations ----
 
@@ -565,13 +551,8 @@ export default function ProductsPage() {
   });
 
   const writeoffMutation = useMutation({
-    mutationFn: ({
-      id,
-      data,
-    }: {
-      id: string;
-      data: { quantity: number; reason: string };
-    }) => productsApi.writeoff(id, data),
+    mutationFn: ({ id, data }: { id: string; data: { quantity: number; reason: string } }) =>
+      productsApi.writeoff(id, data),
     onSuccess: () => {
       toast.success('Товар списан');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -581,13 +562,8 @@ export default function ProductsPage() {
   });
 
   const inventoryMutation = useMutation({
-    mutationFn: ({
-      id,
-      data,
-    }: {
-      id: string;
-      data: { actualStock: number; reason: string };
-    }) => productsApi.inventory(id, data),
+    mutationFn: ({ id, data }: { id: string; data: { actualStock: number; reason: string } }) =>
+      productsApi.inventory(id, data),
     onSuccess: () => {
       toast.success('Инвентаризация проведена');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -621,309 +597,145 @@ export default function ProductsPage() {
     }
   }
 
-  function handleSearchChange(v: string) {
-    setSearch(v);
-    setPage(1);
-  }
-
-  const products = productsData?.data || [];
-  const total = productsData?.total || 0;
   const isMutating = createMutation.isPending || updateMutation.isPending;
 
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const hasFilters = !!(search || categoryFilter || lowStockOnly);
+  // ---- Which products to render ----
+  const displayProducts = searchText ? searchResults : categoryProducts;
+  const showingSearch = !!searchText;
+  const showingCategory = !!activeCategory && !searchText;
+  const showingFolders = !searchText && !activeCategory;
 
   return (
-    <div className="space-y-4 md:space-y-6">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Склад</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Всего: {total}</p>
+          <h1 className="text-xl font-bold text-gray-900">Склад</h1>
+          <p className="text-xs text-gray-400 mt-0.5">{allProducts.length} товаров</p>
         </div>
         <button
           onClick={openCreate}
-          className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 md:px-4 py-2 md:py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary-700 active:scale-[0.97]"
         >
           <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Добавить товар</span>
+          <span className="hidden sm:inline">Добавить</span>
         </button>
       </div>
 
-      {/* Filters */}
-      <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        {/* Mobile filter toggle */}
-        <button
-          type="button"
-          onClick={() => setFiltersOpen((v) => !v)}
-          className="md:hidden flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-gray-700"
-        >
-          <span>Фильтры{hasFilters ? ' (активны)' : ''}</span>
-          <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
-        </button>
-
-        <div className={`${filtersOpen ? 'block' : 'hidden'} md:block`}>
-          <div className="flex flex-col md:flex-row md:flex-wrap md:items-end gap-3 md:gap-4 p-4 pt-0 md:pt-4">
-            <div className="w-full md:w-64">
-              <SearchInput
-                value={search}
-                onChange={handleSearchChange}
-                placeholder="Поиск по названию..."
-              />
-            </div>
-
-            <div className="flex-1 min-w-0 md:flex-initial">
-              <label className="block text-xs font-medium text-gray-500 mb-1">
-                Категория
-              </label>
-              <select
-                value={categoryFilter}
-                onChange={(e) => {
-                  setCategoryFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 md:min-w-[180px] focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
-              >
-                <option value="">Все категории</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <label className="flex items-center gap-2 pb-0.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={lowStockOnly}
-                onChange={(e) => {
-                  setLowStockOnly(e.target.checked);
-                  setPage(1);
-                }}
-                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              />
-              <span className="flex items-center gap-1.5 text-sm text-gray-700">
-                <AlertTriangle className="h-4 w-4 text-orange-500" />
-                Мало на складе
-              </span>
-            </label>
-
-            {hasFilters && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearch('');
-                  setCategoryFilter('');
-                  setLowStockOnly(false);
-                  setPage(1);
-                }}
-                className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors md:pb-0.5"
-              >
-                Сбросить
-              </button>
-            )}
-          </div>
-        </div>
+      {/* Search */}
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+        <input
+          type="text"
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          placeholder="Поиск по названию..."
+          className="block w-full rounded-xl border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-all focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10"
+        />
       </div>
 
-      {/* Content */}
       {isLoading ? (
-        <LoadingSpinner />
-      ) : isError ? (
-        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-          <p className="text-sm">Не удалось загрузить список товаров</p>
-        </div>
-      ) : products.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 bg-white">
-          <EmptyState
-            icon={Package}
-            title={search || categoryFilter || lowStockOnly ? 'Ничего не найдено' : 'Нет товаров'}
-            description={
-              search || categoryFilter || lowStockOnly
-                ? 'Попробуйте изменить параметры фильтрации'
-                : 'Добавьте первый товар на склад'
-            }
-            action={
-              !search && !categoryFilter && !lowStockOnly ? (
-                <button
-                  onClick={openCreate}
-                  className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700"
-                >
-                  <Plus className="h-4 w-4" />
-                  Добавить товар
-                </button>
-              ) : undefined
-            }
-          />
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
         </div>
       ) : (
         <>
-          {/* ─── Mobile card list ─── */}
-          <div className="md:hidden space-y-3">
-            {products.map((product) => {
-              const isLow = product.stock <= product.minStock;
-              return (
-                <div
-                  key={product.id}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm p-4"
-                >
-                  <div className="flex items-start gap-3">
-                    {product.photo ? (
-                      <img src={product.photo} alt={product.name} className="h-12 w-12 rounded-lg object-cover border border-gray-200" />
-                    ) : (
-                      <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-100 text-gray-400 flex-shrink-0">
-                        <Package className="h-6 w-6" />
+          {/* Back button when inside category */}
+          {showingCategory && (
+            <button
+              type="button"
+              onClick={() => setActiveCategory(null)}
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Все категории
+            </button>
+          )}
+
+          {/* Category title */}
+          {showingCategory && (
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-lg">
+                {CATEGORY_ICONS[activeCategory!] || <FolderOpen className="h-5 w-5 text-primary-500" />}
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">{activeCategory}</h2>
+                <p className="text-xs text-gray-400">{categoryProducts.length} товаров</p>
+              </div>
+            </div>
+          )}
+
+          {/* Folder view — categories as cards */}
+          {showingFolders && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {categoryGroups.map(([cat, products]) => {
+                const hasLow = products.some((p) => p.stock <= p.minStock);
+                const totalItems = products.length;
+                // Show first product image as category preview
+                const previewImg = products.find((p) => p.photo)?.photo;
+
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => {
+                      setActiveCategory(cat);
+                      setSearchText('');
+                    }}
+                    className="relative flex flex-col items-center rounded-2xl border border-gray-100 bg-white p-4 shadow-sm
+                      hover:shadow-md hover:border-primary-200 active:scale-[0.97] transition-all text-center"
+                  >
+                    {hasLow && (
+                      <div className="absolute top-2 right-2">
+                        <AlertTriangle className="h-4 w-4 text-orange-500" />
                       </div>
                     )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{product.name}</p>
-                      {product.category && <p className="text-xs text-gray-500">{product.category}</p>}
-                      <div className="flex items-center gap-3 mt-1.5">
-                        <span className="text-sm font-medium text-gray-900">{formatMoney(product.sellPrice)}</span>
-                        <span className={`text-xs font-medium ${isLow ? 'text-red-600' : 'text-gray-500'}`}>
-                          {isLow && <AlertTriangle className="inline h-3 w-3 mr-0.5 -mt-0.5" />}
-                          {product.stock} шт.
-                        </span>
-                      </div>
+                    <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 mb-3 overflow-hidden">
+                      {previewImg ? (
+                        <img src={previewImg} alt={cat} className="w-full h-full object-cover rounded-2xl" />
+                      ) : (
+                        <span className="text-2xl">{CATEGORY_ICONS[cat] || ''}</span>
+                      )}
+                      {!previewImg && !CATEGORY_ICONS[cat] && (
+                        <FolderOpen className="h-7 w-7 text-gray-400" />
+                      )}
                     </div>
-                  </div>
-                  <div className="flex items-center justify-end gap-1 mt-3 pt-2 border-t border-gray-50">
-                    <button onClick={() => openEdit(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button onClick={() => setWriteoffTarget(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-orange-50 hover:text-orange-600">
-                      <PackageMinus className="h-4 w-4" />
-                    </button>
-                    <button onClick={() => setInventoryTarget(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-blue-50 hover:text-blue-600">
-                      <ClipboardCheck className="h-4 w-4" />
-                    </button>
-                    <button onClick={() => setDeleteTarget(product)} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600">
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* ─── Desktop table ─── */}
-          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/50">
-                    <th className="px-4 py-3 font-semibold text-gray-600 w-12"></th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Название</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Категория</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Закуп. цена
-                    </th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Продажная цена
-                    </th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Остаток
-                    </th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Мин. остаток
-                    </th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Действия
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {products.map((product) => {
-                    const isLow = product.stock <= product.minStock;
-                    return (
-                      <tr
-                        key={product.id}
-                        className="transition-colors hover:bg-gray-50"
-                      >
-                        <td className="px-4 py-3">
-                          {product.photo ? (
-                            <img
-                              src={product.photo}
-                              alt={product.name}
-                              className="h-8 w-8 rounded object-cover"
-                            />
-                          ) : (
-                            <div className="flex h-8 w-8 items-center justify-center rounded bg-gray-100 text-gray-400">
-                              <Package className="h-4 w-4" />
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 font-medium text-gray-900">
-                          {product.name}
-                        </td>
-                        <td className="px-4 py-3 text-gray-600">
-                          {product.category || '\u2014'}
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-600">
-                          {formatMoney(product.costPrice)}
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-900">
-                          {formatMoney(product.sellPrice)}
-                        </td>
-                        <td
-                          className={`px-4 py-3 text-right font-medium ${
-                            isLow ? 'text-red-600' : 'text-gray-900'
-                          }`}
-                        >
-                          {isLow && (
-                            <AlertTriangle className="inline h-3.5 w-3.5 mr-1 -mt-0.5" />
-                          )}
-                          {product.stock}
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-500">
-                          {product.minStock}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => openEdit(product)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                              title="Редактировать"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => setWriteoffTarget(product)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-orange-50 hover:text-orange-600"
-                              title="Списание"
-                            >
-                              <PackageMinus className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => setInventoryTarget(product)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-600"
-                              title="Инвентаризация"
-                            >
-                              <ClipboardCheck className="h-4 w-4" />
-                            </button>
-                            <button
-                              onClick={() => setDeleteTarget(product)}
-                              className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                              title="Удалить"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                    <p className="text-sm font-semibold text-gray-900 leading-tight">{cat}</p>
+                    <p className="text-[11px] text-gray-400 mt-1">{totalItems} товаров</p>
+                  </button>
+                );
+              })}
             </div>
-          </div>
+          )}
 
-          <Pagination page={page} total={total} limit={LIMIT} onChange={setPage} />
+          {/* Product cards grid (search or in-category view) */}
+          {(showingSearch || showingCategory) && (
+            displayProducts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                <Package className="h-12 w-12 mb-3" />
+                <p className="text-sm">
+                  {showingSearch ? 'Товары не найдены' : 'В этой категории нет товаров'}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                {displayProducts.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    onEdit={() => openEdit(product)}
+                    onWriteoff={() => setWriteoffTarget(product)}
+                    onInventory={() => setInventoryTarget(product)}
+                    onDelete={() => setDeleteTarget(product)}
+                  />
+                ))}
+              </div>
+            )
+          )}
         </>
       )}
 
-      {/* Create / Edit Modal */}
+      {/* Modals */}
       {formOpen && (
         <ProductFormModal
           key={editingProduct?.id || 'new'}
@@ -936,35 +748,28 @@ export default function ProductsPage() {
         />
       )}
 
-      {/* Writeoff Modal */}
       {writeoffTarget && (
         <WriteoffModal
           key={`wo-${writeoffTarget.id}`}
           isOpen={!!writeoffTarget}
           onClose={() => setWriteoffTarget(null)}
           product={writeoffTarget}
-          onSubmit={(data) =>
-            writeoffMutation.mutate({ id: writeoffTarget.id, data })
-          }
+          onSubmit={(data) => writeoffMutation.mutate({ id: writeoffTarget.id, data })}
           isLoading={writeoffMutation.isPending}
         />
       )}
 
-      {/* Inventory Modal */}
       {inventoryTarget && (
         <InventoryModal
           key={`inv-${inventoryTarget.id}`}
           isOpen={!!inventoryTarget}
           onClose={() => setInventoryTarget(null)}
           product={inventoryTarget}
-          onSubmit={(data) =>
-            inventoryMutation.mutate({ id: inventoryTarget.id, data })
-          }
+          onSubmit={(data) => inventoryMutation.mutate({ id: inventoryTarget.id, data })}
           isLoading={inventoryMutation.isPending}
         />
       )}
 
-      {/* Delete Confirm */}
       <ConfirmDialog
         isOpen={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}

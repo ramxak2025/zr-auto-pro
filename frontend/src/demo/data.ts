@@ -289,6 +289,8 @@ export const demoChecks: Check[] = [
     carId: 'car-1',
     car: demoCars[0],
     mileage: 87500,
+    comment: 'Клиент просил проверить подвеску при следующем визите',
+    discount: 0,
     paymentMethod: PaymentMethod.CARD,
     services: [
       { id: 's1', name: 'Замена масла', price: 1500, quantity: 1, total: 1500 },
@@ -318,6 +320,8 @@ export const demoChecks: Check[] = [
     carId: 'car-3',
     car: demoCars[2],
     mileage: 42000,
+    comment: 'Постоянный клиент, сделали скидку 10%',
+    discount: 472,
     paymentMethod: PaymentMethod.CASH,
     services: [
       { id: 's3', name: 'Компьютерная диагностика', price: 2000, quantity: 1, total: 2000 },
@@ -346,7 +350,9 @@ export const demoChecks: Check[] = [
     carId: 'car-2',
     car: demoCars[1],
     mileage: 55200,
-    paymentMethod: PaymentMethod.TRANSFER,
+    comment: 'Гарантийный ремонт тормозной системы, клиент обращался повторно',
+    discount: 0,
+    paymentMethod: PaymentMethod.WARRANTY,
     services: [
       { id: 's5', name: 'Замена тормозных колодок (ось)', price: 2500, quantity: 2, total: 5000 },
       { id: 's6', name: 'Замена тормозных дисков (ось)', price: 3500, quantity: 1, total: 3500 },
@@ -375,7 +381,9 @@ export const demoChecks: Check[] = [
     carId: 'car-5',
     car: demoCars[4],
     mileage: 15800,
-    paymentMethod: PaymentMethod.CARD,
+    comment: '',
+    discount: 500,
+    paymentMethod: PaymentMethod.CASH_CARD,
     services: [
       { id: 's7', name: 'Замена масла', price: 1500, quantity: 1, total: 1500 },
       { id: 's8', name: 'Замена воздушного фильтра', price: 400, quantity: 1, total: 400 },
@@ -406,6 +414,8 @@ export const demoChecks: Check[] = [
     carId: 'car-4',
     car: demoCars[3],
     mileage: 68400,
+    comment: 'Амортизаторы сильно изношены, рекомендовано заменить все 4',
+    discount: 1000,
     paymentMethod: PaymentMethod.CASH,
     services: [
       { id: 's10', name: 'Диагностика подвески', price: 1200, quantity: 1, total: 1200 },

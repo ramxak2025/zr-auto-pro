@@ -19,10 +19,9 @@ import {
   Gauge,
   CreditCard,
   Banknote,
-  ArrowRightLeft,
-  Shuffle,
-  MessageSquare,
+  ShieldCheck,
   CheckCircle2,
+  MessageSquare,
 } from 'lucide-react';
 import {
   clientsApi,
@@ -48,70 +47,59 @@ import { useAuth } from '../contexts/AuthContext';
 // ---------------------------------------------------------------------------
 
 function formatMoney(value: number): string {
-  return value.toLocaleString('ru-RU') + ' ₽';
+  return value.toLocaleString('ru-RU') + ' \u20BD';
 }
 
 const PAYMENT_METHODS: { value: PaymentMethod; label: string; icon: typeof Banknote }[] = [
   { value: PM.CASH, label: 'Наличные', icon: Banknote },
   { value: PM.CARD, label: 'Карта', icon: CreditCard },
-  { value: PM.TRANSFER, label: 'Перевод', icon: ArrowRightLeft },
-  { value: PM.MIXED, label: 'Смешанная', icon: Shuffle },
+  { value: PM.WARRANTY, label: 'По гарантии', icon: ShieldCheck },
+  { value: PM.CASH_CARD, label: 'Нал + Карта', icon: CreditCard },
 ];
 
+const CATEGORY_ICONS: Record<string, string> = {
+  'Масла': '🛢️',
+  'Фильтры': '🔧',
+  'Тормозная система': '🛞',
+  'Жидкости': '💧',
+  'Электрика': '⚡',
+  'ГРМ': '⛓️',
+  'Подвеска': '🔩',
+  'ТО': '🔧',
+  'Тормоза': '🛞',
+  'Диагностика': '🔍',
+  'Двигатель': '⚙️',
+  'Колёса': '🛞',
+  'Работа мастера': '👨‍🔧',
+};
+
 // ---------------------------------------------------------------------------
-// Section Wrapper — consistent card style with colored accent
+// Section UI helpers
 // ---------------------------------------------------------------------------
 
-function Section({
-  children,
-  accent = 'gray',
-}: {
-  children: React.ReactNode;
-  accent?: 'blue' | 'emerald' | 'amber' | 'violet' | 'gray';
-}) {
-  const accentBorder: Record<string, string> = {
-    blue: 'border-l-blue-500',
-    emerald: 'border-l-emerald-500',
-    amber: 'border-l-amber-500',
-    violet: 'border-l-violet-500',
-    gray: 'border-l-gray-300',
+function Section({ children, accent = 'gray' }: { children: React.ReactNode; accent?: 'blue' | 'emerald' | 'amber' | 'violet' | 'gray' }) {
+  const borders: Record<string, string> = {
+    blue: 'border-l-blue-500', emerald: 'border-l-emerald-500', amber: 'border-l-amber-500', violet: 'border-l-violet-500', gray: 'border-l-gray-300',
   };
-
   return (
-    <div
-      className={`rounded-2xl border border-gray-100 bg-white shadow-sm border-l-[3px] ${accentBorder[accent]} overflow-hidden`}
-    >
+    <div className={`rounded-2xl border border-gray-100 bg-white shadow-sm border-l-[3px] ${borders[accent]} overflow-hidden`}>
       {children}
     </div>
   );
 }
 
-function SectionHeader({
-  icon: Icon,
-  title,
-  badge,
-  action,
-  accentColor = 'text-gray-500',
-  accentBg = 'bg-gray-50',
-}: {
-  icon: typeof Wrench;
-  title: string;
-  badge?: number;
-  action?: React.ReactNode;
-  accentColor?: string;
-  accentBg?: string;
+function SectionHeader({ icon: Icon, title, badge, action, accentColor = 'text-gray-500', accentBg = 'bg-gray-50' }: {
+  icon: typeof Wrench; title: string; badge?: number; action?: React.ReactNode; accentColor?: string; accentBg?: string;
 }) {
   return (
-    <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-50">
-      <div className="flex items-center gap-2.5">
-        <div className={`flex h-8 w-8 items-center justify-center rounded-xl ${accentBg}`}>
-          <Icon className={`h-4 w-4 ${accentColor}`} />
+    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
+      <div className="flex items-center gap-2">
+        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${accentBg}`}>
+          <Icon className={`h-3.5 w-3.5 ${accentColor}`} />
         </div>
-        <h2 className="text-[15px] font-semibold text-gray-900">{title}</h2>
+        <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
         {badge !== undefined && badge > 0 && (
-          <span className="flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-gray-900 text-white text-[10px] font-bold">
-            {badge}
-          </span>
+          <span className="flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-gray-900 text-white text-[10px] font-bold">{badge}</span>
         )}
       </div>
       {action}
@@ -120,48 +108,34 @@ function SectionHeader({
 }
 
 // ---------------------------------------------------------------------------
-// Client Search Component
+// Client Search
 // ---------------------------------------------------------------------------
 
-interface ClientSearchProps {
-  onSelect: (client: Client) => void;
-  selectedClient: Client | null;
-  onClear: () => void;
-}
-
-function ClientSearch({ onSelect, selectedClient, onClear }: ClientSearchProps) {
+function ClientSearch({ onSelect, selectedClient, onClear }: {
+  onSelect: (client: Client) => void; selectedClient: Client | null; onClear: () => void;
+}) {
   const [searchText, setSearchText] = useState('');
   const [isOpen, setIsOpen] = useState(false);
 
   const { data: clientsData } = useQuery<PaginatedResponse<Client>>({
     queryKey: ['clients-search', searchText],
-    queryFn: async () => {
-      const res = await clientsApi.getAll({ search: searchText, limit: 10 });
-      return res.data;
-    },
+    queryFn: async () => { const res = await clientsApi.getAll({ search: searchText, limit: 10 }); return res.data; },
     enabled: searchText.length >= 2,
     staleTime: 30_000,
   });
-
   const clients = clientsData?.data || [];
 
   if (selectedClient) {
     return (
       <div className="flex items-center gap-3 rounded-xl bg-blue-50/60 px-4 py-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-600 flex-shrink-0">
-          <UserIcon className="h-4.5 w-4.5" />
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-blue-600 flex-shrink-0">
+          <UserIcon className="h-4 w-4" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 truncate">
-            {selectedClient.fullName}
-          </p>
+          <p className="text-sm font-semibold text-gray-900 truncate">{selectedClient.fullName}</p>
           <p className="text-xs text-gray-500">{selectedClient.phone}</p>
         </div>
-        <button
-          type="button"
-          onClick={onClear}
-          className="text-xs font-medium text-blue-600 hover:text-blue-700 transition-colors px-2 py-1 rounded-lg hover:bg-blue-100/60"
-        >
+        <button type="button" onClick={onClear} className="text-xs font-medium text-blue-600 hover:text-blue-700 px-2 py-1 rounded-lg hover:bg-blue-100/60">
           Изменить
         </button>
       </div>
@@ -172,54 +146,36 @@ function ClientSearch({ onSelect, selectedClient, onClear }: ClientSearchProps) 
     <div className="relative">
       <div className="relative">
         <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          value={searchText}
-          onChange={(e) => {
-            setSearchText(e.target.value);
-            setIsOpen(true);
-          }}
+        <input type="text" value={searchText}
+          onChange={(e) => { setSearchText(e.target.value); setIsOpen(true); }}
           onFocus={() => setIsOpen(true)}
-          placeholder="ФИО, телефон или госномер авто..."
-          className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 py-3 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 transition-all focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10"
+          placeholder="ФИО, телефон или госномер..."
+          className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-4 text-sm placeholder-gray-400 focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10"
         />
       </div>
-
       {isOpen && searchText.length >= 2 && clients.length > 0 && (
-        <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl shadow-gray-200/50 max-h-60 overflow-y-auto">
+        <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl max-h-60 overflow-y-auto">
           {clients.map((client) => (
-            <button
-              key={client.id}
-              type="button"
-              onClick={() => {
-                onSelect(client);
-                setSearchText('');
-                setIsOpen(false);
-              }}
-              className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0"
-            >
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 text-gray-500 flex-shrink-0">
-                <UserIcon className="h-3.5 w-3.5" />
+            <button key={client.id} type="button"
+              onClick={() => { onSelect(client); setSearchText(''); setIsOpen(false); }}
+              className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50 border-b border-gray-50 last:border-0">
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-100 text-gray-500 flex-shrink-0">
+                <UserIcon className="h-3 w-3" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">
-                  {client.fullName}
-                </p>
+                <p className="text-sm font-medium text-gray-900 truncate">{client.fullName}</p>
                 <p className="text-xs text-gray-500">{client.phone}</p>
                 {client.cars && client.cars.length > 0 && (
-                  <p className="text-[11px] text-gray-400 mt-0.5">
-                    {client.cars.map((c) => c.plateNumber).join(', ')}
-                  </p>
+                  <p className="text-[11px] text-gray-400">{client.cars.map((c) => c.plateNumber).join(', ')}</p>
                 )}
               </div>
             </button>
           ))}
         </div>
       )}
-
       {isOpen && searchText.length >= 2 && clients.length === 0 && (
-        <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl shadow-gray-200/50 p-4">
-          <p className="text-sm text-gray-400 text-center">Клиенты не найдены</p>
+        <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl p-4">
+          <p className="text-sm text-gray-400 text-center">Не найдено</p>
         </div>
       )}
     </div>
@@ -227,98 +183,159 @@ function ClientSearch({ onSelect, selectedClient, onClear }: ClientSearchProps) 
 }
 
 // ---------------------------------------------------------------------------
-// Service Line
+// Data interfaces
 // ---------------------------------------------------------------------------
 
-interface ServiceLineData {
-  key: string;
-  serviceId: string;
-  name: string;
-  price: number;
-  quantity: number;
-}
+interface ServiceLineData { key: string; serviceId: string; name: string; price: number; quantity: number; }
+interface ProductLineData { key: string; productId: string; name: string; sellPrice: number; costPrice: number; quantity: number; }
 
 // ---------------------------------------------------------------------------
-// Product Line
+// Fullscreen Service Catalog
 // ---------------------------------------------------------------------------
 
-interface ProductLineData {
-  key: string;
-  productId: string;
-  name: string;
-  sellPrice: number;
-  costPrice: number;
-  quantity: number;
-}
-
-// ---------------------------------------------------------------------------
-// Product Catalog — folders (categories) + image cards
-// ---------------------------------------------------------------------------
-
-const CATEGORY_ICONS: Record<string, string> = {
-  'Масла': '🛢️',
-  'Фильтры': '🔧',
-  'Тормозная система': '🛞',
-  'Жидкости': '💧',
-  'Электрика': '⚡',
-  'ГРМ': '⛓️',
-  'Подвеска': '🔩',
-};
-
-interface ProductCatalogProps {
-  allProducts: Product[];
-  productLines: ProductLineData[];
-  onAdd: (product: Product) => void;
-  onUpdateQty: (key: string, qty: number) => void;
-  onRemove: (key: string) => void;
-}
-
-function ProductCatalog({
-  allProducts,
-  productLines,
-  onAdd,
-  onUpdateQty,
-  onRemove,
-}: ProductCatalogProps) {
+function ServiceCatalog({ services, onSelect, onClose }: {
+  services: Service[]; onSelect: (service: Service) => void; onClose: () => void;
+}) {
+  const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const [productSearch, setProductSearch] = useState('');
+
+  const categories = useMemo(() => {
+    const map = new Map<string, Service[]>();
+    for (const s of services) {
+      const cat = s.category || 'Прочее';
+      if (!map.has(cat)) map.set(cat, []);
+      map.get(cat)!.push(s);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [services]);
+
+  const searchResults = useMemo(() => {
+    if (!search) return [];
+    const q = search.toLowerCase();
+    return services.filter((s) => s.name.toLowerCase().includes(q));
+  }, [search, services]);
+
+  const categoryServices = activeCategory
+    ? (categories.find(([cat]) => cat === activeCategory)?.[1] || [])
+    : [];
+
+  return (
+    <div className="fixed inset-0 z-50 bg-white flex flex-col">
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white">
+        <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+          <X className="h-4 w-4" />
+        </button>
+        <h2 className="text-base font-bold text-gray-900">Выбор услуги</h2>
+      </div>
+
+      {/* Search */}
+      <div className="px-4 py-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+            placeholder="Найти услугу..."
+            className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-4 text-sm placeholder-gray-400 focus:border-emerald-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/10" />
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto px-4 pb-6">
+        {search ? (
+          searchResults.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-10">Не найдено</p>
+          ) : (
+            <div className="space-y-1.5">
+              {searchResults.map((svc) => (
+                <button key={svc.id} type="button" onClick={() => { onSelect(svc); onClose(); }}
+                  className="flex w-full items-center justify-between rounded-xl bg-gray-50 px-4 py-3 text-left hover:bg-emerald-50 transition-colors">
+                  <span className="text-sm font-medium text-gray-900">{svc.name}</span>
+                  <span className="text-sm font-bold text-emerald-600">{formatMoney(svc.defaultPrice)}</span>
+                </button>
+              ))}
+            </div>
+          )
+        ) : activeCategory ? (
+          <div>
+            <button type="button" onClick={() => setActiveCategory(null)}
+              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3">
+              <ChevronLeft className="h-4 w-4" />Все категории
+            </button>
+            <div className="space-y-1.5">
+              {categoryServices.map((svc) => (
+                <button key={svc.id} type="button" onClick={() => { onSelect(svc); onClose(); }}
+                  className="flex w-full items-center justify-between rounded-xl bg-gray-50 px-4 py-3 text-left hover:bg-emerald-50 transition-colors">
+                  <span className="text-sm font-medium text-gray-900">{svc.name}</span>
+                  <span className="text-sm font-bold text-emerald-600">{formatMoney(svc.defaultPrice)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {categories.map(([cat, svcs]) => (
+              <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
+                className="flex flex-col items-center rounded-2xl border border-gray-100 bg-white p-4 shadow-sm hover:shadow-md hover:border-emerald-200 active:scale-[0.97] transition-all text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50 text-xl mb-2">
+                  {CATEGORY_ICONS[cat] || <Wrench className="h-5 w-5 text-emerald-500" />}
+                </div>
+                <p className="text-sm font-semibold text-gray-900 leading-tight">{cat}</p>
+                <p className="text-[11px] text-gray-400 mt-0.5">{svcs.length} услуг</p>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Fullscreen Product Catalog
+// ---------------------------------------------------------------------------
+
+function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, onClose }: {
+  products: Product[]; productLines: ProductLineData[];
+  onAdd: (product: Product) => void; onUpdateQty: (key: string, qty: number) => void;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
 
   const categories = useMemo(() => {
     const map = new Map<string, Product[]>();
-    for (const p of allProducts) {
+    for (const p of products) {
       const cat = p.category || 'Без категории';
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat)!.push(p);
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [allProducts]);
+  }, [products]);
 
   const searchResults = useMemo(() => {
-    if (!productSearch) return [];
-    const q = productSearch.toLowerCase();
-    return allProducts.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 20);
-  }, [productSearch, allProducts]);
+    if (!search) return [];
+    const q = search.toLowerCase();
+    return products.filter((p) => p.name.toLowerCase().includes(q));
+  }, [search, products]);
 
-  const productsInCategory = activeCategory
+  const categoryProducts = activeCategory
     ? (categories.find(([cat]) => cat === activeCategory)?.[1] || [])
     : [];
 
-  function getCartQty(productId: string): number {
-    const line = productLines.find((l) => l.productId === productId);
-    return line?.quantity || 0;
+  function getQty(productId: string) {
+    return productLines.find((l) => l.productId === productId)?.quantity || 0;
   }
-
-  function getCartLine(productId: string) {
+  function getLine(productId: string) {
     return productLines.find((l) => l.productId === productId);
   }
 
-  function ProductCard({ product }: { product: Product }) {
-    const qty = getCartQty(product.id);
-    const line = getCartLine(product.id);
+  const cartCount = productLines.reduce((s, l) => s + l.quantity, 0);
 
+  function renderProductCard(product: Product) {
+    const qty = getQty(product.id);
+    const line = getLine(product.id);
     return (
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden flex flex-col hover:shadow-md transition-shadow">
-        {/* Image */}
+      <div key={product.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden flex flex-col">
         <div className="aspect-square bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center relative">
           {product.photo ? (
             <img src={product.photo} alt={product.name} className="w-full h-full object-cover" />
@@ -326,54 +343,34 @@ function ProductCatalog({
             <Package className="h-8 w-8 text-gray-300" />
           )}
           {product.stock <= 0 && (
-            <div className="absolute inset-0 bg-white/80 backdrop-blur-[1px] flex items-center justify-center">
-              <span className="text-[10px] font-semibold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">Нет в наличии</span>
+            <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+              <span className="text-[10px] font-semibold text-red-500 bg-red-50 px-2 py-0.5 rounded-full">Нет</span>
             </div>
           )}
           {qty > 0 && (
-            <div className="absolute top-1.5 right-1.5 flex items-center justify-center h-5 min-w-[20px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold shadow-sm">
-              {qty}
-            </div>
+            <div className="absolute top-1.5 right-1.5 h-5 min-w-[20px] px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold flex items-center justify-center">{qty}</div>
           )}
         </div>
-        {/* Info */}
-        <div className="flex-1 p-2.5 flex flex-col gap-1">
+        <div className="flex-1 p-2.5 space-y-1">
           <p className="text-xs font-medium text-gray-800 line-clamp-2 leading-tight">{product.name}</p>
-          <div className="mt-auto flex items-center justify-between">
+          <div className="flex items-center justify-between">
             <span className="text-[13px] font-bold text-gray-900">{formatMoney(product.sellPrice)}</span>
             <span className="text-[10px] text-gray-400">{product.stock} шт</span>
           </div>
         </div>
-        {/* Actions */}
         <div className="px-2.5 pb-2.5">
           {qty === 0 ? (
-            <button
-              type="button"
-              onClick={() => onAdd(product)}
-              disabled={product.stock <= 0}
-              className="w-full flex items-center justify-center gap-1 rounded-xl bg-amber-50 text-amber-700 py-2 text-xs font-semibold
-                hover:bg-amber-100 active:bg-amber-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              В чек
+            <button type="button" onClick={() => onAdd(product)} disabled={product.stock <= 0}
+              className="w-full flex items-center justify-center gap-1 rounded-xl bg-amber-50 text-amber-700 py-2 text-xs font-semibold hover:bg-amber-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+              <Plus className="h-3.5 w-3.5" />В чек
             </button>
           ) : (
             <div className="flex items-center justify-between bg-amber-50 rounded-xl p-1">
-              <button
-                type="button"
-                onClick={() => line && onUpdateQty(line.key, qty - 1)}
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100 transition-colors"
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </button>
+              <button type="button" onClick={() => line && onUpdateQty(line.key, qty - 1)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100"><Minus className="h-3.5 w-3.5" /></button>
               <span className="text-sm font-bold text-gray-900">{qty}</span>
-              <button
-                type="button"
-                onClick={() => onAdd(product)}
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100 transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </button>
+              <button type="button" onClick={() => onAdd(product)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-amber-700 hover:bg-amber-100"><Plus className="h-3.5 w-3.5" /></button>
             </div>
           )}
         </div>
@@ -381,99 +378,88 @@ function ProductCatalog({
     );
   }
 
-  return (
-    <>
-      {/* Search */}
-      <div className="px-5 py-4">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            value={productSearch}
-            onChange={(e) => setProductSearch(e.target.value)}
-            placeholder="Поиск товара..."
-            className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-3 text-sm text-gray-900 placeholder-gray-400
-              focus:border-amber-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/10 transition-all"
-          />
-        </div>
-      </div>
+  const displayProducts = search ? searchResults : categoryProducts;
 
-      {/* Content */}
-      <div className="px-5 pb-5">
-        {productSearch ? (
-          searchResults.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-8">Товары не найдены</p>
-          ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2.5">
-              {searchResults.map((p) => (
-                <ProductCard key={p.id} product={p} />
-              ))}
-            </div>
-          )
-        ) : activeCategory ? (
-          <div>
-            <button
-              type="button"
-              onClick={() => setActiveCategory(null)}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors mb-3"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              <span>Все категории</span>
-            </button>
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2.5">
-              {productsInCategory.map((p) => (
-                <ProductCard key={p.id} product={p} />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
-            {categories.map(([cat, products]) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setActiveCategory(cat)}
-                className="flex items-center gap-3 rounded-2xl border border-gray-100 bg-gradient-to-br from-gray-50/50 to-gray-50 p-3.5
-                  hover:border-amber-200 hover:from-amber-50/30 hover:to-amber-50/10 active:scale-[0.98] transition-all"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white shadow-sm text-lg flex-shrink-0">
-                  {CATEGORY_ICONS[cat] || <FolderOpen className="h-5 w-5 text-gray-400" />}
-                </div>
-                <div className="text-left min-w-0">
-                  <p className="text-sm font-medium text-gray-900 leading-tight truncate">{cat}</p>
-                  <p className="text-[11px] text-gray-400">{products.length} шт</p>
-                </div>
-              </button>
-            ))}
+  return (
+    <div className="fixed inset-0 z-50 bg-white flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-white">
+        <div className="flex items-center gap-3">
+          <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+            <X className="h-4 w-4" />
+          </button>
+          <h2 className="text-base font-bold text-gray-900">Выбор товара</h2>
+        </div>
+        {cartCount > 0 && (
+          <div className="flex items-center gap-1.5 bg-amber-100 text-amber-700 px-3 py-1.5 rounded-full text-xs font-bold">
+            <Package className="h-3.5 w-3.5" />{cartCount}
           </div>
         )}
       </div>
 
-      {/* Cart summary */}
-      {productLines.length > 0 && (
-        <div className="border-t border-gray-100 bg-amber-50/40 px-5 py-3.5 space-y-2">
-          <p className="text-[11px] font-semibold text-amber-700/70 uppercase tracking-wider">Товары в чеке</p>
-          {productLines.map((line) => (
-            <div key={line.key} className="flex items-center gap-2.5 bg-white rounded-xl p-2.5 border border-amber-100/60">
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">{line.name}</p>
-                <p className="text-xs text-gray-400">{line.quantity} × {formatMoney(line.sellPrice)}</p>
-              </div>
-              <span className="text-sm font-bold text-gray-900 flex-shrink-0">
-                {formatMoney(line.sellPrice * line.quantity)}
-              </span>
-              <button
-                type="button"
-                onClick={() => onRemove(line.key)}
-                className="flex h-6 w-6 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-500 transition-colors flex-shrink-0"
-              >
-                <X className="h-3.5 w-3.5" />
+      {/* Search */}
+      <div className="px-4 py-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+            placeholder="Поиск товара..."
+            className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-4 text-sm placeholder-gray-400 focus:border-amber-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/10" />
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto px-4 pb-6">
+        {search || activeCategory ? (
+          <>
+            {activeCategory && !search && (
+              <button type="button" onClick={() => setActiveCategory(null)}
+                className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3">
+                <ChevronLeft className="h-4 w-4" />Все категории
               </button>
-            </div>
-          ))}
+            )}
+            {displayProducts.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-10">Не найдено</p>
+            ) : (
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
+                {displayProducts.map(renderProductCard)}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {categories.map(([cat, prods]) => {
+              const previewImg = prods.find((p) => p.photo)?.photo;
+              return (
+                <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
+                  className="flex flex-col items-center rounded-2xl border border-gray-100 bg-white p-4 shadow-sm hover:shadow-md hover:border-amber-200 active:scale-[0.97] transition-all text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-gray-50 to-gray-100 mb-2 overflow-hidden">
+                    {previewImg ? (
+                      <img src={previewImg} alt={cat} className="w-full h-full object-cover rounded-2xl" />
+                    ) : (
+                      <span className="text-xl">{CATEGORY_ICONS[cat] || ''}</span>
+                    )}
+                    {!previewImg && !CATEGORY_ICONS[cat] && <FolderOpen className="h-6 w-6 text-gray-400" />}
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900 leading-tight">{cat}</p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">{prods.length} шт</p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Done button */}
+      {cartCount > 0 && (
+        <div className="border-t border-gray-100 px-4 py-3 bg-white">
+          <button type="button" onClick={onClose}
+            className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 py-3 text-sm font-bold text-white shadow-sm active:scale-[0.98]">
+            <CheckCircle2 className="h-4 w-4" />
+            Готово ({cartCount} товаров)
+          </button>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -486,38 +472,32 @@ export default function CheckCreatePage() {
   const { user } = useAuth();
   const isMaster = user?.role === UserRole.MASTER;
 
-  // Form state
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedCarId, setSelectedCarId] = useState('');
   const [mileage, setMileage] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PM.CASH);
   const [comment, setComment] = useState('');
+  const [discount, setDiscount] = useState('');
 
-  // Service lines
   const [serviceLines, setServiceLines] = useState<ServiceLineData[]>([]);
-  const [serviceSearch, setServiceSearch] = useState('');
-
-  // Product lines
   const [productLines, setProductLines] = useState<ProductLineData[]>([]);
+
+  // Fullscreen catalog state
+  const [showServiceCatalog, setShowServiceCatalog] = useState(false);
+  const [showProductCatalog, setShowProductCatalog] = useState(false);
 
   // ---- Queries ----
 
   const { data: servicesData } = useQuery<PaginatedResponse<Service>>({
     queryKey: ['services-all'],
-    queryFn: async () => {
-      const res = await servicesApi.getAll({ limit: 1000 });
-      return res.data;
-    },
+    queryFn: async () => { const res = await servicesApi.getAll({ limit: 1000 }); return res.data; },
     staleTime: 5 * 60_000,
   });
 
   const { data: productsData } = useQuery<PaginatedResponse<Product>>({
     queryKey: ['products-all'],
-    queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 1000 });
-      return res.data;
-    },
+    queryFn: async () => { const res = await productsApi.getAll({ limit: 1000 }); return res.data; },
     staleTime: 5 * 60_000,
   });
 
@@ -526,51 +506,42 @@ export default function CheckCreatePage() {
   const cars: Car[] = selectedClient?.cars || [];
 
   useEffect(() => {
-    if (cars.length === 1) {
-      setSelectedCarId(cars[0].id);
-    } else {
-      setSelectedCarId('');
-    }
+    if (cars.length === 1) setSelectedCarId(cars[0].id);
+    else setSelectedCarId('');
   }, [selectedClient]);
 
-  const filteredServices = useMemo(() => {
-    if (!serviceSearch) return [];
-    const lower = serviceSearch.toLowerCase();
-    return allServices
-      .filter((s) => s.name.toLowerCase().includes(lower))
-      .slice(0, 8);
-  }, [serviceSearch, allServices]);
+  // ---- Service handlers ----
 
-  // ---- Service line handlers ----
-
-  function addServiceLine(service?: Service) {
-    const newLine: ServiceLineData = {
-      key: crypto.randomUUID(),
-      serviceId: service?.id || '',
-      name: service?.name || '',
-      price: service?.defaultPrice || 0,
-      quantity: 1,
-    };
-    setServiceLines((prev) => [...prev, newLine]);
-    setServiceSearch('');
+  function addServiceLine(service: Service) {
+    setServiceLines((prev) => [...prev, {
+      key: crypto.randomUUID(), serviceId: service.id, name: service.name, price: service.defaultPrice, quantity: 1,
+    }]);
   }
 
   function updateServiceLine(key: string, field: Partial<ServiceLineData>) {
-    setServiceLines((prev) =>
-      prev.map((l) => (l.key === key ? { ...l, ...field } : l)),
-    );
+    setServiceLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...field } : l)));
   }
 
   function removeServiceLine(key: string) {
     setServiceLines((prev) => prev.filter((l) => l.key !== key));
   }
 
-  // ---- Product line handlers ----
+  // ---- Product handlers ----
 
-  function updateProductLine(key: string, field: Partial<ProductLineData>) {
-    setProductLines((prev) =>
-      prev.map((l) => (l.key === key ? { ...l, ...field } : l)),
-    );
+  function addProduct(product: Product) {
+    const existing = productLines.find((l) => l.productId === product.id);
+    if (existing) {
+      setProductLines((prev) => prev.map((l) => l.key === existing.key ? { ...l, quantity: l.quantity + 1 } : l));
+    } else {
+      setProductLines((prev) => [...prev, {
+        key: crypto.randomUUID(), productId: product.id, name: product.name, sellPrice: product.sellPrice, costPrice: product.costPrice, quantity: 1,
+      }]);
+    }
+  }
+
+  function updateProductQty(key: string, qty: number) {
+    if (qty <= 0) setProductLines((prev) => prev.filter((l) => l.key !== key));
+    else setProductLines((prev) => prev.map((l) => (l.key === key ? { ...l, quantity: qty } : l)));
   }
 
   function removeProductLine(key: string) {
@@ -579,473 +550,273 @@ export default function CheckCreatePage() {
 
   // ---- Calculations ----
 
-  const servicesTotal = serviceLines.reduce(
-    (sum, l) => sum + l.price * l.quantity,
-    0,
-  );
-  const productsTotal = productLines.reduce(
-    (sum, l) => sum + l.sellPrice * l.quantity,
-    0,
-  );
-  const grandTotal = servicesTotal + productsTotal;
+  const servicesTotal = serviceLines.reduce((s, l) => s + l.price * l.quantity, 0);
+  const productsTotal = productLines.reduce((s, l) => s + l.sellPrice * l.quantity, 0);
+  const discountValue = parseFloat(discount) || 0;
+  const grandTotal = Math.max(0, servicesTotal + productsTotal - discountValue);
+  const itemCount = serviceLines.length + productLines.reduce((s, l) => s + l.quantity, 0);
 
   // ---- Submit ----
 
   const createMutation = useMutation({
     mutationFn: (data: any) => checksApi.create(data),
-    onSuccess: (res) => {
-      toast.success('Чек создан');
-      navigate(`/checks/${res.data.id}`);
-    },
-    onError: () => {
-      toast.error('Не удалось создать чек');
-    },
+    onSuccess: (res) => { toast.success('Чек создан'); navigate(`/checks/${res.data.id}`); },
+    onError: () => { toast.error('Не удалось создать чек'); },
   });
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-
-    if (!selectedClient) {
-      toast.error('Выберите клиента');
-      return;
-    }
-    if (!selectedCarId) {
-      toast.error('Выберите автомобиль');
-      return;
-    }
-    if (serviceLines.length === 0 && productLines.length === 0) {
-      toast.error('Добавьте хотя бы одну услугу или товар');
-      return;
-    }
-
-    for (const line of serviceLines) {
-      if (!line.name.trim()) {
-        toast.error('Заполните название всех услуг');
-        return;
-      }
-    }
-
-    for (const line of productLines) {
-      if (!line.productId) {
-        toast.error('Выберите товар для всех строк');
-        return;
-      }
-    }
+    if (!selectedClient) { toast.error('Выберите клиента'); return; }
+    if (!selectedCarId) { toast.error('Выберите автомобиль'); return; }
+    if (serviceLines.length === 0 && productLines.length === 0) { toast.error('Добавьте услугу или товар'); return; }
 
     const services: Omit<CheckServiceLine, 'id'>[] = serviceLines.map((l) => ({
-      serviceId: l.serviceId || undefined,
-      name: l.name,
-      price: l.price,
-      quantity: l.quantity,
-      total: l.price * l.quantity,
+      serviceId: l.serviceId || undefined, name: l.name, price: l.price, quantity: l.quantity, total: l.price * l.quantity,
     }));
 
     const products: Omit<CheckProductLine, 'id'>[] = productLines.map((l) => ({
-      productId: l.productId,
-      name: l.name,
-      sellPrice: l.sellPrice,
-      costPrice: l.costPrice,
-      quantity: l.quantity,
-      totalSell: l.sellPrice * l.quantity,
-      totalCost: l.costPrice * l.quantity,
+      productId: l.productId, name: l.name, sellPrice: l.sellPrice, costPrice: l.costPrice,
+      quantity: l.quantity, totalSell: l.sellPrice * l.quantity, totalCost: l.costPrice * l.quantity,
     }));
 
     createMutation.mutate({
-      clientId: selectedClient.id,
-      carId: selectedCarId,
-      date,
+      clientId: selectedClient.id, carId: selectedCarId, date,
       mileage: mileage ? parseInt(mileage) : undefined,
-      services,
-      products,
-      paymentMethod,
+      services, products, paymentMethod,
+      discount: discountValue || undefined,
       comment: comment.trim() || undefined,
     });
   }
 
-  const itemCount = serviceLines.length + productLines.reduce((s, l) => s + l.quantity, 0);
-
   return (
-    <div className="pb-28 md:pb-6">
-      {/* ── Header ── */}
-      <div className="flex items-center gap-3 mb-6">
-        <button
-          onClick={() => navigate('/checks')}
-          className="flex h-10 w-10 items-center justify-center rounded-xl bg-white border border-gray-200 text-gray-500 transition-all hover:bg-gray-50 hover:text-gray-700 active:scale-95"
-        >
-          <ArrowLeft className="h-4.5 w-4.5" />
-        </button>
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Новый чек</h1>
-          <p className="text-xs text-gray-400 mt-0.5">Заполните данные для создания чека</p>
-        </div>
-      </div>
+    <>
+      {/* Fullscreen catalogs */}
+      {showServiceCatalog && (
+        <ServiceCatalog services={allServices} onSelect={addServiceLine} onClose={() => setShowServiceCatalog(false)} />
+      )}
+      {showProductCatalog && (
+        <ProductCatalogFullscreen
+          products={allProducts} productLines={productLines}
+          onAdd={addProduct} onUpdateQty={updateProductQty}
+          onClose={() => setShowProductCatalog(false)}
+        />
+      )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* ── Section 1: Client & Car ── */}
-        <Section accent="blue">
-          <SectionHeader
-            icon={UserIcon}
-            title="Клиент и автомобиль"
-            accentColor="text-blue-600"
-            accentBg="bg-blue-50"
-          />
-          <div className="p-5 space-y-4">
-            <ClientSearch
-              onSelect={(client) => setSelectedClient(client)}
-              selectedClient={selectedClient}
-              onClear={() => {
-                setSelectedClient(null);
-                setSelectedCarId('');
-              }}
-            />
-
-            {selectedClient && (
-              <div className="grid gap-3 sm:grid-cols-3">
-                {/* Car */}
-                <div>
-                  <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1.5">
-                    <span>Автомобиль</span>
-                    <span className="text-red-400">*</span>
-                  </label>
-                  <select
-                    value={selectedCarId}
-                    onChange={(e) => setSelectedCarId(e.target.value)}
-                    disabled={cars.length === 0}
-                    className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3.5 py-2.5 text-sm text-gray-900 transition-all focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10 disabled:bg-gray-100 disabled:text-gray-400"
-                  >
-                    <option value="">
-                      {cars.length === 0 ? 'Нет авто' : 'Выберите авто'}
-                    </option>
-                    {cars.map((car) => (
-                      <option key={car.id} value={car.id}>
-                        {car.plateNumber} — {car.makeModel}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Mileage */}
-                <div>
-                  <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1.5">
-                    <span>Пробег (км)</span>
-                  </label>
-                  <div className="relative">
-                    <Gauge className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                    <input
-                      type="number"
-                      value={mileage}
-                      onChange={(e) => setMileage(e.target.value)}
-                      min="0"
-                      placeholder="0"
-                      className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-9 pr-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-all focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10"
-                    />
-                  </div>
-                </div>
-
-                {/* Date */}
-                <div>
-                  <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1.5">
-                    <span>Дата</span>
-                  </label>
-                  {isMaster ? (
-                    <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-2.5 text-sm text-gray-500">
-                      <Calendar className="h-4 w-4 text-gray-400" />
-                      {new Date(date).toLocaleDateString('ru-RU')}
-                    </div>
-                  ) : (
-                    <div className="relative">
-                      <Calendar className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                      <input
-                        type="date"
-                        value={date}
-                        onChange={(e) => setDate(e.target.value)}
-                        className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-9 pr-3 py-2.5 text-sm text-gray-900 transition-all focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
+      <div className="pb-28 md:pb-6">
+        {/* Header */}
+        <div className="flex items-center gap-3 mb-5">
+          <button onClick={() => navigate('/checks')}
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white border border-gray-200 text-gray-500 hover:bg-gray-50 active:scale-95">
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <div>
+            <h1 className="text-lg font-bold text-gray-900">Новый чек</h1>
+            <p className="text-[11px] text-gray-400">Заполните данные</p>
           </div>
-        </Section>
+        </div>
 
-        {/* ── Section 2: Services ── */}
-        <Section accent="emerald">
-          <SectionHeader
-            icon={Wrench}
-            title="Услуги"
-            badge={serviceLines.length}
-            accentColor="text-emerald-600"
-            accentBg="bg-emerald-50"
-          />
-          <div className="p-5 space-y-3">
-            {/* Service autocomplete */}
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={serviceSearch}
-                onChange={(e) => setServiceSearch(e.target.value)}
-                placeholder="Найти услугу..."
-                className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 transition-all focus:border-emerald-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/10"
-              />
-              {serviceSearch && filteredServices.length > 0 && (
-                <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl shadow-gray-200/50 max-h-48 overflow-y-auto">
-                  {filteredServices.map((service) => (
-                    <button
-                      key={service.id}
-                      type="button"
-                      onClick={() => addServiceLine(service)}
-                      className="flex w-full items-center justify-between px-4 py-2.5 text-left hover:bg-emerald-50/50 transition-colors text-sm border-b border-gray-50 last:border-0"
-                    >
-                      <span className="text-gray-900">{service.name}</span>
-                      <span className="text-emerald-600 font-medium text-xs">
-                        {formatMoney(service.defaultPrice)}
-                      </span>
-                    </button>
-                  ))}
+        <form onSubmit={handleSubmit} className="space-y-3">
+          {/* Section 1: Client */}
+          <Section accent="blue">
+            <SectionHeader icon={UserIcon} title="Клиент" accentColor="text-blue-600" accentBg="bg-blue-50" />
+            <div className="p-4 space-y-3">
+              <ClientSearch onSelect={setSelectedClient} selectedClient={selectedClient}
+                onClear={() => { setSelectedClient(null); setSelectedCarId(''); }} />
+              {selectedClient && (
+                <div className="grid gap-2.5 grid-cols-3">
+                  <div>
+                    <label className="text-[11px] font-medium text-gray-500 mb-1 block">Авто *</label>
+                    <select value={selectedCarId} onChange={(e) => setSelectedCarId(e.target.value)} disabled={cars.length === 0}
+                      className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10 disabled:bg-gray-100">
+                      <option value="">{cars.length === 0 ? 'Нет' : 'Выбрать'}</option>
+                      {cars.map((car) => <option key={car.id} value={car.id}>{car.plateNumber} — {car.makeModel}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-medium text-gray-500 mb-1 block">Пробег</label>
+                    <div className="relative">
+                      <Gauge className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                      <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} min="0" placeholder="0"
+                        className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-8 pr-2 py-2 text-sm placeholder-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-medium text-gray-500 mb-1 block">Дата</label>
+                    {isMaster ? (
+                      <div className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+                        <Calendar className="h-3.5 w-3.5" />{new Date(date).toLocaleDateString('ru-RU')}
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+                          className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-8 pr-2 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10" />
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
+          </Section>
 
-            <button
-              type="button"
-              onClick={() => addServiceLine()}
-              className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600 hover:text-emerald-700 transition-colors px-1"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Произвольная услуга
-            </button>
-
-            {/* Service lines */}
+          {/* Section 2: Services */}
+          <Section accent="emerald">
+            <SectionHeader icon={Wrench} title="Услуги" badge={serviceLines.length} accentColor="text-emerald-600" accentBg="bg-emerald-50"
+              action={
+                <button type="button" onClick={() => setShowServiceCatalog(true)}
+                  className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors">
+                  <Plus className="h-3.5 w-3.5" />Добавить
+                </button>
+              }
+            />
             {serviceLines.length > 0 && (
-              <div className="space-y-2 pt-1">
+              <div className="p-4 space-y-2">
                 {serviceLines.map((line, idx) => (
-                  <div
-                    key={line.key}
-                    className="group rounded-xl bg-gray-50/70 p-3 space-y-2 hover:bg-gray-50 transition-colors"
-                  >
-                    {/* Row 1: Name + delete */}
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 text-[11px] font-bold flex-shrink-0">
-                        {idx + 1}
-                      </span>
-                      <input
-                        type="text"
-                        value={line.name}
-                        onChange={(e) =>
-                          updateServiceLine(line.key, { name: e.target.value })
-                        }
-                        placeholder="Название услуги"
-                        className="flex-1 min-w-0 rounded-lg border-0 bg-transparent px-2 py-1 text-sm font-medium text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-0"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => removeServiceLine(line.key)}
-                        className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500 opacity-0 group-hover:opacity-100 flex-shrink-0"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                    {/* Row 2: Price × Qty = Total */}
-                    <div className="flex items-center gap-2 pl-8">
-                      <div className="relative flex-1 min-w-0">
-                        <input
-                          type="number"
-                          value={line.price}
-                          onChange={(e) =>
-                            updateServiceLine(line.key, {
-                              price: parseFloat(e.target.value) || 0,
-                            })
-                          }
-                          min="0"
-                          step="0.01"
-                          placeholder="Цена"
-                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-900 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-500/10"
-                        />
+                  <div key={line.key} className="group flex items-center gap-2 rounded-xl bg-gray-50/70 px-3 py-2.5">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold flex-shrink-0">{idx + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{line.name}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <input type="number" value={line.price}
+                          onChange={(e) => updateServiceLine(line.key, { price: parseFloat(e.target.value) || 0 })}
+                          className="w-20 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs focus:border-emerald-400 focus:outline-none" />
+                        <span className="text-gray-300 text-[10px]">x</span>
+                        <input type="number" value={line.quantity} min="1"
+                          onChange={(e) => updateServiceLine(line.key, { quantity: parseInt(e.target.value) || 1 })}
+                          className="w-12 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-center focus:border-emerald-400 focus:outline-none" />
+                        <span className="text-xs font-bold text-gray-900 ml-auto">{formatMoney(line.price * line.quantity)}</span>
                       </div>
-                      <span className="text-gray-300 text-xs">×</span>
-                      <input
-                        type="number"
-                        value={line.quantity}
-                        onChange={(e) =>
-                          updateServiceLine(line.key, {
-                            quantity: parseInt(e.target.value) || 1,
-                          })
-                        }
-                        min="1"
-                        className="w-16 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-sm text-gray-900 text-center focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-500/10"
-                      />
-                      <span className="text-gray-300 text-xs">=</span>
-                      <span className="text-sm font-bold text-gray-900 min-w-[80px] text-right">
-                        {formatMoney(line.price * line.quantity)}
-                      </span>
                     </div>
+                    <button type="button" onClick={() => removeServiceLine(line.key)}
+                      className="flex h-6 w-6 items-center justify-center rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 flex-shrink-0">
+                      <Trash2 className="h-3 w-3" />
+                    </button>
                   </div>
                 ))}
               </div>
             )}
-          </div>
-        </Section>
+            {serviceLines.length === 0 && (
+              <div className="p-6 text-center">
+                <p className="text-sm text-gray-400">Нажмите "Добавить" для выбора услуг</p>
+              </div>
+            )}
+          </Section>
 
-        {/* ── Section 3: Products ── */}
-        <Section accent="amber">
-          <SectionHeader
-            icon={Package}
-            title="Товары"
-            badge={productLines.reduce((s, l) => s + l.quantity, 0)}
-            accentColor="text-amber-600"
-            accentBg="bg-amber-50"
-          />
-          <ProductCatalog
-            allProducts={allProducts}
-            productLines={productLines}
-            onAdd={(product) => {
-              const existing = productLines.find((l) => l.productId === product.id);
-              if (existing) {
-                updateProductLine(existing.key, { quantity: existing.quantity + 1 });
-              } else {
-                setProductLines((prev) => [
-                  ...prev,
-                  {
-                    key: crypto.randomUUID(),
-                    productId: product.id,
-                    name: product.name,
-                    sellPrice: product.sellPrice,
-                    costPrice: product.costPrice,
-                    quantity: 1,
-                  },
-                ]);
+          {/* Section 3: Products */}
+          <Section accent="amber">
+            <SectionHeader icon={Package} title="Товары" badge={productLines.reduce((s, l) => s + l.quantity, 0)} accentColor="text-amber-600" accentBg="bg-amber-50"
+              action={
+                <button type="button" onClick={() => setShowProductCatalog(true)}
+                  className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 transition-colors">
+                  <Plus className="h-3.5 w-3.5" />Добавить
+                </button>
               }
-            }}
-            onUpdateQty={(key, qty) => {
-              if (qty <= 0) {
-                removeProductLine(key);
-              } else {
-                updateProductLine(key, { quantity: qty });
-              }
-            }}
-            onRemove={removeProductLine}
-          />
-        </Section>
-
-        {/* ── Section 4: Payment & Comment ── */}
-        <Section accent="violet">
-          <SectionHeader
-            icon={CreditCard}
-            title="Оплата"
-            accentColor="text-violet-600"
-            accentBg="bg-violet-50"
-          />
-          <div className="p-5 space-y-5">
-            {/* Payment method pills */}
-            <div className="flex flex-wrap gap-2">
-              {PAYMENT_METHODS.map((pm) => {
-                const Icon = pm.icon;
-                const active = paymentMethod === pm.value;
-                return (
-                  <button
-                    key={pm.value}
-                    type="button"
-                    onClick={() => setPaymentMethod(pm.value)}
-                    className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
-                      active
-                        ? 'bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm'
-                        : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    <Icon className="h-4 w-4" />
-                    {pm.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Comment */}
-            <div>
-              <label className="flex items-center gap-1.5 text-xs font-medium text-gray-500 mb-1.5">
-                <MessageSquare className="h-3.5 w-3.5" />
-                Комментарий
-              </label>
-              <textarea
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                rows={2}
-                placeholder="Доп. информация..."
-                className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-all focus:border-violet-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/10 resize-none"
-              />
-            </div>
-          </div>
-        </Section>
-
-        {/* ── Sticky Total Bar (mobile) + Desktop summary ── */}
-        <div className="hidden md:block">
-          <div className="rounded-2xl bg-gradient-to-br from-gray-900 to-gray-800 p-5 text-white">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-semibold text-white/80">Итого по чеку</h2>
-              <span className="text-xs text-white/50">{itemCount} позиций</span>
-            </div>
-            <div className="space-y-2 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-white/60">Услуги</span>
-                <span className="font-medium">{formatMoney(servicesTotal)}</span>
+            />
+            {productLines.length > 0 && (
+              <div className="p-4 space-y-2">
+                {productLines.map((line) => (
+                  <div key={line.key} className="flex items-center gap-2.5 rounded-xl bg-gray-50/70 px-3 py-2.5">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{line.name}</p>
+                      <p className="text-xs text-gray-400">{line.quantity} x {formatMoney(line.sellPrice)}</p>
+                    </div>
+                    <span className="text-sm font-bold text-gray-900 flex-shrink-0">{formatMoney(line.sellPrice * line.quantity)}</span>
+                    <button type="button" onClick={() => removeProductLine(line.key)}
+                      className="flex h-6 w-6 items-center justify-center rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 flex-shrink-0">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-white/60">Товары</span>
-                <span className="font-medium">{formatMoney(productsTotal)}</span>
+            )}
+            {productLines.length === 0 && (
+              <div className="p-6 text-center">
+                <p className="text-sm text-gray-400">Нажмите "Добавить" для выбора товаров</p>
               </div>
-              <div className="border-t border-white/10 pt-3 mt-3 flex items-center justify-between">
-                <span className="text-lg font-bold">Итого</span>
-                <span className="text-2xl font-bold">{formatMoney(grandTotal)}</span>
+            )}
+          </Section>
+
+          {/* Section 4: Payment */}
+          <Section accent="violet">
+            <SectionHeader icon={CreditCard} title="Оплата" accentColor="text-violet-600" accentBg="bg-violet-50" />
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {PAYMENT_METHODS.map((pm) => {
+                  const Icon = pm.icon;
+                  const active = paymentMethod === pm.value;
+                  return (
+                    <button key={pm.value} type="button" onClick={() => setPaymentMethod(pm.value)}
+                      className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-semibold transition-all ${
+                        active
+                          ? 'bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm'
+                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      }`}>
+                      <Icon className="h-3.5 w-3.5" />{pm.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[11px] font-medium text-gray-500 mb-1 block">Скидка (руб)</label>
+                  <input type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} min="0" placeholder="0"
+                    className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-2 text-sm placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/10" />
+                </div>
+                <div>
+                  <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
+                    <MessageSquare className="h-3 w-3" />Комментарий
+                  </label>
+                  <input type="text" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Доп. инфо..."
+                    className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-2 text-sm placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/10" />
+                </div>
               </div>
             </div>
-            <div className="flex gap-3 mt-5">
-              <button
-                type="button"
-                onClick={() => navigate('/checks')}
-                className="flex-1 rounded-xl border border-white/20 px-4 py-3 text-sm font-medium text-white/80 transition-colors hover:bg-white/10"
-              >
-                Отмена
-              </button>
-              <button
-                type="submit"
-                disabled={createMutation.isPending}
-                className="flex-[2] flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-gray-900 transition-all hover:bg-gray-100 disabled:opacity-50 active:scale-[0.98]"
-              >
-                {createMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="h-4 w-4" />
+          </Section>
+
+          {/* Desktop summary */}
+          <div className="hidden md:block">
+            <div className="rounded-2xl bg-gradient-to-br from-gray-900 to-gray-800 p-5 text-white">
+              <div className="space-y-1.5 text-sm">
+                <div className="flex justify-between"><span className="text-white/60">Услуги</span><span>{formatMoney(servicesTotal)}</span></div>
+                <div className="flex justify-between"><span className="text-white/60">Товары</span><span>{formatMoney(productsTotal)}</span></div>
+                {discountValue > 0 && (
+                  <div className="flex justify-between"><span className="text-white/60">Скидка</span><span className="text-red-300">-{formatMoney(discountValue)}</span></div>
                 )}
-                Создать чек
+                <div className="border-t border-white/10 pt-2 mt-2 flex justify-between">
+                  <span className="text-lg font-bold">Итого</span>
+                  <span className="text-2xl font-bold">{formatMoney(grandTotal)}</span>
+                </div>
+              </div>
+              <div className="flex gap-3 mt-4">
+                <button type="button" onClick={() => navigate('/checks')}
+                  className="flex-1 rounded-xl border border-white/20 px-4 py-2.5 text-sm font-medium text-white/80 hover:bg-white/10">Отмена</button>
+                <button type="submit" disabled={createMutation.isPending}
+                  className="flex-[2] flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-sm font-bold text-gray-900 hover:bg-gray-100 disabled:opacity-50 active:scale-[0.98]">
+                  {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  Создать чек
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Mobile sticky bar */}
+          <div className="md:hidden fixed bottom-[68px] inset-x-0 z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-4 py-2.5">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] text-gray-400 uppercase tracking-wider">Итого</p>
+                <p className="text-lg font-bold text-gray-900">{formatMoney(grandTotal)}</p>
+                {discountValue > 0 && <p className="text-[10px] text-red-500">скидка -{formatMoney(discountValue)}</p>}
+              </div>
+              <button type="submit" disabled={createMutation.isPending}
+                className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-primary-600 to-primary-700 px-5 py-3 text-sm font-bold text-white shadow-lg active:scale-[0.97] disabled:opacity-50">
+                {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                Создать
               </button>
             </div>
           </div>
-        </div>
-
-        {/* Mobile sticky bottom bar */}
-        <div className="md:hidden fixed bottom-[68px] inset-x-0 z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))]">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="text-[11px] text-gray-400 uppercase tracking-wider">Итого</p>
-              <p className="text-xl font-bold text-gray-900">{formatMoney(grandTotal)}</p>
-              <p className="text-[11px] text-gray-400">{itemCount} позиций</p>
-            </div>
-            <button
-              type="submit"
-              disabled={createMutation.isPending}
-              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-primary-600 to-primary-700 px-6 py-3.5 text-sm font-bold text-white shadow-lg shadow-primary-600/20 transition-all hover:shadow-xl active:scale-[0.97] disabled:opacity-50"
-            >
-              {createMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="h-4 w-4" />
-              )}
-              Создать
-            </button>
-          </div>
-        </div>
-      </form>
-    </div>
+        </form>
+      </div>
+    </>
   );
 }
