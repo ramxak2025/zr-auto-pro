@@ -251,4 +251,11 @@ export interface DashboardStats {
   todayChecks: number;
   weekRevenue: number;
   monthRevenue: number;
+  todayProfit: number;
+  monthProfit: number;
+}
+
+export interface EmployeeRanking {
+  today: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
+  month: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
 }

@@ -55,6 +55,8 @@ export interface DashboardStatsResult {
   todayChecks: number;
   weekRevenue: number;
   monthRevenue: number;
+  todayProfit: number;
+  monthProfit: number;
 }
 
 @Injectable()
@@ -237,6 +239,7 @@ export class ReportsService {
       .createQueryBuilder('check')
       .select('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
       .addSelect('COUNT(check.id)', 'checkCount')
+      .addSelect('COALESCE(SUM(check.profit), 0)', 'profit')
       .where('check.date BETWEEN :dateFrom AND :dateTo', {
         dateFrom: todayStart,
         dateTo: todayEnd,
@@ -259,6 +262,7 @@ export class ReportsService {
     const monthResult = await this.checkRepo
       .createQueryBuilder('check')
       .select('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
+      .addSelect('COALESCE(SUM(check.profit), 0)', 'profit')
       .where('check.date BETWEEN :dateFrom AND :dateTo', {
         dateFrom: monthStart,
         dateTo: todayEnd,
@@ -272,6 +276,54 @@ export class ReportsService {
       todayChecks: parseInt(todayResult.checkCount, 10) || 0,
       weekRevenue: parseFloat(weekResult.revenue) || 0,
       monthRevenue: parseFloat(monthResult.revenue) || 0,
+      todayProfit: parseFloat(todayResult.profit) || 0,
+      monthProfit: parseFloat(monthResult.profit) || 0,
     };
   }
-}
+
+  async getEmployeeRanking(tenantId: string): Promise<{
+    today: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
+    month: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
+  }> {
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    monthStart.setHours(0, 0, 0, 0);
+
+    const buildQuery = (from: Date, to: Date) =>
+      this.checkRepo
+        .createQueryBuilder('check')
+        .select('check.masterId', 'masterId')
+        .addSelect('user.fullName', 'masterName')
+        .addSelect('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
+        .addSelect('COUNT(check.id)', 'checkCount')
+        .innerJoin('check.master', 'user')
+        .where('check.date BETWEEN :dateFrom AND :dateTo', { dateFrom: from, dateTo: to })
+        .andWhere('check.deletedAt IS NULL')
+        .andWhere('check.tenantId = :tenantId', { tenantId })
+        .groupBy('check.masterId')
+        .addGroupBy('user.fullName')
+        .orderBy('revenue', 'DESC')
+        .getRawMany();
+
+    const [todayResults, monthResults] = await Promise.all([
+      buildQuery(todayStart, todayEnd),
+      buildQuery(monthStart, todayEnd),
+    ]);
+
+    const mapResult = (rows: any[]) =>
+      rows.map((row) => ({
+        masterId: row.masterId,
+        masterName: row.masterName,
+        revenue: parseFloat(row.revenue) || 0,
+        checkCount: parseInt(row.checkCount, 10) || 0,
+      }));
+
+    return {
+      today: mapResult(todayResults),
+      month: mapResult(monthResults),
+    };
+  }

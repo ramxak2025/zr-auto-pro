@@ -75,4 +75,11 @@ export class ReportsController {
   getDashboardStats(@TenantId() tenantId: string) {
     return this.reportsService.getDashboardStats(tenantId);
   }
+
+  @Get('employee-ranking')
+  @UseGuards(PermissionsGuard)
+  @RequirePermissions('profit_view')
+  getEmployeeRanking(@TenantId() tenantId: string) {
+    return this.reportsService.getEmployeeRanking(tenantId);
+  }
 }

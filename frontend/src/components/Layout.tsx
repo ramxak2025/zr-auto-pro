@@ -255,7 +255,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         </header>
 
         {/* ─── Page content ─── */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 pb-32 md:pb-6">{children}</main>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 pb-32 md:pb-6">{children}</main>
       </div>
 
       {/* ─── Mobile bottom tab bar ─── */}

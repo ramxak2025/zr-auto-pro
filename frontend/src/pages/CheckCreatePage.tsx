@@ -645,7 +645,7 @@ export default function CheckCreatePage() {
         />
       )}
 
-      <div className="pb-20 md:pb-6">
+      <div className="pb-44 md:pb-6">
         {/* Header */}
         <div className="flex items-center gap-3 mb-5">
           <button onClick={() => navigate('/checks')}

@@ -520,14 +520,14 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
 }
 
 // ---------------------------------------------------------------------------
-// Main Page — Folder-based warehouse view
+// Main Page — Folder-based warehouse view with nested category support
 // ---------------------------------------------------------------------------
 
 export default function ProductsPage() {
   const queryClient = useQueryClient();
 
   const [searchText, setSearchText] = useState('');
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [activePath, setActivePath] = useState<string[]>([]);
 
   // Modal state
   const [formOpen, setFormOpen] = useState(false);
@@ -569,15 +569,63 @@ export default function ProductsPage() {
 
   const allProducts = productsData?.data || [];
 
-  // Group by category
-  const categoryGroups = useMemo(() => {
-    const map = new Map<string, Product[]>();
+  // Compute subfolders and products at the current path level
+  const { subfolders, currentProducts } = useMemo(() => {
+    const prefix = activePath.length > 0 ? activePath.join('/') : '';
+    const subfolderSet = new Map<string, { count: number; hasLow: boolean }>();
+    const prods: Product[] = [];
+
     for (const p of allProducts) {
-      const cat = p.category || 'Без категории';
-      if (!map.has(cat)) map.set(cat, []);
-      map.get(cat)!.push(p);
+      const cat = p.category || '';
+      const catParts = cat ? cat.split('/') : [];
+
+      if (activePath.length === 0) {
+        // At root: products with no category belong here; first segment = subfolder
+        if (catParts.length === 0 || cat === '') {
+          prods.push(p);
+        } else {
+          const folderName = catParts[0];
+          const existing = subfolderSet.get(folderName) || { count: 0, hasLow: false };
+          existing.count++;
+          if (p.stock <= p.minStock) existing.hasLow = true;
+          subfolderSet.set(folderName, existing);
+        }
+      } else {
+        // Inside a path: check if product's category starts with our prefix
+        if (cat === prefix) {
+          // Product is at exactly this level
+          prods.push(p);
+        } else if (cat.startsWith(prefix + '/')) {
+          // Product is in a subfolder
+          const rest = cat.slice(prefix.length + 1);
+          const nextSegment = rest.split('/')[0];
+          const existing = subfolderSet.get(nextSegment) || { count: 0, hasLow: false };
+          existing.count++;
+          if (p.stock <= p.minStock) existing.hasLow = true;
+          subfolderSet.set(nextSegment, existing);
+        }
+      }
     }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+    const sortedSubfolders = Array.from(subfolderSet.entries())
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { subfolders: sortedSubfolders, currentProducts: prods };
+  }, [allProducts, activePath]);
+
+  // All unique category paths for the move modal
+  const allCategoryPaths = useMemo(() => {
+    const paths = new Set<string>();
+    for (const p of allProducts) {
+      if (p.category) {
+        const parts = p.category.split('/');
+        for (let i = 1; i <= parts.length; i++) {
+          paths.add(parts.slice(0, i).join('/'));
+        }
+      }
+    }
+    return Array.from(paths).sort();
   }, [allProducts]);
 
   // Search results
@@ -586,11 +634,6 @@ export default function ProductsPage() {
     const q = searchText.toLowerCase();
     return allProducts.filter((p) => p.name.toLowerCase().includes(q));
   }, [searchText, allProducts]);
-
-  // Products in active category
-  const categoryProducts = activeCategory
-    ? (categoryGroups.find(([cat]) => cat === activeCategory)?.[1] || [])
-    : [];
 
   // ---- Mutations ----
 
@@ -688,11 +731,14 @@ export default function ProductsPage() {
 
   const isMutating = createMutation.isPending || updateMutation.isPending;
 
-  // ---- Which products to render ----
-  const displayProducts = searchText ? searchResults : categoryProducts;
+  // ---- Navigation state ----
+  const isInFolder = activePath.length > 0;
   const showingSearch = !!searchText;
-  const showingCategory = !!activeCategory && !searchText;
-  const showingFolders = !searchText && !activeCategory;
+  const showingFolderContents = isInFolder && !searchText;
+  const showingRoot = !searchText && !isInFolder;
+
+  // Current path as a joined string for comparison
+  const currentPathStr = activePath.join('/');
 
   return (
     <div className="space-y-5">
@@ -729,22 +775,54 @@ export default function ProductsPage() {
         </div>
       ) : (
         <>
-          {/* Back button + select toggle when inside category */}
-          {showingCategory && (
+          {/* Breadcrumb navigation + select toggle when inside a folder */}
+          {showingFolderContents && (
             <div className="flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => { setActiveCategory(null); setSelectMode(false); setSelectedProducts(new Set()); }}
-                className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-              >
-                <ChevronLeft className="h-4 w-4" />
-                Все категории
-              </button>
-              {categoryProducts.length > 0 && (
+              <div className="flex items-center gap-1 text-sm flex-wrap">
                 <button
                   type="button"
-                  onClick={() => { setSelectMode((v) => !v); setSelectedProducts(new Set()); }}
-                  className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${selectMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'}`}
+                  onClick={() => {
+                    setActivePath([]);
+                    setSelectMode(false);
+                    setSelectedProducts(new Set());
+                  }}
+                  className="text-primary-600 hover:text-primary-700 font-medium"
+                >
+                  Все
+                </button>
+                {activePath.map((segment, idx) => (
+                  <span key={idx} className="flex items-center gap-1">
+                    <ChevronLeft className="h-3 w-3 text-gray-400 rotate-180" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivePath(activePath.slice(0, idx + 1));
+                        setSelectMode(false);
+                        setSelectedProducts(new Set());
+                      }}
+                      className={
+                        idx === activePath.length - 1
+                          ? 'font-semibold text-gray-900'
+                          : 'text-primary-600 hover:text-primary-700 font-medium'
+                      }
+                    >
+                      {segment}
+                    </button>
+                  </span>
+                ))}
+              </div>
+              {currentProducts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectMode((v) => !v);
+                    setSelectedProducts(new Set());
+                  }}
+                  className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                    selectMode
+                      ? 'bg-primary-100 text-primary-700'
+                      : 'text-gray-500 hover:bg-gray-100'
+                  }`}
                 >
                   {selectMode ? 'Отмена' : 'Выбрать'}
                 </button>
@@ -752,56 +830,43 @@ export default function ProductsPage() {
             </div>
           )}
 
-          {/* Category title */}
-          {showingCategory && (
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-base">
-                {CATEGORY_ICONS[activeCategory!] || <FolderOpen className="h-4 w-4 text-primary-500" />}
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-gray-900">{activeCategory}</h2>
-                <p className="text-[11px] text-gray-400">{categoryProducts.length} товаров</p>
-              </div>
+          {/* Subfolders listing (at root or inside a folder) */}
+          {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
+            <div className="space-y-1.5">
+              {subfolders.map((folder) => (
+                <button
+                  key={folder.name}
+                  type="button"
+                  onClick={() => {
+                    setActivePath([...activePath, folder.name]);
+                    setSearchText('');
+                  }}
+                  className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3
+                    hover:shadow-sm hover:border-primary-200 active:bg-gray-50 transition-all text-left"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 flex-shrink-0">
+                    {CATEGORY_ICONS[folder.name] ? (
+                      <span className="text-lg">{CATEGORY_ICONS[folder.name]}</span>
+                    ) : (
+                      <FolderOpen className="h-5 w-5 text-primary-500" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900">{folder.name}</p>
+                    <p className="text-[11px] text-gray-400">{folder.count} товаров</p>
+                  </div>
+                  {folder.hasLow && (
+                    <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
+                  )}
+                  <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
+                </button>
+              ))}
             </div>
           )}
 
-          {/* Folder view — categories as list */}
-          {showingFolders && (
-            <div className="space-y-1.5">
-              {categoryGroups.map(([cat, products]) => {
-                const hasLow = products.some((p) => p.stock <= p.minStock);
-                const totalItems = products.length;
-
-                return (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => {
-                      setActiveCategory(cat);
-                      setSearchText('');
-                    }}
-                    className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3
-                      hover:shadow-sm hover:border-primary-200 active:bg-gray-50 transition-all text-left"
-                  >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 flex-shrink-0">
-                      {CATEGORY_ICONS[cat] ? (
-                        <span className="text-lg">{CATEGORY_ICONS[cat]}</span>
-                      ) : (
-                        <FolderOpen className="h-5 w-5 text-primary-500" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900">{cat}</p>
-                      <p className="text-[11px] text-gray-400">{totalItems} товаров</p>
-                    </div>
-                    {hasLow && (
-                      <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
-                    )}
-                    <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
-                  </button>
-                );
-              })}
-              {/* Add new folder button */}
+          {/* New folder button (at any level, root or inside a folder) */}
+          {(showingRoot || showingFolderContents) && (
+            <div>
               <button
                 type="button"
                 onClick={() => setShowFolderModal(true)}
@@ -810,61 +875,83 @@ export default function ProductsPage() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100 flex-shrink-0">
                   <FolderPlus className="h-5 w-5 text-gray-400" />
                 </div>
-                <p className="text-sm font-medium text-gray-500">Новая папка</p>
+                <p className="text-sm font-medium text-gray-500">Новая подпапка</p>
               </button>
             </div>
           )}
 
-          {/* Product list (search or in-category view) */}
-          {(showingSearch || showingCategory) && (
-            displayProducts.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                <Package className="h-12 w-12 mb-3" />
-                <p className="text-sm">
-                  {showingSearch ? 'Товары не найдены' : 'В этой категории нет товаров'}
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {displayProducts.map((product) => (
-                  <div key={product.id} className="flex items-center gap-2">
-                    {selectMode && (
-                      <button
-                        type="button"
-                        onClick={() => {
+          {/* Products at current level (root or inside a folder) */}
+          {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (
+            <div className="space-y-1.5">
+              {currentProducts.map((product) => (
+                <div key={product.id} className="flex items-center gap-2">
+                  {selectMode && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedProducts((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(product.id)) next.delete(product.id);
+                          else next.add(product.id);
+                          return next;
+                        });
+                      }}
+                      className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 transition-colors ${
+                        selectedProducts.has(product.id)
+                          ? 'border-primary-600 bg-primary-600'
+                          : 'border-gray-300 bg-white hover:border-primary-400'
+                      }`}
+                    >
+                      {selectedProducts.has(product.id) && (
+                        <CheckIcon className="h-3 w-3 text-white" />
+                      )}
+                    </button>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <ProductRow
+                      product={product}
+                      onClick={() => {
+                        if (selectMode) {
                           setSelectedProducts((prev) => {
                             const next = new Set(prev);
                             if (next.has(product.id)) next.delete(product.id);
                             else next.add(product.id);
                             return next;
                           });
-                        }}
-                        className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 transition-colors ${
-                          selectedProducts.has(product.id)
-                            ? 'border-primary-600 bg-primary-600'
-                            : 'border-gray-300 bg-white hover:border-primary-400'
-                        }`}
-                      >
-                        {selectedProducts.has(product.id) && (
-                          <CheckIcon className="h-3 w-3 text-white" />
-                        )}
-                      </button>
-                    )}
+                        } else {
+                          setDetailTarget(product);
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Empty state when inside a folder with no subfolders and no products */}
+          {showingFolderContents && subfolders.length === 0 && currentProducts.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+              <Package className="h-12 w-12 mb-3" />
+              <p className="text-sm">В этой папке пока нет товаров</p>
+            </div>
+          )}
+
+          {/* Search results */}
+          {showingSearch && (
+            searchResults.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                <Package className="h-12 w-12 mb-3" />
+                <p className="text-sm">Товары не найдены</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {searchResults.map((product) => (
+                  <div key={product.id} className="flex items-center gap-2">
                     <div className="flex-1 min-w-0">
                       <ProductRow
                         product={product}
-                        onClick={() => {
-                          if (selectMode) {
-                            setSelectedProducts((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(product.id)) next.delete(product.id);
-                              else next.add(product.id);
-                              return next;
-                            });
-                          } else {
-                            setDetailTarget(product);
-                          }
-                        }}
+                        onClick={() => setDetailTarget(product)}
                       />
                     </div>
                   </div>
@@ -949,23 +1036,49 @@ export default function ProductsPage() {
         variant="danger"
       />
 
-      {/* Move to folder modal */}
+      {/* Move to folder modal — shows full folder hierarchy */}
       {showMoveModal && (
         <Modal isOpen onClose={() => setShowMoveModal(false)} title="Переместить в папку">
           <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-            {categoryGroups
-              .filter(([cat]) => cat !== activeCategory)
-              .map(([cat]) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => moveMutation.mutate({ productIds: Array.from(selectedProducts), category: cat })}
-                  className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors"
-                >
-                  <FolderOpen className="h-5 w-5 text-primary-500" />
-                  <span className="text-sm font-medium text-gray-900">{cat}</span>
-                </button>
-              ))}
+            {/* Root (no category) option */}
+            {currentPathStr !== '' && (
+              <button
+                type="button"
+                onClick={() =>
+                  moveMutation.mutate({
+                    productIds: Array.from(selectedProducts),
+                    category: '',
+                  })
+                }
+                className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+              >
+                <FolderOpen className="h-5 w-5 text-gray-400" />
+                <span className="text-sm font-medium text-gray-500">Без категории (корень)</span>
+              </button>
+            )}
+            {/* All known category paths */}
+            {allCategoryPaths
+              .filter((path) => path !== currentPathStr)
+              .map((path) => {
+                const depth = path.split('/').length - 1;
+                return (
+                  <button
+                    key={path}
+                    type="button"
+                    onClick={() =>
+                      moveMutation.mutate({
+                        productIds: Array.from(selectedProducts),
+                        category: path,
+                      })
+                    }
+                    className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+                    style={{ paddingLeft: `${16 + depth * 16}px` }}
+                  >
+                    <FolderOpen className="h-5 w-5 text-primary-500 flex-shrink-0" />
+                    <span className="text-sm font-medium text-gray-900">{path}</span>
+                  </button>
+                );
+              })}
             {/* New folder option */}
             <div className="border-t border-gray-100 pt-2 mt-2">
               <div className="flex items-center gap-2 px-4">
@@ -979,7 +1092,15 @@ export default function ProductsPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (newFolderName.trim()) moveMutation.mutate({ productIds: Array.from(selectedProducts), category: newFolderName.trim() });
+                    if (newFolderName.trim()) {
+                      const targetCategory = activePath.length > 0
+                        ? activePath.join('/') + '/' + newFolderName.trim()
+                        : newFolderName.trim();
+                      moveMutation.mutate({
+                        productIds: Array.from(selectedProducts),
+                        category: targetCategory,
+                      });
+                    }
                   }}
                   disabled={!newFolderName.trim()}
                   className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40"
@@ -994,7 +1115,15 @@ export default function ProductsPage() {
 
       {/* Add new folder modal */}
       {showFolderModal && (
-        <Modal isOpen onClose={() => { setShowFolderModal(false); setNewFolderName(''); }} title="Новая папка" size="sm">
+        <Modal
+          isOpen
+          onClose={() => {
+            setShowFolderModal(false);
+            setNewFolderName('');
+          }}
+          title={activePath.length > 0 ? `Новая подпапка в "${activePath[activePath.length - 1]}"` : 'Новая папка'}
+          size="sm"
+        >
           <div className="space-y-4">
             <input
               type="text"
@@ -1007,7 +1136,10 @@ export default function ProductsPage() {
             <div className="flex justify-end gap-3">
               <button
                 type="button"
-                onClick={() => { setShowFolderModal(false); setNewFolderName(''); }}
+                onClick={() => {
+                  setShowFolderModal(false);
+                  setNewFolderName('');
+                }}
                 className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 Отмена
@@ -1016,7 +1148,7 @@ export default function ProductsPage() {
                 type="button"
                 onClick={() => {
                   if (newFolderName.trim()) {
-                    setActiveCategory(newFolderName.trim());
+                    setActivePath([...activePath, newFolderName.trim()]);
                     setShowFolderModal(false);
                     setNewFolderName('');
                   }

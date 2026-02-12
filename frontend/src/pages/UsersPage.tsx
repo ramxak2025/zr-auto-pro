@@ -8,6 +8,7 @@ import {
   Shield,
   Loader2,
   Users,
+  ChevronDown,
 } from 'lucide-react';
 import { usersApi } from '../api/services';
 import type { User, UserPermissions, PaginatedResponse } from '../types';
@@ -439,6 +440,7 @@ export default function UsersPage() {
   const users = usersData?.data || [];
   const total = usersData?.total || 0;
   const isMutating = createMutation.isPending || updateMutation.isPending;
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
   // ---- Render ----
   return (
@@ -456,12 +458,12 @@ export default function UsersPage() {
           className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" />
-          Добавить пользователя
+          <span className="hidden sm:inline">Добавить</span>
         </button>
       </div>
 
       {/* Search */}
-      <div className="max-w-sm">
+      <div className="w-full sm:max-w-sm">
         <SearchInput
           value={search}
           onChange={handleSearchChange}
@@ -499,7 +501,70 @@ export default function UsersPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          {/* Mobile accordion cards */}
+          <div className="md:hidden space-y-2">
+            {users.map((u) => {
+              const isExpanded = expandedUserId === u.id;
+              return (
+                <div key={u.id} className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
+                    className="flex items-center gap-3 w-full px-4 py-3 text-left"
+                  >
+                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold flex-shrink-0">
+                      {u.fullName?.charAt(0) || 'U'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{u.fullName}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${ROLE_BADGE_COLORS[u.role] || 'bg-gray-100 text-gray-700'}`}>
+                          {ROLE_LABELS[u.role] || u.role}
+                        </span>
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${u.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                          {u.isActive ? 'Активен' : 'Неактивен'}
+                        </span>
+                      </div>
+                    </div>
+                    <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                  </button>
+                  {isExpanded && (
+                    <div className="border-t border-gray-100 px-4 py-3 space-y-3 bg-gray-50/50">
+                      <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                          <p className="text-[11px] text-gray-400 mb-0.5">Логин</p>
+                          <p className="font-medium text-gray-900">{u.username}</p>
+                        </div>
+                        {u.role === 'master' && (
+                          <div>
+                            <p className="text-[11px] text-gray-400 mb-0.5">% зарплаты</p>
+                            <p className="font-medium text-gray-900">{u.salaryPercent}%</p>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button onClick={() => setPermissionsUser(u)}
+                          className="flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors">
+                          <Shield className="h-3.5 w-3.5" />Права
+                        </button>
+                        <button onClick={() => openEdit(u)}
+                          className="flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-200 transition-colors">
+                          <Pencil className="h-3.5 w-3.5" />Изменить
+                        </button>
+                        <button onClick={() => setDeleteTarget(u)}
+                          className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-600 hover:bg-red-100 transition-colors ml-auto">
+                          <Trash2 className="h-3.5 w-3.5" />Удалить
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>

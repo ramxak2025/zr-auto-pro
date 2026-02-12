@@ -17,6 +17,7 @@ import type {
   MasterSalary,
   SalarySummary,
   DashboardStats,
+  EmployeeRanking,
 } from '../types';
 
 // Auth
@@ -170,4 +171,5 @@ export const reportsApi = {
   getByProduct: (params: Record<string, any>) =>
     api.get('/reports/by-product', { params }),
   getDashboard: () => api.get<DashboardStats>('/reports/dashboard'),
+  getEmployeeRanking: () => api.get<EmployeeRanking>('/reports/employee-ranking'),
 };
