@@ -395,21 +395,16 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 
 function ProductRow({
   product,
-  onEdit,
-  onWriteoff,
-  onInventory,
-  onDelete,
+  onClick,
 }: {
   product: Product;
-  onEdit: () => void;
-  onWriteoff: () => void;
-  onInventory: () => void;
-  onDelete: () => void;
+  onClick: () => void;
 }) {
   const isLow = product.stock <= product.minStock;
 
   return (
-    <div className="flex items-center gap-3 bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm transition-shadow">
+    <button type="button" onClick={onClick}
+      className="flex items-center gap-3 w-full bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm hover:border-primary-200 transition-all text-left active:bg-gray-50">
       {/* Thumbnail */}
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0 overflow-hidden">
         {product.photo ? (
@@ -424,35 +419,100 @@ function ProductRow({
           <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
           {isLow && (
             <span className="flex items-center gap-0.5 bg-red-50 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0">
-              <AlertTriangle className="h-2.5 w-2.5" />
-              Мало
+              <AlertTriangle className="h-2.5 w-2.5" />Мало
             </span>
           )}
         </div>
         <div className="flex items-center gap-2 mt-0.5">
           <span className={`text-xs ${isLow ? 'text-red-500' : 'text-gray-400'}`}>{product.stock} шт</span>
-          <span className="text-[10px] text-gray-300">·</span>
+          <span className="text-[10px] text-gray-300">&middot;</span>
           <span className="text-[11px] text-gray-400">Закуп: {formatMoney(product.costPrice)}</span>
         </div>
       </div>
       {/* Price */}
       <span className="text-sm font-bold text-primary-600 flex-shrink-0">{formatMoney(product.sellPrice)}</span>
-      {/* Actions */}
-      <div className="flex items-center gap-0.5 flex-shrink-0">
-        <button onClick={onEdit} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors">
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
-        <button onClick={onWriteoff} className="hidden sm:flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-orange-600 hover:bg-orange-50 transition-colors">
-          <PackageMinus className="h-3.5 w-3.5" />
-        </button>
-        <button onClick={onInventory} className="hidden sm:flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
-          <ClipboardCheck className="h-3.5 w-3.5" />
-        </button>
-        <button onClick={onDelete} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors">
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
+      <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Product Detail Modal — edit, delete, writeoff, inventory accessible here
+// ---------------------------------------------------------------------------
+
+function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory, onDelete }: {
+  product: Product;
+  onClose: () => void;
+  onEdit: () => void;
+  onWriteoff: () => void;
+  onInventory: () => void;
+  onDelete: () => void;
+}) {
+  const isLow = product.stock <= product.minStock;
+
+  return (
+    <Modal isOpen onClose={onClose} title={product.name} size="lg">
+      <div className="space-y-5">
+        {/* Photo + info */}
+        <div className="flex items-start gap-4">
+          <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-gray-50 flex-shrink-0 overflow-hidden">
+            {product.photo ? (
+              <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-xl" />
+            ) : (
+              <Package className="h-8 w-8 text-gray-300" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0 space-y-1.5">
+            {product.category && (
+              <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">{product.category}</span>
+            )}
+            <p className="text-base font-bold text-gray-900">{product.name}</p>
+          </div>
+        </div>
+
+        {/* Stats grid */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[11px] text-gray-400 mb-0.5">Закуп. цена</p>
+            <p className="text-sm font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
+          </div>
+          <div className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[11px] text-gray-400 mb-0.5">Продажная цена</p>
+            <p className="text-sm font-bold text-primary-600">{formatMoney(product.sellPrice)}</p>
+          </div>
+          <div className={`rounded-xl p-3 ${isLow ? 'bg-red-50' : 'bg-gray-50'}`}>
+            <p className="text-[11px] text-gray-400 mb-0.5">Остаток</p>
+            <p className={`text-sm font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
+              {product.stock} шт {isLow && <AlertTriangle className="inline h-3 w-3 ml-1" />}
+            </p>
+          </div>
+          <div className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[11px] text-gray-400 mb-0.5">Мин. остаток</p>
+            <p className="text-sm font-bold text-gray-900">{product.minStock} шт</p>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="space-y-2 pt-2 border-t border-gray-100">
+          <button type="button" onClick={onEdit}
+            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+            <Pencil className="h-4 w-4 text-primary-500" />Редактировать
+          </button>
+          <button type="button" onClick={onWriteoff}
+            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+            <PackageMinus className="h-4 w-4 text-orange-500" />Списание
+          </button>
+          <button type="button" onClick={onInventory}
+            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+            <ClipboardCheck className="h-4 w-4 text-blue-500" />Инвентаризация
+          </button>
+          <button type="button" onClick={onDelete}
+            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors">
+            <Trash2 className="h-4 w-4" />Удалить товар
+          </button>
+        </div>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -469,6 +529,7 @@ export default function ProductsPage() {
   // Modal state
   const [formOpen, setFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [detailTarget, setDetailTarget] = useState<Product | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [writeoffTarget, setWriteoffTarget] = useState<Product | null>(null);
   const [inventoryTarget, setInventoryTarget] = useState<Product | null>(null);
@@ -723,16 +784,25 @@ export default function ProductsPage() {
                   <ProductRow
                     key={product.id}
                     product={product}
-                    onEdit={() => openEdit(product)}
-                    onWriteoff={() => setWriteoffTarget(product)}
-                    onInventory={() => setInventoryTarget(product)}
-                    onDelete={() => setDeleteTarget(product)}
+                    onClick={() => setDetailTarget(product)}
                   />
                 ))}
               </div>
             )
           )}
         </>
+      )}
+
+      {/* Product detail — actions accessible from here */}
+      {detailTarget && (
+        <ProductDetailModal
+          product={detailTarget}
+          onClose={() => setDetailTarget(null)}
+          onEdit={() => { openEdit(detailTarget); setDetailTarget(null); }}
+          onWriteoff={() => { setWriteoffTarget(detailTarget); setDetailTarget(null); }}
+          onInventory={() => { setInventoryTarget(detailTarget); setDetailTarget(null); }}
+          onDelete={() => { setDeleteTarget(detailTarget); setDetailTarget(null); }}
+        />
       )}
 
       {/* Modals */}

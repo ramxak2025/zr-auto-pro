@@ -12,9 +12,8 @@ import {
   Banknote,
   CreditCard,
   ShieldCheck,
-  ChevronRight,
-  Award,
   ClipboardList,
+  Star,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsApi, salaryApi } from '../api/services';
@@ -252,6 +251,12 @@ function MasterDashboard() {
   const initials = user?.fullName?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'М';
   const greeting = getGreeting();
 
+  // Achievement tiers
+  const tier = levelPercent >= 80 ? { label: 'Эксперт', color: 'from-amber-400 to-yellow-500', star: 'text-amber-400', bg: 'bg-amber-500/20' }
+    : levelPercent >= 50 ? { label: 'Профи', color: 'from-blue-400 to-indigo-500', star: 'text-blue-400', bg: 'bg-blue-500/20' }
+    : levelPercent >= 25 ? { label: 'Опытный', color: 'from-emerald-400 to-teal-500', star: 'text-emerald-400', bg: 'bg-emerald-500/20' }
+    : { label: 'Новичок', color: 'from-gray-400 to-slate-500', star: 'text-gray-300', bg: 'bg-white/10' };
+
   return (
     <div className="space-y-4">
       {/* ── Profile card ── */}
@@ -265,16 +270,13 @@ function MasterDashboard() {
             <p className="text-lg font-bold truncate">{user?.fullName || 'Мастер'}</p>
             <p className="text-sm text-white/70">Ставка {data.salaryPercent}%</p>
           </div>
-        </div>
-
-        {/* Level bar */}
-        <div className="mt-4">
-          <div className="flex items-center justify-between text-xs mb-1.5">
-            <span className="flex items-center gap-1 text-white/70"><Award className="h-3 w-3" />Уровень мастера</span>
-            <span className="font-bold text-white">{levelPercent}%</span>
-          </div>
-          <div className="h-2 rounded-full bg-white/20 overflow-hidden">
-            <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-300 transition-all duration-700" style={{ width: `${levelPercent}%` }} />
+          {/* Achievement badge */}
+          <div className="flex flex-col items-center flex-shrink-0">
+            <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${tier.bg} backdrop-blur-sm`}>
+              <Star className={`h-6 w-6 ${tier.star} fill-current`} />
+            </div>
+            <span className="text-[10px] font-bold text-white/80 mt-1">{tier.label}</span>
+            <span className="text-[10px] text-white/50">{levelPercent}%</span>
           </div>
         </div>
       </div>
@@ -296,29 +298,12 @@ function MasterDashboard() {
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50">
               <TrendingUp className="h-4 w-4 text-green-600" />
             </div>
-            <span className="text-xs text-gray-400 font-medium">Заработок сегодня</span>
+            <span className="text-xs text-gray-400 font-medium">Сегодня</span>
           </div>
           <p className="text-2xl font-bold text-gray-900">{formatMoney(data.today)}</p>
           <p className="text-[11px] text-gray-400 mt-0.5">За месяц: {formatMoney(data.month)}</p>
         </div>
       </div>
-
-      {/* ── Salary link ── */}
-      <Link to="/salary" className="flex items-center justify-between rounded-xl bg-white border border-gray-100 shadow-sm px-4 py-3.5 hover:shadow-md transition-shadow active:bg-gray-50">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50">
-            <Wallet className="h-4 w-4 text-green-600" />
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Зарплата за месяц</p>
-            <p className="text-xs text-gray-400">Подробная сводка</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-green-600">{formatMoney(data.month)}</span>
-          <ChevronRight className="h-4 w-4 text-gray-300" />
-        </div>
-      </Link>
 
       {/* ── Today cash register — different shade section ── */}
       <div className="rounded-2xl bg-gradient-to-br from-slate-50 to-slate-100 border border-slate-200 p-4 shadow-sm">

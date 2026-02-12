@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, FormEvent } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -43,25 +43,6 @@ import { PaymentMethod as PM, UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 
 // ---------------------------------------------------------------------------
-// Hook: intercept browser back to close modals instead of navigating away
-// ---------------------------------------------------------------------------
-
-function useBackClose(isOpen: boolean, onClose: () => void) {
-  useEffect(() => {
-    if (!isOpen) return;
-    // Push a dummy history entry so "back" pops it instead of leaving the page
-    window.history.pushState({ modal: true }, '');
-    const handlePopState = () => {
-      onClose();
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  }, [isOpen, onClose]);
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -72,59 +53,15 @@ function formatMoney(value: number): string {
 const PAYMENT_METHODS: { value: PaymentMethod; label: string; icon: typeof Banknote }[] = [
   { value: PM.CASH, label: 'Наличные', icon: Banknote },
   { value: PM.CARD, label: 'Карта', icon: CreditCard },
-  { value: PM.WARRANTY, label: 'По гарантии', icon: ShieldCheck },
+  { value: PM.WARRANTY, label: 'Гарантия', icon: ShieldCheck },
   { value: PM.CASH_CARD, label: 'Нал + Карта', icon: CreditCard },
 ];
 
 const CATEGORY_ICONS: Record<string, string> = {
-  'Масла': '🛢️',
-  'Фильтры': '🔧',
-  'Тормозная система': '🛞',
-  'Жидкости': '💧',
-  'Электрика': '⚡',
-  'ГРМ': '⛓️',
-  'Подвеска': '🔩',
-  'ТО': '🔧',
-  'Тормоза': '🛞',
-  'Диагностика': '🔍',
-  'Двигатель': '⚙️',
-  'Колёса': '🛞',
-  'Работа мастера': '👨‍🔧',
+  'Масла': '🛢️', 'Фильтры': '🔧', 'Тормозная система': '🛞', 'Жидкости': '💧',
+  'Электрика': '⚡', 'ГРМ': '⛓️', 'Подвеска': '🔩', 'ТО': '🔧', 'Тормоза': '🛞',
+  'Диагностика': '🔍', 'Двигатель': '⚙️', 'Колёса': '🛞', 'Работа мастера': '👨‍🔧',
 };
-
-// ---------------------------------------------------------------------------
-// Section UI helpers
-// ---------------------------------------------------------------------------
-
-function Section({ children, accent = 'gray' }: { children: React.ReactNode; accent?: 'blue' | 'emerald' | 'amber' | 'violet' | 'gray' }) {
-  const borders: Record<string, string> = {
-    blue: 'border-l-blue-500', emerald: 'border-l-emerald-500', amber: 'border-l-amber-500', violet: 'border-l-violet-500', gray: 'border-l-gray-300',
-  };
-  return (
-    <div className={`rounded-2xl border border-gray-100 bg-white shadow-sm border-l-[3px] ${borders[accent]} overflow-hidden`}>
-      {children}
-    </div>
-  );
-}
-
-function SectionHeader({ icon: Icon, title, badge, action, accentColor = 'text-gray-500', accentBg = 'bg-gray-50' }: {
-  icon: typeof Wrench; title: string; badge?: number; action?: React.ReactNode; accentColor?: string; accentBg?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between px-4 py-3 border-b border-gray-50">
-      <div className="flex items-center gap-2">
-        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${accentBg}`}>
-          <Icon className={`h-3.5 w-3.5 ${accentColor}`} />
-        </div>
-        <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
-        {badge !== undefined && badge > 0 && (
-          <span className="flex items-center justify-center h-5 min-w-[20px] px-1.5 rounded-full bg-gray-900 text-white text-[10px] font-bold">{badge}</span>
-        )}
-      </div>
-      {action}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Client Search
@@ -209,7 +146,7 @@ interface ServiceLineData { key: string; serviceId: string; name: string; price:
 interface ProductLineData { key: string; productId: string; name: string; sellPrice: number; costPrice: number; quantity: number; }
 
 // ---------------------------------------------------------------------------
-// Fullscreen Service Catalog
+// Fullscreen Service Catalog — with back navigation inside categories
 // ---------------------------------------------------------------------------
 
 function ServiceCatalog({ services, onSelect, onClose }: {
@@ -217,6 +154,10 @@ function ServiceCatalog({ services, onSelect, onClose }: {
 }) {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const activeCategoryRef = useRef<string | null>(null);
+  const shouldCloseRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const categories = useMemo(() => {
     const map = new Map<string, Service[]>();
@@ -238,17 +179,55 @@ function ServiceCatalog({ services, onSelect, onClose }: {
     ? (categories.find(([cat]) => cat === activeCategory)?.[1] || [])
     : [];
 
+  // History management
+  useEffect(() => {
+    window.history.pushState({ catalog: true }, '');
+    const handler = () => {
+      if (shouldCloseRef.current) {
+        shouldCloseRef.current = false;
+        onCloseRef.current();
+        return;
+      }
+      if (activeCategoryRef.current) {
+        activeCategoryRef.current = null;
+        setActiveCategory(null);
+      } else {
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, []);
+
+  function handleCategoryClick(cat: string) {
+    activeCategoryRef.current = cat;
+    setActiveCategory(cat);
+    window.history.pushState({ catalogCategory: true }, '');
+  }
+
+  function handleClose() {
+    if (activeCategoryRef.current) {
+      shouldCloseRef.current = true;
+      window.history.go(-2);
+    } else {
+      window.history.back();
+    }
+  }
+
+  function handleSelect(svc: Service) {
+    onSelect(svc);
+    handleClose();
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-white flex flex-col">
-      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100 bg-white">
-        <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+        <button type="button" onClick={handleClose} className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
           <X className="h-4 w-4" />
         </button>
         <h2 className="text-base font-bold text-gray-900">Выбор услуги</h2>
       </div>
 
-      {/* Search */}
       <div className="px-4 py-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -258,15 +237,14 @@ function ServiceCatalog({ services, onSelect, onClose }: {
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 pb-6">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-4 pb-6">
         {search ? (
           searchResults.length === 0 ? (
             <p className="text-sm text-gray-400 text-center py-10">Не найдено</p>
           ) : (
             <div className="space-y-1.5">
               {searchResults.map((svc) => (
-                <button key={svc.id} type="button" onClick={() => { onSelect(svc); onClose(); }}
+                <button key={svc.id} type="button" onClick={() => handleSelect(svc)}
                   className="flex w-full items-center justify-between rounded-xl bg-gray-50 px-4 py-3 text-left hover:bg-emerald-50 transition-colors">
                   <span className="text-sm font-medium text-gray-900">{svc.name}</span>
                   <span className="text-sm font-bold text-emerald-600">{formatMoney(svc.defaultPrice)}</span>
@@ -276,13 +254,13 @@ function ServiceCatalog({ services, onSelect, onClose }: {
           )
         ) : activeCategory ? (
           <div>
-            <button type="button" onClick={() => setActiveCategory(null)}
+            <button type="button" onClick={() => window.history.back()}
               className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3">
               <ChevronLeft className="h-4 w-4" />Все категории
             </button>
             <div className="space-y-1.5">
               {categoryServices.map((svc) => (
-                <button key={svc.id} type="button" onClick={() => { onSelect(svc); onClose(); }}
+                <button key={svc.id} type="button" onClick={() => handleSelect(svc)}
                   className="flex w-full items-center justify-between rounded-xl bg-gray-50 px-4 py-3 text-left hover:bg-emerald-50 transition-colors">
                   <span className="text-sm font-medium text-gray-900">{svc.name}</span>
                   <span className="text-sm font-bold text-emerald-600">{formatMoney(svc.defaultPrice)}</span>
@@ -293,7 +271,7 @@ function ServiceCatalog({ services, onSelect, onClose }: {
         ) : (
           <div className="space-y-1.5">
             {categories.map(([cat, svcs]) => (
-              <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
+              <button key={cat} type="button" onClick={() => handleCategoryClick(cat)}
                 className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3 hover:shadow-sm hover:border-emerald-200 active:bg-gray-50 transition-all text-left">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 flex-shrink-0 text-lg">
                   {CATEGORY_ICONS[cat] || <Wrench className="h-5 w-5 text-emerald-500" />}
@@ -313,7 +291,7 @@ function ServiceCatalog({ services, onSelect, onClose }: {
 }
 
 // ---------------------------------------------------------------------------
-// Fullscreen Product Catalog
+// Fullscreen Product Catalog — with back navigation inside categories
 // ---------------------------------------------------------------------------
 
 function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, onClose }: {
@@ -323,6 +301,10 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
 }) {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const activeCategoryRef = useRef<string | null>(null);
+  const shouldCloseRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const categories = useMemo(() => {
     const map = new Map<string, Product[]>();
@@ -352,6 +334,41 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
   }
 
   const cartCount = productLines.reduce((s, l) => s + l.quantity, 0);
+
+  // History management — push entry on mount, push again on category enter
+  useEffect(() => {
+    window.history.pushState({ catalog: true }, '');
+    const handler = () => {
+      if (shouldCloseRef.current) {
+        shouldCloseRef.current = false;
+        onCloseRef.current();
+        return;
+      }
+      if (activeCategoryRef.current) {
+        activeCategoryRef.current = null;
+        setActiveCategory(null);
+      } else {
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, []);
+
+  function handleCategoryClick(cat: string) {
+    activeCategoryRef.current = cat;
+    setActiveCategory(cat);
+    window.history.pushState({ catalogCategory: true }, '');
+  }
+
+  function handleClose() {
+    if (activeCategoryRef.current) {
+      shouldCloseRef.current = true;
+      window.history.go(-2);
+    } else {
+      window.history.back();
+    }
+  }
 
   function renderProductCard(product: Product) {
     const qty = getQty(product.id);
@@ -407,7 +424,7 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-white">
         <div className="flex items-center gap-3">
-          <button type="button" onClick={onClose} className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
+          <button type="button" onClick={handleClose} className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-500">
             <X className="h-4 w-4" />
           </button>
           <h2 className="text-base font-bold text-gray-900">Выбор товара</h2>
@@ -429,12 +446,12 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto px-4 pb-6">
+      {/* Content — always show scrollbar to prevent layout shift */}
+      <div className="flex-1 overflow-y-scroll overscroll-contain px-4 pb-6">
         {search || activeCategory ? (
           <>
             {activeCategory && !search && (
-              <button type="button" onClick={() => setActiveCategory(null)}
+              <button type="button" onClick={() => window.history.back()}
                 className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3">
                 <ChevronLeft className="h-4 w-4" />Все категории
               </button>
@@ -450,7 +467,7 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
         ) : (
           <div className="space-y-1.5">
             {categories.map(([cat, prods]) => (
-              <button key={cat} type="button" onClick={() => setActiveCategory(cat)}
+              <button key={cat} type="button" onClick={() => handleCategoryClick(cat)}
                 className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3 hover:shadow-sm hover:border-amber-200 active:bg-gray-50 transition-all text-left">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 flex-shrink-0 text-lg">
                   {CATEGORY_ICONS[cat] || <FolderOpen className="h-5 w-5 text-amber-500" />}
@@ -469,7 +486,7 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
       {/* Done button */}
       {cartCount > 0 && (
         <div className="border-t border-gray-100 px-4 py-3 bg-white">
-          <button type="button" onClick={onClose}
+          <button type="button" onClick={handleClose}
             className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 py-3 text-sm font-bold text-white shadow-sm active:scale-[0.98]">
             <CheckCircle2 className="h-4 w-4" />
             Готово ({cartCount} товаров)
@@ -505,12 +522,6 @@ export default function CheckCreatePage() {
   // Fullscreen catalog state
   const [showServiceCatalog, setShowServiceCatalog] = useState(false);
   const [showProductCatalog, setShowProductCatalog] = useState(false);
-
-  // Intercept browser back button / swipe-back to close catalog instead of navigating away
-  const closeServiceCatalog = useCallback(() => setShowServiceCatalog(false), []);
-  const closeProductCatalog = useCallback(() => setShowProductCatalog(false), []);
-  useBackClose(showServiceCatalog, closeServiceCatalog);
-  useBackClose(showProductCatalog, closeProductCatalog);
 
   // ---- Queries ----
 
@@ -579,7 +590,7 @@ export default function CheckCreatePage() {
   const productsTotal = productLines.reduce((s, l) => s + l.sellPrice * l.quantity, 0);
   const discountValue = parseFloat(discount) || 0;
   const grandTotal = Math.max(0, servicesTotal + productsTotal - discountValue);
-  const itemCount = serviceLines.length + productLines.reduce((s, l) => s + l.quantity, 0);
+  const itemCount = serviceLines.length + productLines.length;
 
   // ---- Submit ----
 
@@ -613,19 +624,21 @@ export default function CheckCreatePage() {
     });
   }
 
+  // ---- Running item index for receipt ----
+  let receiptIdx = 0;
+
   return (
     <>
-      {/* Fullscreen catalogs — onClose calls history.back() which triggers
-           the useBackClose hook to set state to false */}
+      {/* Fullscreen catalogs */}
       {showServiceCatalog && (
         <ServiceCatalog services={allServices} onSelect={addServiceLine}
-          onClose={() => window.history.back()} />
+          onClose={() => setShowServiceCatalog(false)} />
       )}
       {showProductCatalog && (
         <ProductCatalogFullscreen
           products={allProducts} productLines={productLines}
           onAdd={addProduct} onUpdateQty={updateProductQty}
-          onClose={() => window.history.back()}
+          onClose={() => setShowProductCatalog(false)}
         />
       )}
 
@@ -643,20 +656,22 @@ export default function CheckCreatePage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Section 1: Client */}
-          <Section accent="blue">
-            <SectionHeader icon={UserIcon} title="Клиент" accentColor="text-blue-600" accentBg="bg-blue-50" />
+          {/* ── Client section (compact) ── */}
+          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-50">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Клиент</p>
+            </div>
             <div className="p-4 space-y-3">
               <ClientSearch onSelect={setSelectedClient} selectedClient={selectedClient}
                 onClear={() => { setSelectedClient(null); setSelectedCarId(''); }} />
               {selectedClient && (
-                <div className="grid gap-2.5 grid-cols-1 sm:grid-cols-3">
+                <div className="grid gap-2.5 grid-cols-3">
                   <div>
                     <label className="text-[11px] font-medium text-gray-500 mb-1 block">Авто *</label>
                     <select value={selectedCarId} onChange={(e) => setSelectedCarId(e.target.value)} disabled={cars.length === 0}
-                      className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10 disabled:bg-gray-100">
+                      className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-2.5 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10 disabled:bg-gray-100">
                       <option value="">{cars.length === 0 ? 'Нет' : 'Выбрать'}</option>
-                      {cars.map((car) => <option key={car.id} value={car.id}>{car.plateNumber} — {car.makeModel}</option>)}
+                      {cars.map((car) => <option key={car.id} value={car.id}>{car.plateNumber}</option>)}
                     </select>
                   </div>
                   <div>
@@ -670,7 +685,7 @@ export default function CheckCreatePage() {
                   <div>
                     <label className="text-[11px] font-medium text-gray-500 mb-1 block">Дата</label>
                     {isMaster ? (
-                      <div className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+                      <div className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-2 text-sm text-gray-500">
                         <Calendar className="h-3.5 w-3.5" />{new Date(date).toLocaleDateString('ru-RU')}
                       </div>
                     ) : (
@@ -684,89 +699,127 @@ export default function CheckCreatePage() {
                 </div>
               )}
             </div>
-          </Section>
+          </div>
 
-          {/* Section 2: Services */}
-          <Section accent="emerald">
-            <SectionHeader icon={Wrench} title="Услуги" badge={serviceLines.length} accentColor="text-emerald-600" accentBg="bg-emerald-50"
-              action={
-                <button type="button" onClick={() => setShowServiceCatalog(true)}
-                  className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors">
-                  <Plus className="h-3.5 w-3.5" />Добавить
-                </button>
-              }
-            />
-            {serviceLines.length > 0 && (
-              <div className="p-4 space-y-2">
-                {serviceLines.map((line, idx) => (
-                  <div key={line.key} className="group flex items-center gap-2 rounded-xl bg-gray-50/70 px-3 py-2.5">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold flex-shrink-0">{idx + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">{line.name}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <input type="number" value={line.price}
-                          onChange={(e) => updateServiceLine(line.key, { price: parseFloat(e.target.value) || 0 })}
-                          className="w-20 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs focus:border-emerald-400 focus:outline-none" />
-                        <span className="text-gray-300 text-[10px]">x</span>
-                        <input type="number" value={line.quantity} min="1"
-                          onChange={(e) => updateServiceLine(line.key, { quantity: parseInt(e.target.value) || 1 })}
-                          className="w-12 rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-center focus:border-emerald-400 focus:outline-none" />
-                        <span className="text-xs font-bold text-gray-900 ml-auto">{formatMoney(line.price * line.quantity)}</span>
+          {/* ── Receipt — unified services + products ── */}
+          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+            {/* Add buttons */}
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-50">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex-1">Позиции</p>
+              <button type="button" onClick={() => setShowServiceCatalog(true)}
+                className="flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors">
+                <Wrench className="h-3 w-3" />Услуга
+              </button>
+              <button type="button" onClick={() => setShowProductCatalog(true)}
+                className="flex items-center gap-1 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 transition-colors">
+                <Package className="h-3 w-3" />Товар
+              </button>
+            </div>
+
+            {/* Items list */}
+            {itemCount === 0 ? (
+              <div className="p-8 text-center">
+                <p className="text-sm text-gray-400">Добавьте услуги или товары</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-dashed divide-gray-100">
+                {/* Service lines */}
+                {serviceLines.map((line) => {
+                  receiptIdx++;
+                  return (
+                    <div key={line.key} className="flex items-start gap-2 px-4 py-2.5">
+                      <span className="text-[11px] text-gray-300 font-mono mt-0.5 w-4 text-right flex-shrink-0">{receiptIdx}.</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm text-gray-900 leading-tight">{line.name}</p>
+                          <button type="button" onClick={() => removeServiceLine(line.key)}
+                            className="flex-shrink-0 text-gray-300 hover:text-red-500 mt-0.5"><Trash2 className="h-3 w-3" /></button>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <input type="number" value={line.price}
+                            onChange={(e) => updateServiceLine(line.key, { price: parseFloat(e.target.value) || 0 })}
+                            className="w-20 rounded-lg border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-700 focus:border-emerald-400 focus:outline-none" />
+                          <span className="text-gray-300 text-[10px]">&times;</span>
+                          <input type="number" value={line.quantity} min="1"
+                            onChange={(e) => updateServiceLine(line.key, { quantity: parseInt(e.target.value) || 1 })}
+                            className="w-10 rounded-lg border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-xs text-center text-gray-700 focus:border-emerald-400 focus:outline-none" />
+                          <span className="ml-auto text-sm font-semibold text-gray-900">{formatMoney(line.price * line.quantity)}</span>
+                        </div>
                       </div>
                     </div>
-                    <button type="button" onClick={() => removeServiceLine(line.key)}
-                      className="flex h-6 w-6 items-center justify-center rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 flex-shrink-0">
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {serviceLines.length === 0 && (
-              <div className="p-6 text-center">
-                <p className="text-sm text-gray-400">Нажмите "Добавить" для выбора услуг</p>
-              </div>
-            )}
-          </Section>
-
-          {/* Section 3: Products */}
-          <Section accent="amber">
-            <SectionHeader icon={Package} title="Товары" badge={productLines.reduce((s, l) => s + l.quantity, 0)} accentColor="text-amber-600" accentBg="bg-amber-50"
-              action={
-                <button type="button" onClick={() => setShowProductCatalog(true)}
-                  className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 transition-colors">
-                  <Plus className="h-3.5 w-3.5" />Добавить
-                </button>
-              }
-            />
-            {productLines.length > 0 && (
-              <div className="p-4 space-y-2">
-                {productLines.map((line) => (
-                  <div key={line.key} className="flex items-center gap-2.5 rounded-xl bg-gray-50/70 px-3 py-2.5">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 truncate">{line.name}</p>
-                      <p className="text-xs text-gray-400">{line.quantity} x {formatMoney(line.sellPrice)}</p>
+                  );
+                })}
+                {/* Product lines */}
+                {productLines.map((line) => {
+                  receiptIdx++;
+                  return (
+                    <div key={line.key} className="flex items-start gap-2 px-4 py-2.5">
+                      <span className="text-[11px] text-gray-300 font-mono mt-0.5 w-4 text-right flex-shrink-0">{receiptIdx}.</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm text-gray-900 leading-tight">{line.name}</p>
+                          <button type="button" onClick={() => removeProductLine(line.key)}
+                            className="flex-shrink-0 text-gray-300 hover:text-red-500 mt-0.5"><Trash2 className="h-3 w-3" /></button>
+                        </div>
+                        <div className="flex items-center justify-between mt-1">
+                          <span className="text-xs text-gray-400">{line.quantity} &times; {formatMoney(line.sellPrice)}</span>
+                          <span className="text-sm font-semibold text-gray-900">{formatMoney(line.sellPrice * line.quantity)}</span>
+                        </div>
+                      </div>
                     </div>
-                    <span className="text-sm font-bold text-gray-900 flex-shrink-0">{formatMoney(line.sellPrice * line.quantity)}</span>
-                    <button type="button" onClick={() => removeProductLine(line.key)}
-                      className="flex h-6 w-6 items-center justify-center rounded-lg text-gray-300 hover:bg-red-50 hover:text-red-500 flex-shrink-0">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
-            {productLines.length === 0 && (
-              <div className="p-6 text-center">
-                <p className="text-sm text-gray-400">Нажмите "Добавить" для выбора товаров</p>
-              </div>
-            )}
-          </Section>
 
-          {/* Section 4: Payment */}
-          <Section accent="violet">
-            <SectionHeader icon={CreditCard} title="Оплата" accentColor="text-violet-600" accentBg="bg-violet-50" />
-            <div className="p-4 space-y-4">
+            {/* Totals — receipt style */}
+            {itemCount > 0 && (
+              <div className="border-t border-gray-200 px-4 py-3 space-y-1.5 bg-gray-50/50">
+                {servicesTotal > 0 && (
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>Услуги</span><span>{formatMoney(servicesTotal)}</span>
+                  </div>
+                )}
+                {productsTotal > 0 && (
+                  <div className="flex justify-between text-xs text-gray-500">
+                    <span>Товары</span><span>{formatMoney(productsTotal)}</span>
+                  </div>
+                )}
+                <div>
+                  <label className="text-[11px] text-gray-400">Скидка, ₽</label>
+                  <input type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} min="0" placeholder="0"
+                    className="block w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-700 mt-0.5 focus:border-violet-400 focus:outline-none" />
+                </div>
+                {discountValue > 0 && (
+                  <div className="flex justify-between text-xs text-red-500">
+                    <span>Скидка</span><span>-{formatMoney(discountValue)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between pt-2 border-t border-dashed border-gray-300">
+                  <span className="text-sm font-bold text-gray-900">ИТОГО</span>
+                  <span className="text-lg font-bold text-gray-900">{formatMoney(grandTotal)}</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Comment — prominent, before payment ── */}
+          <div className="rounded-2xl border-2 border-dashed border-amber-300 bg-amber-50/40 p-4">
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 mb-2">
+              <MessageSquare className="h-3.5 w-3.5" />Комментарий к заказу
+            </label>
+            <textarea value={comment} onChange={(e) => setComment(e.target.value)}
+              placeholder="Опишите работу, пожелания клиента, особенности..."
+              rows={2}
+              className="block w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500/10 resize-none" />
+          </div>
+
+          {/* ── Payment ── */}
+          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-50">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Оплата</p>
+            </div>
+            <div className="p-4 space-y-3">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {PAYMENT_METHODS.map((pm) => {
                   const Icon = pm.icon;
@@ -784,7 +837,7 @@ export default function CheckCreatePage() {
                 })}
               </div>
 
-              {/* Split payment for Нал + Карта */}
+              {/* Split payment */}
               {paymentMethod === PM.CASH_CARD && (
                 <div className="rounded-xl bg-purple-50/50 border border-purple-100 p-3 space-y-2.5">
                   <p className="text-[11px] font-semibold text-purple-700 uppercase tracking-wider">Разделение оплаты</p>
@@ -818,44 +871,17 @@ export default function CheckCreatePage() {
                         className="block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/10" />
                     </div>
                   </div>
-                  {grandTotal > 0 && (
-                    <p className="text-[10px] text-purple-500 text-center">
-                      Итого к оплате: {formatMoney(grandTotal)}
-                    </p>
-                  )}
                 </div>
               )}
-
-              <div className="space-y-3">
-                <div>
-                  <label className="text-[11px] font-medium text-gray-500 mb-1 block">Скидка (руб)</label>
-                  <input type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} min="0" placeholder="0"
-                    className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-2.5 text-sm placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/10" />
-                </div>
-                <div>
-                  <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
-                    <MessageSquare className="h-3 w-3" />Комментарий
-                  </label>
-                  <input type="text" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Дополнительная информация..."
-                    className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-3 py-2.5 text-sm placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-500/10" />
-                </div>
-              </div>
             </div>
-          </Section>
+          </div>
 
           {/* Desktop summary */}
           <div className="hidden md:block">
             <div className="rounded-2xl bg-gradient-to-br from-gray-900 to-gray-800 p-5 text-white">
-              <div className="space-y-1.5 text-sm">
-                <div className="flex justify-between"><span className="text-white/60">Услуги</span><span>{formatMoney(servicesTotal)}</span></div>
-                <div className="flex justify-between"><span className="text-white/60">Товары</span><span>{formatMoney(productsTotal)}</span></div>
-                {discountValue > 0 && (
-                  <div className="flex justify-between"><span className="text-white/60">Скидка</span><span className="text-red-300">-{formatMoney(discountValue)}</span></div>
-                )}
-                <div className="border-t border-white/10 pt-2 mt-2 flex justify-between">
-                  <span className="text-lg font-bold">Итого</span>
-                  <span className="text-2xl font-bold">{formatMoney(grandTotal)}</span>
-                </div>
+              <div className="flex justify-between items-center">
+                <span className="text-lg font-bold">Итого</span>
+                <span className="text-2xl font-bold">{formatMoney(grandTotal)}</span>
               </div>
               <div className="flex gap-3 mt-4">
                 <button type="button" onClick={() => navigate('/checks')}
@@ -875,7 +901,6 @@ export default function CheckCreatePage() {
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] text-gray-400 uppercase tracking-wider">Итого</p>
                 <p className="text-lg font-bold text-gray-900">{formatMoney(grandTotal)}</p>
-                {discountValue > 0 && <p className="text-[10px] text-red-500">скидка -{formatMoney(discountValue)}</p>}
               </div>
               <button type="submit" disabled={createMutation.isPending}
                 className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-primary-600 to-primary-700 px-5 py-3 text-sm font-bold text-white shadow-lg active:scale-[0.97] disabled:opacity-50">

@@ -135,21 +135,21 @@ export default function CashFlowPage() {
           <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
         </button>
         <div className={`${filtersOpen ? 'block' : 'hidden'} md:block`}>
-          <div className="flex flex-col md:flex-row md:flex-wrap md:items-end gap-3 md:gap-4 p-4 pt-0 md:pt-4">
-            <div className="flex-1 min-w-0 md:flex-initial">
+          <div className="grid grid-cols-2 md:flex md:flex-row md:flex-wrap md:items-end gap-3 md:gap-4 p-4 pt-0 md:pt-4">
+            <div className="min-w-0">
               <label className="block text-xs font-medium text-gray-500 mb-1">Дата с</label>
               <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
+                className="block w-full rounded-lg border border-gray-300 px-2.5 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
             </div>
-            <div className="flex-1 min-w-0 md:flex-initial">
+            <div className="min-w-0">
               <label className="block text-xs font-medium text-gray-500 mb-1">Дата по</label>
               <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
+                className="block w-full rounded-lg border border-gray-300 px-2.5 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
             </div>
-            <div className="flex-1 min-w-0 md:flex-initial">
+            <div className="col-span-2 min-w-0 md:flex-initial">
               <label className="block text-xs font-medium text-gray-500 mb-1">Сотрудник</label>
               <select value={masterId} onChange={(e) => setMasterId(e.target.value)}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 md:min-w-[180px] focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none">
+                className="block w-full md:w-auto rounded-lg border border-gray-300 px-2.5 py-2 text-sm text-gray-900 md:min-w-[180px] focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none">
                 <option value="">Все сотрудники</option>
                 {masters.map((m) => (
                   <option key={m.id} value={m.id}>{m.fullName}</option>
@@ -158,7 +158,7 @@ export default function CashFlowPage() {
             </div>
             {hasFilters && (
               <button type="button" onClick={() => { setDateFrom(''); setDateTo(''); setMasterId(''); }}
-                className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors md:pb-2">
+                className="col-span-2 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors md:pb-2">
                 Сбросить
               </button>
             )}
