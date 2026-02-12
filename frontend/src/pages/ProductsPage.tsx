@@ -18,7 +18,6 @@ import {
   Check as CheckIcon,
   Move,
   FolderPlus,
-  ChevronRight,
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
 import type { Product, PaginatedResponse } from '../types';
@@ -394,15 +393,21 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 }
 
 // ---------------------------------------------------------------------------
-// Product Card — div-based for reliable mobile overflow control
+// Product Grid Card — vertical card for 2-col grid layout
 // ---------------------------------------------------------------------------
 
-function ProductRow({
+function ProductCard({
   product,
   onClick,
+  selectMode,
+  selected,
+  onToggleSelect,
 }: {
   product: Product;
   onClick: () => void;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const isLow = product.stock <= product.minStock;
 
@@ -410,30 +415,100 @@ function ProductRow({
     <div
       role="button"
       tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      className="flex items-center gap-3 rounded-xl bg-white border border-gray-100 px-3 py-2.5 active:bg-gray-50 transition-colors cursor-pointer"
+      onClick={() => {
+        if (selectMode && onToggleSelect) onToggleSelect();
+        else onClick();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          if (selectMode && onToggleSelect) onToggleSelect();
+          else onClick();
+        }
+      }}
+      className={`relative bg-white rounded-2xl overflow-hidden shadow-sm border transition-all active:scale-[0.97] cursor-pointer ${
+        selected ? 'border-primary-500 ring-2 ring-primary-500/20' : 'border-gray-100'
+      }`}
     >
-      <div className="h-10 w-10 flex-shrink-0 rounded-lg bg-gray-50 overflow-hidden flex items-center justify-center">
+      {/* Select checkbox overlay */}
+      {selectMode && (
+        <div className="absolute top-2 left-2 z-10">
+          <div
+            className={`flex h-5 w-5 items-center justify-center rounded-full border-2 transition-colors ${
+              selected
+                ? 'border-primary-600 bg-primary-600'
+                : 'border-white bg-white/80 shadow-sm'
+            }`}
+          >
+            {selected && <CheckIcon className="h-3 w-3 text-white" />}
+          </div>
+        </div>
+      )}
+
+      {/* Image area */}
+      <div className="aspect-[4/3] bg-gray-50 flex items-center justify-center overflow-hidden">
         {product.photo ? (
-          <img src={product.photo} alt="" className="h-full w-full object-cover" />
+          <img src={product.photo} alt="" className="w-full h-full object-cover" />
         ) : (
-          <Package className="h-5 w-5 text-gray-300" />
+          <Package className="h-10 w-10 text-gray-200" />
         )}
       </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          <span className={`text-xs ${isLow ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+
+      {/* Info */}
+      <div className="p-2.5">
+        <p className="text-[13px] font-medium text-gray-900 leading-tight line-clamp-2 min-h-[2.5em]">
+          {product.name}
+        </p>
+        <div className="flex items-center gap-1 mt-1.5">
+          <span className={`text-[11px] ${isLow ? 'text-red-500 font-semibold' : 'text-gray-400'}`}>
             {product.stock} шт
           </span>
-          {isLow && <AlertTriangle className="h-3 w-3 text-red-500 flex-shrink-0" />}
+          {isLow && <AlertTriangle className="h-3 w-3 text-red-500" />}
         </div>
+        <p className="text-sm font-bold text-gray-900 mt-1">
+          {formatMoney(product.sellPrice)}
+        </p>
       </div>
-      <span className="text-sm font-bold text-primary-600 whitespace-nowrap flex-shrink-0">
-        {formatMoney(product.sellPrice)}
-      </span>
-      <ChevronRight className="h-4 w-4 text-gray-300 flex-shrink-0" />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Folder Tile — grid tile for category folders
+// ---------------------------------------------------------------------------
+
+function FolderTile({
+  name,
+  count,
+  hasLow,
+  onClick,
+}: {
+  name: string;
+  count: number;
+  hasLow: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => e.key === 'Enter' && onClick()}
+      className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer relative"
+    >
+      {hasLow && (
+        <div className="absolute top-2 right-2">
+          <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />
+        </div>
+      )}
+      <div className="h-12 w-12 rounded-xl bg-primary-50 flex items-center justify-center">
+        {CATEGORY_ICONS[name] ? (
+          <span className="text-2xl leading-none">{CATEGORY_ICONS[name]}</span>
+        ) : (
+          <FolderOpen className="h-6 w-6 text-primary-500" />
+        )}
+      </div>
+      <p className="text-[13px] font-semibold text-gray-900 text-center truncate w-full">{name}</p>
+      <p className="text-[11px] text-gray-400">{count} шт</p>
     </div>
   );
 }
@@ -519,7 +594,7 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
 }
 
 // ---------------------------------------------------------------------------
-// Main Page — Folder-based warehouse view with nested category support
+// Main Page — Grid-based warehouse catalog
 // ---------------------------------------------------------------------------
 
 export default function ProductsPage() {
@@ -547,7 +622,6 @@ export default function ProductsPage() {
   const activePathRef = useRef(activePath);
   activePathRef.current = activePath;
 
-  // Push a guard entry on mount; handle popstate for folder back-navigation
   useEffect(() => {
     window.history.pushState({ warehouseGuard: true }, '');
 
@@ -559,7 +633,6 @@ export default function ProductsPage() {
         setSelectMode(false);
         setSelectedProducts(new Set());
       }
-      // Always re-push guard so back never leaves this section
       window.history.pushState({ warehouseGuard: true }, '');
     };
 
@@ -602,7 +675,6 @@ export default function ProductsPage() {
 
   const allProducts = productsData?.data || [];
 
-  // Compute subfolders and products at the current path level
   const { subfolders, currentProducts } = useMemo(() => {
     const prefix = activePath.length > 0 ? activePath.join('/') : '';
     const subfolderSet = new Map<string, { count: number; hasLow: boolean }>();
@@ -643,7 +715,6 @@ export default function ProductsPage() {
     return { subfolders: sortedSubfolders, currentProducts: prods };
   }, [allProducts, activePath]);
 
-  // All unique category paths for the move modal
   const allCategoryPaths = useMemo(() => {
     const paths = new Set<string>();
     for (const p of allProducts) {
@@ -657,7 +728,6 @@ export default function ProductsPage() {
     return Array.from(paths).sort();
   }, [allProducts]);
 
-  // Search results
   const searchResults = useMemo(() => {
     if (!searchText) return [];
     const q = searchText.toLowerCase();
@@ -758,6 +828,15 @@ export default function ProductsPage() {
     }
   }
 
+  function toggleSelect(id: string) {
+    setSelectedProducts((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   const isMutating = createMutation.isPending || updateMutation.isPending;
 
   // ---- Navigation state ----
@@ -765,21 +844,38 @@ export default function ProductsPage() {
   const showingSearch = !!searchText;
   const showingFolderContents = isInFolder && !searchText;
   const showingRoot = !searchText && !isInFolder;
-
   const currentPathStr = activePath.join('/');
 
+  // Render product grid helper
+  function renderProductGrid(products: Product[], isSearch?: boolean) {
+    return (
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+        {products.map((product) => (
+          <ProductCard
+            key={product.id}
+            product={product}
+            onClick={() => setDetailTarget(product)}
+            selectMode={!isSearch && selectMode}
+            selected={selectedProducts.has(product.id)}
+            onToggleSelect={() => toggleSelect(product.id)}
+          />
+        ))}
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4 overflow-hidden">
+    <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold text-gray-900 truncate">Склад</h1>
+          <h1 className="text-xl font-bold text-gray-900">Склад</h1>
           <p className="text-xs text-gray-400 mt-0.5">{allProducts.length} товаров</p>
         </div>
         <button
           type="button"
           onClick={openCreate}
-          className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary-700 active:scale-[0.97] flex-shrink-0"
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all flex-shrink-0"
         >
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Добавить</span>
@@ -794,7 +890,7 @@ export default function ProductsPage() {
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           placeholder="Поиск по названию..."
-          className="block w-full rounded-xl border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-all focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10"
+          className="block w-full rounded-xl border border-gray-200 bg-white py-3 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 shadow-sm focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10"
         />
       </div>
 
@@ -804,7 +900,7 @@ export default function ProductsPage() {
         </div>
       ) : (
         <>
-          {/* Breadcrumb navigation + select toggle when inside a folder */}
+          {/* Breadcrumb + select toggle when inside a folder */}
           {showingFolderContents && (
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1 text-sm min-w-0 overflow-hidden">
@@ -882,115 +978,54 @@ export default function ProductsPage() {
             </div>
           )}
 
-          {/* Subfolders listing */}
+          {/* ── Category folders grid ── */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
-            <div className="space-y-2">
+            <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4 md:grid-cols-5">
               {subfolders.map((folder) => (
-                <div
+                <FolderTile
                   key={folder.name}
-                  role="button"
-                  tabIndex={0}
+                  name={folder.name}
+                  count={folder.count}
+                  hasLow={folder.hasLow}
                   onClick={() => enterFolder(folder.name)}
-                  onKeyDown={(e) => e.key === 'Enter' && enterFolder(folder.name)}
-                  className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3 active:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  <div className="h-10 w-10 flex-shrink-0 rounded-xl bg-primary-50 flex items-center justify-center">
-                    {CATEGORY_ICONS[folder.name] ? (
-                      <span className="text-lg leading-none">{CATEGORY_ICONS[folder.name]}</span>
-                    ) : (
-                      <FolderOpen className="h-5 w-5 text-primary-500" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{folder.name}</p>
-                    <p className="text-[11px] text-gray-400">{folder.count} товаров</p>
-                  </div>
-                  {folder.hasLow && (
-                    <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
-                  )}
-                  <ChevronRight className="h-4 w-4 text-gray-300 flex-shrink-0" />
-                </div>
+                />
               ))}
+              {/* New folder tile */}
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setShowFolderModal(true)}
+                onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
+                className="rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer bg-gray-50/50"
+              >
+                <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center">
+                  <FolderPlus className="h-6 w-6 text-gray-400" />
+                </div>
+                <p className="text-[11px] font-medium text-gray-400 text-center">Новая папка</p>
+              </div>
             </div>
           )}
 
-          {/* New folder button */}
-          {(showingRoot || showingFolderContents) && (
+          {/* New folder button when no subfolders exist */}
+          {(showingRoot || showingFolderContents) && subfolders.length === 0 && (
             <div
               role="button"
               tabIndex={0}
               onClick={() => setShowFolderModal(true)}
               onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
-              className="flex items-center gap-3 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-3 py-3 active:bg-gray-100 transition-colors cursor-pointer"
+              className="flex items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-4 py-3 active:bg-gray-100 transition-colors cursor-pointer"
             >
-              <div className="h-10 w-10 flex-shrink-0 rounded-xl bg-gray-100 flex items-center justify-center">
-                <FolderPlus className="h-5 w-5 text-gray-400" />
-              </div>
-              <p className="text-sm font-medium text-gray-500">Новая подпапка</p>
+              <FolderPlus className="h-4 w-4 text-gray-400" />
+              <p className="text-sm font-medium text-gray-400">Новая папка</p>
             </div>
           )}
 
-          {/* Products at current level */}
+          {/* ── Products grid ── */}
           {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (
-            <div className="space-y-2">
-              {currentProducts.map((product) => (
-                <div key={product.id} className="flex items-center gap-2">
-                  {selectMode && (
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        setSelectedProducts((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(product.id)) next.delete(product.id);
-                          else next.add(product.id);
-                          return next;
-                        });
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          setSelectedProducts((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(product.id)) next.delete(product.id);
-                            else next.add(product.id);
-                            return next;
-                          });
-                        }
-                      }}
-                      className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 transition-colors cursor-pointer ${
-                        selectedProducts.has(product.id)
-                          ? 'border-primary-600 bg-primary-600'
-                          : 'border-gray-300 bg-white hover:border-primary-400'
-                      }`}
-                    >
-                      {selectedProducts.has(product.id) && (
-                        <CheckIcon className="h-3 w-3 text-white" />
-                      )}
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <ProductRow
-                      product={product}
-                      onClick={() => {
-                        if (selectMode) {
-                          setSelectedProducts((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(product.id)) next.delete(product.id);
-                            else next.add(product.id);
-                            return next;
-                          });
-                        } else {
-                          setDetailTarget(product);
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+            renderProductGrid(currentProducts)
           )}
 
-          {/* Empty state when inside a folder with no subfolders and no products */}
+          {/* Empty state */}
           {showingFolderContents && subfolders.length === 0 && currentProducts.length === 0 && (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
               <Package className="h-12 w-12 mb-3" />
@@ -1006,16 +1041,7 @@ export default function ProductsPage() {
                 <p className="text-sm">Товары не найдены</p>
               </div>
             ) : (
-              <div className="space-y-2">
-                {searchResults.map((product) => (
-                  <div key={product.id} className="flex-1 min-w-0">
-                    <ProductRow
-                      product={product}
-                      onClick={() => setDetailTarget(product)}
-                    />
-                  </div>
-                ))}
-              </div>
+              renderProductGrid(searchResults, true)
             )
           )}
         </>
