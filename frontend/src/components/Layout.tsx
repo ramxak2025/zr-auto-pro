@@ -233,9 +233,9 @@ export default function Layout({ children }: { children: ReactNode }) {
         </header>
 
         {/* ─── Mobile top bar ─── */}
-        <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+        <header className="md:hidden sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-4">
           <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="Autexa" className="h-8 max-w-[130px] object-contain" />
+            <img src="/logo.png" alt="Autexa" className="h-11 max-w-[170px] object-contain" />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
