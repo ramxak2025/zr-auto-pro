@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, FormEvent } from 'react';
+import { useState, useEffect, useCallback, useMemo, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -41,6 +41,25 @@ import type {
 } from '../types';
 import { PaymentMethod as PM, UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+
+// ---------------------------------------------------------------------------
+// Hook: intercept browser back to close modals instead of navigating away
+// ---------------------------------------------------------------------------
+
+function useBackClose(isOpen: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!isOpen) return;
+    // Push a dummy history entry so "back" pops it instead of leaving the page
+    window.history.pushState({ modal: true }, '');
+    const handlePopState = () => {
+      onClose();
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [isOpen, onClose]);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -487,6 +506,12 @@ export default function CheckCreatePage() {
   const [showServiceCatalog, setShowServiceCatalog] = useState(false);
   const [showProductCatalog, setShowProductCatalog] = useState(false);
 
+  // Intercept browser back button / swipe-back to close catalog instead of navigating away
+  const closeServiceCatalog = useCallback(() => setShowServiceCatalog(false), []);
+  const closeProductCatalog = useCallback(() => setShowProductCatalog(false), []);
+  useBackClose(showServiceCatalog, closeServiceCatalog);
+  useBackClose(showProductCatalog, closeProductCatalog);
+
   // ---- Queries ----
 
   const { data: servicesData } = useQuery<PaginatedResponse<Service>>({
@@ -590,15 +615,17 @@ export default function CheckCreatePage() {
 
   return (
     <>
-      {/* Fullscreen catalogs */}
+      {/* Fullscreen catalogs — onClose calls history.back() which triggers
+           the useBackClose hook to set state to false */}
       {showServiceCatalog && (
-        <ServiceCatalog services={allServices} onSelect={addServiceLine} onClose={() => setShowServiceCatalog(false)} />
+        <ServiceCatalog services={allServices} onSelect={addServiceLine}
+          onClose={() => window.history.back()} />
       )}
       {showProductCatalog && (
         <ProductCatalogFullscreen
           products={allProducts} productLines={productLines}
           onAdd={addProduct} onUpdateQty={updateProductQty}
-          onClose={() => setShowProductCatalog(false)}
+          onClose={() => window.history.back()}
         />
       )}
 
