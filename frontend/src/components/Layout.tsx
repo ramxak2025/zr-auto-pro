@@ -126,13 +126,11 @@ export default function Layout({ children }: { children: ReactNode }) {
       {/* ─── Desktop sidebar ─── */}
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
         {/* Logo */}
-        <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
-          <img src="/logo.png" alt="Autexa" className="h-10 aspect-[7/2] object-cover object-center" />
-          <div className="min-w-0">
-            {user?.tenant && (
-              <span className="text-xs text-gray-500 truncate block">{user.tenant.name || ''}</span>
-            )}
-          </div>
+        <div className="flex h-14 items-center border-b border-gray-200 px-5">
+          <img src="/logo.png" alt="Autexa" className="h-8 aspect-[7/2] object-cover object-center" />
+          {user?.tenant && (
+            <span className="ml-3 text-xs text-gray-400 truncate">{user.tenant.name || ''}</span>
+          )}
         </div>
 
         {/* Navigation */}
@@ -233,14 +231,10 @@ export default function Layout({ children }: { children: ReactNode }) {
         </header>
 
         {/* ─── Mobile top bar ─── */}
-        <header className="md:hidden sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-4">
-          <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="Autexa" className="h-12 aspect-[7/2] object-cover object-center" />
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
-              {user?.fullName?.charAt(0) || 'U'}
-            </div>
+        <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+          <img src="/logo.png" alt="Autexa" className="h-8 aspect-[7/2] object-cover object-center" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-50 text-primary-700 text-xs font-semibold">
+            {user?.fullName?.charAt(0) || 'U'}
           </div>
         </header>
 
