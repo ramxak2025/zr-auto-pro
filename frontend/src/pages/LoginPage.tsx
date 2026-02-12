@@ -146,16 +146,16 @@ export default function LoginPage() {
       {/* ══════════════════════════════════════════════════
           Mobile: large logo on white (~25% of screen)
          ══════════════════════════════════════════════════ */}
-      <div className="lg:hidden flex flex-col items-center justify-center bg-white pt-4 pb-2 min-h-[22dvh]">
+      <div className="lg:hidden flex flex-col items-center justify-center bg-white pt-10 pb-3 min-h-[25dvh]">
         {/* Animated logo — large, cropped to remove internal whitespace */}
         <div className="animate-scale-in w-full flex justify-center px-4 overflow-hidden">
           <img
             src="/logo.png"
             alt="Autexa"
-            className="w-[80vw] max-w-[380px] aspect-[7/2] object-cover object-center drop-shadow-md"
+            className="w-[85vw] max-w-[400px] aspect-[7/2] object-cover object-center drop-shadow-md"
           />
         </div>
-        <p className="mt-2 text-[13px] text-gray-400 font-medium tracking-wide animate-fade-in [animation-delay:300ms]">
+        <p className="mt-3 text-sm text-gray-400 font-medium tracking-wide animate-fade-in [animation-delay:300ms]">
           Система управления автосервисом
         </p>
       </div>
