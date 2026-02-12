@@ -271,6 +271,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                   <NavLink
                     key={tab.path}
                     to={tab.path}
+                    replace
                     className="flex flex-col items-center -mt-6"
                   >
                     <div className="relative">
@@ -292,6 +293,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 <NavLink
                   key={tab.path}
                   to={tab.path}
+                  replace
                   className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors"
                 >
                   <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>

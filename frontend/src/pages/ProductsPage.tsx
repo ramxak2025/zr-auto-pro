@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, FormEvent } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback, FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -18,6 +18,7 @@ import {
   Check as CheckIcon,
   Move,
   FolderPlus,
+  ChevronRight,
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
 import type { Product, PaginatedResponse } from '../types';
@@ -393,7 +394,7 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 }
 
 // ---------------------------------------------------------------------------
-// Product Card — used in folder view
+// Product Card — div-based for reliable mobile overflow control
 // ---------------------------------------------------------------------------
 
 function ProductRow({
@@ -406,33 +407,33 @@ function ProductRow({
   const isLow = product.stock <= product.minStock;
 
   return (
-    <div className="w-full max-w-full overflow-hidden rounded-xl">
-      <button type="button" onClick={onClick}
-        className="flex items-center gap-3 w-full max-w-full bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm hover:border-primary-200 transition-all text-left active:bg-gray-50 overflow-hidden box-border">
-        {/* Thumbnail */}
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0 overflow-hidden">
-          {product.photo ? (
-            <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-lg" />
-          ) : (
-            <Package className="h-5 w-5 text-gray-300" />
-          )}
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => e.key === 'Enter' && onClick()}
+      className="flex items-center gap-3 rounded-xl bg-white border border-gray-100 px-3 py-2.5 active:bg-gray-50 transition-colors cursor-pointer"
+    >
+      <div className="h-10 w-10 flex-shrink-0 rounded-lg bg-gray-50 overflow-hidden flex items-center justify-center">
+        {product.photo ? (
+          <img src={product.photo} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <Package className="h-5 w-5 text-gray-300" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className={`text-xs ${isLow ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+            {product.stock} шт
+          </span>
+          {isLow && <AlertTriangle className="h-3 w-3 text-red-500 flex-shrink-0" />}
         </div>
-        {/* Info */}
-        <div className="flex-1 min-w-0 overflow-hidden">
-          <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
-          <div className="flex items-center gap-2 mt-0.5 min-w-0 overflow-hidden">
-            <span className={`text-xs flex-shrink-0 ${isLow ? 'text-red-500' : 'text-gray-400'}`}>{product.stock} шт</span>
-            {isLow && (
-              <span className="flex items-center gap-0.5 bg-red-50 text-red-600 text-[9px] font-bold px-1 py-0.5 rounded-full flex-shrink-0">
-                <AlertTriangle className="h-2.5 w-2.5" />
-              </span>
-            )}
-          </div>
-        </div>
-        {/* Price */}
-        <span className="text-sm font-bold text-primary-600 flex-shrink-0 text-right">{formatMoney(product.sellPrice)}</span>
-        <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
-      </button>
+      </div>
+      <span className="text-sm font-bold text-primary-600 whitespace-nowrap flex-shrink-0">
+        {formatMoney(product.sellPrice)}
+      </span>
+      <ChevronRight className="h-4 w-4 text-gray-300 flex-shrink-0" />
     </div>
   );
 }
@@ -542,6 +543,40 @@ export default function ProductsPage() {
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
 
+  // ---- History-based back navigation for folders ----
+  const activePathRef = useRef(activePath);
+  activePathRef.current = activePath;
+
+  // Push a guard entry on mount; handle popstate for folder back-navigation
+  useEffect(() => {
+    window.history.pushState({ warehouseGuard: true }, '');
+
+    const handler = () => {
+      if (activePathRef.current.length > 0) {
+        const newPath = activePathRef.current.slice(0, -1);
+        activePathRef.current = newPath;
+        setActivePath(newPath);
+        setSelectMode(false);
+        setSelectedProducts(new Set());
+      }
+      // Always re-push guard so back never leaves this section
+      window.history.pushState({ warehouseGuard: true }, '');
+    };
+
+    window.addEventListener('popstate', handler);
+    return () => window.removeEventListener('popstate', handler);
+  }, []);
+
+  const enterFolder = useCallback((folderName: string) => {
+    setActivePath((prev) => {
+      const next = [...prev, folderName];
+      activePathRef.current = next;
+      return next;
+    });
+    setSearchText('');
+    window.history.pushState({ warehouseFolder: true }, '');
+  }, []);
+
   // ---- Queries ----
 
   const {
@@ -578,7 +613,6 @@ export default function ProductsPage() {
       const catParts = cat ? cat.split('/') : [];
 
       if (activePath.length === 0) {
-        // At root: products with no category belong here; first segment = subfolder
         if (catParts.length === 0 || cat === '') {
           prods.push(p);
         } else {
@@ -589,12 +623,9 @@ export default function ProductsPage() {
           subfolderSet.set(folderName, existing);
         }
       } else {
-        // Inside a path: check if product's category starts with our prefix
         if (cat === prefix) {
-          // Product is at exactly this level
           prods.push(p);
         } else if (cat.startsWith(prefix + '/')) {
-          // Product is in a subfolder
           const rest = cat.slice(prefix.length + 1);
           const nextSegment = rest.split('/')[0];
           const existing = subfolderSet.get(nextSegment) || { count: 0, hasLow: false };
@@ -735,20 +766,20 @@ export default function ProductsPage() {
   const showingFolderContents = isInFolder && !searchText;
   const showingRoot = !searchText && !isInFolder;
 
-  // Current path as a joined string for comparison
   const currentPathStr = activePath.join('/');
 
   return (
-    <div className="space-y-5 w-full max-w-full">
+    <div className="space-y-4 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Склад</h1>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-gray-900 truncate">Склад</h1>
           <p className="text-xs text-gray-400 mt-0.5">{allProducts.length} товаров</p>
         </div>
         <button
+          type="button"
           onClick={openCreate}
-          className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary-700 active:scale-[0.97]"
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-primary-700 active:scale-[0.97] flex-shrink-0"
         >
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Добавить</span>
@@ -775,37 +806,60 @@ export default function ProductsPage() {
         <>
           {/* Breadcrumb navigation + select toggle when inside a folder */}
           {showingFolderContents && (
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1 text-sm flex-wrap">
-                <button
-                  type="button"
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1 text-sm min-w-0 overflow-hidden">
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
                     setActivePath([]);
+                    activePathRef.current = [];
                     setSelectMode(false);
                     setSelectedProducts(new Set());
                   }}
-                  className="text-primary-600 hover:text-primary-700 font-medium"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      setActivePath([]);
+                      activePathRef.current = [];
+                      setSelectMode(false);
+                      setSelectedProducts(new Set());
+                    }
+                  }}
+                  className="text-primary-600 hover:text-primary-700 font-medium flex-shrink-0 cursor-pointer flex items-center gap-0.5"
                 >
+                  <ChevronLeft className="h-3.5 w-3.5" />
                   Все
-                </button>
+                </div>
                 {activePath.map((segment, idx) => (
-                  <span key={idx} className="flex items-center gap-1">
-                    <ChevronLeft className="h-3 w-3 text-gray-400 rotate-180" />
-                    <button
-                      type="button"
+                  <span key={idx} className="flex items-center gap-1 min-w-0">
+                    <span className="text-gray-300 flex-shrink-0">/</span>
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
-                        setActivePath(activePath.slice(0, idx + 1));
+                        const newPath = activePath.slice(0, idx + 1);
+                        setActivePath(newPath);
+                        activePathRef.current = newPath;
                         setSelectMode(false);
                         setSelectedProducts(new Set());
                       }}
-                      className={
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const newPath = activePath.slice(0, idx + 1);
+                          setActivePath(newPath);
+                          activePathRef.current = newPath;
+                          setSelectMode(false);
+                          setSelectedProducts(new Set());
+                        }
+                      }}
+                      className={`truncate cursor-pointer ${
                         idx === activePath.length - 1
                           ? 'font-semibold text-gray-900'
                           : 'text-primary-600 hover:text-primary-700 font-medium'
-                      }
+                      }`}
                     >
                       {segment}
-                    </button>
+                    </div>
                   </span>
                 ))}
               </div>
@@ -816,7 +870,7 @@ export default function ProductsPage() {
                     setSelectMode((v) => !v);
                     setSelectedProducts(new Set());
                   }}
-                  className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${
+                  className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors flex-shrink-0 ${
                     selectMode
                       ? 'bg-primary-100 text-primary-700'
                       : 'text-gray-500 hover:bg-gray-100'
@@ -828,65 +882,63 @@ export default function ProductsPage() {
             </div>
           )}
 
-          {/* Subfolders listing (at root or inside a folder) */}
+          {/* Subfolders listing */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {subfolders.map((folder) => (
-                <div key={folder.name} className="w-full max-w-full overflow-hidden rounded-xl">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActivePath([...activePath, folder.name]);
-                      setSearchText('');
-                    }}
-                    className="flex items-center gap-3 w-full max-w-full rounded-xl border border-gray-100 bg-white px-4 py-3
-                      hover:shadow-sm hover:border-primary-200 active:bg-gray-50 transition-all text-left overflow-hidden box-border"
-                  >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 flex-shrink-0">
-                      {CATEGORY_ICONS[folder.name] ? (
-                        <span className="text-lg">{CATEGORY_ICONS[folder.name]}</span>
-                      ) : (
-                        <FolderOpen className="h-5 w-5 text-primary-500" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0 overflow-hidden">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{folder.name}</p>
-                      <p className="text-[11px] text-gray-400">{folder.count} товаров</p>
-                    </div>
-                    {folder.hasLow && (
-                      <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
+                <div
+                  key={folder.name}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => enterFolder(folder.name)}
+                  onKeyDown={(e) => e.key === 'Enter' && enterFolder(folder.name)}
+                  className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white px-3 py-3 active:bg-gray-50 transition-colors cursor-pointer"
+                >
+                  <div className="h-10 w-10 flex-shrink-0 rounded-xl bg-primary-50 flex items-center justify-center">
+                    {CATEGORY_ICONS[folder.name] ? (
+                      <span className="text-lg leading-none">{CATEGORY_ICONS[folder.name]}</span>
+                    ) : (
+                      <FolderOpen className="h-5 w-5 text-primary-500" />
                     )}
-                    <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
-                  </button>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{folder.name}</p>
+                    <p className="text-[11px] text-gray-400">{folder.count} товаров</p>
+                  </div>
+                  {folder.hasLow && (
+                    <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
+                  )}
+                  <ChevronRight className="h-4 w-4 text-gray-300 flex-shrink-0" />
                 </div>
               ))}
             </div>
           )}
 
-          {/* New folder button (at any level, root or inside a folder) */}
+          {/* New folder button */}
           {(showingRoot || showingFolderContents) && (
-            <div>
-              <button
-                type="button"
-                onClick={() => setShowFolderModal(true)}
-                className="flex items-center gap-3 w-full max-w-full rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-4 py-3 hover:border-primary-300 hover:bg-primary-50/30 active:bg-gray-100 transition-all text-left overflow-hidden box-border"
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100 flex-shrink-0">
-                  <FolderPlus className="h-5 w-5 text-gray-400" />
-                </div>
-                <p className="text-sm font-medium text-gray-500">Новая подпапка</p>
-              </button>
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setShowFolderModal(true)}
+              onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
+              className="flex items-center gap-3 rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-3 py-3 active:bg-gray-100 transition-colors cursor-pointer"
+            >
+              <div className="h-10 w-10 flex-shrink-0 rounded-xl bg-gray-100 flex items-center justify-center">
+                <FolderPlus className="h-5 w-5 text-gray-400" />
+              </div>
+              <p className="text-sm font-medium text-gray-500">Новая подпапка</p>
             </div>
           )}
 
-          {/* Products at current level (root or inside a folder) */}
+          {/* Products at current level */}
           {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               {currentProducts.map((product) => (
                 <div key={product.id} className="flex items-center gap-2">
                   {selectMode && (
-                    <button
-                      type="button"
+                    <div
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         setSelectedProducts((prev) => {
                           const next = new Set(prev);
@@ -895,7 +947,17 @@ export default function ProductsPage() {
                           return next;
                         });
                       }}
-                      className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 transition-colors ${
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          setSelectedProducts((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(product.id)) next.delete(product.id);
+                            else next.add(product.id);
+                            return next;
+                          });
+                        }
+                      }}
+                      className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 transition-colors cursor-pointer ${
                         selectedProducts.has(product.id)
                           ? 'border-primary-600 bg-primary-600'
                           : 'border-gray-300 bg-white hover:border-primary-400'
@@ -904,7 +966,7 @@ export default function ProductsPage() {
                       {selectedProducts.has(product.id) && (
                         <CheckIcon className="h-3 w-3 text-white" />
                       )}
-                    </button>
+                    </div>
                   )}
                   <div className="flex-1 min-w-0">
                     <ProductRow
@@ -944,15 +1006,13 @@ export default function ProductsPage() {
                 <p className="text-sm">Товары не найдены</p>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 {searchResults.map((product) => (
-                  <div key={product.id} className="flex items-center gap-2">
-                    <div className="flex-1 min-w-0">
-                      <ProductRow
-                        product={product}
-                        onClick={() => setDetailTarget(product)}
-                      />
-                    </div>
+                  <div key={product.id} className="flex-1 min-w-0">
+                    <ProductRow
+                      product={product}
+                      onClick={() => setDetailTarget(product)}
+                    />
                   </div>
                 ))}
               </div>
@@ -961,7 +1021,7 @@ export default function ProductsPage() {
         </>
       )}
 
-      {/* Bottom action bar when products are selected — sticky inside <main> */}
+      {/* Bottom action bar when products are selected */}
       {selectMode && selectedProducts.size > 0 && (
         <div className="sticky bottom-0 z-10 -mx-4 -mb-4 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3">
           <div className="flex items-center justify-between">
@@ -978,7 +1038,7 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {/* Product detail — actions accessible from here */}
+      {/* Product detail */}
       {detailTarget && (
         <ProductDetailModal
           product={detailTarget}
@@ -1035,50 +1095,65 @@ export default function ProductsPage() {
         variant="danger"
       />
 
-      {/* Move to folder modal — shows full folder hierarchy */}
+      {/* Move to folder modal */}
       {showMoveModal && (
         <Modal isOpen onClose={() => setShowMoveModal(false)} title="Переместить в папку">
           <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
-            {/* Root (no category) option */}
             {currentPathStr !== '' && (
-              <button
-                type="button"
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() =>
                   moveMutation.mutate({
                     productIds: Array.from(selectedProducts),
                     category: '',
                   })
                 }
-                className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    moveMutation.mutate({
+                      productIds: Array.from(selectedProducts),
+                      category: '',
+                    });
+                  }
+                }}
+                className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors cursor-pointer"
               >
-                <FolderOpen className="h-5 w-5 text-gray-400" />
+                <FolderOpen className="h-5 w-5 text-gray-400 flex-shrink-0" />
                 <span className="text-sm font-medium text-gray-500">Без категории (корень)</span>
-              </button>
+              </div>
             )}
-            {/* All known category paths */}
             {allCategoryPaths
               .filter((path) => path !== currentPathStr)
               .map((path) => {
                 const depth = path.split('/').length - 1;
                 return (
-                  <button
+                  <div
                     key={path}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     onClick={() =>
                       moveMutation.mutate({
                         productIds: Array.from(selectedProducts),
                         category: path,
                       })
                     }
-                    className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        moveMutation.mutate({
+                          productIds: Array.from(selectedProducts),
+                          category: path,
+                        });
+                      }
+                    }}
+                    className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors cursor-pointer"
                     style={{ paddingLeft: `${16 + depth * 16}px` }}
                   >
                     <FolderOpen className="h-5 w-5 text-primary-500 flex-shrink-0" />
-                    <span className="text-sm font-medium text-gray-900">{path}</span>
-                  </button>
+                    <span className="text-sm font-medium text-gray-900 truncate">{path}</span>
+                  </div>
                 );
               })}
-            {/* New folder option */}
             <div className="border-t border-gray-100 pt-2 mt-2">
               <div className="flex items-center gap-2 px-4">
                 <input
@@ -1086,7 +1161,7 @@ export default function ProductsPage() {
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
                   placeholder="Новая папка..."
-                  className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm placeholder-gray-400 focus:border-primary-400 focus:outline-none"
+                  className="flex-1 min-w-0 rounded-lg border border-gray-200 px-3 py-2 text-sm placeholder-gray-400 focus:border-primary-400 focus:outline-none"
                 />
                 <button
                   type="button"
@@ -1102,7 +1177,7 @@ export default function ProductsPage() {
                     }
                   }}
                   disabled={!newFolderName.trim()}
-                  className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40"
+                  className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40 flex-shrink-0"
                 >
                   OK
                 </button>
@@ -1147,7 +1222,7 @@ export default function ProductsPage() {
                 type="button"
                 onClick={() => {
                   if (newFolderName.trim()) {
-                    setActivePath([...activePath, newFolderName.trim()]);
+                    enterFolder(newFolderName.trim());
                     setShowFolderModal(false);
                     setNewFolderName('');
                   }
