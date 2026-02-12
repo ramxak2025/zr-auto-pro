@@ -347,7 +347,7 @@ export default function SuppliersPage() {
           className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
         >
           <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Добавить</span> поставщика
+          <span className="hidden sm:inline">Добавить поставщика</span>
         </button>
       </div>
 

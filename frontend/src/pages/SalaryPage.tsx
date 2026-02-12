@@ -286,17 +286,17 @@ function AdminSalaryView() {
             {/* Summary card */}
             <div className="rounded-xl bg-gradient-to-r from-primary-50 to-blue-50 border border-primary-100 p-4">
               <p className="text-[11px] font-semibold text-primary-600 uppercase tracking-wider mb-2">Итого</p>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="text-center">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="text-center min-w-0">
                   <p className="text-lg font-bold text-gray-900">{totalChecks}</p>
                   <p className="text-[10px] text-gray-500">Чеков</p>
                 </div>
-                <div className="text-center">
-                  <p className="text-sm font-bold text-gray-900">{formatMoney(totalRevenue)}</p>
+                <div className="text-center min-w-0">
+                  <p className="text-xs font-bold text-gray-900 truncate">{formatMoney(totalRevenue)}</p>
                   <p className="text-[10px] text-gray-500">Выручка</p>
                 </div>
-                <div className="text-center">
-                  <p className="text-sm font-bold text-green-600">{formatMoney(totalEarnings)}</p>
+                <div className="text-center min-w-0">
+                  <p className="text-xs font-bold text-green-600 truncate">{formatMoney(totalEarnings)}</p>
                   <p className="text-[10px] text-gray-500">Заработок</p>
                 </div>
               </div>

@@ -46,9 +46,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   const breadcrumbs = getPageTitle(location.pathname);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
       {/* Sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-30 flex w-[260px] flex-col bg-gray-900">
+      <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col bg-gray-900">
         {/* Logo */}
         <div className="flex h-16 items-center gap-3 border-b border-gray-700/50 px-6">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-white">
@@ -109,9 +109,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       </aside>
 
       {/* Main area */}
-      <div className="flex flex-1 flex-col pl-[260px]">
+      <div className="flex flex-1 flex-col md:pl-[260px]">
         {/* Top bar */}
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
+        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-4 md:px-6">
           {/* Breadcrumbs */}
           <div className="flex items-center gap-1.5 text-sm">
             {breadcrumbs.map((crumb, index) => (
@@ -154,7 +154,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">{children}</main>
       </div>
     </div>
   );

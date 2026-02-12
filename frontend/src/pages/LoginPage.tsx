@@ -201,18 +201,18 @@ export default function LoginPage() {
         </div>
 
         {/* Features */}
-        <div className="mt-8 grid grid-cols-3 gap-3 text-center">
-          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-3">
-            <p className="text-lg font-bold text-gray-900">CRM</p>
-            <p className="text-[11px] text-gray-500 mt-0.5">Клиенты и авто</p>
+        <div className="mt-8 grid grid-cols-3 gap-2 sm:gap-3 text-center">
+          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-2.5 sm:p-3">
+            <p className="text-base sm:text-lg font-bold text-gray-900">CRM</p>
+            <p className="text-[10px] sm:text-[11px] text-gray-500 mt-0.5">Клиенты и авто</p>
           </div>
-          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-3">
-            <p className="text-lg font-bold text-gray-900">Склад</p>
-            <p className="text-[11px] text-gray-500 mt-0.5">Учёт запчастей</p>
+          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-2.5 sm:p-3">
+            <p className="text-base sm:text-lg font-bold text-gray-900">Склад</p>
+            <p className="text-[10px] sm:text-[11px] text-gray-500 mt-0.5">Учёт запчастей</p>
           </div>
-          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-3">
-            <p className="text-lg font-bold text-gray-900">Отчёты</p>
-            <p className="text-[11px] text-gray-500 mt-0.5">Финансы и KPI</p>
+          <div className="rounded-xl bg-white/80 backdrop-blur border border-gray-100 p-2.5 sm:p-3">
+            <p className="text-base sm:text-lg font-bold text-gray-900">Отчёты</p>
+            <p className="text-[10px] sm:text-[11px] text-gray-500 mt-0.5">Финансы и KPI</p>
           </div>
         </div>
 

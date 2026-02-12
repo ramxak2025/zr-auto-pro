@@ -136,7 +136,7 @@ export default function DatePeriodPicker({ dateFrom, dateTo, onChange }: DatePer
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full mt-1.5 z-50 w-64 rounded-xl border border-gray-200 bg-white shadow-xl overflow-hidden">
+        <div className="absolute right-0 sm:left-0 sm:right-auto top-full mt-1.5 z-50 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-gray-200 bg-white shadow-xl overflow-hidden">
           {/* Period presets */}
           <div className="p-2 space-y-0.5">
             {PERIODS.map((p) => (
