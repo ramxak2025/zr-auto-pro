@@ -3,6 +3,11 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    --bottom-nav-h: calc(68px + env(safe-area-inset-bottom, 0px));
+    --mobile-pb: calc(140px + env(safe-area-inset-bottom, 0px));
+  }
+
   html {
     overflow-x: hidden;
     max-width: 100vw;
@@ -23,6 +28,28 @@
     overflow-x: hidden;
     max-width: 100vw;
     max-width: 100dvw;
+  }
+
+  /* Prevent any scrollable container from overflowing horizontally */
+  main {
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Safe-area-aware bottom padding for main content on mobile */
+  .main-content {
+    padding-bottom: var(--mobile-pb);
+  }
+  @media (min-width: 768px) {
+    .main-content {
+      padding-bottom: 1.5rem;
+    }
+  }
+
+  /* Ensure tables don't blow out containers on mobile */
+  table {
+    table-layout: auto;
+    word-break: break-word;
   }
 
   /* Prevent iOS zoom on focus — force 16px minimum on mobile inputs */

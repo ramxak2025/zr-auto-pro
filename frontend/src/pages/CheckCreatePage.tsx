@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   MessageSquare,
   Pause,
+  Clock,
 } from 'lucide-react';
 import {
   clientsApi,
@@ -499,6 +500,149 @@ function ProductCatalogFullscreen({ products, productLines, onAdd, onUpdateQty, 
 }
 
 // ---------------------------------------------------------------------------
+// Payment Action Sheet — bottom sheet with payment options + defer
+// ---------------------------------------------------------------------------
+
+function PaymentActionSheet({ grandTotal, isLoading, onClose, onSubmit }: {
+  grandTotal: number;
+  isLoading: boolean;
+  onClose: () => void;
+  onSubmit: (method: PaymentMethod, deferred: boolean, cashAmt?: number, cardAmt?: number) => void;
+}) {
+  const [splitMode, setSplitMode] = useState(false);
+  const [cashAmount, setCashAmount] = useState('');
+  const [cardAmount, setCardAmount] = useState('');
+
+  function handleSplitConfirm() {
+    onSubmit(PM.CASH_CARD, false, parseFloat(cashAmount) || 0, parseFloat(cardAmount) || 0);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={!isLoading ? onClose : undefined} />
+      {/* Sheet */}
+      <div className="relative w-full md:max-w-sm bg-white rounded-t-3xl md:rounded-2xl overflow-hidden">
+        {/* Handle */}
+        <div className="flex justify-center pt-3 pb-1 md:hidden">
+          <div className="w-10 h-1 bg-gray-200 rounded-full" />
+        </div>
+
+        {/* Header */}
+        <div className="px-6 pt-4 pb-3 text-center">
+          <h3 className="text-lg font-bold text-gray-900">Оформление чека</h3>
+          <p className="text-2xl font-bold text-primary-600 mt-1">{formatMoney(grandTotal)}</p>
+        </div>
+
+        {splitMode ? (
+          /* ── Split payment form ── */
+          <div className="px-6 pb-6 space-y-4">
+            <p className="text-xs font-semibold text-purple-600 uppercase tracking-wider">Разделение оплаты</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
+                  <Banknote className="h-3 w-3" />Наличные
+                </label>
+                <input type="number" value={cashAmount}
+                  onChange={(e) => {
+                    setCashAmount(e.target.value);
+                    const cash = parseFloat(e.target.value) || 0;
+                    const remaining = Math.max(0, grandTotal - cash);
+                    setCardAmount(remaining > 0 ? remaining.toString() : '');
+                  }}
+                  min="0" placeholder="0 ₽"
+                  className="block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/10" />
+              </div>
+              <div>
+                <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
+                  <CreditCard className="h-3 w-3" />Карта
+                </label>
+                <input type="number" value={cardAmount}
+                  onChange={(e) => {
+                    setCardAmount(e.target.value);
+                    const card = parseFloat(e.target.value) || 0;
+                    const remaining = Math.max(0, grandTotal - card);
+                    setCashAmount(remaining > 0 ? remaining.toString() : '');
+                  }}
+                  min="0" placeholder="0 ₽"
+                  className="block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/10" />
+              </div>
+            </div>
+            <button type="button" onClick={handleSplitConfirm} disabled={isLoading}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-purple-600 to-purple-700 py-3.5 text-sm font-bold text-white shadow-lg active:scale-[0.98] disabled:opacity-50">
+              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Подтвердить
+            </button>
+            <button type="button" onClick={() => setSplitMode(false)} disabled={isLoading}
+              className="w-full text-center text-sm text-gray-500 hover:text-gray-700 py-1">
+              Назад
+            </button>
+          </div>
+        ) : (
+          /* ── Payment methods + defer ── */
+          <div className="px-5 pb-6 space-y-2">
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider px-1 mb-1">Способ оплаты</p>
+
+            <button type="button" onClick={() => onSubmit(PM.CASH, false)} disabled={isLoading}
+              className="flex items-center gap-3 w-full rounded-2xl bg-green-50 hover:bg-green-100 px-4 py-3.5 transition-colors disabled:opacity-50">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-100">
+                <Banknote className="h-5 w-5 text-green-600" />
+              </div>
+              <span className="text-sm font-semibold text-gray-900">Наличные</span>
+            </button>
+
+            <button type="button" onClick={() => onSubmit(PM.CARD, false)} disabled={isLoading}
+              className="flex items-center gap-3 w-full rounded-2xl bg-blue-50 hover:bg-blue-100 px-4 py-3.5 transition-colors disabled:opacity-50">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100">
+                <CreditCard className="h-5 w-5 text-blue-600" />
+              </div>
+              <span className="text-sm font-semibold text-gray-900">Карта</span>
+            </button>
+
+            <button type="button" onClick={() => onSubmit(PM.WARRANTY, false)} disabled={isLoading}
+              className="flex items-center gap-3 w-full rounded-2xl bg-orange-50 hover:bg-orange-100 px-4 py-3.5 transition-colors disabled:opacity-50">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-100">
+                <ShieldCheck className="h-5 w-5 text-orange-600" />
+              </div>
+              <span className="text-sm font-semibold text-gray-900">Гарантия</span>
+            </button>
+
+            <button type="button" onClick={() => setSplitMode(true)} disabled={isLoading}
+              className="flex items-center gap-3 w-full rounded-2xl bg-purple-50 hover:bg-purple-100 px-4 py-3.5 transition-colors disabled:opacity-50">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-100">
+                <CreditCard className="h-5 w-5 text-purple-600" />
+              </div>
+              <span className="text-sm font-semibold text-gray-900">Нал + Карта</span>
+            </button>
+
+            {/* Divider */}
+            <div className="border-t border-gray-100 !my-3" />
+
+            {/* Defer option */}
+            <button type="button" onClick={() => onSubmit(PM.CASH, true)} disabled={isLoading}
+              className="flex items-center gap-3 w-full rounded-2xl bg-amber-50 hover:bg-amber-100 border-2 border-dashed border-amber-300 px-4 py-3.5 transition-colors disabled:opacity-50">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100">
+                <Clock className="h-5 w-5 text-amber-600" />
+              </div>
+              <div className="text-left">
+                <span className="text-sm font-semibold text-amber-800 block">Отложить чек</span>
+                <span className="text-[11px] text-amber-600">Без оплаты, можно вернуться позже</span>
+              </div>
+            </button>
+
+            {/* Cancel */}
+            <button type="button" onClick={onClose} disabled={isLoading}
+              className="w-full text-center text-sm text-gray-400 hover:text-gray-600 py-2 mt-1">
+              Отмена
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
@@ -511,12 +655,9 @@ export default function CheckCreatePage() {
   const [selectedCarId, setSelectedCarId] = useState('');
   const [mileage, setMileage] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PM.CASH);
   const [comment, setComment] = useState('');
   const [discount, setDiscount] = useState('');
-  const [isDeferred, setIsDeferred] = useState(false);
-  const [cashAmount, setCashAmount] = useState('');
-  const [cardAmount, setCardAmount] = useState('');
+  const [showPaymentSheet, setShowPaymentSheet] = useState(false);
 
   const [serviceLines, setServiceLines] = useState<ServiceLineData[]>([]);
   const [productLines, setProductLines] = useState<ProductLineData[]>([]);
@@ -607,7 +748,10 @@ export default function CheckCreatePage() {
     if (!selectedClient) { toast.error('Выберите клиента'); return; }
     if (!selectedCarId) { toast.error('Выберите автомобиль'); return; }
     if (serviceLines.length === 0 && productLines.length === 0) { toast.error('Добавьте услугу или товар'); return; }
+    setShowPaymentSheet(true);
+  }
 
+  function handlePaymentSubmit(method: PaymentMethod, deferred: boolean, cashAmt?: number, cardAmt?: number) {
     const services: Omit<CheckServiceLine, 'id'>[] = serviceLines.map((l) => ({
       serviceId: l.serviceId || undefined, name: l.name, price: l.price, quantity: l.quantity, total: l.price * l.quantity,
     }));
@@ -618,13 +762,15 @@ export default function CheckCreatePage() {
     }));
 
     createMutation.mutate({
-      clientId: selectedClient.id, carId: selectedCarId, date,
+      clientId: selectedClient!.id, carId: selectedCarId, date,
       mileage: mileage ? parseInt(mileage) : undefined,
-      services, products, paymentMethod,
+      services, products, paymentMethod: method,
       discount: discountValue || undefined,
       comment: comment.trim() || undefined,
-      isDeferred,
+      isDeferred: deferred,
+      cashAmount: cashAmt, cardAmount: cardAmt,
     });
+    setShowPaymentSheet(false);
   }
 
   // ---- Running item index for receipt ----
@@ -645,7 +791,7 @@ export default function CheckCreatePage() {
         />
       )}
 
-      <div className="pb-44 md:pb-6">
+      <div className="pb-20 md:pb-0">
         {/* Header */}
         <div className="flex items-center gap-3 mb-5">
           <button onClick={() => navigate('/checks')}
@@ -817,89 +963,7 @@ export default function CheckCreatePage() {
               className="block w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500/10 resize-none" />
           </div>
 
-          {/* ── Defer check ── */}
-          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setIsDeferred((v) => !v)}
-              className={`flex items-center gap-3 w-full px-4 py-3.5 transition-colors ${
-                isDeferred ? 'bg-amber-50' : ''
-              }`}
-            >
-              <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${isDeferred ? 'bg-amber-100' : 'bg-gray-100'}`}>
-                <Pause className={`h-4 w-4 ${isDeferred ? 'text-amber-600' : 'text-gray-400'}`} />
-              </div>
-              <div className="flex-1 text-left">
-                <p className="text-sm font-medium text-gray-900">Отложить чек</p>
-                <p className="text-[11px] text-gray-400">Чек будет помечен как отложенный</p>
-              </div>
-              <div className={`flex h-6 w-11 items-center rounded-full p-0.5 transition-colors ${isDeferred ? 'bg-amber-500' : 'bg-gray-200'}`}>
-                <div className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${isDeferred ? 'translate-x-5' : 'translate-x-0'}`} />
-              </div>
-            </button>
-          </div>
-
-          {/* ── Payment ── */}
-          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-50">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Оплата</p>
-            </div>
-            <div className="p-4 space-y-3">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {PAYMENT_METHODS.map((pm) => {
-                  const Icon = pm.icon;
-                  const active = paymentMethod === pm.value;
-                  return (
-                    <button key={pm.value} type="button" onClick={() => setPaymentMethod(pm.value)}
-                      className={`flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-semibold transition-all ${
-                        active
-                          ? 'bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm'
-                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
-                      }`}>
-                      <Icon className="h-3.5 w-3.5" />{pm.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Split payment */}
-              {paymentMethod === PM.CASH_CARD && (
-                <div className="rounded-xl bg-purple-50/50 border border-purple-100 p-3 space-y-2.5">
-                  <p className="text-[11px] font-semibold text-purple-700 uppercase tracking-wider">Разделение оплаты</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
-                        <Banknote className="h-3 w-3" />Наличные
-                      </label>
-                      <input type="number" value={cashAmount}
-                        onChange={(e) => {
-                          setCashAmount(e.target.value);
-                          const cash = parseFloat(e.target.value) || 0;
-                          const remaining = Math.max(0, grandTotal - cash);
-                          setCardAmount(remaining > 0 ? remaining.toString() : '');
-                        }}
-                        min="0" placeholder="0 ₽"
-                        className="block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/10" />
-                    </div>
-                    <div>
-                      <label className="flex items-center gap-1 text-[11px] font-medium text-gray-500 mb-1">
-                        <CreditCard className="h-3 w-3" />Карта
-                      </label>
-                      <input type="number" value={cardAmount}
-                        onChange={(e) => {
-                          setCardAmount(e.target.value);
-                          const card = parseFloat(e.target.value) || 0;
-                          const remaining = Math.max(0, grandTotal - card);
-                          setCashAmount(remaining > 0 ? remaining.toString() : '');
-                        }}
-                        min="0" placeholder="0 ₽"
-                        className="block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm placeholder-gray-400 focus:border-purple-400 focus:outline-none focus:ring-2 focus:ring-purple-500/10" />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          {/* Payment & defer are handled by the PaymentActionSheet on submit */}
 
           {/* Desktop summary */}
           <div className="hidden md:block">
@@ -921,7 +985,7 @@ export default function CheckCreatePage() {
           </div>
 
           {/* Mobile sticky bar */}
-          <div className="md:hidden fixed bottom-[68px] inset-x-0 z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-4 py-2.5">
+          <div className="md:hidden fixed inset-x-0 z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-4 py-2.5" style={{ bottom: 'var(--bottom-nav-h)' }}>
             <div className="flex items-center gap-3">
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] text-gray-400 uppercase tracking-wider">Итого</p>
@@ -936,6 +1000,16 @@ export default function CheckCreatePage() {
           </div>
         </form>
       </div>
+
+      {/* ── Payment Action Sheet ── */}
+      {showPaymentSheet && (
+        <PaymentActionSheet
+          grandTotal={grandTotal}
+          isLoading={createMutation.isPending}
+          onClose={() => setShowPaymentSheet(false)}
+          onSubmit={handlePaymentSubmit}
+        />
+      )}
     </>
   );
 }

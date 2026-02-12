@@ -407,7 +407,7 @@ function ProductRow({
 
   return (
     <button type="button" onClick={onClick}
-      className="flex items-center gap-3 w-full bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm hover:border-primary-200 transition-all text-left active:bg-gray-50">
+      className="flex items-center gap-3 w-full bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm hover:border-primary-200 transition-all text-left active:bg-gray-50 overflow-hidden">
       {/* Thumbnail */}
       <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0 overflow-hidden">
         {product.photo ? (
@@ -417,8 +417,8 @@ function ProductRow({
         )}
       </div>
       {/* Info */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
+      <div className="flex-1 min-w-0 overflow-hidden">
+        <div className="flex items-center gap-1.5 min-w-0">
           <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
           {isLow && (
             <span className="flex items-center gap-0.5 bg-red-50 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0">
@@ -426,10 +426,10 @@ function ProductRow({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className={`text-xs ${isLow ? 'text-red-500' : 'text-gray-400'}`}>{product.stock} шт</span>
-          <span className="text-[10px] text-gray-300">&middot;</span>
-          <span className="text-[11px] text-gray-400">Закуп: {formatMoney(product.costPrice)}</span>
+        <div className="flex items-center gap-2 mt-0.5 min-w-0 overflow-hidden">
+          <span className={`text-xs flex-shrink-0 ${isLow ? 'text-red-500' : 'text-gray-400'}`}>{product.stock} шт</span>
+          <span className="text-[10px] text-gray-300 flex-shrink-0">&middot;</span>
+          <span className="text-[11px] text-gray-400 truncate">Закуп: {formatMoney(product.costPrice)}</span>
         </div>
       </div>
       {/* Price */}
@@ -741,7 +741,7 @@ export default function ProductsPage() {
   const currentPathStr = activePath.join('/');
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -964,7 +964,7 @@ export default function ProductsPage() {
 
       {/* Bottom action bar when products are selected */}
       {selectMode && selectedProducts.size > 0 && (
-        <div className="fixed bottom-[68px] inset-x-0 z-30 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3">
+        <div className="fixed inset-x-0 z-30 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3" style={{ bottom: 'var(--bottom-nav-h)' }}>
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-600">Выбрано: {selectedProducts.size}</span>
             <button
