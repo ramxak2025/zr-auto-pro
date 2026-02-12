@@ -67,10 +67,7 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <img src="/logo.png" alt="Autexa" className="w-16 h-16 rounded-2xl mx-auto mb-4 shadow-lg object-cover" />
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight">
-            Autexa
-          </h1>
+          <img src="/logo-horizontal.png" alt="Autexa" className="h-16 mx-auto mb-4 object-contain" />
           <p className="mt-1.5 text-gray-500 text-sm">
             Система управления автосервисом
           </p>

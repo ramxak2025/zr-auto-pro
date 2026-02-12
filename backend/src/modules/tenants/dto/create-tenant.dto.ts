@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsEmail,
   IsInt,
+  IsDateString,
   Min,
   MinLength,
   MaxLength,
@@ -42,6 +43,15 @@ export class CreateTenantDto {
   @IsInt()
   @Min(1)
   maxUsers?: number;
+
+  @IsOptional()
+  @IsDateString()
+  subscriptionEnd?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  subscriptionNote?: string;
 
   @IsString()
   @MinLength(3)

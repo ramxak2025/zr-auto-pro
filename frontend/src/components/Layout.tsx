@@ -127,11 +127,8 @@ export default function Layout({ children }: { children: ReactNode }) {
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
         {/* Logo */}
         <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
-          <img src="/logo.png" alt="Autexa" className="h-9 w-9 rounded-lg object-cover" />
+          <img src="/logo-horizontal.png" alt="Autexa" className="h-9 rounded-lg object-contain" />
           <div className="min-w-0">
-            <span className="text-lg font-bold text-gray-900 tracking-tight block">
-              Autexa
-            </span>
             {user?.tenant && (
               <span className="text-xs text-gray-500 truncate block">{user.tenant.name || ''}</span>
             )}
@@ -238,10 +235,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         {/* ─── Mobile top bar ─── */}
         <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
           <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="Autexa" className="h-8 w-8 rounded-lg object-cover" />
-            <span className="text-base font-bold text-gray-900 tracking-tight">
-              Autexa
-            </span>
+            <img src="/logo-horizontal.png" alt="Autexa" className="h-8 rounded-lg object-contain" />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">

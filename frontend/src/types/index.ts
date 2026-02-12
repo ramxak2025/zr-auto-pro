@@ -9,7 +9,10 @@ export interface Tenant {
   logo?: string;
   isActive: boolean;
   maxUsers: number;
+  subscriptionEnd?: string | null;
+  subscriptionNote?: string | null;
   users?: User[];
+  userCount?: number;
   createdAt: string;
   updatedAt: string;
 }

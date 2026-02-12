@@ -39,6 +39,8 @@ export const adminApi = {
   updateTenant: (id: string, data: any) => api.patch<Tenant>(`/admin/tenants/${id}`, data),
   activateTenant: (id: string) => api.post(`/admin/tenants/${id}/activate`),
   deactivateTenant: (id: string) => api.post(`/admin/tenants/${id}/deactivate`),
+  extendSubscription: (id: string, data: { subscriptionEnd: string; note?: string }) =>
+    api.post<Tenant>(`/admin/tenants/${id}/extend-subscription`, data),
   deleteTenant: (id: string) => api.delete(`/admin/tenants/${id}`),
 };
 

@@ -41,6 +41,12 @@ export class Tenant {
   @Column({ type: 'int', default: 5 })
   maxUsers: number;
 
+  @Column({ type: 'timestamp', nullable: true })
+  subscriptionEnd: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  subscriptionNote: string;
+
   @OneToMany(() => User, (user) => user.tenant)
   users: User[];
 

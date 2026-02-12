@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['logo.png'],
+      includeAssets: ['logo-icon.png', 'logo-horizontal.png'],
       manifest: {
         name: 'Autexa - система управления автосервисом',
         short_name: 'Autexa',

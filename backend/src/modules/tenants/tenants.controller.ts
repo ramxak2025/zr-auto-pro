@@ -64,6 +64,14 @@ export class TenantsController {
     return this.tenantsService.deactivate(id);
   }
 
+  @Post(':id/extend-subscription')
+  extendSubscription(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() data: { subscriptionEnd: string; note?: string },
+  ) {
+    return this.tenantsService.extendSubscription(id, data);
+  }
+
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.tenantsService.remove(id);

@@ -115,6 +115,10 @@ export class TenantsService {
       email: dto.email,
       description: dto.description,
       maxUsers: dto.maxUsers,
+      subscriptionEnd: dto.subscriptionEnd
+        ? new Date(dto.subscriptionEnd)
+        : null,
+      subscriptionNote: dto.subscriptionNote,
     });
 
     const savedTenant = await this.tenantRepo.save(tenant);
@@ -171,6 +175,18 @@ export class TenantsService {
   async deactivate(id: string): Promise<Tenant> {
     const tenant = await this.findById(id);
     tenant.isActive = false;
+    return this.tenantRepo.save(tenant);
+  }
+
+  async extendSubscription(
+    id: string,
+    data: { subscriptionEnd: string; note?: string },
+  ): Promise<Tenant> {
+    const tenant = await this.findById(id);
+    tenant.subscriptionEnd = new Date(data.subscriptionEnd);
+    if (data.note) {
+      tenant.subscriptionNote = data.note;
+    }
     return this.tenantRepo.save(tenant);
   }
 
