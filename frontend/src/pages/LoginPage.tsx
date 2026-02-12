@@ -27,7 +27,7 @@ export default function LoginPage() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-950">
+      <div className="min-h-screen flex items-center justify-center bg-slate-950">
         <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
       </div>
     );
@@ -86,18 +86,21 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
-      {/* ── Left: branding panel ── */}
-      <div className="relative hidden lg:flex lg:w-[55%] flex-col justify-between bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 p-10 xl:p-14 overflow-hidden">
+      {/* ══════════════════════════════════════════════════
+          Desktop left panel — dark branding
+         ══════════════════════════════════════════════════ */}
+      <div className="relative hidden lg:flex lg:w-[55%] flex-col justify-between bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-10 xl:p-14 overflow-hidden">
         {/* Decorative blobs */}
         <div className="absolute -top-40 -left-40 h-80 w-80 rounded-full bg-blue-600/10 blur-3xl" />
         <div className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-indigo-600/10 blur-3xl" />
+        <div className="absolute top-1/2 left-1/3 h-64 w-64 rounded-full bg-blue-500/5 blur-3xl" />
 
-        {/* Top: logo */}
+        {/* Top: full logo */}
         <div className="relative z-10">
           <img
-            src="/logo-horizontal.png"
+            src="/logo.png"
             alt="Autexa"
-            className="h-12 object-contain brightness-0 invert"
+            className="h-11 w-auto object-contain brightness-0 invert drop-shadow-lg"
           />
         </div>
 
@@ -116,7 +119,7 @@ export default function LoginPage() {
             Единая платформа для заказ-нарядов, склада, финансов и команды. Всё в одном месте.
           </p>
 
-          {/* Feature pills */}
+          {/* Feature grid */}
           <div className="mt-8 grid grid-cols-3 gap-3">
             {features.map((f) => (
               <div
@@ -139,23 +142,69 @@ export default function LoginPage() {
         </p>
       </div>
 
-      {/* ── Right: login form ── */}
-      <div className="flex flex-1 flex-col items-center justify-center bg-white px-6 py-10 lg:px-12">
-        <div className="w-full max-w-sm">
-          {/* Mobile logo */}
-          <div className="mb-10 text-center lg:hidden">
-            <img
-              src="/logo-horizontal.png"
-              alt="Autexa"
-              className="h-10 mx-auto object-contain"
-            />
-            <p className="mt-2 text-sm text-gray-500">
-              Система управления автосервисом
-            </p>
-          </div>
+      {/* ══════════════════════════════════════════════════
+          Mobile branded hero (visible only on < lg)
+         ══════════════════════════════════════════════════ */}
+      <div className="lg:hidden relative overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+        {/* Decorative blobs */}
+        <div className="absolute -top-20 -right-20 h-48 w-48 rounded-full bg-blue-600/15 blur-3xl" />
+        <div className="absolute -bottom-16 -left-16 h-40 w-40 rounded-full bg-indigo-500/10 blur-3xl" />
 
-          {/* Welcome */}
-          <div className="mb-8">
+        <div className="relative z-10 flex flex-col items-center px-6 pt-10 pb-8">
+          {/* Full logo — prominent, properly sized */}
+          <img
+            src="/logo.png"
+            alt="Autexa"
+            className="h-14 sm:h-16 w-auto max-w-[220px] sm:max-w-[260px] object-contain brightness-0 invert drop-shadow-lg"
+          />
+
+          <p className="mt-3 text-[13px] sm:text-sm text-blue-300/70 font-medium tracking-wide">
+            Система управления автосервисом
+          </p>
+
+          {/* Mini feature badges */}
+          <div className="mt-5 flex flex-wrap justify-center gap-2">
+            {[
+              { icon: Car, label: 'Заказ-наряды' },
+              { icon: Users, label: 'CRM' },
+              { icon: Warehouse, label: 'Склад' },
+              { icon: BarChart3, label: 'Отчёты' },
+            ].map((f) => (
+              <div
+                key={f.label}
+                className="flex items-center gap-1.5 rounded-full bg-white/[0.07] border border-white/[0.08] px-3 py-1.5 backdrop-blur-sm"
+              >
+                <f.icon className="h-3.5 w-3.5 text-blue-400" />
+                <span className="text-[11px] font-medium text-gray-300">{f.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Curved divider connecting hero to form */}
+        <div className="absolute -bottom-1 left-0 right-0">
+          <svg
+            viewBox="0 0 1440 60"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            className="w-full h-auto"
+            preserveAspectRatio="none"
+          >
+            <path
+              d="M0 60V20C360 0 720 0 1080 20C1260 30 1380 45 1440 60H0Z"
+              fill="white"
+            />
+          </svg>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════
+          Login form — right panel (desktop) / below hero (mobile)
+         ══════════════════════════════════════════════════ */}
+      <div className="flex flex-1 flex-col items-center justify-center bg-white px-6 py-8 lg:py-10 lg:px-12">
+        <div className="w-full max-w-sm">
+          {/* Welcome heading */}
+          <div className="mb-7">
             <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
               Войти в систему
             </h2>
@@ -229,9 +278,9 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="w-full flex items-center justify-center gap-2.5 rounded-xl bg-gray-900 px-4 py-3.5 text-[15px] font-semibold text-white
-                hover:bg-gray-800 active:scale-[0.98]
-                focus:outline-none focus:ring-4 focus:ring-gray-900/20
+              className="w-full flex items-center justify-center gap-2.5 rounded-xl bg-gradient-to-r from-slate-800 to-slate-900 px-4 py-3.5 text-[15px] font-semibold text-white shadow-lg shadow-slate-900/20
+                hover:from-slate-700 hover:to-slate-800 active:scale-[0.98]
+                focus:outline-none focus:ring-4 focus:ring-slate-900/20
                 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
             >
               {isSubmitting ? (
@@ -239,7 +288,7 @@ export default function LoginPage() {
               ) : (
                 <>
                   Войти
-                  <ArrowRight className="h-4.5 w-4.5" />
+                  <ArrowRight className="h-[18px] w-[18px]" />
                 </>
               )}
             </button>
