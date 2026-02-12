@@ -75,10 +75,10 @@ function ClientSearch({ onSelect, selectedClient, onClear }: {
   const [searchText, setSearchText] = useState('');
   const [isOpen, setIsOpen] = useState(false);
 
-  const { data: clientsData } = useQuery<PaginatedResponse<Client>>({
+  const { data: clientsData, isFetching } = useQuery<PaginatedResponse<Client>>({
     queryKey: ['clients-search', searchText],
     queryFn: async () => { const res = await clientsApi.getAll({ search: searchText, limit: 10 }); return res.data; },
-    enabled: searchText.length >= 2,
+    enabled: searchText.length >= 1,
     staleTime: 30_000,
   });
   const clients = clientsData?.data || [];
@@ -106,12 +106,15 @@ function ClientSearch({ onSelect, selectedClient, onClear }: {
         <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
         <input type="text" value={searchText}
           onChange={(e) => { setSearchText(e.target.value); setIsOpen(true); }}
-          onFocus={() => setIsOpen(true)}
+          onFocus={() => { if (searchText.length >= 1) setIsOpen(true); }}
           placeholder="ФИО, телефон или госномер..."
           className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 py-2.5 pl-10 pr-4 text-sm placeholder-gray-400 focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10"
         />
+        {isFetching && searchText.length >= 1 && (
+          <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-300 animate-spin" />
+        )}
       </div>
-      {isOpen && searchText.length >= 2 && clients.length > 0 && (
+      {isOpen && searchText.length >= 1 && clients.length > 0 && (
         <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl max-h-60 overflow-y-auto">
           {clients.map((client) => (
             <button key={client.id} type="button"
@@ -120,18 +123,20 @@ function ClientSearch({ onSelect, selectedClient, onClear }: {
               <div className="flex h-7 w-7 items-center justify-center rounded-full bg-gray-100 text-gray-500 flex-shrink-0">
                 <UserIcon className="h-3 w-3" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-gray-900 truncate">{client.fullName}</p>
                 <p className="text-xs text-gray-500">{client.phone}</p>
                 {client.cars && client.cars.length > 0 && (
-                  <p className="text-[11px] text-gray-400">{client.cars.map((c) => c.plateNumber).join(', ')}</p>
+                  <p className="text-[11px] text-gray-400 truncate">
+                    {client.cars.map((c) => `${c.plateNumber} ${c.makeModel}`).join(', ')}
+                  </p>
                 )}
               </div>
             </button>
           ))}
         </div>
       )}
-      {isOpen && searchText.length >= 2 && clients.length === 0 && (
+      {isOpen && searchText.length >= 1 && !isFetching && clients.length === 0 && (
         <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl p-4">
           <p className="text-sm text-gray-400 text-center">Не найдено</p>
         </div>

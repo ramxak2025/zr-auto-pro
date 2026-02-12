@@ -393,43 +393,39 @@ export default function ClientDetailPage() {
   return (
     <div className="space-y-6">
       {/* Back button + title */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/clients')}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-600 transition-colors hover:bg-gray-50"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{client.fullName}</h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              Клиент с {formatDate(client.createdAt)}
-            </p>
-          </div>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => navigate('/clients')}
+          className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-600 transition-colors hover:bg-gray-50 flex-shrink-0"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{client.fullName}</h1>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Клиент с {formatDate(client.createdAt)}
+          </p>
         </div>
       </div>
 
       {/* Client info card */}
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="flex items-start justify-between">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm">
-              <Phone className="h-4 w-4 text-gray-400" />
-              <span className="text-gray-700">{client.phone}</span>
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-sm">
+            <Phone className="h-4 w-4 text-gray-400 flex-shrink-0" />
+            <span className="text-gray-700">{client.phone}</span>
+          </div>
+          {client.comment && (
+            <div className="flex items-start gap-2 text-sm">
+              <MessageSquare className="h-4 w-4 text-gray-400 mt-0.5 flex-shrink-0" />
+              <span className="text-gray-600 break-words">{client.comment}</span>
             </div>
-            {client.comment && (
-              <div className="flex items-start gap-2 text-sm">
-                <MessageSquare className="h-4 w-4 text-gray-400 mt-0.5" />
-                <span className="text-gray-600">{client.comment}</span>
-              </div>
-            )}
-            <div className="flex items-center gap-2 text-sm">
-              <CalendarDays className="h-4 w-4 text-gray-400" />
-              <span className="text-gray-500">
-                Зарегистрирован: {formatDate(client.createdAt)}
-              </span>
-            </div>
+          )}
+          <div className="flex items-center gap-2 text-sm">
+            <CalendarDays className="h-4 w-4 text-gray-400 flex-shrink-0" />
+            <span className="text-gray-500">
+              Зарегистрирован: {formatDate(client.createdAt)}
+            </span>
           </div>
           <button
             onClick={() => setEditClientOpen(true)}
@@ -549,46 +545,79 @@ export default function ClientDetailPage() {
               />
             </div>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-200 bg-gray-50/50">
-                      <th className="px-4 py-3 font-semibold text-gray-600">Номер</th>
-                      <th className="px-4 py-3 font-semibold text-gray-600">Дата</th>
-                      <th className="px-4 py-3 font-semibold text-gray-600">Автомобиль</th>
-                      <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                        Сумма
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {checks.map((check: Check) => (
-                      <tr
-                        key={check.id}
-                        onClick={() => navigate(`/checks/${check.id}`)}
-                        className="cursor-pointer transition-colors hover:bg-gray-50"
-                      >
-                        <td className="px-4 py-3 font-medium text-gray-900">
-                          #{check.number}
-                        </td>
-                        <td className="px-4 py-3 text-gray-600">
-                          {formatDate(check.date)}
-                        </td>
-                        <td className="px-4 py-3 text-gray-600">
-                          {check.car
-                            ? `${check.car.plateNumber} ${check.car.makeModel}`
-                            : '\u2014'}
-                        </td>
-                        <td className="px-4 py-3 text-right font-medium text-gray-900">
-                          {formatMoney(check.totalRevenue)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <>
+              {/* Mobile card list */}
+              <div className="md:hidden space-y-2">
+                {checks.map((check: Check) => (
+                  <button
+                    key={check.id}
+                    type="button"
+                    onClick={() => navigate(`/checks/${check.id}`)}
+                    className="flex items-center gap-3 w-full max-w-full overflow-hidden rounded-xl border border-gray-200 bg-white px-4 py-3 text-left shadow-sm hover:shadow-md active:bg-gray-50 transition-all box-border"
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 flex-shrink-0">
+                      <FileText className="h-5 w-5 text-blue-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900">#{check.number}</span>
+                        <span className="text-xs text-gray-400">{formatDate(check.date)}</span>
+                      </div>
+                      {check.car && (
+                        <p className="text-xs text-gray-500 truncate mt-0.5">
+                          {check.car.plateNumber} {check.car.makeModel}
+                        </p>
+                      )}
+                    </div>
+                    <span className="text-sm font-bold text-gray-900 flex-shrink-0 whitespace-nowrap">
+                      {formatMoney(check.totalRevenue)}
+                    </span>
+                  </button>
+                ))}
               </div>
-            </div>
+
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200 bg-gray-50/50">
+                        <th className="px-4 py-3 font-semibold text-gray-600">Номер</th>
+                        <th className="px-4 py-3 font-semibold text-gray-600">Дата</th>
+                        <th className="px-4 py-3 font-semibold text-gray-600">Автомобиль</th>
+                        <th className="px-4 py-3 font-semibold text-gray-600 text-right whitespace-nowrap">
+                          Сумма
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {checks.map((check: Check) => (
+                        <tr
+                          key={check.id}
+                          onClick={() => navigate(`/checks/${check.id}`)}
+                          className="cursor-pointer transition-colors hover:bg-gray-50"
+                        >
+                          <td className="px-4 py-3 font-medium text-gray-900">
+                            #{check.number}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
+                            {formatDate(check.date)}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600">
+                            {check.car
+                              ? `${check.car.plateNumber} ${check.car.makeModel}`
+                              : '\u2014'}
+                          </td>
+                          <td className="px-4 py-3 text-right font-medium text-gray-900 whitespace-nowrap">
+                            {formatMoney(check.totalRevenue)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
           )}
         </div>
       )}

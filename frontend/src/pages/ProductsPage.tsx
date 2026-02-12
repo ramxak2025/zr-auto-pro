@@ -406,36 +406,34 @@ function ProductRow({
   const isLow = product.stock <= product.minStock;
 
   return (
-    <button type="button" onClick={onClick}
-      className="flex items-center gap-3 w-full bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm hover:border-primary-200 transition-all text-left active:bg-gray-50 overflow-hidden">
-      {/* Thumbnail */}
-      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0 overflow-hidden">
-        {product.photo ? (
-          <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-lg" />
-        ) : (
-          <Package className="h-5 w-5 text-gray-300" />
-        )}
-      </div>
-      {/* Info */}
-      <div className="flex-1 min-w-0 overflow-hidden">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
-          {isLow && (
-            <span className="flex items-center gap-0.5 bg-red-50 text-red-600 text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0">
-              <AlertTriangle className="h-2.5 w-2.5" />Мало
-            </span>
+    <div className="w-full max-w-full overflow-hidden rounded-xl">
+      <button type="button" onClick={onClick}
+        className="flex items-center gap-3 w-full max-w-full bg-white rounded-xl border border-gray-100 px-3 py-2.5 hover:shadow-sm hover:border-primary-200 transition-all text-left active:bg-gray-50 overflow-hidden box-border">
+        {/* Thumbnail */}
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0 overflow-hidden">
+          {product.photo ? (
+            <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-lg" />
+          ) : (
+            <Package className="h-5 w-5 text-gray-300" />
           )}
         </div>
-        <div className="flex items-center gap-2 mt-0.5 min-w-0 overflow-hidden">
-          <span className={`text-xs flex-shrink-0 ${isLow ? 'text-red-500' : 'text-gray-400'}`}>{product.stock} шт</span>
-          <span className="text-[10px] text-gray-300 flex-shrink-0">&middot;</span>
-          <span className="text-[11px] text-gray-400 truncate">Закуп: {formatMoney(product.costPrice)}</span>
+        {/* Info */}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
+          <div className="flex items-center gap-2 mt-0.5 min-w-0 overflow-hidden">
+            <span className={`text-xs flex-shrink-0 ${isLow ? 'text-red-500' : 'text-gray-400'}`}>{product.stock} шт</span>
+            {isLow && (
+              <span className="flex items-center gap-0.5 bg-red-50 text-red-600 text-[9px] font-bold px-1 py-0.5 rounded-full flex-shrink-0">
+                <AlertTriangle className="h-2.5 w-2.5" />
+              </span>
+            )}
+          </div>
         </div>
-      </div>
-      {/* Price */}
-      <span className="text-sm font-bold text-primary-600 flex-shrink-0">{formatMoney(product.sellPrice)}</span>
-      <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
-    </button>
+        {/* Price */}
+        <span className="text-sm font-bold text-primary-600 flex-shrink-0 text-right">{formatMoney(product.sellPrice)}</span>
+        <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
+      </button>
+    </div>
   );
 }
 
@@ -741,7 +739,7 @@ export default function ProductsPage() {
   const currentPathStr = activePath.join('/');
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 w-full max-w-full">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -834,32 +832,33 @@ export default function ProductsPage() {
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
             <div className="space-y-1.5">
               {subfolders.map((folder) => (
-                <button
-                  key={folder.name}
-                  type="button"
-                  onClick={() => {
-                    setActivePath([...activePath, folder.name]);
-                    setSearchText('');
-                  }}
-                  className="flex items-center gap-3 w-full rounded-xl border border-gray-100 bg-white px-4 py-3
-                    hover:shadow-sm hover:border-primary-200 active:bg-gray-50 transition-all text-left"
-                >
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 flex-shrink-0">
-                    {CATEGORY_ICONS[folder.name] ? (
-                      <span className="text-lg">{CATEGORY_ICONS[folder.name]}</span>
-                    ) : (
-                      <FolderOpen className="h-5 w-5 text-primary-500" />
+                <div key={folder.name} className="w-full max-w-full overflow-hidden rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActivePath([...activePath, folder.name]);
+                      setSearchText('');
+                    }}
+                    className="flex items-center gap-3 w-full max-w-full rounded-xl border border-gray-100 bg-white px-4 py-3
+                      hover:shadow-sm hover:border-primary-200 active:bg-gray-50 transition-all text-left overflow-hidden box-border"
+                  >
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 flex-shrink-0">
+                      {CATEGORY_ICONS[folder.name] ? (
+                        <span className="text-lg">{CATEGORY_ICONS[folder.name]}</span>
+                      ) : (
+                        <FolderOpen className="h-5 w-5 text-primary-500" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0 overflow-hidden">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{folder.name}</p>
+                      <p className="text-[11px] text-gray-400">{folder.count} товаров</p>
+                    </div>
+                    {folder.hasLow && (
+                      <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
                     )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-gray-900">{folder.name}</p>
-                    <p className="text-[11px] text-gray-400">{folder.count} товаров</p>
-                  </div>
-                  {folder.hasLow && (
-                    <AlertTriangle className="h-4 w-4 text-orange-500 flex-shrink-0" />
-                  )}
-                  <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
-                </button>
+                    <ChevronLeft className="h-4 w-4 text-gray-300 flex-shrink-0 rotate-180" />
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -870,7 +869,7 @@ export default function ProductsPage() {
               <button
                 type="button"
                 onClick={() => setShowFolderModal(true)}
-                className="flex items-center gap-3 w-full rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-4 py-3 hover:border-primary-300 hover:bg-primary-50/30 active:bg-gray-100 transition-all text-left"
+                className="flex items-center gap-3 w-full max-w-full rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-4 py-3 hover:border-primary-300 hover:bg-primary-50/30 active:bg-gray-100 transition-all text-left overflow-hidden box-border"
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100 flex-shrink-0">
                   <FolderPlus className="h-5 w-5 text-gray-400" />
