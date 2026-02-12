@@ -7,6 +7,8 @@ import {
   CalendarRange,
   TrendingUp,
   Info,
+  ChevronDown,
+  Wallet,
 } from 'lucide-react';
 import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -121,6 +123,48 @@ function MasterSalaryView() {
 }
 
 // ---------------------------------------------------------------------------
+// Mobile accordion card for a master
+// ---------------------------------------------------------------------------
+
+function MasterAccordion({ master: m }: { master: MasterSalary }) {
+  const [open, setOpen] = useState(false);
+  const initials = m.masterName.split(' ').map((w) => w[0]).join('').slice(0, 2);
+
+  return (
+    <div className="rounded-xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-3 w-full px-4 py-3.5 text-left active:bg-gray-50 transition-colors">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-sm font-bold text-primary-600 flex-shrink-0">
+          {initials}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-900 truncate">{m.masterName}</p>
+          <p className="text-[11px] text-gray-400">Ставка {m.salaryPercent}%</p>
+        </div>
+        <span className="text-sm font-bold text-green-600 flex-shrink-0 mr-1">{formatMoney(m.totalEarnings)}</span>
+        <ChevronDown className={`h-4 w-4 text-gray-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="border-t border-gray-100 px-4 py-3 space-y-2.5 bg-gray-50/50">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">Чеков</span>
+            <span className="text-sm font-medium text-gray-900">{m.checkCount}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">Выручка</span>
+            <span className="text-sm font-medium text-gray-900">{formatMoney(m.totalRevenue)}</span>
+          </div>
+          <div className="flex items-center justify-between pt-1.5 border-t border-gray-100">
+            <span className="text-xs font-semibold text-gray-700">Заработок</span>
+            <span className="text-sm font-bold text-green-600">{formatMoney(m.totalEarnings)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Admin / Owner View
 // ---------------------------------------------------------------------------
 
@@ -144,35 +188,23 @@ function AdminSalaryView() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Зарплата мастеров</h1>
-        <p className="mt-1 text-sm text-gray-500">
+        <h1 className="text-lg font-bold text-gray-900">Зарплата мастеров</h1>
+        <p className="text-xs text-gray-400 mt-0.5">
           Отчёт по зарплатам за выбранный период
         </p>
       </div>
 
       {/* Date filter */}
-      <div className="flex flex-wrap items-end gap-4">
+      <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end sm:gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Дата от
-          </label>
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="block rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-          />
+          <label className="block text-xs font-medium text-gray-500 mb-1">Дата от</label>
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+            className="block w-full sm:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Дата до
-          </label>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="block rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-          />
+          <label className="block text-xs font-medium text-gray-500 mb-1">Дата до</label>
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+            className="block w-full sm:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
         </div>
       </div>
 
@@ -191,63 +223,71 @@ function AdminSalaryView() {
           </p>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50/50">
-                  <th className="px-4 py-3 font-semibold text-gray-600">Мастер</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                    % от услуг
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                    Кол-во чеков
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                    Выручка
-                  </th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                    Заработок
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {masters.map((m) => (
-                  <tr key={m.masterId} className="transition-colors hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">
-                      {m.masterName}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-right">
-                      {m.salaryPercent}%
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-right">
-                      {m.checkCount}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-right">
-                      {formatMoney(m.totalRevenue)}
-                    </td>
-                    <td className="px-4 py-3 font-medium text-gray-900 text-right">
-                      {formatMoney(m.totalEarnings)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-gray-200 bg-gray-50/80 font-semibold">
-                  <td className="px-4 py-3 text-gray-900">Итого</td>
-                  <td className="px-4 py-3 text-right text-gray-600">&mdash;</td>
-                  <td className="px-4 py-3 text-right text-gray-900">{totalChecks}</td>
-                  <td className="px-4 py-3 text-right text-gray-900">
-                    {formatMoney(totalRevenue)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-gray-900">
-                    {formatMoney(totalEarnings)}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
+        <>
+          {/* Mobile accordion cards */}
+          <div className="md:hidden space-y-2">
+            {/* Summary card */}
+            <div className="rounded-xl bg-gradient-to-r from-primary-50 to-blue-50 border border-primary-100 p-4">
+              <p className="text-[11px] font-semibold text-primary-600 uppercase tracking-wider mb-2">Итого</p>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="text-center">
+                  <p className="text-lg font-bold text-gray-900">{totalChecks}</p>
+                  <p className="text-[10px] text-gray-500">Чеков</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-bold text-gray-900">{formatMoney(totalRevenue)}</p>
+                  <p className="text-[10px] text-gray-500">Выручка</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-bold text-green-600">{formatMoney(totalEarnings)}</p>
+                  <p className="text-[10px] text-gray-500">Заработок</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Master accordion items */}
+            {masters.map((m) => (
+              <MasterAccordion key={m.masterId} master={m} />
+            ))}
           </div>
-        </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50/50">
+                    <th className="px-4 py-3 font-semibold text-gray-600">Мастер</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">% от услуг</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во чеков</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Заработок</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {masters.map((m) => (
+                    <tr key={m.masterId} className="transition-colors hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900">{m.masterName}</td>
+                      <td className="px-4 py-3 text-gray-600 text-right">{m.salaryPercent}%</td>
+                      <td className="px-4 py-3 text-gray-600 text-right">{m.checkCount}</td>
+                      <td className="px-4 py-3 text-gray-600 text-right">{formatMoney(m.totalRevenue)}</td>
+                      <td className="px-4 py-3 font-medium text-gray-900 text-right">{formatMoney(m.totalEarnings)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-gray-200 bg-gray-50/80 font-semibold">
+                    <td className="px-4 py-3 text-gray-900">Итого</td>
+                    <td className="px-4 py-3 text-right text-gray-600">&mdash;</td>
+                    <td className="px-4 py-3 text-right text-gray-900">{totalChecks}</td>
+                    <td className="px-4 py-3 text-right text-gray-900">{formatMoney(totalRevenue)}</td>
+                    <td className="px-4 py-3 text-right text-gray-900">{formatMoney(totalEarnings)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

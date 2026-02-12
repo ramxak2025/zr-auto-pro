@@ -55,6 +55,32 @@ export const demoUser: User = {
   createdAt: '2024-01-15T10:00:00Z',
 };
 
+export const demoMasterUser: User = {
+  id: 'user-master-1',
+  username: 'sergey',
+  fullName: 'Сергей Козлов',
+  role: UserRole.MASTER,
+  salaryPercent: 35,
+  permissions: {
+    checks_view: true,
+    checks_create: true,
+    checks_edit: false,
+    checks_delete: false,
+    profit_view: false,
+    clients_view: true,
+    clients_edit: false,
+    warehouse_access: true,
+    suppliers_access: false,
+    financial_reports: false,
+    export_data: false,
+    user_management: false,
+  },
+  isActive: true,
+  tenantId: tenant.id,
+  tenant,
+  createdAt: '2024-02-10T10:00:00Z',
+};
+
 export const demoUsers: User[] = [
   demoUser,
   {

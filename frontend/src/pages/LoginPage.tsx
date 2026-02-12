@@ -1,9 +1,9 @@
 import { useState, FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Wrench, Eye, EyeOff, LogIn, Loader2, Play } from 'lucide-react';
+import { Wrench, Eye, EyeOff, LogIn, Loader2, Play, HardHat } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { demoUser } from '../demo/data';
+import { demoUser, demoMasterUser } from '../demo/data';
 
 export default function LoginPage() {
   const { user, isLoading: authLoading, login } = useAuth();
@@ -51,6 +51,14 @@ export default function LoginPage() {
     localStorage.setItem('token', 'demo-token');
     localStorage.setItem('user', JSON.stringify(demoUser));
     toast.success('Добро пожаловать в демо-режим!');
+    window.location.href = '/';
+  };
+
+  const handleDemoMasterLogin = () => {
+    localStorage.setItem('demo', 'true');
+    localStorage.setItem('token', 'demo-token');
+    localStorage.setItem('user', JSON.stringify(demoMasterUser));
+    toast.success('Демо-вход как мастер!');
     window.location.href = '/';
   };
 
@@ -164,17 +172,29 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Demo button */}
-          <button
-            type="button"
-            onClick={handleDemoLogin}
-            className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary-300 bg-primary-50/50 px-4 py-2.5 text-sm font-semibold text-primary-700
-              hover:bg-primary-50 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2
-              transition-all"
-          >
-            <Play className="h-4 w-4" />
-            Демо-вход (без регистрации)
-          </button>
+          {/* Demo buttons */}
+          <div className="space-y-2.5">
+            <button
+              type="button"
+              onClick={handleDemoLogin}
+              className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary-300 bg-primary-50/50 px-4 py-2.5 text-sm font-semibold text-primary-700
+                hover:bg-primary-50 hover:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:ring-offset-2
+                transition-all"
+            >
+              <Play className="h-4 w-4" />
+              Демо-вход (Владелец)
+            </button>
+            <button
+              type="button"
+              onClick={handleDemoMasterLogin}
+              className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-green-300 bg-green-50/50 px-4 py-2.5 text-sm font-semibold text-green-700
+                hover:bg-green-50 hover:border-green-400 focus:outline-none focus:ring-2 focus:ring-green-500/50 focus:ring-offset-2
+                transition-all"
+            >
+              <HardHat className="h-4 w-4" />
+              Демо-вход (Мастер)
+            </button>
+          </div>
           <p className="text-center text-xs text-gray-400 mt-2">
             Посмотрите систему с демо-данными
           </p>
