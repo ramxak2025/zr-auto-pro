@@ -474,6 +474,8 @@ export const demoDashboardStats: DashboardStats = {
   todayChecks: 2,
   weekRevenue: 57070,
   monthRevenue: 185400,
+  todayProfit: 4230,
+  monthProfit: 72150,
 };
 
 // ---- Salary ----

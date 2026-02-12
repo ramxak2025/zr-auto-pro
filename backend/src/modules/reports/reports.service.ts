@@ -327,3 +327,4 @@ export class ReportsService {
       month: mapResult(monthResults),
     };
   }
+}
