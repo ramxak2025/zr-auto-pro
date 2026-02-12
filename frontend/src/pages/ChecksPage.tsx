@@ -8,17 +8,19 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
   Car,
   MessageSquare,
   Tag,
   TrendingUp,
   Search,
+  Clock,
+  Pause,
 } from 'lucide-react';
 import { checksApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import type { Check, User, PaymentMethod, PaginatedResponse } from '../types';
 import { UserRole } from '../types';
+import DatePeriodPicker from '../components/DatePeriodPicker';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -89,18 +91,29 @@ function truncateComment(text: string, maxLen = 60): string {
 function CheckCard({ check, onClick, showProfit }: { check: Check; onClick: () => void; showProfit: boolean }) {
   const hasDiscount = check.discount && check.discount > 0;
   const hasComment = check.comment && check.comment.trim().length > 0;
+  const isDeferred = (check as any).isDeferred;
 
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-left bg-white rounded-xl border border-gray-100 shadow-sm p-4 hover:shadow-md active:bg-gray-50 transition-all"
+      className={`w-full text-left rounded-xl border shadow-sm p-4 hover:shadow-md active:bg-gray-50 transition-all ${
+        isDeferred
+          ? 'bg-amber-50/60 border-amber-200'
+          : 'bg-white border-gray-100'
+      }`}
     >
       {/* Top row: number + badges | amount + profit */}
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-bold text-gray-900">#{check.number}</span>
           <PaymentBadge method={check.paymentMethod} />
+          {isDeferred && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 border border-amber-300 px-2 py-0.5 text-xs font-medium text-amber-700">
+              <Pause className="h-3 w-3" />
+              Отложен
+            </span>
+          )}
           {hasDiscount && (
             <span className="inline-flex items-center gap-0.5 rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-xs font-medium text-rose-600">
               <Tag className="h-3 w-3" />
@@ -174,7 +187,6 @@ export default function ChecksPage() {
   const [masterId, setMasterId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Fetch masters for filter dropdown
   const { data: masters } = useQuery<User[]>({
@@ -220,6 +232,12 @@ export default function ChecksPage() {
     setPage(1);
   };
 
+  const handleDatePeriodChange = (from: string, to: string) => {
+    setDateFrom(from);
+    setDateTo(to);
+    setPage(1);
+  };
+
   const hasFilters = !!(dateFrom || dateTo || masterId || searchNumber);
 
   return (
@@ -242,98 +260,57 @@ export default function ChecksPage() {
         </Link>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          value={searchNumber}
-          onChange={(e) => handleFilterChange(setSearchNumber, e.target.value)}
-          placeholder="Поиск по номеру чека..."
-          className="block w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-all focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10"
-        />
-      </div>
-
-      {/* Filters - collapsible on mobile */}
-      <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        {/* Mobile filter toggle */}
-        <button
-          type="button"
-          onClick={() => setFiltersOpen((v) => !v)}
-          className="md:hidden flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-gray-700"
-        >
-          <span>Фильтры{hasFilters ? ' (активны)' : ''}</span>
-          <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
-        </button>
-
-        <div className={`${filtersOpen ? 'block' : 'hidden'} md:block`}>
-          <div className="flex flex-col md:flex-row md:flex-wrap md:items-end gap-3 md:gap-4 p-4 pt-0 md:pt-4">
-            {/* Date From */}
-            <div className="flex-1 min-w-0 md:flex-initial">
-              <label className="block text-xs font-medium text-gray-500 mb-1">
-                Дата с
-              </label>
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => handleFilterChange(setDateFrom, e.target.value)}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900
-                  focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
-              />
-            </div>
-
-            {/* Date To */}
-            <div className="flex-1 min-w-0 md:flex-initial">
-              <label className="block text-xs font-medium text-gray-500 mb-1">
-                Дата по
-              </label>
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => handleFilterChange(setDateTo, e.target.value)}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900
-                  focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
-              />
-            </div>
-
-            {/* Master */}
-            <div className="flex-1 min-w-0 md:flex-initial">
-              <label className="block text-xs font-medium text-gray-500 mb-1">
-                Сотрудник
-              </label>
-              <select
-                value={masterId}
-                onChange={(e) => handleFilterChange(setMasterId, e.target.value)}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 md:min-w-[180px]
-                  focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
-              >
-                <option value="">Все сотрудники</option>
-                {masters?.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.fullName}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Reset */}
-            {hasFilters && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchNumber('');
-                  setDateFrom('');
-                  setDateTo('');
-                  setMasterId('');
-                  setPage(1);
-                }}
-                className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors md:pb-2"
-              >
-                Сбросить
-              </button>
-            )}
-          </div>
+      {/* Compact filters row */}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Search */}
+        <div className="relative flex-1 min-w-[180px]">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={searchNumber}
+            onChange={(e) => handleFilterChange(setSearchNumber, e.target.value)}
+            placeholder="Поиск по номеру..."
+            className="block w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-all focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10"
+          />
         </div>
+
+        {/* Date period picker */}
+        <DatePeriodPicker
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onChange={handleDatePeriodChange}
+        />
+
+        {/* Master filter */}
+        <select
+          value={masterId}
+          onChange={(e) => handleFilterChange(setMasterId, e.target.value)}
+          className="rounded-lg border border-gray-200 bg-white px-2.5 py-2 text-xs font-medium text-gray-600 min-w-0 max-w-[140px] focus:border-primary-400 focus:outline-none focus:ring-2 focus:ring-primary-500/10 transition-colors"
+        >
+          <option value="">Все мастера</option>
+          {masters?.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.fullName}
+            </option>
+          ))}
+        </select>
+
+        {/* Reset */}
+        {hasFilters && (
+          <button
+            type="button"
+            onClick={() => {
+              setSearchNumber('');
+              setDateFrom('');
+              setDateTo('');
+              setMasterId('');
+              setPage(1);
+            }}
+            className="text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors"
+          >
+            Сбросить
+          </button>
+        )}
       </div>
 
       {/* Content */}
@@ -406,15 +383,21 @@ export default function ChecksPage() {
                   {checks.map((check) => {
                     const hasDiscount = check.discount && check.discount > 0;
                     const hasComment = check.comment && check.comment.trim().length > 0;
+                    const isDeferred = (check as any).isDeferred;
 
                     return (
                       <tr
                         key={check.id}
                         onClick={() => navigate(`/checks/${check.id}`)}
-                        className="cursor-pointer hover:bg-gray-50 transition-colors group"
+                        className={`cursor-pointer transition-colors group ${
+                          isDeferred ? 'bg-amber-50/50 hover:bg-amber-50' : 'hover:bg-gray-50'
+                        }`}
                       >
                         <td className="px-4 py-3 font-medium text-gray-900">
-                          #{check.number}
+                          <div className="flex items-center gap-1.5">
+                            #{check.number}
+                            {isDeferred && <Pause className="h-3.5 w-3.5 text-amber-500" />}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
                           {formatDate(check.date)}
@@ -465,7 +448,14 @@ export default function ChecksPage() {
                           </td>
                         )}
                         <td className="px-4 py-3 text-center">
-                          <PaymentBadge method={check.paymentMethod} />
+                          <div className="flex items-center justify-center gap-1">
+                            <PaymentBadge method={check.paymentMethod} />
+                            {isDeferred && (
+                              <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 border border-amber-300 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+                                <Pause className="h-2.5 w-2.5" />
+                              </span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

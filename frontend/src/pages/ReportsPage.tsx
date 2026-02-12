@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   TrendingUp,
@@ -7,11 +7,12 @@ import {
   Package,
   Users,
   Receipt,
-  BarChart3,
+  ChevronDown,
 } from 'lucide-react';
 import { reportsApi } from '../api/services';
 import type { FinancialReport } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
+import DatePeriodPicker from '../components/DatePeriodPicker';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,43 +22,14 @@ function formatMoney(value: number): string {
   return value.toLocaleString('ru-RU') + ' \u20BD';
 }
 
-function toISO(d: Date): string {
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function monthAgoISO(): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
   return d.toISOString().slice(0, 10);
-}
-
-function startOfDay(d: Date): Date {
-  const c = new Date(d);
-  c.setHours(0, 0, 0, 0);
-  return c;
-}
-
-type Period = 'today' | 'week' | 'month' | 'year' | 'custom';
-
-function calcRange(period: Period): { from: string; to: string } {
-  const now = new Date();
-  const to = toISO(now);
-
-  switch (period) {
-    case 'today':
-      return { from: toISO(startOfDay(now)), to };
-    case 'week': {
-      const d = new Date(now);
-      d.setDate(d.getDate() - 7);
-      return { from: toISO(d), to };
-    }
-    case 'month': {
-      const d = new Date(now);
-      d.setMonth(d.getMonth() - 1);
-      return { from: toISO(d), to };
-    }
-    case 'year': {
-      const d = new Date(now);
-      d.setFullYear(d.getFullYear() - 1);
-      return { from: toISO(d), to };
-    }
-    default:
-      return { from: toISO(startOfDay(now)), to };
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -122,13 +94,6 @@ interface ProductRow {
 // Main Component
 // ---------------------------------------------------------------------------
 
-const PERIOD_BUTTONS: { key: Period; label: string }[] = [
-  { key: 'today', label: 'Сегодня' },
-  { key: 'week', label: 'Неделя' },
-  { key: 'month', label: 'Месяц' },
-  { key: 'year', label: 'Год' },
-];
-
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'masters', label: 'По мастерам' },
   { key: 'services', label: 'По услугам' },
@@ -136,18 +101,9 @@ const TABS: { key: TabKey; label: string }[] = [
 ];
 
 export default function ReportsPage() {
-  const [period, setPeriod] = useState<Period>('month');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
+  const [dateFrom, setDateFrom] = useState(monthAgoISO());
+  const [dateTo, setDateTo] = useState(todayISO());
   const [activeTab, setActiveTab] = useState<TabKey>('masters');
-
-  const { dateFrom, dateTo } = useMemo(() => {
-    if (period === 'custom' && customFrom && customTo) {
-      return { dateFrom: customFrom, dateTo: customTo };
-    }
-    const r = calcRange(period === 'custom' ? 'month' : period);
-    return { dateFrom: r.from, dateTo: r.to };
-  }, [period, customFrom, customTo]);
 
   // ---- Financial summary ----
   const {
@@ -191,21 +147,6 @@ export default function ReportsPage() {
     },
     enabled: activeTab === 'products',
   });
-
-  // ---- Period handlers ----
-  function selectPeriod(p: Period) {
-    setPeriod(p);
-  }
-
-  function handleCustomFrom(v: string) {
-    setCustomFrom(v);
-    setPeriod('custom');
-  }
-
-  function handleCustomTo(v: string) {
-    setCustomTo(v);
-    setPeriod('custom');
-  }
 
   // ---- Stat cards data ----
   const stats = report
@@ -267,32 +208,51 @@ export default function ReportsPage() {
         );
       }
       return (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-gray-200 bg-gray-50/50">
-                <th className="px-4 py-3 font-semibold text-gray-600">Мастер</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Чеков</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Зарплата</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rows.map((r, i) => (
-                <tr key={i} className="transition-colors hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{r.masterName}</td>
-                  <td className="px-4 py-3 text-gray-600 text-right">
-                    {formatMoney(r.revenue)}
-                  </td>
-                  <td className="px-4 py-3 text-gray-600 text-right">{r.checkCount}</td>
-                  <td className="px-4 py-3 font-medium text-gray-900 text-right">
-                    {formatMoney(r.salaryTotal)}
-                  </td>
+        <>
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-2 p-3">
+            {rows.map((r, i) => (
+              <div key={i} className="rounded-xl bg-white border border-gray-100 px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-900">{r.masterName}</span>
+                  <span className="text-sm font-bold text-gray-900">{formatMoney(r.salaryTotal)}</span>
+                </div>
+                <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
+                  <span>{formatMoney(r.revenue)} выр.</span>
+                  <span>{r.checkCount} чеков</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50/50">
+                  <th className="px-4 py-3 font-semibold text-gray-600">Мастер</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Чеков</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Зарплата</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {rows.map((r, i) => (
+                  <tr key={i} className="transition-colors hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-900">{r.masterName}</td>
+                    <td className="px-4 py-3 text-gray-600 text-right">
+                      {formatMoney(r.revenue)}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 text-right">{r.checkCount}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900 text-right">
+                      {formatMoney(r.salaryTotal)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       );
     }
 
@@ -305,28 +265,46 @@ export default function ReportsPage() {
         );
       }
       return (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-gray-200 bg-gray-50/50">
-                <th className="px-4 py-3 font-semibold text-gray-600">Услуга</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rows.map((r, i) => (
-                <tr key={i} className="transition-colors hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{r.serviceName}</td>
-                  <td className="px-4 py-3 text-gray-600 text-right">{r.count}</td>
-                  <td className="px-4 py-3 font-medium text-gray-900 text-right">
-                    {formatMoney(r.revenue)}
-                  </td>
+        <>
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-2 p-3">
+            {rows.map((r, i) => (
+              <div key={i} className="rounded-xl bg-white border border-gray-100 px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-900">{r.serviceName}</span>
+                  <span className="text-sm font-bold text-gray-900">{formatMoney(r.revenue)}</span>
+                </div>
+                <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
+                  <span>{r.count} раз</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50/50">
+                  <th className="px-4 py-3 font-semibold text-gray-600">Услуга</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {rows.map((r, i) => (
+                  <tr key={i} className="transition-colors hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-900">{r.serviceName}</td>
+                    <td className="px-4 py-3 text-gray-600 text-right">{r.count}</td>
+                    <td className="px-4 py-3 font-medium text-gray-900 text-right">
+                      {formatMoney(r.revenue)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       );
     }
 
@@ -339,40 +317,61 @@ export default function ReportsPage() {
         );
       }
       return (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b border-gray-200 bg-gray-50/50">
-                <th className="px-4 py-3 font-semibold text-gray-600">Товар</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Себестоимость</th>
-                <th className="px-4 py-3 font-semibold text-gray-600 text-right">Прибыль</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rows.map((r, i) => (
-                <tr key={i} className="transition-colors hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{r.productName}</td>
-                  <td className="px-4 py-3 text-gray-600 text-right">{r.count}</td>
-                  <td className="px-4 py-3 text-gray-600 text-right">
-                    {formatMoney(r.revenue)}
-                  </td>
-                  <td className="px-4 py-3 text-gray-600 text-right">
-                    {formatMoney(r.cost)}
-                  </td>
-                  <td
-                    className={`px-4 py-3 font-medium text-right ${
-                      r.profit >= 0 ? 'text-green-600' : 'text-red-600'
-                    }`}
-                  >
+        <>
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-2 p-3">
+            {rows.map((r, i) => (
+              <div key={i} className="rounded-xl bg-white border border-gray-100 px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-900">{r.productName}</span>
+                  <span className={`text-sm font-bold ${r.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {formatMoney(r.profit)}
-                  </td>
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
+                  <span>{r.count} шт.</span>
+                  <span>{formatMoney(r.revenue)} выр.</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50/50">
+                  <th className="px-4 py-3 font-semibold text-gray-600">Товар</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Себестоимость</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Прибыль</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {rows.map((r, i) => (
+                  <tr key={i} className="transition-colors hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-900">{r.productName}</td>
+                    <td className="px-4 py-3 text-gray-600 text-right">{r.count}</td>
+                    <td className="px-4 py-3 text-gray-600 text-right">
+                      {formatMoney(r.revenue)}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600 text-right">
+                      {formatMoney(r.cost)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 font-medium text-right ${
+                        r.profit >= 0 ? 'text-green-600' : 'text-red-600'
+                      }`}
+                    >
+                      {formatMoney(r.profit)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       );
     }
 
@@ -391,47 +390,8 @@ export default function ReportsPage() {
       </div>
 
       {/* Period Selector */}
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="flex gap-2">
-          {PERIOD_BUTTONS.map((p) => (
-            <button
-              key={p.key}
-              onClick={() => selectPeriod(p.key)}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                period === p.key
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-end gap-2">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              От
-            </label>
-            <input
-              type="date"
-              value={period === 'custom' ? customFrom : dateFrom}
-              onChange={(e) => handleCustomFrom(e.target.value)}
-              className="block rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-900 shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              До
-            </label>
-            <input
-              type="date"
-              value={period === 'custom' ? customTo : dateTo}
-              onChange={(e) => handleCustomTo(e.target.value)}
-              className="block rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-900 shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-            />
-          </div>
-        </div>
+      <div className="flex items-center gap-2">
+        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => { setDateFrom(from); setDateTo(to); }} />
       </div>
 
       {/* Stat Cards */}

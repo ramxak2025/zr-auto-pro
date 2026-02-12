@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   MessageSquare,
+  Pause,
 } from 'lucide-react';
 import {
   clientsApi,
@@ -513,6 +514,7 @@ export default function CheckCreatePage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(PM.CASH);
   const [comment, setComment] = useState('');
   const [discount, setDiscount] = useState('');
+  const [isDeferred, setIsDeferred] = useState(false);
   const [cashAmount, setCashAmount] = useState('');
   const [cardAmount, setCardAmount] = useState('');
 
@@ -621,6 +623,7 @@ export default function CheckCreatePage() {
       services, products, paymentMethod,
       discount: discountValue || undefined,
       comment: comment.trim() || undefined,
+      isDeferred,
     });
   }
 
@@ -812,6 +815,28 @@ export default function CheckCreatePage() {
               placeholder="Опишите работу, пожелания клиента, особенности..."
               rows={2}
               className="block w-full rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-sm placeholder-gray-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-500/10 resize-none" />
+          </div>
+
+          {/* ── Defer check ── */}
+          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setIsDeferred((v) => !v)}
+              className={`flex items-center gap-3 w-full px-4 py-3.5 transition-colors ${
+                isDeferred ? 'bg-amber-50' : ''
+              }`}
+            >
+              <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${isDeferred ? 'bg-amber-100' : 'bg-gray-100'}`}>
+                <Pause className={`h-4 w-4 ${isDeferred ? 'text-amber-600' : 'text-gray-400'}`} />
+              </div>
+              <div className="flex-1 text-left">
+                <p className="text-sm font-medium text-gray-900">Отложить чек</p>
+                <p className="text-[11px] text-gray-400">Чек будет помечен как отложенный</p>
+              </div>
+              <div className={`flex h-6 w-11 items-center rounded-full p-0.5 transition-colors ${isDeferred ? 'bg-amber-500' : 'bg-gray-200'}`}>
+                <div className={`h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${isDeferred ? 'translate-x-5' : 'translate-x-0'}`} />
+              </div>
+            </button>
           </div>
 
           {/* ── Payment ── */}

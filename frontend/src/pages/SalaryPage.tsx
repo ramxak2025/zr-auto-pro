@@ -14,6 +14,7 @@ import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import type { MasterSalary, SalarySummary } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
+import DatePeriodPicker from '../components/DatePeriodPicker';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -168,9 +169,51 @@ function MasterAccordion({ master: m }: { master: MasterSalary }) {
 // Admin / Owner View
 // ---------------------------------------------------------------------------
 
+const MONTH_LABELS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+
+function getMonthRange(year: number, month: number): { from: string; to: string } {
+  const from = new Date(year, month, 1);
+  const to = new Date(year, month + 1, 0); // last day of month
+  return {
+    from: from.toISOString().slice(0, 10),
+    to: to.toISOString().slice(0, 10),
+  };
+}
+
+function getLast12Months(): { label: string; year: number; month: number }[] {
+  const now = new Date();
+  const result: { label: string; year: number; month: number }[] = [];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    result.push({
+      label: MONTH_LABELS[d.getMonth()],
+      year: d.getFullYear(),
+      month: d.getMonth(),
+    });
+  }
+  return result.reverse();
+}
+
 function AdminSalaryView() {
   const [dateFrom, setDateFrom] = useState(monthAgoISO());
   const [dateTo, setDateTo] = useState(todayISO());
+  const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
+
+  const months = getLast12Months();
+
+  function handleMonthClick(idx: number) {
+    const m = months[idx];
+    const range = getMonthRange(m.year, m.month);
+    setSelectedMonth(idx);
+    setDateFrom(range.from);
+    setDateTo(range.to);
+  }
+
+  function handleDatePickerChange(from: string, to: string) {
+    setSelectedMonth(null);
+    setDateFrom(from);
+    setDateTo(to);
+  }
 
   const { data, isLoading, isError } = useQuery<MasterSalary[]>({
     queryKey: ['salary', 'masters', { dateFrom, dateTo }],
@@ -195,16 +238,30 @@ function AdminSalaryView() {
       </div>
 
       {/* Date filter */}
-      <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end sm:gap-4">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Дата от</label>
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-            className="block w-full sm:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={handleDatePickerChange} />
         </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 mb-1">Дата до</label>
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-            className="block w-full sm:w-auto rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
+
+        {/* Month shortcut buttons */}
+        <div className="flex flex-wrap gap-1.5">
+          {months.map((m, idx) => (
+            <button
+              key={`${m.year}-${m.month}`}
+              type="button"
+              onClick={() => handleMonthClick(idx)}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                selectedMonth === idx
+                  ? 'bg-primary-600 text-white shadow-sm'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              {m.label}
+              {m.year !== new Date().getFullYear() && (
+                <span className="ml-0.5 text-[10px] opacity-60">{String(m.year).slice(2)}</span>
+              )}
+            </button>
+          ))}
         </div>
       </div>
 

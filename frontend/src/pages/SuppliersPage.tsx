@@ -9,6 +9,9 @@ import {
   Loader2,
   AlertCircle,
   PackageOpen,
+  ChevronDown,
+  Phone,
+  User as UserIcon,
 } from 'lucide-react';
 import { suppliersApi } from '../api/services';
 import type { Supplier, PaginatedResponse } from '../types';
@@ -344,12 +347,12 @@ export default function SuppliersPage() {
           className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
         >
           <Plus className="h-4 w-4" />
-          Добавить поставщика
+          <span className="hidden sm:inline">Добавить</span> поставщика
         </button>
       </div>
 
       {/* Search */}
-      <div className="max-w-sm">
+      <div className="max-w-full sm:max-w-sm">
         <SearchInput
           value={search}
           onChange={handleSearchChange}
@@ -385,8 +388,81 @@ export default function SuppliersPage() {
         </div>
       ) : (
         <>
-          {/* Table */}
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          {/* Mobile accordion cards */}
+          <div className="md:hidden space-y-2">
+            {suppliers.map((supplier) => (
+              <div
+                key={supplier.id}
+                className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden"
+              >
+                {/* Card header – clickable to navigate */}
+                <div
+                  onClick={() => navigate(`/suppliers/${supplier.id}`)}
+                  className="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer active:bg-gray-50"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-gray-900 truncate">
+                      {supplier.name}
+                    </p>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
+                      {supplier.contactPerson && (
+                        <span className="inline-flex items-center gap-1 truncate">
+                          <UserIcon className="h-3 w-3 flex-shrink-0" />
+                          {supplier.contactPerson}
+                        </span>
+                      )}
+                      {supplier.phone && (
+                        <span className="inline-flex items-center gap-1">
+                          <Phone className="h-3 w-3 flex-shrink-0" />
+                          {supplier.phone}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0 -rotate-90" />
+                </div>
+
+                {/* Financial info */}
+                <div className="border-t border-gray-100 px-4 py-2.5 grid grid-cols-3 gap-2 text-center">
+                  <div>
+                    <p className="text-[10px] text-gray-400 font-medium">Закупки</p>
+                    <p className="text-xs font-semibold text-gray-900">{formatAmount(supplier.totalPurchases)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-400 font-medium">Оплачено</p>
+                    <p className="text-xs font-semibold text-gray-900">{formatAmount(supplier.totalPaid)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-400 font-medium">Долг</p>
+                    <p className={`text-xs font-semibold ${supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+                      {formatAmount(supplier.currentDebt)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="border-t border-gray-100 flex items-center justify-end gap-1 px-3 py-2">
+                  <button
+                    onClick={() => openEdit(supplier)}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+                    title="Редактировать"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => setDeleteTarget(supplier)}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                    title="Удалить"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop Table */}
+          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead>

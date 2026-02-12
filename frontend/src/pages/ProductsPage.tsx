@@ -15,6 +15,9 @@ import {
   Search,
   ChevronLeft,
   FolderOpen,
+  Check as CheckIcon,
+  Move,
+  FolderPlus,
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
 import type { Product, PaginatedResponse } from '../types';
@@ -534,6 +537,13 @@ export default function ProductsPage() {
   const [writeoffTarget, setWriteoffTarget] = useState<Product | null>(null);
   const [inventoryTarget, setInventoryTarget] = useState<Product | null>(null);
 
+  // Select & move state
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [showMoveModal, setShowMoveModal] = useState(false);
+  const [showFolderModal, setShowFolderModal] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+
   // ---- Queries ----
 
   const {
@@ -637,6 +647,20 @@ export default function ProductsPage() {
     onError: () => toast.error('Ошибка инвентаризации'),
   });
 
+  const moveMutation = useMutation({
+    mutationFn: async ({ productIds, category }: { productIds: string[]; category: string }) => {
+      await Promise.all(productIds.map((id) => productsApi.update(id, { category })));
+    },
+    onSuccess: () => {
+      toast.success('Товары перемещены');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      setSelectedProducts(new Set());
+      setSelectMode(false);
+      setShowMoveModal(false);
+    },
+    onError: () => toast.error('Не удалось переместить товары'),
+  });
+
   // ---- Handlers ----
 
   function openCreate() {
@@ -705,16 +729,27 @@ export default function ProductsPage() {
         </div>
       ) : (
         <>
-          {/* Back button when inside category */}
+          {/* Back button + select toggle when inside category */}
           {showingCategory && (
-            <button
-              type="button"
-              onClick={() => setActiveCategory(null)}
-              className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              Все категории
-            </button>
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => { setActiveCategory(null); setSelectMode(false); setSelectedProducts(new Set()); }}
+                className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Все категории
+              </button>
+              {categoryProducts.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setSelectMode((v) => !v); setSelectedProducts(new Set()); }}
+                  className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors ${selectMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'}`}
+                >
+                  {selectMode ? 'Отмена' : 'Выбрать'}
+                </button>
+              )}
+            </div>
           )}
 
           {/* Category title */}
@@ -766,6 +801,17 @@ export default function ProductsPage() {
                   </button>
                 );
               })}
+              {/* Add new folder button */}
+              <button
+                type="button"
+                onClick={() => setShowFolderModal(true)}
+                className="flex items-center gap-3 w-full rounded-xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-4 py-3 hover:border-primary-300 hover:bg-primary-50/30 active:bg-gray-100 transition-all text-left"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100 flex-shrink-0">
+                  <FolderPlus className="h-5 w-5 text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-500">Новая папка</p>
+              </button>
             </div>
           )}
 
@@ -781,16 +827,69 @@ export default function ProductsPage() {
             ) : (
               <div className="space-y-1.5">
                 {displayProducts.map((product) => (
-                  <ProductRow
-                    key={product.id}
-                    product={product}
-                    onClick={() => setDetailTarget(product)}
-                  />
+                  <div key={product.id} className="flex items-center gap-2">
+                    {selectMode && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedProducts((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(product.id)) next.delete(product.id);
+                            else next.add(product.id);
+                            return next;
+                          });
+                        }}
+                        className={`flex h-5 w-5 items-center justify-center rounded-md border-2 flex-shrink-0 transition-colors ${
+                          selectedProducts.has(product.id)
+                            ? 'border-primary-600 bg-primary-600'
+                            : 'border-gray-300 bg-white hover:border-primary-400'
+                        }`}
+                      >
+                        {selectedProducts.has(product.id) && (
+                          <CheckIcon className="h-3 w-3 text-white" />
+                        )}
+                      </button>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <ProductRow
+                        product={product}
+                        onClick={() => {
+                          if (selectMode) {
+                            setSelectedProducts((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(product.id)) next.delete(product.id);
+                              else next.add(product.id);
+                              return next;
+                            });
+                          } else {
+                            setDetailTarget(product);
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
                 ))}
               </div>
             )
           )}
         </>
+      )}
+
+      {/* Bottom action bar when products are selected */}
+      {selectMode && selectedProducts.size > 0 && (
+        <div className="fixed bottom-[68px] inset-x-0 z-30 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600">Выбрано: {selectedProducts.size}</span>
+            <button
+              type="button"
+              onClick={() => setShowMoveModal(true)}
+              className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
+            >
+              <Move className="h-4 w-4" />
+              Переместить
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Product detail — actions accessible from here */}
@@ -849,6 +948,88 @@ export default function ProductsPage() {
         confirmText="Удалить"
         variant="danger"
       />
+
+      {/* Move to folder modal */}
+      {showMoveModal && (
+        <Modal isOpen onClose={() => setShowMoveModal(false)} title="Переместить в папку">
+          <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+            {categoryGroups
+              .filter(([cat]) => cat !== activeCategory)
+              .map(([cat]) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => moveMutation.mutate({ productIds: Array.from(selectedProducts), category: cat })}
+                  className="flex items-center gap-3 w-full rounded-xl px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+                >
+                  <FolderOpen className="h-5 w-5 text-primary-500" />
+                  <span className="text-sm font-medium text-gray-900">{cat}</span>
+                </button>
+              ))}
+            {/* New folder option */}
+            <div className="border-t border-gray-100 pt-2 mt-2">
+              <div className="flex items-center gap-2 px-4">
+                <input
+                  type="text"
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  placeholder="Новая папка..."
+                  className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm placeholder-gray-400 focus:border-primary-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (newFolderName.trim()) moveMutation.mutate({ productIds: Array.from(selectedProducts), category: newFolderName.trim() });
+                  }}
+                  disabled={!newFolderName.trim()}
+                  className="rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Add new folder modal */}
+      {showFolderModal && (
+        <Modal isOpen onClose={() => { setShowFolderModal(false); setNewFolderName(''); }} title="Новая папка" size="sm">
+          <div className="space-y-4">
+            <input
+              type="text"
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              placeholder="Название папки..."
+              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              autoFocus
+            />
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowFolderModal(false); setNewFolderName(''); }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (newFolderName.trim()) {
+                    setActiveCategory(newFolderName.trim());
+                    setShowFolderModal(false);
+                    setNewFolderName('');
+                  }
+                }}
+                disabled={!newFolderName.trim()}
+                className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40"
+              >
+                Создать
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

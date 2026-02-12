@@ -124,6 +124,8 @@ export class ChecksService {
       comment: dto.comment,
       paymentMethod: dto.paymentMethod,
       date: dto.date ? new Date(dto.date) : new Date(),
+      isDeferred: dto.isDeferred || false,
+      discount: dto.discount || 0,
       services: serviceLines,
       products: productLines,
       serviceTotal,

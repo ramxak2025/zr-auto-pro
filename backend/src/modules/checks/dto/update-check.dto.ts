@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsEnum } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsEnum, IsBoolean } from 'class-validator';
 import { PaymentMethod } from '../entities/check.entity';
 
 export class UpdateCheckDto {
@@ -13,4 +13,8 @@ export class UpdateCheckDto {
   @IsOptional()
   @IsNumber()
   mileage?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isDeferred?: boolean;
 }

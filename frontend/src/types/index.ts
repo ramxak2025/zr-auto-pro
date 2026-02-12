@@ -141,6 +141,7 @@ export interface Check {
   products: CheckProductLine[];
   comment?: string;
   discount?: number;
+  isDeferred?: boolean;
   paymentMethod: PaymentMethod;
   serviceTotal: number;
   productTotal: number;

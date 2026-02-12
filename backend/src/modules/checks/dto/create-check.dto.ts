@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsNumber,
   IsEnum,
+  IsBoolean,
   IsArray,
   ValidateNested,
   IsDateString,
@@ -77,4 +78,12 @@ export class CreateCheckDto {
   @IsOptional()
   @IsDateString()
   date?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isDeferred?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  discount?: number;
 }

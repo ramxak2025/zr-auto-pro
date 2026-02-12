@@ -4,7 +4,6 @@ import {
   Banknote,
   CreditCard,
   ShieldCheck,
-  ChevronDown,
   ArrowLeft,
   TrendingUp,
 } from 'lucide-react';
@@ -13,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Check, PaginatedResponse, User } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { useNavigate } from 'react-router-dom';
+import DatePeriodPicker from '../components/DatePeriodPicker';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,7 +51,6 @@ export default function CashFlowPage() {
   const [masterId, setMasterId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Load all checks
   const { data: checksData, isLoading } = useQuery<PaginatedResponse<Check>>({
@@ -128,42 +127,22 @@ export default function CashFlowPage() {
       </div>
 
       {/* Filters */}
-      <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-        <button type="button" onClick={() => setFiltersOpen((v) => !v)}
-          className="md:hidden flex items-center justify-between w-full px-4 py-3 text-sm font-medium text-gray-700">
-          <span>Фильтры{hasFilters ? ' (активны)' : ''}</span>
-          <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
-        </button>
-        <div className={`${filtersOpen ? 'block' : 'hidden'} md:block`}>
-          <div className="grid grid-cols-2 md:flex md:flex-row md:flex-wrap md:items-end gap-3 md:gap-4 p-4 pt-0 md:pt-4">
-            <div className="min-w-0">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Дата с</label>
-              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-                className="block w-full rounded-lg border border-gray-300 px-2.5 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
-            </div>
-            <div className="min-w-0">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Дата по</label>
-              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-                className="block w-full rounded-lg border border-gray-300 px-2.5 py-2 text-sm text-gray-900 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none" />
-            </div>
-            <div className="col-span-2 min-w-0 md:flex-initial">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Сотрудник</label>
-              <select value={masterId} onChange={(e) => setMasterId(e.target.value)}
-                className="block w-full md:w-auto rounded-lg border border-gray-300 px-2.5 py-2 text-sm text-gray-900 md:min-w-[180px] focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none">
-                <option value="">Все сотрудники</option>
-                {masters.map((m) => (
-                  <option key={m.id} value={m.id}>{m.fullName}</option>
-                ))}
-              </select>
-            </div>
-            {hasFilters && (
-              <button type="button" onClick={() => { setDateFrom(''); setDateTo(''); setMasterId(''); }}
-                className="col-span-2 text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors md:pb-2">
-                Сбросить
-              </button>
-            )}
-          </div>
-        </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <DatePeriodPicker
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onChange={(from, to) => { setDateFrom(from); setDateTo(to); }}
+        />
+        <select
+          value={masterId}
+          onChange={(e) => setMasterId(e.target.value)}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+        >
+          <option value="">Все сотрудники</option>
+          {masters.map((m) => (
+            <option key={m.id} value={m.id}>{m.fullName}</option>
+          ))}
+        </select>
       </div>
 
       {/* Summary cards */}
