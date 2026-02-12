@@ -1,6 +1,6 @@
 import { useState, FormEvent } from 'react';
 import { Navigate } from 'react-router-dom';
-import { Wrench, Eye, EyeOff, LogIn, Loader2, Play, HardHat } from 'lucide-react';
+import { Eye, EyeOff, LogIn, Loader2, Play, HardHat } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { demoUser, demoMasterUser } from '../demo/data';
@@ -67,14 +67,12 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary-600 text-white mb-4 shadow-lg shadow-primary-600/25">
-            <Wrench className="h-8 w-8" />
-          </div>
+          <img src="/logo.png" alt="Autexa" className="w-16 h-16 rounded-2xl mx-auto mb-4 shadow-lg object-cover" />
           <h1 className="text-3xl font-bold text-gray-900 tracking-tight">
-            ZR Auto Pro
+            Autexa
           </h1>
           <p className="mt-1.5 text-gray-500 text-sm">
-            CRM-система для управления автосервисом
+            Система управления автосервисом
           </p>
         </div>
 
@@ -218,7 +216,7 @@ export default function LoginPage() {
 
         {/* Footer */}
         <p className="text-center text-xs text-gray-400 mt-6">
-          ZR Auto Pro &copy; {new Date().getFullYear()}
+          Autexa &copy; {new Date().getFullYear()}
         </p>
       </div>
     </div>

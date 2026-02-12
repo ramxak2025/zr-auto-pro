@@ -5,7 +5,6 @@ import {
   Building2,
   LogOut,
   ChevronRight,
-  Shield,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -51,12 +50,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col bg-gray-900">
         {/* Logo */}
         <div className="flex h-16 items-center gap-3 border-b border-gray-700/50 px-6">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-white">
-            <Shield className="h-5 w-5" />
-          </div>
+          <img src="/logo.png" alt="Autexa" className="h-9 w-9 rounded-lg object-cover" />
           <div className="flex flex-col">
             <span className="text-base font-bold text-white tracking-tight leading-tight">
-              ZR Auto Pro
+              Autexa
             </span>
             <span className="text-[11px] font-medium text-indigo-400 leading-tight">
               Панель управления

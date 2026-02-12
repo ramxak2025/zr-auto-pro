@@ -127,12 +127,10 @@ export default function Layout({ children }: { children: ReactNode }) {
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
         {/* Logo */}
         <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-600 text-white">
-            <Wrench className="h-5 w-5" />
-          </div>
+          <img src="/logo.png" alt="Autexa" className="h-9 w-9 rounded-lg object-cover" />
           <div className="min-w-0">
             <span className="text-lg font-bold text-gray-900 tracking-tight block">
-              ZR Auto Pro
+              Autexa
             </span>
             {user?.tenant && (
               <span className="text-xs text-gray-500 truncate block">{user.tenant.name || ''}</span>
@@ -240,11 +238,9 @@ export default function Layout({ children }: { children: ReactNode }) {
         {/* ─── Mobile top bar ─── */}
         <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary-600 text-white">
-              <Wrench className="h-4 w-4" />
-            </div>
+            <img src="/logo.png" alt="Autexa" className="h-8 w-8 rounded-lg object-cover" />
             <span className="text-base font-bold text-gray-900 tracking-tight">
-              ZR Auto Pro
+              Autexa
             </span>
           </div>
           <div className="flex items-center gap-2">

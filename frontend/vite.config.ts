@@ -8,11 +8,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
+      includeAssets: ['logo.png'],
       manifest: {
-        name: 'ZR Auto Pro - CRM Автосервис',
-        short_name: 'ZR Auto',
-        description: 'CRM система для автосервиса',
+        name: 'Autexa - система управления автосервисом',
+        short_name: 'Autexa',
+        description: 'Система управления автосервисом',
         theme_color: '#2563eb',
         background_color: '#ffffff',
         display: 'standalone',
