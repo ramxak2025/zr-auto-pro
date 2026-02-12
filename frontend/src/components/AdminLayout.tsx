@@ -50,7 +50,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col bg-gray-900">
         {/* Logo */}
         <div className="flex h-16 items-center gap-3 border-b border-gray-700/50 px-6">
-          <img src="/logo.png" alt="Autexa" className="h-9 max-w-[140px] object-contain brightness-0 invert" />
+          <img src="/logo.png" alt="Autexa" className="h-10 aspect-[7/2] object-cover object-center brightness-0 invert" />
           <div className="flex flex-col">
             <span className="text-[11px] font-medium text-indigo-400 leading-tight">
               Панель управления

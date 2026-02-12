@@ -100,7 +100,7 @@ export default function LoginPage() {
           <img
             src="/logo.png"
             alt="Autexa"
-            className="h-11 w-auto object-contain brightness-0 invert drop-shadow-lg"
+            className="h-14 aspect-[7/2] object-cover object-center brightness-0 invert drop-shadow-lg"
           />
         </div>
 
@@ -146,16 +146,16 @@ export default function LoginPage() {
       {/* ══════════════════════════════════════════════════
           Mobile: large logo on white (~25% of screen)
          ══════════════════════════════════════════════════ */}
-      <div className="lg:hidden flex flex-col items-center justify-center bg-white pt-8 pb-4 min-h-[25dvh]">
-        {/* Animated logo — very large, takes ~75% of screen width */}
-        <div className="animate-scale-in w-full flex justify-center px-8">
+      <div className="lg:hidden flex flex-col items-center justify-center bg-white pt-4 pb-2 min-h-[22dvh]">
+        {/* Animated logo — large, cropped to remove internal whitespace */}
+        <div className="animate-scale-in w-full flex justify-center px-4 overflow-hidden">
           <img
             src="/logo.png"
             alt="Autexa"
-            className="w-[75vw] max-w-[360px] h-auto object-contain drop-shadow-md"
+            className="w-[80vw] max-w-[380px] aspect-[7/2] object-cover object-center drop-shadow-md"
           />
         </div>
-        <p className="mt-4 text-[13px] text-gray-400 font-medium tracking-wide animate-fade-in [animation-delay:300ms]">
+        <p className="mt-2 text-[13px] text-gray-400 font-medium tracking-wide animate-fade-in [animation-delay:300ms]">
           Система управления автосервисом
         </p>
       </div>
@@ -294,31 +294,8 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Feature cards */}
-          <div className="animate-fade-in-up [animation-delay:550ms] max-w-sm mx-auto mt-6 grid grid-cols-3 gap-2.5">
-            {[
-              { icon: Users, label: 'CRM', desc: 'Клиенты', color: 'from-blue-500 to-blue-600', bg: 'bg-blue-50', text: 'text-blue-600' },
-              { icon: Car, label: 'Касса', desc: 'Заказ-наряды', color: 'from-primary-500 to-primary-600', bg: 'bg-primary-50', text: 'text-primary-600' },
-              { icon: Warehouse, label: 'Склад', desc: 'Запчасти', color: 'from-emerald-500 to-emerald-600', bg: 'bg-emerald-50', text: 'text-emerald-600' },
-            ].map((f, i) => (
-              <div
-                key={f.label}
-                className="relative overflow-hidden rounded-2xl bg-white border border-gray-100 shadow-sm p-4 flex flex-col items-center gap-2 text-center group hover:shadow-md transition-all"
-                style={{ animationDelay: `${600 + i * 100}ms` }}
-              >
-                {/* Gradient accent bar */}
-                <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${f.color}`} />
-                <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${f.bg} ${f.text} group-hover:scale-110 transition-transform`}>
-                  <f.icon className="h-5 w-5" />
-                </div>
-                <p className="text-[13px] font-bold text-gray-900">{f.label}</p>
-                <p className="text-[10px] text-gray-400 leading-tight">{f.desc}</p>
-              </div>
-            ))}
-          </div>
-
           {/* Footer */}
-          <p className="text-center text-[11px] text-gray-400 mt-6 animate-fade-in [animation-delay:800ms]">
+          <p className="text-center text-[11px] text-gray-400 mt-6 animate-fade-in [animation-delay:600ms]">
             Autexa &copy; {new Date().getFullYear()}
           </p>
         </div>
