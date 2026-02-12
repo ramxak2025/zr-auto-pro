@@ -18,6 +18,7 @@ import SalaryPage from './pages/SalaryPage';
 import ReportsPage from './pages/ReportsPage';
 import UsersPage from './pages/UsersPage';
 import MorePage from './pages/MorePage';
+import CashFlowPage from './pages/CashFlowPage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminTenantsPage from './pages/admin/AdminTenantsPage';
 import AdminTenantDetailPage from './pages/admin/AdminTenantDetailPage';
@@ -68,6 +69,7 @@ function AppRoutes() {
         <Route path="/salary" element={<SalaryPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/users" element={<UsersPage />} />
+        <Route path="/cashflow" element={<CashFlowPage />} />
         <Route path="/more" element={<MorePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

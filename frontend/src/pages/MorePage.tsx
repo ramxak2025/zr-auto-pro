@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import {
-  LayoutDashboard,
+  Users,
   Wrench,
   Truck,
   Wallet,
@@ -8,6 +8,7 @@ import {
   Shield,
   LogOut,
   ChevronRight,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import type { UserPermissions } from '../types';
@@ -16,7 +17,7 @@ interface MenuItem {
   label: string;
   description: string;
   path: string;
-  icon: typeof LayoutDashboard;
+  icon: typeof Users;
   permission?: keyof UserPermissions;
   color: string;
   iconColor: string;
@@ -24,10 +25,11 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   {
-    label: 'Главная',
-    description: 'Дашборд и статистика',
-    path: '/',
-    icon: LayoutDashboard,
+    label: 'Клиенты',
+    description: 'База клиентов',
+    path: '/clients',
+    icon: Users,
+    permission: 'clients_view',
     color: 'bg-blue-50',
     iconColor: 'text-blue-600',
   },
@@ -47,6 +49,14 @@ const menuItems: MenuItem[] = [
     permission: 'suppliers_access',
     color: 'bg-amber-50',
     iconColor: 'text-amber-600',
+  },
+  {
+    label: 'Движение денег',
+    description: 'Касса по дням и сотрудникам',
+    path: '/cashflow',
+    icon: ArrowRightLeft,
+    color: 'bg-teal-50',
+    iconColor: 'text-teal-600',
   },
   {
     label: 'Зарплата',

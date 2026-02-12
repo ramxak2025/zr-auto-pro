@@ -33,6 +33,7 @@ const navItems: NavItem[] = [
   { label: 'Склад', path: '/products', icon: Package, permission: 'warehouse_access' },
   { label: 'Услуги', path: '/services', icon: Wrench },
   { label: 'Поставщики', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
+  { label: 'Движение денег', path: '/cashflow', icon: Wallet },
   { label: 'Зарплата', path: '/salary', icon: Wallet },
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
   { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management' },
@@ -47,13 +48,13 @@ interface TabItem {
   matchPaths?: string[];
 }
 
-/** Order: Журнал, Склад, КАССА (center), Клиенты, Ещё */
+/** Order: Главная, Склад, КАССА (center), Журнал, Ещё */
 const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
-  { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
+  { label: 'Главная', path: '/', icon: LayoutDashboard, matchPaths: ['/'] },
   { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
   { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
-  { label: 'Клиенты', path: '/clients', icon: Users, matchPaths: ['/clients'] },
-  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/', '/services', '/suppliers', '/salary', '/reports', '/users'] },
+  { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
+  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow'] },
 ];
 
 const roleBadgeColors: Record<string, string> = {
@@ -97,6 +98,10 @@ function isTabActive(tab: TabItem, pathname: string): boolean {
   // Exact match for Касса (checks/new)
   if (tab.path === '/checks/new') {
     return pathname === '/checks/new';
+  }
+  // Главная: exact match only
+  if (tab.path === '/') {
+    return pathname === '/';
   }
   // Журнал: match /checks but NOT /checks/new
   if (tab.path === '/checks') {

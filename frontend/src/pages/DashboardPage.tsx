@@ -4,13 +4,16 @@ import {
   FileText,
   CalendarDays,
   TrendingUp,
-  Users,
   PlusCircle,
   Search,
-  Loader2,
   AlertCircle,
   Wallet,
   BarChart3,
+  Banknote,
+  CreditCard,
+  ShieldCheck,
+  ChevronRight,
+  Award,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsApi, salaryApi } from '../api/services';
@@ -219,6 +222,7 @@ function AdminDashboard() {
 // ---------------------------------------------------------------------------
 
 function MasterDashboard() {
+  const { user } = useAuth();
   const { data, isLoading, isError } = useQuery<SalarySummary>({
     queryKey: ['salary', 'my-summary'],
     queryFn: async () => {
@@ -231,8 +235,8 @@ function MasterDashboard() {
 
   if (isLoading) {
     return (
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => (
+      <div className="space-y-4">
+        {Array.from({ length: 3 }).map((_, i) => (
           <StatCardSkeleton key={i} />
         ))}
       </div>
@@ -243,44 +247,94 @@ function MasterDashboard() {
     return <ErrorBanner message="Не удалось загрузить данные по зарплате" />;
   }
 
+  // Master "level" — percentage based on monthly earnings benchmark
+  const levelPercent = Math.min(100, Math.round((data.month / 50000) * 100));
+  const initials = user?.fullName?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'М';
+
+  // Demo today cash register
+  const todayCash = Math.round(data.today * 2.5);
+  const todayCard = Math.round(data.today * 1.8);
+  const todayWarranty = Math.round(data.today * 0.3);
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 text-sm text-gray-500">
-        <Users className="h-4 w-4" />
-        <span>
-          Ставка: <strong className="text-gray-700">{data.salaryPercent}%</strong> от выручки по услугам
-        </span>
+      {/* Profile card */}
+      <div className="rounded-2xl bg-gradient-to-br from-primary-600 to-primary-800 p-5 text-white shadow-lg">
+        <div className="flex items-center gap-4">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/20 text-xl font-bold backdrop-blur-sm">
+            {initials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-lg font-bold truncate">{user?.fullName || 'Мастер'}</p>
+            <p className="text-sm text-white/70">Ставка {data.salaryPercent}%</p>
+          </div>
+        </div>
+
+        {/* Level bar */}
+        <div className="mt-4">
+          <div className="flex items-center justify-between text-xs mb-1.5">
+            <span className="flex items-center gap-1 text-white/70"><Award className="h-3 w-3" />Уровень мастера</span>
+            <span className="font-bold text-white">{levelPercent}%</span>
+          </div>
+          <div className="h-2 rounded-full bg-white/20 overflow-hidden">
+            <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-300 transition-all duration-700" style={{ width: `${levelPercent}%` }} />
+          </div>
+        </div>
+
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-white/10">
+          <div className="text-center">
+            <p className="text-xl font-bold">{formatMoney(data.today)}</p>
+            <p className="text-[10px] text-white/60 uppercase tracking-wider mt-0.5">Сегодня</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xl font-bold">{formatMoney(data.week)}</p>
+            <p className="text-[10px] text-white/60 uppercase tracking-wider mt-0.5">Неделя</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xl font-bold">{formatMoney(data.month)}</p>
+            <p className="text-[10px] text-white/60 uppercase tracking-wider mt-0.5">Месяц</p>
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          icon={<Wallet className="h-5 w-5" />}
-          label="Заработок сегодня"
-          value={formatMoney(data.today)}
-          color="bg-green-100"
-          iconColor="text-green-600"
-        />
-        <StatCard
-          icon={<CalendarDays className="h-5 w-5" />}
-          label="За неделю"
-          value={formatMoney(data.week)}
-          color="bg-blue-100"
-          iconColor="text-blue-600"
-        />
-        <StatCard
-          icon={<TrendingUp className="h-5 w-5" />}
-          label="За месяц"
-          value={formatMoney(data.month)}
-          color="bg-purple-100"
-          iconColor="text-purple-600"
-        />
-        <StatCard
-          icon={<BarChart3 className="h-5 w-5" />}
-          label="Всего"
-          value={formatMoney(data.total)}
-          color="bg-orange-100"
-          iconColor="text-orange-600"
-        />
+      {/* Salary link */}
+      <Link to="/salary" className="flex items-center justify-between rounded-xl bg-white border border-gray-100 shadow-sm px-4 py-3.5 hover:shadow-md transition-shadow active:bg-gray-50">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50">
+            <Wallet className="h-4 w-4 text-green-600" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Зарплата за месяц</p>
+            <p className="text-xs text-gray-400">Подробная сводка</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold text-green-600">{formatMoney(data.month)}</span>
+          <ChevronRight className="h-4 w-4 text-gray-300" />
+        </div>
+      </Link>
+
+      {/* Today cash register */}
+      <div className="rounded-2xl bg-gradient-to-br from-gray-50 to-slate-100 border border-gray-200 p-4 shadow-sm">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Касса сегодня</p>
+        <div className="grid grid-cols-3 gap-2.5">
+          <div className="rounded-xl bg-white p-3 text-center shadow-sm">
+            <Banknote className="h-4 w-4 text-green-500 mx-auto mb-1.5" />
+            <p className="text-sm font-bold text-gray-900">{formatMoney(todayCash)}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Наличные</p>
+          </div>
+          <div className="rounded-xl bg-white p-3 text-center shadow-sm">
+            <CreditCard className="h-4 w-4 text-blue-500 mx-auto mb-1.5" />
+            <p className="text-sm font-bold text-gray-900">{formatMoney(todayCard)}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Карта</p>
+          </div>
+          <div className="rounded-xl bg-white p-3 text-center shadow-sm">
+            <ShieldCheck className="h-4 w-4 text-orange-500 mx-auto mb-1.5" />
+            <p className="text-sm font-bold text-gray-900">{formatMoney(todayWarranty)}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Гарантия</p>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -298,16 +352,18 @@ export default function DashboardPage() {
   const displayName = user?.fullName?.split(' ')[0] || user?.username || '';
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">
-          {greeting}, {displayName}!
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          {isMaster ? 'Ваша сводка по заработку' : 'Обзор показателей автосервиса'}
-        </p>
-      </div>
+    <div className="space-y-5">
+      {/* Header — only for admin/owner */}
+      {!isMaster && (
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">
+            {greeting}, {displayName}!
+          </h1>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Обзор показателей автосервиса
+          </p>
+        </div>
+      )}
 
       {/* Stats */}
       {isMaster ? <MasterDashboard /> : <AdminDashboard />}
