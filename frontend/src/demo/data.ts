@@ -484,6 +484,11 @@ export const demoSalarySummary: SalarySummary = {
   total: 142300,
   masterName: 'Сергей Козлов',
   salaryPercent: 35,
+  todayChecks: 2,
+  monthChecks: 87,
+  todayCash: 4720,
+  todayCard: 5850,
+  todayWarranty: 0,
 };
 
 export const demoMasterSalaries: MasterSalary[] = [

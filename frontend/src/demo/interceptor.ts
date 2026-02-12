@@ -39,9 +39,15 @@ function ok(data: unknown): AxiosResponse {
 type RouteHandler = (url: string, config: InternalAxiosRequestConfig) => AxiosResponse | null;
 
 const getRoutes: RouteHandler[] = [
-  // Auth profile
+  // Auth profile — return the user stored in localStorage (supports master/owner demo logins)
   (url) => {
-    if (url === '/api/auth/profile') return ok(demoUser);
+    if (url === '/api/auth/profile') {
+      const stored = localStorage.getItem('user');
+      if (stored) {
+        try { return ok(JSON.parse(stored)); } catch { /* fall through */ }
+      }
+      return ok(demoUser);
+    }
     return null;
   },
 

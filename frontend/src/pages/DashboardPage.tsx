@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   ChevronRight,
   Award,
+  ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { reportsApi, salaryApi } from '../api/services';
@@ -247,24 +248,20 @@ function MasterDashboard() {
     return <ErrorBanner message="Не удалось загрузить данные по зарплате" />;
   }
 
-  // Master "level" — percentage based on monthly earnings benchmark
   const levelPercent = Math.min(100, Math.round((data.month / 50000) * 100));
   const initials = user?.fullName?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'М';
-
-  // Demo today cash register
-  const todayCash = Math.round(data.today * 2.5);
-  const todayCard = Math.round(data.today * 1.8);
-  const todayWarranty = Math.round(data.today * 0.3);
+  const greeting = getGreeting();
 
   return (
     <div className="space-y-4">
-      {/* Profile card */}
+      {/* ── Profile card ── */}
       <div className="rounded-2xl bg-gradient-to-br from-primary-600 to-primary-800 p-5 text-white shadow-lg">
         <div className="flex items-center gap-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/20 text-xl font-bold backdrop-blur-sm">
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/20 text-2xl font-bold backdrop-blur-sm">
             {initials}
           </div>
           <div className="flex-1 min-w-0">
+            <p className="text-xs text-white/60">{greeting}</p>
             <p className="text-lg font-bold truncate">{user?.fullName || 'Мастер'}</p>
             <p className="text-sm text-white/70">Ставка {data.salaryPercent}%</p>
           </div>
@@ -280,25 +277,33 @@ function MasterDashboard() {
             <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-300 transition-all duration-700" style={{ width: `${levelPercent}%` }} />
           </div>
         </div>
+      </div>
 
-        {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-white/10">
-          <div className="text-center">
-            <p className="text-xl font-bold">{formatMoney(data.today)}</p>
-            <p className="text-[10px] text-white/60 uppercase tracking-wider mt-0.5">Сегодня</p>
+      {/* ── Today stats: orders + earnings ── */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl bg-white border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center gap-2.5 mb-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50">
+              <ClipboardList className="h-4 w-4 text-blue-600" />
+            </div>
+            <span className="text-xs text-gray-400 font-medium">Заказов сегодня</span>
           </div>
-          <div className="text-center">
-            <p className="text-xl font-bold">{formatMoney(data.week)}</p>
-            <p className="text-[10px] text-white/60 uppercase tracking-wider mt-0.5">Неделя</p>
+          <p className="text-2xl font-bold text-gray-900">{data.todayChecks ?? 0}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">За месяц: {data.monthChecks ?? 0}</p>
+        </div>
+        <div className="rounded-xl bg-white border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center gap-2.5 mb-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50">
+              <TrendingUp className="h-4 w-4 text-green-600" />
+            </div>
+            <span className="text-xs text-gray-400 font-medium">Заработок сегодня</span>
           </div>
-          <div className="text-center">
-            <p className="text-xl font-bold">{formatMoney(data.month)}</p>
-            <p className="text-[10px] text-white/60 uppercase tracking-wider mt-0.5">Месяц</p>
-          </div>
+          <p className="text-2xl font-bold text-gray-900">{formatMoney(data.today)}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">За месяц: {formatMoney(data.month)}</p>
         </div>
       </div>
 
-      {/* Salary link */}
+      {/* ── Salary link ── */}
       <Link to="/salary" className="flex items-center justify-between rounded-xl bg-white border border-gray-100 shadow-sm px-4 py-3.5 hover:shadow-md transition-shadow active:bg-gray-50">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50">
@@ -315,23 +320,23 @@ function MasterDashboard() {
         </div>
       </Link>
 
-      {/* Today cash register */}
-      <div className="rounded-2xl bg-gradient-to-br from-gray-50 to-slate-100 border border-gray-200 p-4 shadow-sm">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Касса сегодня</p>
+      {/* ── Today cash register — different shade section ── */}
+      <div className="rounded-2xl bg-gradient-to-br from-slate-50 to-slate-100 border border-slate-200 p-4 shadow-sm">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Касса сегодня</p>
         <div className="grid grid-cols-3 gap-2.5">
           <div className="rounded-xl bg-white p-3 text-center shadow-sm">
             <Banknote className="h-4 w-4 text-green-500 mx-auto mb-1.5" />
-            <p className="text-sm font-bold text-gray-900">{formatMoney(todayCash)}</p>
+            <p className="text-sm font-bold text-gray-900">{formatMoney(data.todayCash ?? 0)}</p>
             <p className="text-[10px] text-gray-400 mt-0.5">Наличные</p>
           </div>
           <div className="rounded-xl bg-white p-3 text-center shadow-sm">
             <CreditCard className="h-4 w-4 text-blue-500 mx-auto mb-1.5" />
-            <p className="text-sm font-bold text-gray-900">{formatMoney(todayCard)}</p>
+            <p className="text-sm font-bold text-gray-900">{formatMoney(data.todayCard ?? 0)}</p>
             <p className="text-[10px] text-gray-400 mt-0.5">Карта</p>
           </div>
           <div className="rounded-xl bg-white p-3 text-center shadow-sm">
             <ShieldCheck className="h-4 w-4 text-orange-500 mx-auto mb-1.5" />
-            <p className="text-sm font-bold text-gray-900">{formatMoney(todayWarranty)}</p>
+            <p className="text-sm font-bold text-gray-900">{formatMoney(data.todayWarranty ?? 0)}</p>
             <p className="text-[10px] text-gray-400 mt-0.5">Гарантия</p>
           </div>
         </div>

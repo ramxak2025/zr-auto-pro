@@ -238,6 +238,11 @@ export interface SalarySummary {
   total: number;
   masterName: string;
   salaryPercent: number;
+  todayChecks?: number;
+  monthChecks?: number;
+  todayCash?: number;
+  todayCard?: number;
+  todayWarranty?: number;
 }
 
 export interface DashboardStats {
