@@ -804,7 +804,7 @@ export default function CheckCreatePage() {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form id="check-form" onSubmit={handleSubmit} className="space-y-4">
           {/* ── Client section (compact) ── */}
           <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-50">
@@ -984,21 +984,22 @@ export default function CheckCreatePage() {
             </div>
           </div>
 
-          {/* Mobile sticky bar */}
-          <div className="md:hidden fixed inset-x-0 z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-4 py-2.5" style={{ bottom: 'var(--bottom-nav-h)' }}>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <p className="text-[10px] text-gray-400 uppercase tracking-wider">Итого</p>
-                <p className="text-lg font-bold text-gray-900">{formatMoney(grandTotal)}</p>
-              </div>
-              <button type="submit" disabled={createMutation.isPending}
-                className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-primary-600 to-primary-700 px-5 py-3 text-sm font-bold text-white shadow-lg active:scale-[0.97] disabled:opacity-50">
-                {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                Создать
-              </button>
-            </div>
-          </div>
         </form>
+
+        {/* Mobile sticky bar — sticky inside <main> scroll container */}
+        <div className="md:hidden sticky bottom-0 z-10 -mx-4 -mb-4 bg-white/95 backdrop-blur-lg border-t border-gray-100 px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider">Итого</p>
+              <p className="text-lg font-bold text-gray-900">{formatMoney(grandTotal)}</p>
+            </div>
+            <button type="submit" form="check-form" disabled={createMutation.isPending}
+              className="flex items-center gap-2 rounded-2xl bg-gradient-to-r from-primary-600 to-primary-700 px-5 py-3 text-sm font-bold text-white shadow-lg active:scale-[0.97] disabled:opacity-50">
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Создать
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* ── Payment Action Sheet ── */}

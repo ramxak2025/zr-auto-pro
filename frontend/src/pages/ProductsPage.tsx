@@ -741,7 +741,7 @@ export default function ProductsPage() {
   const currentPathStr = activePath.join('/');
 
   return (
-    <div className="space-y-5 overflow-hidden">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -962,9 +962,9 @@ export default function ProductsPage() {
         </>
       )}
 
-      {/* Bottom action bar when products are selected */}
+      {/* Bottom action bar when products are selected — sticky inside <main> */}
       {selectMode && selectedProducts.size > 0 && (
-        <div className="fixed inset-x-0 z-30 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3" style={{ bottom: 'var(--bottom-nav-h)' }}>
+        <div className="sticky bottom-0 z-10 -mx-4 -mb-4 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3">
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-600">Выбрано: {selectedProducts.size}</span>
             <button

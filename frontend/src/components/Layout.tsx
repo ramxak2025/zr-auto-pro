@@ -122,7 +122,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
       {/* ─── Desktop sidebar ─── */}
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
         {/* Logo */}
@@ -254,60 +254,61 @@ export default function Layout({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        {/* ─── Page content ─── */}
-        <main className="main-content flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">{children}</main>
-      </div>
+        {/* ─── Page content (sole scroll container) ─── */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">{children}</main>
 
-      {/* ─── Mobile bottom tab bar ─── */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
-        <div className="flex items-center justify-around h-[68px] px-2">
-          {mobileTabItems.map((tab) => {
-            const Icon = tab.icon;
-            const active = isTabActive(tab, location.pathname);
+        {/* ─── Mobile bottom tab bar ─── */}
+        {/* Flex item (NOT fixed): sits below <main> so content never goes under it */}
+        <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+          <div className="flex items-center justify-around h-[68px] px-2">
+            {mobileTabItems.map((tab) => {
+              const Icon = tab.icon;
+              const active = isTabActive(tab, location.pathname);
 
-            // Center "Касса" button — pill shape, gradient accent
-            if (tab.isCenter) {
+              // Center "Касса" button — pill shape, gradient accent
+              if (tab.isCenter) {
+                return (
+                  <NavLink
+                    key={tab.path}
+                    to={tab.path}
+                    className="flex flex-col items-center -mt-6"
+                  >
+                    <div className="relative">
+                      <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
+                      <div
+                        className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95"
+                      >
+                        <Icon className="h-6 w-6" strokeWidth={2.2} />
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold mt-1 text-primary-600">
+                      {tab.label}
+                    </span>
+                  </NavLink>
+                );
+              }
+
               return (
                 <NavLink
                   key={tab.path}
                   to={tab.path}
-                  className="flex flex-col items-center -mt-6"
+                  className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors"
                 >
-                  <div className="relative">
-                    <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
-                    <div
-                      className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95"
-                    >
-                      <Icon className="h-6 w-6" strokeWidth={2.2} />
-                    </div>
+                  <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
+                    <Icon
+                      className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`}
+                      strokeWidth={active ? 2.2 : 1.8}
+                    />
                   </div>
-                  <span className="text-[10px] font-bold mt-1 text-primary-600">
+                  <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>
                     {tab.label}
                   </span>
                 </NavLink>
               );
-            }
-
-            return (
-              <NavLink
-                key={tab.path}
-                to={tab.path}
-                className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors"
-              >
-                <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
-                  <Icon
-                    className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`}
-                    strokeWidth={active ? 2.2 : 1.8}
-                  />
-                </div>
-                <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>
-                  {tab.label}
-                </span>
-              </NavLink>
-            );
-          })}
-        </div>
-      </nav>
+            })}
+          </div>
+        </nav>
+      </div>
     </div>
   );
 }
