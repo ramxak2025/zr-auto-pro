@@ -97,6 +97,7 @@ export class ProductsService {
       .where('product.tenantId = :tenantId', { tenantId })
       .andWhere('product.category IS NOT NULL')
       .andWhere('product.category != :empty', { empty: '' })
+      .andWhere('product.deletedAt IS NULL')
       .orderBy('product.category', 'ASC')
       .getRawMany();
 

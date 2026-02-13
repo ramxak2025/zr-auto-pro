@@ -140,7 +140,7 @@ export class User {
   @Column()
   fullName: string;
 
-  @Column({ type: 'enum', enum: UserRole, default: UserRole.MASTER })
+  @Column({ type: 'varchar', length: 30, default: 'master' })
   role: UserRole;
 
   @Column({ type: 'decimal', precision: 5, scale: 2, default: 0 })

@@ -30,7 +30,7 @@ import { SeedModule } from './modules/seed/seed.module';
         database: config.get('DB_NAME', 'zr_auto_pro'),
         autoLoadEntities: true,
         synchronize: true,
-        logging: ['error', 'warn'],
+        logging: ['error', 'warn', 'schema'],
       }),
     }),
     AuthModule,

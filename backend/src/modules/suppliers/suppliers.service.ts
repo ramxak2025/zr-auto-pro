@@ -150,6 +150,7 @@ export class SuppliersService {
 
     const [data, total] = await this.deliveryRepo.findAndCount({
       where: { supplierId, tenantId },
+      relations: ['items', 'items.product'],
       order: { date: 'DESC' },
       skip,
       take: limit,

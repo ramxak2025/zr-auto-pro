@@ -19,8 +19,8 @@ import { CheckProduct } from './check-product.entity';
 export enum PaymentMethod {
   CASH = 'cash',
   CARD = 'card',
-  TRANSFER = 'transfer',
-  MIXED = 'mixed',
+  WARRANTY = 'warranty',
+  CASH_CARD = 'cash_card',
 }
 
 @Entity('checks')
@@ -65,16 +65,16 @@ export class Check {
   @Column({ type: 'int', nullable: true })
   mileage: number;
 
-  @OneToMany(() => CheckService, (cs) => cs.check, { cascade: true, eager: true })
+  @OneToMany(() => CheckService, (cs) => cs.check, { cascade: true })
   services: CheckService[];
 
-  @OneToMany(() => CheckProduct, (cp) => cp.check, { cascade: true, eager: true })
+  @OneToMany(() => CheckProduct, (cp) => cp.check, { cascade: true })
   products: CheckProduct[];
 
   @Column({ type: 'text', nullable: true })
   comment: string;
 
-  @Column({ type: 'enum', enum: PaymentMethod, default: PaymentMethod.CASH })
+  @Column({ type: 'varchar', length: 20, default: 'cash' })
   paymentMethod: PaymentMethod;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })

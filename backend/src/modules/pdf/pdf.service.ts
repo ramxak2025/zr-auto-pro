@@ -4,8 +4,8 @@ import { Check } from '../checks/entities/check.entity';
 const PAYMENT_LABELS: Record<string, string> = {
   cash: 'Наличные',
   card: 'Карта',
-  transfer: 'Перевод',
-  mixed: 'Смешанная',
+  warranty: 'Гарантия',
+  cash_card: 'Нал + Карта',
 };
 
 @Injectable()

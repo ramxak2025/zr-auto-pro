@@ -37,13 +37,13 @@ export class Delivery {
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   date: Date;
 
-  @OneToMany(() => DeliveryItem, (item) => item.delivery, { cascade: true, eager: true })
+  @OneToMany(() => DeliveryItem, (item) => item.delivery, { cascade: true })
   items: DeliveryItem[];
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
   totalAmount: number;
 
-  @Column({ type: 'enum', enum: DeliveryPaymentStatus, default: DeliveryPaymentStatus.UNPAID })
+  @Column({ type: 'varchar', length: 20, default: 'unpaid' })
   paymentStatus: DeliveryPaymentStatus;
 
   @Column({ type: 'text', nullable: true })
