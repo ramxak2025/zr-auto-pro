@@ -44,8 +44,7 @@ export class SeedService implements OnModuleInit {
       role: UserRole.SUPERADMIN,
       permissions: DEFAULT_PERMISSIONS[UserRole.SUPERADMIN],
       isActive: true,
-      tenantId: null,
-    });
+    } as Partial<User>);
 
     await this.userRepo.save(superadmin);
     this.logger.log(`SuperAdmin created: "${username}"`);
