@@ -5,6 +5,8 @@ import {
   Body,
   UseGuards,
   UnauthorizedException,
+  InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -19,24 +21,34 @@ import { User } from '../users/entities/user.entity';
 
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
   async login(@Body() loginDto: LoginDto) {
-    const user = await this.authService.validateUser(
-      loginDto.username,
-      loginDto.password,
-    );
+    try {
+      const user = await this.authService.validateUser(
+        loginDto.username,
+        loginDto.password,
+      );
 
-    if (!user) {
-      throw new UnauthorizedException('Invalid username or password');
+      if (!user) {
+        throw new UnauthorizedException('Неверный логин или пароль');
+      }
+
+      if (!user.isActive) {
+        throw new UnauthorizedException('Учётная запись деактивирована');
+      }
+
+      return this.authService.login(user);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      this.logger.error(`Login failed for "${loginDto.username}": ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Ошибка при входе. Попробуйте позже.');
     }
-
-    if (!user.isActive) {
-      throw new UnauthorizedException('User account is deactivated');
-    }
-
-    return this.authService.login(user);
   }
 
   @Post('register')

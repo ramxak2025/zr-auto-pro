@@ -34,10 +34,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('User not found or inactive');
     }
 
-    const { password, ...result } = user;
     return {
-      ...result,
+      id: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      role: user.role,
+      salaryPercent: user.salaryPercent,
+      permissions: user.permissions,
+      isActive: user.isActive,
       tenantId: user.tenantId || payload.tenantId,
+      tenant: user.tenant
+        ? { id: user.tenant.id, name: user.tenant.name, slug: user.tenant.slug }
+        : undefined,
     };
   }
 }

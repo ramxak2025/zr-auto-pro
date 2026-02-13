@@ -58,7 +58,7 @@ export class UsersService {
   async findById(tenantId: string, id: string): Promise<User> {
     const user = await this.repo.findOne({
       where: { id, tenantId },
-      relations: ['checks'],
+      relations: ['tenant'],
     });
 
     if (!user) {
@@ -71,7 +71,7 @@ export class UsersService {
   async findByIdWithoutTenant(id: string): Promise<User> {
     const user = await this.repo.findOne({
       where: { id },
-      relations: ['checks'],
+      relations: ['tenant'],
     });
 
     if (!user) {
