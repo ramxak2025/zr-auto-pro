@@ -115,8 +115,17 @@ export class ChecksService {
     const totalCost = productCostTotal + serviceSalaryTotal;
     const profit = totalRevenue - totalCost;
 
+    // Auto-generate check number per tenant
+    const lastCheck = await this.checkRepo
+      .createQueryBuilder('check')
+      .where('check.tenantId = :tenantId', { tenantId })
+      .orderBy('check.number', 'DESC', 'NULLS LAST')
+      .getOne();
+    const nextNumber = (lastCheck?.number || 0) + 1;
+
     const check = this.checkRepo.create({
       tenantId,
+      number: nextNumber,
       masterId: dto.masterId,
       clientId: dto.clientId,
       carId: dto.carId,

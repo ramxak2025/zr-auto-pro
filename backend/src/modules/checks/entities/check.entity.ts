@@ -33,7 +33,7 @@ export class Check {
   tenantId: string;
 
   @Index()
-  @Column({ type: 'int', generated: 'increment' })
+  @Column({ type: 'int', nullable: true })
   number: number;
 
   @Index()

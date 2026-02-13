@@ -1,8 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { join } from 'path';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ClientsModule } from './modules/clients/clients.module';
@@ -32,11 +30,8 @@ import { SeedModule } from './modules/seed/seed.module';
         database: config.get('DB_NAME', 'zr_auto_pro'),
         autoLoadEntities: true,
         synchronize: true,
+        logging: ['error', 'warn'],
       }),
-    }),
-    ServeStaticModule.forRoot({
-      rootPath: join(__dirname, '..', '..', 'frontend', 'dist'),
-      exclude: ['/api/(.*)'],
     }),
     AuthModule,
     UsersModule,
