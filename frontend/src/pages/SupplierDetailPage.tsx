@@ -2,6 +2,7 @@ import { useState, FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { getApiError } from '../api/axios';
 import {
   ArrowLeft,
   Pencil,
@@ -547,7 +548,7 @@ export default function SupplierDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['supplier', id] });
       setEditOpen(false);
     },
-    onError: () => toast.error('Не удалось обновить поставщика'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось обновить поставщика')),
   });
 
   const createDeliveryMutation = useMutation({
@@ -558,7 +559,7 @@ export default function SupplierDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] });
       setDeliveryOpen(false);
     },
-    onError: () => toast.error('Не удалось создать поставку'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось создать поставку')),
   });
 
   const createPaymentMutation = useMutation({
@@ -569,7 +570,7 @@ export default function SupplierDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['supplier-payments', id] });
       setPaymentOpen(false);
     },
-    onError: () => toast.error('Не удалось создать оплату'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось создать оплату')),
   });
 
   // ---- Render ----

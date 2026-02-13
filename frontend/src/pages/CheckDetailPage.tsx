@@ -1,6 +1,7 @@
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { getApiError } from '../api/axios';
 import {
   ArrowLeft,
   Trash2,
@@ -112,7 +113,7 @@ export default function CheckDetailPage() {
       setShowPaymentModal(false);
       setSplitMode(false);
     },
-    onError: () => toast.error('Не удалось обновить чек'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось обновить чек')),
   });
 
   const editMutation = useMutation({
@@ -124,7 +125,7 @@ export default function CheckDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       setShowEditModal(false);
     },
-    onError: () => toast.error('Не удалось обновить чек'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось обновить чек')),
   });
 
   function handlePayment(method: PaymentMethod, cashAmt?: number, cardAmt?: number) {

@@ -20,6 +20,7 @@ import {
   FolderPlus,
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
+import { getApiError } from '../api/axios';
 import type { Product, PaginatedResponse } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -743,7 +744,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       closeForm();
     },
-    onError: () => toast.error('Не удалось создать товар'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось создать товар')),
   });
 
   const updateMutation = useMutation({
@@ -754,7 +755,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       closeForm();
     },
-    onError: () => toast.error('Не удалось обновить товар'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось обновить товар')),
   });
 
   const deleteMutation = useMutation({
@@ -764,7 +765,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setDeleteTarget(null);
     },
-    onError: () => toast.error('Не удалось удалить товар'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось удалить товар')),
   });
 
   const writeoffMutation = useMutation({
@@ -775,7 +776,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setWriteoffTarget(null);
     },
-    onError: () => toast.error('Не удалось списать товар'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось списать товар')),
   });
 
   const inventoryMutation = useMutation({
@@ -786,7 +787,7 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setInventoryTarget(null);
     },
-    onError: () => toast.error('Ошибка инвентаризации'),
+    onError: (err) => toast.error(getApiError(err, 'Ошибка инвентаризации')),
   });
 
   const moveMutation = useMutation({
@@ -800,7 +801,7 @@ export default function ProductsPage() {
       setSelectMode(false);
       setShowMoveModal(false);
     },
-    onError: () => toast.error('Не удалось переместить товары'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось переместить товары')),
   });
 
   // ---- Handlers ----

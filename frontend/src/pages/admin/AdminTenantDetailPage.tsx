@@ -20,6 +20,7 @@ import {
   Check as CheckIcon,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getApiError } from '../../api/axios';
 import { adminApi } from '../../api/services';
 import type { Tenant, User } from '../../types';
 import Modal from '../../components/Modal';
@@ -184,7 +185,7 @@ function EditTenantModal({
       queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
       onClose();
     },
-    onError: () => toast.error('Не удалось сохранить'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось сохранить')),
   });
 
   function handleSubmit(e: React.FormEvent) {
@@ -273,7 +274,7 @@ function ExtendSubscriptionModal({
       queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
       onClose();
     },
-    onError: () => toast.error('Не удалось продлить подписку'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось продлить подписку')),
   });
 
   function addDays(days: number) {
@@ -362,7 +363,7 @@ export default function AdminTenantDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'tenant', id] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
     },
-    onError: () => toast.error('Ошибка'),
+    onError: (err) => toast.error(getApiError(err, 'Ошибка')),
   });
 
   const deleteMutation = useMutation({
@@ -372,7 +373,7 @@ export default function AdminTenantDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
       navigate('/tenants');
     },
-    onError: () => toast.error('Ошибка'),
+    onError: (err) => toast.error(getApiError(err, 'Ошибка')),
   });
 
   if (isLoading) return <LoadingSpinner size="lg" />;

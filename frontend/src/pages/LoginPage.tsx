@@ -89,33 +89,33 @@ export default function LoginPage() {
       {/* ══════════════════════════════════════════════════
           Desktop left panel — dark branding
          ══════════════════════════════════════════════════ */}
-      <div className="relative hidden lg:flex lg:w-[55%] flex-col justify-between bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-10 xl:p-14 overflow-hidden">
+      <div className="relative hidden lg:flex lg:w-[55%] flex-col justify-between bg-gradient-to-br from-gray-50 via-white to-gray-100 p-10 xl:p-14 overflow-hidden">
         {/* Decorative blobs */}
-        <div className="absolute -top-40 -left-40 h-80 w-80 rounded-full bg-blue-600/10 blur-3xl animate-float" />
-        <div className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-indigo-600/10 blur-3xl" />
-        <div className="absolute top-1/2 left-1/3 h-64 w-64 rounded-full bg-blue-500/5 blur-3xl" />
+        <div className="absolute -top-40 -left-40 h-80 w-80 rounded-full bg-primary-200/30 blur-3xl animate-float" />
+        <div className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-indigo-200/20 blur-3xl" />
+        <div className="absolute top-1/2 left-1/3 h-64 w-64 rounded-full bg-blue-100/20 blur-3xl" />
 
         {/* Top: full logo */}
         <div className="relative z-10 animate-fade-in">
           <img
             src="/logo.png"
             alt="Autexa"
-            className="h-14 aspect-[7/2] object-cover object-center brightness-0 invert drop-shadow-lg"
+            className="h-16 xl:h-20 aspect-[7/2] object-cover object-center drop-shadow-md"
           />
         </div>
 
         {/* Center: hero text + features */}
         <div className="relative z-10 max-w-lg">
-          <h1 className="text-4xl xl:text-5xl font-extrabold text-white leading-tight tracking-tight animate-fade-in-up">
+          <h1 className="text-4xl xl:text-5xl font-extrabold text-gray-900 leading-tight tracking-tight animate-fade-in-up">
             Управляйте
             <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary-600 to-indigo-600">
               автосервисом
             </span>
             <br />
             легко
           </h1>
-          <p className="mt-5 text-lg text-gray-400 leading-relaxed max-w-md animate-fade-in-up [animation-delay:150ms]">
+          <p className="mt-5 text-lg text-gray-500 leading-relaxed max-w-md animate-fade-in-up [animation-delay:150ms]">
             Единая платформа для заказ-нарядов, склада, финансов и команды. Всё в одном месте.
           </p>
 
@@ -124,13 +124,13 @@ export default function LoginPage() {
             {features.map((f, i) => (
               <div
                 key={f.title}
-                className="group flex flex-col items-center gap-2 rounded-2xl bg-white/[0.04] border border-white/[0.06] p-4 backdrop-blur-sm hover:bg-white/[0.07] transition-colors animate-fade-in-up"
+                className="group flex flex-col items-center gap-2 rounded-2xl bg-white/80 border border-gray-200/60 p-4 backdrop-blur-sm hover:bg-white hover:shadow-sm transition-all animate-fade-in-up"
                 style={{ animationDelay: `${200 + i * 80}ms` }}
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400 group-hover:bg-blue-500/20 transition-colors">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-primary-600 group-hover:bg-primary-100 transition-colors">
                   <f.icon className="h-5 w-5" />
                 </div>
-                <p className="text-[13px] font-semibold text-white">{f.title}</p>
+                <p className="text-[13px] font-semibold text-gray-900">{f.title}</p>
                 <p className="text-[11px] text-gray-500 text-center leading-tight">{f.desc}</p>
               </div>
             ))}
@@ -138,7 +138,7 @@ export default function LoginPage() {
         </div>
 
         {/* Bottom */}
-        <p className="relative z-10 text-xs text-gray-600 animate-fade-in [animation-delay:600ms]">
+        <p className="relative z-10 text-xs text-gray-400 animate-fade-in [animation-delay:600ms]">
           Autexa &copy; {new Date().getFullYear()}
         </p>
       </div>

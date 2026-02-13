@@ -12,6 +12,7 @@ import {
   Search,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getApiError } from '../../api/axios';
 import { adminApi } from '../../api/services';
 import type { Tenant, PaginatedResponse } from '../../types';
 import Modal from '../../components/Modal';
@@ -107,8 +108,8 @@ function CreateTenantModal({
       setForm(emptyForm);
       onClose();
     },
-    onError: () => {
-      toast.error('Не удалось создать автосервис');
+    onError: (err) => {
+      toast.error(getApiError(err, 'Не удалось создать автосервис'));
     },
   });
 
@@ -389,7 +390,7 @@ export default function AdminTenantsPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] });
     },
-    onError: () => toast.error('Не удалось изменить статус'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось изменить статус')),
   });
 
   const deleteMutation = useMutation({
@@ -400,7 +401,7 @@ export default function AdminTenantsPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'stats'] });
       setDeleteTarget(null);
     },
-    onError: () => toast.error('Не удалось удалить'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось удалить')),
   });
 
   function handleSearchChange(v: string) {

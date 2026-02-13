@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, FormEvent } from 're
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { getApiError } from '../api/axios';
 import {
   ArrowLeft,
   Plus,
@@ -745,7 +746,7 @@ export default function CheckCreatePage() {
   const createMutation = useMutation({
     mutationFn: (data: any) => checksApi.create(data),
     onSuccess: (res) => { toast.success('Чек создан'); navigate(`/checks/${res.data.id}`); },
-    onError: () => { toast.error('Не удалось создать чек'); },
+    onError: (err) => { toast.error(getApiError(err, 'Не удалось создать чек')); },
   });
 
   function handleSubmit(e: FormEvent) {

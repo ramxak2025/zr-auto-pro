@@ -39,4 +39,14 @@ api.interceptors.response.use(
   },
 );
 
+export function getApiError(error: unknown, fallback = 'Произошла ошибка'): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data;
+    if (data?.message) {
+      return Array.isArray(data.message) ? data.message[0] : data.message;
+    }
+  }
+  return fallback;
+}
+
 export default api;

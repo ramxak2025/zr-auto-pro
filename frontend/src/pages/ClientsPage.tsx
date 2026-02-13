@@ -10,6 +10,7 @@ import {
   Users,
 } from 'lucide-react';
 import { clientsApi } from '../api/services';
+import { getApiError } from '../api/axios';
 import type { Client, PaginatedResponse } from '../types';
 import SearchInput from '../components/SearchInput';
 import Pagination from '../components/Pagination';
@@ -188,8 +189,8 @@ export default function ClientsPage() {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       closeForm();
     },
-    onError: () => {
-      toast.error('Не удалось создать клиента');
+    onError: (err) => {
+      toast.error(getApiError(err, 'Не удалось создать клиента'));
     },
   });
 
@@ -201,8 +202,8 @@ export default function ClientsPage() {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       closeForm();
     },
-    onError: () => {
-      toast.error('Не удалось обновить клиента');
+    onError: (err) => {
+      toast.error(getApiError(err, 'Не удалось обновить клиента'));
     },
   });
 
@@ -213,8 +214,8 @@ export default function ClientsPage() {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       setDeleteTarget(null);
     },
-    onError: () => {
-      toast.error('Не удалось удалить клиента');
+    onError: (err) => {
+      toast.error(getApiError(err, 'Не удалось удалить клиента'));
     },
   });
 

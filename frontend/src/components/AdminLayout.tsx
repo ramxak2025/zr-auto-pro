@@ -47,11 +47,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
       {/* Sidebar */}
-      <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col bg-gray-900">
+      <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
         {/* Logo */}
-        <div className="flex h-14 items-center border-b border-gray-700/50 px-5">
-          <img src="/logo.png" alt="Autexa" className="h-8 aspect-[7/2] object-cover object-center brightness-0 invert" />
-          <span className="ml-3 text-[11px] font-medium text-indigo-400">
+        <div className="flex h-14 items-center border-b border-gray-200 px-5">
+          <img src="/logo.png" alt="Autexa" className="h-8 aspect-[7/2] object-cover object-center" />
+          <span className="ml-3 text-[11px] font-medium text-primary-600">
             Панель управления
           </span>
         </div>
@@ -70,8 +70,8 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     className={({ isActive }) =>
                       `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
                         isActive
-                          ? 'bg-indigo-600/20 text-indigo-400'
-                          : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+                          ? 'bg-primary-50 text-primary-700'
+                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                       }`
                     }
                   >
@@ -85,13 +85,13 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         </nav>
 
         {/* Sidebar footer */}
-        <div className="border-t border-gray-700/50 px-4 py-3">
+        <div className="border-t border-gray-200 px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600/20 text-indigo-400 text-sm font-semibold">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
               {user?.fullName?.charAt(0) || 'S'}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-gray-200">
+              <p className="truncate text-sm font-medium text-gray-900">
                 {user?.fullName || 'Super Admin'}
               </p>
               <p className="truncate text-xs text-gray-500">Super Admin</p>

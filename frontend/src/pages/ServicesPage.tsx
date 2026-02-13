@@ -9,6 +9,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { servicesApi } from '../api/services';
+import { getApiError } from '../api/axios';
 import type { Service, PaginatedResponse } from '../types';
 import SearchInput from '../components/SearchInput';
 import Pagination from '../components/Pagination';
@@ -184,7 +185,7 @@ export default function ServicesPage() {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       closeForm();
     },
-    onError: () => toast.error('Не удалось создать услугу'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось создать услугу')),
   });
 
   const updateMutation = useMutation({
@@ -195,7 +196,7 @@ export default function ServicesPage() {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       closeForm();
     },
-    onError: () => toast.error('Не удалось обновить услугу'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось обновить услугу')),
   });
 
   const deleteMutation = useMutation({
@@ -205,7 +206,7 @@ export default function ServicesPage() {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       setDeleteTarget(null);
     },
-    onError: () => toast.error('Не удалось удалить услугу'),
+    onError: (err) => toast.error(getApiError(err, 'Не удалось удалить услугу')),
   });
 
   // ---- Handlers ----

@@ -39,12 +39,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [token]);
 
   const login = useCallback(async (username: string, password: string) => {
+    // Clear demo mode so real API calls go through
+    const wasDemo = localStorage.getItem('demo') === 'true';
+    localStorage.removeItem('demo');
+
     const res = await authApi.login({ username, password });
     const { access_token, user: u } = res.data;
     localStorage.setItem('token', access_token);
     localStorage.setItem('user', JSON.stringify(u));
     setToken(access_token);
     setUser(u);
+
+    // If switching from demo, reload to clear interceptors
+    if (wasDemo) {
+      window.location.href = '/';
+    }
   }, []);
 
   const logout = useCallback(() => {
