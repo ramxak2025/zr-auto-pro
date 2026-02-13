@@ -28,9 +28,12 @@ api.interceptors.response.use(
   (error) => {
     if (error?.__demo) return Promise.reject(error);
     if (error.response?.status === 401 && !isDemo) {
+      const hadToken = !!localStorage.getItem('token');
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      window.location.href = '/login';
+      if (hadToken && window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   },
