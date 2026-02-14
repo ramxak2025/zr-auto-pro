@@ -20,7 +20,12 @@ export class AuthService {
     phone: string,
     password: string,
   ): Promise<Omit<User, 'password'> | null> {
-    const user = await this.usersService.findByPhone(phone);
+    let user = await this.usersService.findByPhone(phone);
+
+    // Fallback: try username for users created before phone migration
+    if (!user) {
+      user = await this.usersService.findByUsername(phone);
+    }
 
     if (!user) {
       return null;

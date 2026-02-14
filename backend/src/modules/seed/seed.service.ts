@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import {
   User,
@@ -19,6 +19,26 @@ export class SeedService implements OnModuleInit {
 
   async onModuleInit() {
     await this.seedSuperAdmin();
+    await this.migratePhones();
+  }
+
+  /**
+   * Fill phone from username for users created before phone-based auth migration.
+   */
+  private async migratePhones() {
+    const usersWithoutPhone = await this.userRepo.find({
+      where: { phone: IsNull() },
+    });
+
+    for (const user of usersWithoutPhone) {
+      user.phone = user.username;
+      await this.userRepo.save(user);
+      this.logger.log(`Migrated phone for user "${user.username}" (id: ${user.id})`);
+    }
+
+    if (usersWithoutPhone.length > 0) {
+      this.logger.log(`Phone migration complete: ${usersWithoutPhone.length} user(s) updated`);
+    }
   }
 
   private async seedSuperAdmin() {
