@@ -126,7 +126,7 @@ function ClientSearch({ onSelect, selectedClient, onClear, onAddNew }: {
         </button>
       </div>
       {isOpen && searchText.length >= 1 && clients.length > 0 && (
-        <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl max-h-60 overflow-y-auto">
+        <div className="absolute z-50 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl max-h-60 overflow-y-auto">
           {clients.map((client) => (
             <button key={client.id} type="button"
               onClick={() => { onSelect(client); setSearchText(''); setIsOpen(false); }}
@@ -148,7 +148,7 @@ function ClientSearch({ onSelect, selectedClient, onClear, onAddNew }: {
         </div>
       )}
       {isOpen && searchText.length >= 1 && !isFetching && clients.length === 0 && (
-        <div className="absolute z-10 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl p-4">
+        <div className="absolute z-50 mt-1.5 w-full rounded-xl border border-gray-100 bg-white shadow-xl p-4">
           <p className="text-sm text-gray-400 text-center">Не найдено</p>
           <button type="button" onClick={() => { setIsOpen(false); onAddNew(); }}
             className="mt-2 flex items-center justify-center gap-1.5 w-full rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-600 hover:bg-blue-100 transition-colors">
@@ -994,8 +994,8 @@ export default function CheckCreatePage() {
 
         <form id="check-form" onSubmit={handleSubmit} className="space-y-4">
           {/* ── Client section (compact) ── */}
-          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-50">
+          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm relative z-20">
+            <div className="px-4 py-3 border-b border-gray-50 rounded-t-2xl">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Клиент</p>
             </div>
             <div className="p-4 space-y-3">
