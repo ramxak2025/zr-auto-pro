@@ -22,21 +22,30 @@ export class TenantsSeedService implements OnModuleInit {
   }
 
   private async seedSuperAdmin(): Promise<void> {
+    const username = process.env.SUPERADMIN_USERNAME || 'superadmin';
+    const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
+
     const existingSuperAdmin = await this.userRepo.findOne({
       where: { role: UserRole.SUPERADMIN },
     });
 
     if (existingSuperAdmin) {
+      // Sync password so the admin can always log in
+      const hashedPassword = await bcrypt.hash(password, 10);
+      existingSuperAdmin.password = hashedPassword;
+      existingSuperAdmin.username = username;
+      existingSuperAdmin.isActive = true;
+      await this.userRepo.save(existingSuperAdmin);
       this.logger.log(
-        `SuperAdmin user already exists: "${existingSuperAdmin.username}"`,
+        `SuperAdmin password synced for "${existingSuperAdmin.username}"`,
       );
       return;
     }
 
-    const hashedPassword = await bcrypt.hash('admin123', 10);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     const superAdmin = this.userRepo.create({
-      username: 'superadmin',
+      username,
       password: hashedPassword,
       fullName: 'Super Administrator',
       role: UserRole.SUPERADMIN,
@@ -47,10 +56,7 @@ export class TenantsSeedService implements OnModuleInit {
     await this.userRepo.save(superAdmin);
 
     this.logger.log(
-      'SuperAdmin user created successfully (username: "superadmin", password: "admin123")',
-    );
-    this.logger.warn(
-      'Please change the default SuperAdmin password immediately!',
+      `SuperAdmin user created successfully (username: "${username}")`,
     );
   }
 }

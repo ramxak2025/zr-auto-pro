@@ -22,18 +22,24 @@ export class SeedService implements OnModuleInit {
   }
 
   private async seedSuperAdmin() {
+    const username = process.env.SUPERADMIN_USERNAME || 'superadmin';
+    const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
+    const fullName = process.env.SUPERADMIN_FULLNAME || 'Super Admin';
+
     const existing = await this.userRepo.findOne({
       where: { role: UserRole.SUPERADMIN },
     });
 
     if (existing) {
-      this.logger.log(`SuperAdmin already exists: "${existing.username}"`);
+      // Always sync password so the admin can log in with the known credentials
+      const hashedPassword = await bcrypt.hash(password, 10);
+      existing.password = hashedPassword;
+      existing.username = username;
+      existing.isActive = true;
+      await this.userRepo.save(existing);
+      this.logger.log(`SuperAdmin password synced for "${existing.username}"`);
       return;
     }
-
-    const username = process.env.SUPERADMIN_USERNAME || 'superadmin';
-    const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
-    const fullName = process.env.SUPERADMIN_FULLNAME || 'Super Admin';
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
