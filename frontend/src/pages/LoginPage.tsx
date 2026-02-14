@@ -105,7 +105,7 @@ export default function LoginPage() {
         </div>
 
         <p className="relative z-10 text-xs text-gray-400 animate-fade-in [animation-delay:600ms]">
-          ZR Auto Pro &copy; {new Date().getFullYear()}
+          Autexa &copy; {new Date().getFullYear()}
         </p>
       </div>
 
@@ -154,7 +154,7 @@ export default function LoginPage() {
             </form>
           </div>
           <p className="text-center text-[11px] text-gray-400 mt-6 animate-fade-in [animation-delay:600ms]">
-            ZR Auto Pro &copy; {new Date().getFullYear()}
+            Autexa &copy; {new Date().getFullYear()}
           </p>
         </div>
       </div>
