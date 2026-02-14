@@ -137,6 +137,7 @@ function ProductFormModal({
                   src={photo}
                   alt="Фото товара"
                   className="h-20 w-20 rounded-xl object-cover border border-gray-200"
+                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
                 />
                 <button
                   type="button"
@@ -448,10 +449,19 @@ function ProductCard({
       {/* Image area */}
       <div className="aspect-[4/3] bg-gray-50 flex items-center justify-center overflow-hidden">
         {product.photo ? (
-          <img src={product.photo} alt="" className="w-full h-full object-cover" />
-        ) : (
-          <Package className="h-10 w-10 text-gray-200" />
-        )}
+          <img
+            src={product.photo}
+            alt=""
+            className="w-full h-full object-cover"
+            loading="lazy"
+            onError={(e) => {
+              const img = e.currentTarget;
+              img.style.display = 'none';
+              img.parentElement?.classList.add('fallback-icon');
+            }}
+          />
+        ) : null}
+        {!product.photo && <Package className="h-10 w-10 text-gray-200" />}
       </div>
 
       {/* Info */}
@@ -535,7 +545,16 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
         <div className="flex items-start gap-4">
           <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-gray-50 flex-shrink-0 overflow-hidden">
             {product.photo ? (
-              <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-xl" />
+              <img
+                src={product.photo}
+                alt={product.name}
+                className="w-full h-full object-cover rounded-xl"
+                loading="lazy"
+                onError={(e) => {
+                  const img = e.currentTarget;
+                  img.style.display = 'none';
+                }}
+              />
             ) : (
               <Package className="h-8 w-8 text-gray-300" />
             )}

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
 import { Check } from './entities/check.entity';
@@ -13,6 +13,8 @@ import { UpdateCheckDto } from './dto/update-check.dto';
 
 @Injectable()
 export class ChecksService {
+  private readonly logger = new Logger(ChecksService.name);
+
   constructor(
     @InjectRepository(Check)
     private checkRepo: Repository<Check>,
@@ -109,13 +111,14 @@ export class ChecksService {
       return line;
     });
 
-    const serviceTotal = serviceLines.reduce((sum, s) => sum + Number(s.total), 0);
-    const productTotal = productLines.reduce((sum, p) => sum + Number(p.totalSell), 0);
-    const totalRevenue = serviceTotal + productTotal;
-    const productCostTotal = productLines.reduce((sum, p) => sum + Number(p.totalCost), 0);
-    const serviceSalaryTotal = serviceTotal * (Number(master.salaryPercent) / 100);
-    const totalCost = productCostTotal + serviceSalaryTotal;
-    const profit = totalRevenue - totalCost;
+    const serviceTotal = serviceLines.reduce((sum, s) => sum + Number(s.total || 0), 0);
+    const productTotal = productLines.reduce((sum, p) => sum + Number(p.totalSell || 0), 0);
+    const totalRevenue = Math.round((serviceTotal + productTotal) * 100) / 100;
+    const productCostTotal = productLines.reduce((sum, p) => sum + Number(p.totalCost || 0), 0);
+    const salaryPercent = Number(master.salaryPercent) || 0;
+    const serviceSalaryTotal = Math.round(serviceTotal * (salaryPercent / 100) * 100) / 100;
+    const totalCost = Math.round((productCostTotal + serviceSalaryTotal) * 100) / 100;
+    const profit = Math.round((totalRevenue - totalCost) * 100) / 100;
 
     // Auto-generate check number per tenant
     const lastCheck = await this.checkRepo
@@ -163,7 +166,9 @@ export class ChecksService {
           saved.id,
         );
       } catch (e) {
-        // continue even if stock adjustment fails
+        this.logger.warn(
+          `Не удалось списать товар ${p.productId} (кол-во: ${p.quantity}) для чека #${saved.number}: ${e.message}`,
+        );
       }
     }
 

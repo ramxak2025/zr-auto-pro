@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Supplier } from './entities/supplier.entity';
 import { Delivery } from './entities/delivery.entity';
 import { DeliveryItem } from './entities/delivery-item.entity';
@@ -24,6 +24,7 @@ export class SuppliersService {
     @InjectRepository(SupplierPayment)
     private readonly paymentRepo: Repository<SupplierPayment>,
     private readonly productsService: ProductsService,
+    private readonly dataSource: DataSource,
   ) {}
 
   // ─── Supplier CRUD ───────────────────────────────────────────
@@ -83,60 +84,76 @@ export class SuppliersService {
   // ─── Deliveries ──────────────────────────────────────────────
 
   async createDelivery(tenantId: string, dto: CreateDeliveryDto, userId: string): Promise<Delivery> {
-    const supplier = await this.findById(tenantId, dto.supplierId);
+    return this.dataSource.transaction(async (manager) => {
+      // Lock supplier row to prevent concurrent financial updates
+      const supplier = await manager
+        .createQueryBuilder(Supplier, 'supplier')
+        .setLock('pessimistic_write')
+        .where('supplier.id = :id AND supplier.tenantId = :tenantId', {
+          id: dto.supplierId,
+          tenantId,
+        })
+        .getOne();
 
-    // Build delivery items and calculate totals
-    const deliveryItems: Partial<DeliveryItem>[] = [];
-    let totalAmount = 0;
+      if (!supplier) {
+        throw new NotFoundException(`Supplier with id ${dto.supplierId} not found`);
+      }
 
-    for (const item of dto.items) {
-      const itemTotal = item.quantity * item.price;
-      totalAmount += itemTotal;
+      // Build delivery items and calculate totals
+      const deliveryItems: Partial<DeliveryItem>[] = [];
+      let totalAmount = 0;
 
-      deliveryItems.push({
-        productId: item.productId,
-        quantity: item.quantity,
-        price: item.price,
-        total: itemTotal,
-      });
-    }
+      for (const item of dto.items) {
+        const itemTotal = Math.round(item.quantity * item.price * 100) / 100;
+        totalAmount += itemTotal;
 
-    // Create and save the delivery with items (cascade saves items)
-    const delivery = this.deliveryRepo.create({
-      supplierId: dto.supplierId,
-      comment: dto.comment,
-      date: dto.date || new Date(),
-      totalAmount,
-      tenantId,
-      items: deliveryItems as DeliveryItem[],
-    });
+        deliveryItems.push({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.price,
+          total: itemTotal,
+        });
+      }
 
-    const savedDelivery = await this.deliveryRepo.save(delivery);
+      totalAmount = Math.round(totalAmount * 100) / 100;
 
-    // For each item: adjust product stock and update costPrice
-    for (const item of dto.items) {
-      await this.productsService.adjustStock(
+      // Create and save the delivery with items (cascade saves items)
+      const delivery = manager.create(Delivery, {
+        supplierId: dto.supplierId,
+        comment: dto.comment,
+        date: dto.date || new Date(),
+        totalAmount,
         tenantId,
-        item.productId,
-        item.quantity,
-        MovementType.INCOME,
-        userId,
-        'Supplier delivery',
-        savedDelivery.id,
-      );
-
-      // Update product costPrice to the delivery price
-      await this.productsService.update(tenantId, item.productId, {
-        costPrice: item.price,
+        items: deliveryItems as DeliveryItem[],
       });
-    }
 
-    // Update supplier financial totals
-    supplier.totalPurchases = Number(supplier.totalPurchases) + totalAmount;
-    supplier.currentDebt = Number(supplier.currentDebt) + totalAmount;
-    await this.repo.save(supplier);
+      const savedDelivery = await manager.save(Delivery, delivery);
 
-    return savedDelivery;
+      // For each item: adjust product stock and update costPrice
+      for (const item of dto.items) {
+        await this.productsService.adjustStock(
+          tenantId,
+          item.productId,
+          item.quantity,
+          MovementType.INCOME,
+          userId,
+          'Поставка',
+          savedDelivery.id,
+        );
+
+        // Update product costPrice to the delivery price
+        await this.productsService.update(tenantId, item.productId, {
+          costPrice: item.price,
+        });
+      }
+
+      // Update supplier financial totals atomically
+      supplier.totalPurchases = Math.round((Number(supplier.totalPurchases) + totalAmount) * 100) / 100;
+      supplier.currentDebt = Math.round((Number(supplier.currentDebt) + totalAmount) * 100) / 100;
+      await manager.save(Supplier, supplier);
+
+      return savedDelivery;
+    });
   }
 
   async getDeliveries(
@@ -162,24 +179,38 @@ export class SuppliersService {
   // ─── Payments ────────────────────────────────────────────────
 
   async createPayment(tenantId: string, dto: CreatePaymentDto): Promise<SupplierPayment> {
-    const supplier = await this.findById(tenantId, dto.supplierId);
+    return this.dataSource.transaction(async (manager) => {
+      // Lock supplier row to prevent concurrent financial updates
+      const supplier = await manager
+        .createQueryBuilder(Supplier, 'supplier')
+        .setLock('pessimistic_write')
+        .where('supplier.id = :id AND supplier.tenantId = :tenantId', {
+          id: dto.supplierId,
+          tenantId,
+        })
+        .getOne();
 
-    const payment = this.paymentRepo.create({
-      supplierId: dto.supplierId,
-      amount: dto.amount,
-      comment: dto.comment,
-      date: dto.date || new Date(),
-      tenantId,
+      if (!supplier) {
+        throw new NotFoundException(`Supplier with id ${dto.supplierId} not found`);
+      }
+
+      const payment = manager.create(SupplierPayment, {
+        supplierId: dto.supplierId,
+        amount: dto.amount,
+        comment: dto.comment,
+        date: dto.date || new Date(),
+        tenantId,
+      });
+
+      const savedPayment = await manager.save(SupplierPayment, payment);
+
+      // Update supplier financial totals atomically
+      supplier.totalPaid = Math.round((Number(supplier.totalPaid) + dto.amount) * 100) / 100;
+      supplier.currentDebt = Math.round((Number(supplier.currentDebt) - dto.amount) * 100) / 100;
+      await manager.save(Supplier, supplier);
+
+      return savedPayment;
     });
-
-    const savedPayment = await this.paymentRepo.save(payment);
-
-    // Update supplier financial totals
-    supplier.totalPaid = Number(supplier.totalPaid) + dto.amount;
-    supplier.currentDebt = Number(supplier.currentDebt) - dto.amount;
-    await this.repo.save(supplier);
-
-    return savedPayment;
   }
 
   async getPayments(

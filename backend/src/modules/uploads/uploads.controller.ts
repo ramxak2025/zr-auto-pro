@@ -70,6 +70,14 @@ export class UploadsController {
     @Param('filename') filename: string,
     @Res() res: Response,
   ) {
+    // Prevent path traversal attacks
+    if (
+      folder.includes('..') || folder.includes('/') || folder.includes('\\') ||
+      filename.includes('..') || filename.includes('/') || filename.includes('\\')
+    ) {
+      throw new BadRequestException('Invalid file path');
+    }
+
     const relativePath = `${folder}/${filename}`;
     const filePath = this.uploadsService.getLocalFilePath(relativePath);
 
@@ -77,6 +85,8 @@ export class UploadsController {
       throw new NotFoundException('Файл не найден');
     }
 
+    // Set cache headers so images load fast for all employees
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     res.sendFile(filePath);
   }
 }

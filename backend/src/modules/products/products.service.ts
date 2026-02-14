@@ -4,7 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual } from 'typeorm';
+import { Repository, DataSource, LessThanOrEqual } from 'typeorm';
 import { Product } from './entities/product.entity';
 import {
   StockMovement,
@@ -20,6 +20,7 @@ export class ProductsService {
     private readonly repo: Repository<Product>,
     @InjectRepository(StockMovement)
     private readonly movementRepo: Repository<StockMovement>,
+    private readonly dataSource: DataSource,
   ) {}
 
   async findAll(tenantId: string, query: {
@@ -113,49 +114,60 @@ export class ProductsService {
     reason?: string,
     referenceId?: string,
   ): Promise<StockMovement> {
-    const product = await this.findById(tenantId, productId);
-    const stockBefore = product.stock;
+    return this.dataSource.transaction(async (manager) => {
+      // Lock the product row to prevent concurrent modifications
+      const product = await manager
+        .createQueryBuilder(Product, 'product')
+        .setLock('pessimistic_write')
+        .where('product.id = :id AND product.tenantId = :tenantId', { id: productId, tenantId })
+        .getOne();
 
-    let stockAfter: number;
+      if (!product) {
+        throw new NotFoundException(`Product with ID "${productId}" not found`);
+      }
 
-    switch (type) {
-      case MovementType.INCOME:
-        stockAfter = stockBefore + Math.abs(quantity);
-        break;
-      case MovementType.EXPENSE:
-      case MovementType.WRITEOFF:
-        stockAfter = stockBefore - Math.abs(quantity);
-        if (stockAfter < 0) {
-          throw new BadRequestException(
-            `Insufficient stock. Current: ${stockBefore}, requested: ${Math.abs(quantity)}`,
-          );
-        }
-        break;
-      case MovementType.INVENTORY:
-        stockAfter = quantity;
-        break;
-      default:
-        throw new BadRequestException(`Unknown movement type: ${type}`);
-    }
+      const stockBefore = Number(product.stock);
+      let stockAfter: number;
 
-    const movement = this.movementRepo.create({
-      productId,
-      type,
-      quantity,
-      stockBefore,
-      stockAfter,
-      reason,
-      referenceId,
-      userId,
-      tenantId,
+      switch (type) {
+        case MovementType.INCOME:
+          stockAfter = stockBefore + Math.abs(quantity);
+          break;
+        case MovementType.EXPENSE:
+        case MovementType.WRITEOFF:
+          stockAfter = stockBefore - Math.abs(quantity);
+          if (stockAfter < 0) {
+            throw new BadRequestException(
+              `Недостаточно на складе. Текущий остаток: ${stockBefore}, запрошено: ${Math.abs(quantity)}`,
+            );
+          }
+          break;
+        case MovementType.INVENTORY:
+          stockAfter = quantity;
+          break;
+        default:
+          throw new BadRequestException(`Unknown movement type: ${type}`);
+      }
+
+      const movement = manager.create(StockMovement, {
+        productId,
+        type,
+        quantity,
+        stockBefore,
+        stockAfter,
+        reason,
+        referenceId,
+        userId,
+        tenantId,
+      });
+
+      await manager.save(StockMovement, movement);
+
+      product.stock = stockAfter;
+      await manager.save(Product, product);
+
+      return movement;
     });
-
-    await this.movementRepo.save(movement);
-
-    product.stock = stockAfter;
-    await this.repo.save(product);
-
-    return movement;
   }
 
   async getMovements(

@@ -8,6 +8,7 @@ import {
   IsArray,
   ValidateNested,
   IsDateString,
+  Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaymentMethod } from '../entities/check.entity';
@@ -25,9 +26,11 @@ export class CreateCheckServiceDto {
   name: string;
 
   @IsNumber()
+  @Min(0)
   price: number;
 
   @IsNumber()
+  @Min(1)
   quantity: number;
 }
 
@@ -39,12 +42,15 @@ export class CreateCheckProductDto {
   name: string;
 
   @IsNumber()
+  @Min(0)
   sellPrice: number;
 
   @IsNumber()
+  @Min(0)
   costPrice: number;
 
   @IsNumber()
+  @Min(1)
   quantity: number;
 }
 

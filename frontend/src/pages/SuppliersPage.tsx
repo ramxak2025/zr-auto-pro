@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -117,12 +117,12 @@ function SupplierFormModal({
   const [comment, setComment] = useState(supplier?.comment || '');
 
   // Reset form when modal opens with new data
-  useState(() => {
+  useEffect(() => {
     setName(supplier?.name || '');
     setPhone(supplier?.phone || '');
     setContactPerson(supplier?.contactPerson || '');
     setComment(supplier?.comment || '');
-  });
+  }, [supplier]);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
