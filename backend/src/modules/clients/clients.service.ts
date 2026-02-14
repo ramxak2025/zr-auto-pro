@@ -24,7 +24,7 @@ export class ClientsService {
 
     if (query.search) {
       qb.andWhere(
-        `(client.fullName ILIKE :search OR client.phone ILIKE :search OR EXISTS (SELECT 1 FROM cars sc WHERE sc."clientId" = client.id AND sc."deletedAt" IS NULL AND (sc."plateNumber" ILIKE :search OR sc."makeModel" ILIKE :search)))`,
+        `(client.fullName ILIKE :search OR client.phone ILIKE :search OR client.id IN (SELECT sc."clientId" FROM cars sc WHERE sc."tenantId" = :tenantId AND sc."deletedAt" IS NULL AND (sc."plateNumber" ILIKE :search OR sc."makeModel" ILIKE :search)))`,
         { search: `%${query.search}%` },
       );
     }
