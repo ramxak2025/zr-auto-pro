@@ -18,13 +18,13 @@ export class ClientsService {
     const skip = (page - 1) * limit;
 
     const qb = this.repo.createQueryBuilder('client');
-    qb.leftJoinAndSelect('client.cars', 'car');
+    qb.leftJoinAndSelect('client.cars', 'car', 'car.deletedAt IS NULL');
 
     qb.where('client.tenantId = :tenantId', { tenantId });
 
     if (query.search) {
       qb.andWhere(
-        '(client.fullName ILIKE :search OR client.phone ILIKE :search OR car.plateNumber ILIKE :search OR car.makeModel ILIKE :search)',
+        `(client.fullName ILIKE :search OR client.phone ILIKE :search OR EXISTS (SELECT 1 FROM cars sc WHERE sc."clientId" = client.id AND sc."deletedAt" IS NULL AND (sc."plateNumber" ILIKE :search OR sc."makeModel" ILIKE :search)))`,
         { search: `%${query.search}%` },
       );
     }
