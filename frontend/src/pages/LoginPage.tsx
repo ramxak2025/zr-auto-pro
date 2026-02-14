@@ -74,7 +74,7 @@ export default function LoginPage() {
         <div className="absolute top-1/2 left-1/3 h-64 w-64 rounded-full bg-blue-100/20 blur-3xl" />
 
         <div className="relative z-10 animate-fade-in">
-          <img src="/logo.png" alt="ZR Auto Pro" className="h-16 xl:h-20 object-contain object-left drop-shadow-md" />
+          <img src="/logo.png" alt="ZR Auto Pro" className="h-12 xl:h-14 w-auto drop-shadow-md" />
         </div>
 
         <div className="relative z-10 max-w-lg">
@@ -108,7 +108,7 @@ export default function LoginPage() {
       {/* Mobile: logo */}
       <div className="lg:hidden flex flex-col items-center justify-center bg-white pt-10 pb-3 min-h-[25dvh]">
         <div className="animate-scale-in w-full flex justify-center px-4 overflow-hidden">
-          <img src="/logo.png" alt="ZR Auto Pro" className="w-[85vw] max-w-[400px] object-contain drop-shadow-md" />
+          <img src="/logo.png" alt="ZR Auto Pro" className="h-10 w-auto max-w-[75vw] drop-shadow-md" />
         </div>
         <p className="mt-3 text-sm text-gray-400 font-medium tracking-wide animate-fade-in [animation-delay:300ms]">
           Система управления автосервисом
