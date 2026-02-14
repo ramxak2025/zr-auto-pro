@@ -46,6 +46,13 @@ async function migrateEnumsToVarchar() {
         defaultVal: "'unpaid'",
         length: 20,
       },
+      {
+        table: 'stock_movements',
+        column: 'type',
+        enumType: 'stock_movements_type_enum',
+        defaultVal: "'income'",
+        length: 20,
+      },
     ];
 
     for (const m of migrations) {

@@ -31,7 +31,7 @@ export class StockMovement {
   @Column('uuid')
   productId: string;
 
-  @Column({ type: 'enum', enum: MovementType })
+  @Column({ type: 'varchar', length: 20, default: 'income' })
   type: MovementType;
 
   @Column({ type: 'int' })
