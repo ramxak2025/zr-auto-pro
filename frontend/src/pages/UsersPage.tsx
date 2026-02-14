@@ -17,6 +17,7 @@ import Pagination from '../components/Pagination';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
+import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../components/PhoneInput';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -124,8 +125,8 @@ function UserFormModal({
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!username.trim()) {
-      toast.error('Введите логин');
+    if (!username.trim() || !isPhoneComplete(username)) {
+      toast.error('Введите телефон полностью');
       return;
     }
     if (!isEdit && !password.trim()) {
@@ -137,7 +138,7 @@ function UserFormModal({
       return;
     }
     onSubmit({
-      username: username.trim(),
+      username: getPhoneRaw(username),
       password: password.trim(),
       fullName: fullName.trim(),
       role,
@@ -154,13 +155,11 @@ function UserFormModal({
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Логин <span className="text-red-500">*</span>
+            Телефон <span className="text-red-500">*</span>
           </label>
-          <input
-            type="text"
+          <PhoneInput
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="login"
+            onChange={setUsername}
             className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           />
         </div>
@@ -291,7 +290,7 @@ function PermissionsModal({ isOpen, onClose, user }: PermissionsModalProps) {
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Права доступа - ${user.username}`} size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={`Права доступа - ${user.fullName}`} size="lg">
       <div className="space-y-3">
         {(Object.keys(PERMISSION_LABELS) as (keyof UserPermissions)[]).map((key) => (
           <div
@@ -461,7 +460,7 @@ export default function UsersPage() {
         <SearchInput
           value={search}
           onChange={handleSearchChange}
-          placeholder="Поиск по логину или ФИО..."
+          placeholder="Поиск по телефону или ФИО..."
         />
       </div>
 
@@ -526,7 +525,7 @@ export default function UsersPage() {
                     <div className="border-t border-gray-100 px-4 py-3 space-y-3 bg-gray-50/50">
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
-                          <p className="text-[11px] text-gray-400 mb-0.5">Логин</p>
+                          <p className="text-[11px] text-gray-400 mb-0.5">Телефон</p>
                           <p className="font-medium text-gray-900">{u.username}</p>
                         </div>
                         {u.role === 'master' && (
@@ -563,7 +562,7 @@ export default function UsersPage() {
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50/50">
-                    <th className="px-4 py-3 font-semibold text-gray-600">Логин</th>
+                    <th className="px-4 py-3 font-semibold text-gray-600">Телефон</th>
                     <th className="px-4 py-3 font-semibold text-gray-600">ФИО</th>
                     <th className="px-4 py-3 font-semibold text-gray-600">Роль</th>
                     <th className="px-4 py-3 font-semibold text-gray-600 text-right">
@@ -672,7 +671,7 @@ export default function UsersPage() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         title="Удалить пользователя"
-        message={`Вы уверены, что хотите удалить пользователя "${deleteTarget?.username}"? Это действие нельзя отменить.`}
+        message={`Вы уверены, что хотите удалить пользователя "${deleteTarget?.fullName}"? Это действие нельзя отменить.`}
         confirmText="Удалить"
         variant="danger"
       />

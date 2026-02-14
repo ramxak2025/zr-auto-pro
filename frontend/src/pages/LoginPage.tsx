@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../components/PhoneInput';
 
 export default function LoginPage() {
   const { user, isLoading: authLoading, login } = useAuth();
@@ -37,19 +38,22 @@ export default function LoginPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
-    const trimmedUsername = username.trim();
-    if (!trimmedUsername || !password) {
-      toast.error('Введите логин и пароль');
+    if (!username.trim() || !isPhoneComplete(username)) {
+      toast.error('Введите телефон полностью');
+      return;
+    }
+    if (!password) {
+      toast.error('Введите пароль');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await login(trimmedUsername, password);
+      await login(getPhoneRaw(username), password);
       toast.success('Добро пожаловать!');
     } catch (err: any) {
       const message =
-        err?.response?.data?.message || 'Неверный логин или пароль';
+        err?.response?.data?.message || 'Неверный телефон или пароль';
       toast.error(message);
     } finally {
       setIsSubmitting(false);
@@ -121,13 +125,16 @@ export default function LoginPage() {
         <div className="bg-gray-50 px-6 pb-8">
           <div className="animate-fade-in-up [animation-delay:200ms] max-w-sm mx-auto bg-white rounded-2xl shadow-lg shadow-gray-200/60 border border-gray-100 p-6">
             <h2 className="text-xl font-bold text-gray-900 tracking-tight">Вход в систему</h2>
-            <p className="mt-1 text-[13px] text-gray-500 mb-5">Введите данные для входа</p>
+            <p className="mt-1 text-[13px] text-gray-500 mb-5">Введите телефон и пароль</p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label htmlFor="username" className="block text-[13px] font-medium text-gray-600 mb-1.5">Логин</label>
-                <input id="username" type="text" autoComplete="username" autoFocus value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Введите логин" disabled={isSubmitting}
-                  className="block w-full rounded-xl border border-gray-200 bg-gray-50/60 px-4 py-3 text-[15px] text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:bg-white focus:ring-4 focus:ring-primary-500/10 focus:outline-none disabled:bg-gray-100 disabled:text-gray-500 transition-all" />
+                <label htmlFor="username" className="block text-[13px] font-medium text-gray-600 mb-1.5">Телефон</label>
+                <PhoneInput
+                  value={username}
+                  onChange={setUsername}
+                  className="block w-full rounded-xl border border-gray-200 bg-gray-50/60 px-4 py-3 text-[15px] text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:bg-white focus:ring-4 focus:ring-primary-500/10 focus:outline-none disabled:bg-gray-100 disabled:text-gray-500 transition-all"
+                />
               </div>
               <div>
                 <label htmlFor="password" className="block text-[13px] font-medium text-gray-600 mb-1.5">Пароль</label>
@@ -157,14 +164,17 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           <div className="mb-8 animate-fade-in-down">
             <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Войти в систему</h2>
-            <p className="mt-1.5 text-sm text-gray-500">Введите данные для входа в аккаунт</p>
+            <p className="mt-1.5 text-sm text-gray-500">Введите телефон и пароль</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5 animate-fade-in-up [animation-delay:100ms]">
             <div>
-              <label htmlFor="username-desktop" className="block text-[13px] font-medium text-gray-600 mb-2">Логин</label>
-              <input id="username-desktop" type="text" autoComplete="username" autoFocus value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Введите логин" disabled={isSubmitting}
-                className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3 text-[15px] text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:bg-white focus:ring-4 focus:ring-primary-500/10 focus:outline-none disabled:bg-gray-100 disabled:text-gray-500 transition-all" />
+              <label htmlFor="username-desktop" className="block text-[13px] font-medium text-gray-600 mb-2">Телефон</label>
+              <PhoneInput
+                value={username}
+                onChange={setUsername}
+                className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3 text-[15px] text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:bg-white focus:ring-4 focus:ring-primary-500/10 focus:outline-none disabled:bg-gray-100 disabled:text-gray-500 transition-all"
+              />
             </div>
             <div>
               <label htmlFor="password-desktop" className="block text-[13px] font-medium text-gray-600 mb-2">Пароль</label>

@@ -20,6 +20,7 @@ import Pagination from '../../components/Pagination';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
+import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../../components/PhoneInput';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -119,7 +120,19 @@ function CreateTenantModal({
       toast.error('Заполните все обязательные поля');
       return;
     }
-    createMutation.mutate(form);
+    if (!isPhoneComplete(form.ownerUsername)) {
+      toast.error('Введите телефон директора полностью');
+      return;
+    }
+    if (form.phone.trim() && !isPhoneComplete(form.phone)) {
+      toast.error('Введите телефон автосервиса полностью');
+      return;
+    }
+    createMutation.mutate({
+      ...form,
+      ownerUsername: getPhoneRaw(form.ownerUsername),
+      phone: form.phone.trim() ? getPhoneRaw(form.phone) : '',
+    });
   }
 
   function handleChange(field: keyof CreateTenantForm, value: string | number) {
@@ -152,8 +165,11 @@ function CreateTenantModal({
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Телефон</label>
-              <input type="text" value={form.phone} onChange={(e) => handleChange('phone', e.target.value)}
-                placeholder="+7 (999) 123-45-67" className={inputClass} />
+              <PhoneInput
+                value={form.phone}
+                onChange={(v) => handleChange('phone', v)}
+                className={inputClass}
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -196,10 +212,14 @@ function CreateTenantModal({
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Логин <span className="text-red-500">*</span>
+                Телефон директора <span className="text-red-500">*</span>
               </label>
-              <input type="text" value={form.ownerUsername} onChange={(e) => handleChange('ownerUsername', e.target.value)}
-                placeholder="director_login" required className={inputClass} />
+              <PhoneInput
+                value={form.ownerUsername}
+                onChange={(v) => handleChange('ownerUsername', v)}
+                className={inputClass}
+                required
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">

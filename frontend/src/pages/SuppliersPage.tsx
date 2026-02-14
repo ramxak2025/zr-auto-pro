@@ -18,6 +18,7 @@ import type { Supplier, PaginatedResponse } from '../types';
 import SearchInput from '../components/SearchInput';
 import Pagination from '../components/Pagination';
 import Modal from '../components/Modal';
+import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../components/PhoneInput';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -130,9 +131,13 @@ function SupplierFormModal({
       toast.error('Введите название поставщика');
       return;
     }
+    if (phone.trim() && !isPhoneComplete(phone)) {
+      toast.error('Введите телефон полностью');
+      return;
+    }
     onSubmit({
       name: trimmedName,
-      phone: phone.trim(),
+      phone: phone.trim() ? getPhoneRaw(phone) : '',
       contactPerson: contactPerson.trim(),
       comment: comment.trim(),
     });
@@ -164,11 +169,9 @@ function SupplierFormModal({
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
             Телефон
           </label>
-          <input
-            type="text"
+          <PhoneInput
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="+7 (___) ___-__-__"
+            onChange={setPhone}
             className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
         </div>

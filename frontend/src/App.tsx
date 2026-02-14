@@ -20,6 +20,7 @@ import UsersPage from './pages/UsersPage';
 import MorePage from './pages/MorePage';
 import CashFlowPage from './pages/CashFlowPage';
 import SchedulePage from './pages/SchedulePage';
+import TariffPage from './pages/TariffPage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminTenantsPage from './pages/admin/AdminTenantsPage';
 import AdminTenantDetailPage from './pages/admin/AdminTenantDetailPage';
@@ -72,6 +73,7 @@ function AppRoutes() {
         <Route path="/schedule" element={<SchedulePage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/cashflow" element={<CashFlowPage />} />
+        <Route path="/tariff" element={<TariffPage />} />
         <Route path="/more" element={<MorePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

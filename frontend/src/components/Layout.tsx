@@ -22,6 +22,7 @@ import {
   StopCircle,
   Clock,
   Loader2,
+  CreditCard,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { shiftsApi } from '../api/services';
@@ -33,6 +34,7 @@ interface NavItem {
   path: string;
   icon: typeof LayoutDashboard;
   permission?: keyof UserPermissions;
+  directorOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -47,6 +49,7 @@ const navItems: NavItem[] = [
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
   { label: 'График', path: '/schedule', icon: CalendarDays },
   { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management' },
+  { label: 'Тариф', path: '/tariff', icon: CreditCard, directorOnly: true },
 ];
 
 /** Bottom tab items for mobile (5 max like iOS) */
@@ -64,7 +67,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
   { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
   { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
   { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
-  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/schedule', '/users', '/cashflow'] },
+  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/schedule', '/users', '/cashflow', '/tariff'] },
 ];
 
 const roleBadgeColors: Record<string, string> = {
@@ -230,6 +233,9 @@ export default function Layout({ children }: { children: ReactNode }) {
           <ul className="space-y-1">
             {navItems.map((item) => {
               if (item.permission && !hasPermission(item.permission)) {
+                return null;
+              }
+              if (item.directorOnly && user?.role !== 'director') {
                 return null;
               }
 

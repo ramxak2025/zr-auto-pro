@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ArrowRightLeft,
   CalendarDays,
+  CreditCard,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import type { UserPermissions } from '../types';
@@ -20,6 +21,7 @@ interface MenuItem {
   path: string;
   icon: typeof Users;
   permission?: keyof UserPermissions;
+  directorOnly?: boolean;
   color: string;
   iconColor: string;
 }
@@ -93,6 +95,15 @@ const menuItems: MenuItem[] = [
     color: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
   },
+  {
+    label: 'Тариф',
+    description: 'Подписка и оплата',
+    path: '/tariff',
+    icon: CreditCard,
+    directorOnly: true,
+    color: 'bg-rose-50',
+    iconColor: 'text-rose-600',
+  },
 ];
 
 const roleLabels: Record<string, string> = {
@@ -127,6 +138,9 @@ export default function MorePage() {
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100 overflow-hidden">
         {menuItems.map((item) => {
           if (item.permission && !hasPermission(item.permission)) {
+            return null;
+          }
+          if (item.directorOnly && user?.role !== 'director') {
             return null;
           }
 

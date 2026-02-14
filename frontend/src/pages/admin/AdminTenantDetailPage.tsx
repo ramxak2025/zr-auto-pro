@@ -26,6 +26,7 @@ import type { Tenant, User } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../../components/PhoneInput';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -191,7 +192,11 @@ function EditTenantModal({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) { toast.error('Название обязательно'); return; }
-    updateMutation.mutate(form);
+    if (form.phone.trim() && !isPhoneComplete(form.phone)) { toast.error('Введите телефон полностью'); return; }
+    updateMutation.mutate({
+      ...form,
+      phone: form.phone.trim() ? getPhoneRaw(form.phone) : '',
+    });
   }
 
   function handleChange(field: keyof EditTenantForm, value: string | number) {
@@ -211,7 +216,11 @@ function EditTenantModal({
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Телефон</label>
-            <input type="text" value={form.phone} onChange={(e) => handleChange('phone', e.target.value)} className={inputClass} />
+            <PhoneInput
+              value={form.phone}
+              onChange={(v) => handleChange('phone', v)}
+              className={inputClass}
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
@@ -496,7 +505,7 @@ export default function AdminTenantDetailPage() {
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-[11px] text-gray-400 flex items-center gap-1"><UserCircle className="h-3 w-3" />Логин</p>
+                    <p className="text-[11px] text-gray-400 flex items-center gap-1"><UserCircle className="h-3 w-3" />Телефон</p>
                     <p className="text-sm font-mono font-semibold text-purple-700">{ownerUser.username}</p>
                   </div>
                   <CopyButton text={ownerUser.username} />
