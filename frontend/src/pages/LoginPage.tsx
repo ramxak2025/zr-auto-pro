@@ -106,11 +106,11 @@ export default function LoginPage() {
       </div>
 
       {/* Mobile: logo */}
-      <div className="lg:hidden flex flex-col items-center justify-center bg-white pt-10 pb-3 min-h-[25dvh]">
-        <div className="animate-scale-in w-full flex justify-center px-4 overflow-hidden">
-          <img src="/logo.png" alt="ZR Auto Pro" className="h-10 w-auto max-w-[75vw] drop-shadow-md" />
+      <div className="lg:hidden flex flex-col items-center justify-center bg-white pt-6 pb-2">
+        <div className="animate-scale-in w-full flex justify-center px-6">
+          <img src="/logo.png" alt="ZR Auto Pro" className="h-9 w-auto max-w-[70vw] drop-shadow-md" />
         </div>
-        <p className="mt-3 text-sm text-gray-400 font-medium tracking-wide animate-fade-in [animation-delay:300ms]">
+        <p className="mt-2 text-sm text-gray-400 font-medium tracking-wide animate-fade-in [animation-delay:300ms]">
           Система управления автосервисом
         </p>
       </div>

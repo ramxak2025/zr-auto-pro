@@ -123,7 +123,7 @@ export class User {
   isActive: boolean;
 
   @Index()
-  @ManyToOne(() => Tenant, (tenant) => tenant.users, { nullable: true, onDelete: 'CASCADE' })
+  @ManyToOne(() => Tenant, (tenant) => tenant.users, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'tenantId' })
   tenant: Tenant;
 

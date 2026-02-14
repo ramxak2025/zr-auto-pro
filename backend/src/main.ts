@@ -121,6 +121,33 @@ async function migrateEnumsToVarchar() {
       if (updated.rowCount > 0) {
         logger.log(`Migrated ${updated.rowCount} users from 'owner' to 'director' role`);
       }
+
+      // Change CASCADE → SET NULL on users.tenantId FK to prevent data loss
+      const fkCheck = await client.query(`
+        SELECT rc.delete_rule
+        FROM information_schema.referential_constraints rc
+        JOIN information_schema.key_column_usage kcu
+          ON rc.constraint_name = kcu.constraint_name
+        WHERE kcu.table_name = 'users' AND kcu.column_name = 'tenantId'
+        LIMIT 1
+      `);
+      if (fkCheck.rowCount > 0 && fkCheck.rows[0].delete_rule === 'CASCADE') {
+        const fkName = await client.query(`
+          SELECT kcu.constraint_name
+          FROM information_schema.key_column_usage kcu
+          WHERE kcu.table_name = 'users' AND kcu.column_name = 'tenantId'
+          LIMIT 1
+        `);
+        if (fkName.rowCount > 0) {
+          const name = fkName.rows[0].constraint_name;
+          await client.query(`ALTER TABLE "users" DROP CONSTRAINT "${name}"`);
+          await client.query(`
+            ALTER TABLE "users" ADD CONSTRAINT "${name}"
+            FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE SET NULL
+          `);
+          logger.log('Changed users.tenantId FK from CASCADE to SET NULL');
+        }
+      }
     }
 
     logger.log('Pre-startup migration complete');
