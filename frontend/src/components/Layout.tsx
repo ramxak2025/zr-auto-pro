@@ -1,5 +1,7 @@
 import { type ReactNode } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import toast from 'react-hot-toast';
 import {
   LayoutDashboard,
   Users,
@@ -15,9 +17,16 @@ import {
   MoreHorizontal,
   Receipt,
   BookOpen,
+  CalendarDays,
+  PlayCircle,
+  StopCircle,
+  Clock,
+  Loader2,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import type { UserPermissions } from '../types';
+import { shiftsApi } from '../api/services';
+import { getApiError } from '../api/axios';
+import type { UserPermissions, Shift } from '../types';
 
 interface NavItem {
   label: string;
@@ -36,6 +45,7 @@ const navItems: NavItem[] = [
   { label: 'Движение денег', path: '/cashflow', icon: Wallet },
   { label: 'Зарплата', path: '/salary', icon: Wallet },
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
+  { label: 'График', path: '/schedule', icon: CalendarDays },
   { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management' },
 ];
 
@@ -54,7 +64,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
   { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
   { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
   { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
-  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow'] },
+  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/schedule', '/users', '/cashflow'] },
 ];
 
 const roleBadgeColors: Record<string, string> = {
@@ -112,6 +122,92 @@ function isTabActive(tab: TabItem, pathname: string): boolean {
     return tab.matchPaths.some((p) => pathname === p || pathname.startsWith(p + '/'));
   }
   return pathname === tab.path;
+}
+
+// ---------------------------------------------------------------------------
+// Shift open/close button
+// ---------------------------------------------------------------------------
+
+function ShiftButton() {
+  const queryClient = useQueryClient();
+
+  const { data: shift, isLoading } = useQuery<Shift | null>({
+    queryKey: ['my-shift'],
+    queryFn: async () => {
+      const res = await shiftsApi.getMyShift();
+      return res.data;
+    },
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+  });
+
+  const openMutation = useMutation({
+    mutationFn: () => shiftsApi.openShift(),
+    onSuccess: () => {
+      toast.success('Смена открыта');
+      queryClient.invalidateQueries({ queryKey: ['my-shift'] });
+      queryClient.invalidateQueries({ queryKey: ['today-status'] });
+    },
+    onError: (err) => toast.error(getApiError(err, 'Не удалось открыть смену')),
+  });
+
+  const closeMutation = useMutation({
+    mutationFn: () => shiftsApi.closeShift(),
+    onSuccess: () => {
+      toast.success('Смена закрыта');
+      queryClient.invalidateQueries({ queryKey: ['my-shift'] });
+      queryClient.invalidateQueries({ queryKey: ['today-status'] });
+    },
+    onError: (err) => toast.error(getApiError(err, 'Не удалось закрыть смену')),
+  });
+
+  const isPending = openMutation.isPending || closeMutation.isPending;
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl bg-gray-100 px-3 py-2 text-xs text-gray-400">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      </div>
+    );
+  }
+
+  const isOpen = shift && !shift.closedAt;
+
+  if (isOpen) {
+    const openedAt = new Date(shift.openedAt);
+    const hrs = openedAt.getHours().toString().padStart(2, '0');
+    const mins = openedAt.getMinutes().toString().padStart(2, '0');
+
+    return (
+      <button
+        type="button"
+        onClick={() => closeMutation.mutate()}
+        disabled={isPending}
+        className="flex items-center gap-2 rounded-xl bg-green-50 border border-green-200 px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100 transition-all disabled:opacity-50 group"
+      >
+        <div className="relative">
+          <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+        </div>
+        <Clock className="h-3.5 w-3.5" />
+        <span>Смена с {hrs}:{mins}</span>
+        <StopCircle className="h-3.5 w-3.5 text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+        {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => openMutation.mutate()}
+      disabled={isPending}
+      className="flex items-center gap-2 rounded-xl bg-primary-50 border border-primary-200 px-3 py-2 text-xs font-medium text-primary-700 hover:bg-primary-100 transition-all disabled:opacity-50"
+    >
+      <PlayCircle className="h-3.5 w-3.5" />
+      <span>Открыть смену</span>
+      {isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+    </button>
+  );
 }
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -205,8 +301,9 @@ export default function Layout({ children }: { children: ReactNode }) {
             ))}
           </div>
 
-          {/* User info + logout */}
+          {/* Shift + User info + logout */}
           <div className="flex items-center gap-4">
+            <ShiftButton />
             <div className="flex items-center gap-2.5">
               <span className="text-sm font-medium text-gray-700">
                 {user?.fullName}
@@ -233,8 +330,11 @@ export default function Layout({ children }: { children: ReactNode }) {
         {/* ─── Mobile top bar ─── */}
         <header className="md:hidden sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white pl-3 pr-4">
           <img src="/logo.png" alt="Autexa" className="h-10 aspect-[7/2] object-cover object-center" />
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-50 text-primary-700 text-xs font-semibold">
-            {user?.fullName?.charAt(0) || 'U'}
+          <div className="flex items-center gap-2">
+            <ShiftButton />
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-50 text-primary-700 text-xs font-semibold">
+              {user?.fullName?.charAt(0) || 'U'}
+            </div>
           </div>
         </header>
 

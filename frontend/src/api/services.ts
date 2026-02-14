@@ -18,6 +18,10 @@ import type {
   SalarySummary,
   DashboardStats,
   EmployeeRanking,
+  Shift,
+  ScheduleEntry,
+  WorkMode,
+  TodayEmployeeStatus,
 } from '../types';
 
 // Auth
@@ -174,4 +178,35 @@ export const reportsApi = {
     api.get('/reports/by-product', { params }),
   getDashboard: () => api.get<DashboardStats>('/reports/dashboard'),
   getEmployeeRanking: () => api.get<EmployeeRanking>('/reports/employee-ranking'),
+};
+
+// Shifts
+export const shiftsApi = {
+  openShift: () => api.post<Shift>('/shifts/open'),
+  closeShift: (note?: string) => api.post<Shift>('/shifts/close', { note }),
+  getMyShift: () => api.get<Shift | null>('/shifts/my'),
+  getTodayShifts: () => api.get<Shift[]>('/shifts/today'),
+  getHistory: (params?: Record<string, any>) =>
+    api.get<PaginatedResponse<Shift>>('/shifts/history', { params }),
+};
+
+// Schedule
+export const scheduleApi = {
+  getSchedule: (params: { dateFrom: string; dateTo: string; userId?: string }) =>
+    api.get<ScheduleEntry[]>('/schedule', { params }),
+  getTodayStatus: () => api.get<TodayEmployeeStatus[]>('/schedule/today-status'),
+  createEntry: (data: any) => api.post<ScheduleEntry>('/schedule/entry', data),
+  updateEntry: (id: string, data: any) => api.patch<ScheduleEntry>(`/schedule/entry/${id}`, data),
+  generateSchedule: (data: {
+    userId: string;
+    workModeId: string;
+    dateFrom: string;
+    dateTo: string;
+    startOffset?: number;
+  }) => api.post<ScheduleEntry[]>('/schedule/generate', data),
+  getWorkModes: () => api.get<WorkMode[]>('/schedule/work-modes'),
+  createWorkMode: (data: any) => api.post<WorkMode>('/schedule/work-modes', data),
+  updateWorkMode: (id: string, data: any) =>
+    api.patch<WorkMode>(`/schedule/work-modes/${id}`, data),
+  deleteWorkMode: (id: string) => api.delete(`/schedule/work-modes/${id}`),
 };

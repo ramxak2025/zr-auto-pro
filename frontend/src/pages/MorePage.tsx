@@ -9,6 +9,7 @@ import {
   LogOut,
   ChevronRight,
   ArrowRightLeft,
+  CalendarDays,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import type { UserPermissions } from '../types';
@@ -74,6 +75,14 @@ const menuItems: MenuItem[] = [
     permission: 'financial_reports',
     color: 'bg-purple-50',
     iconColor: 'text-purple-600',
+  },
+  {
+    label: 'График работы',
+    description: 'Смены и расписание',
+    path: '/schedule',
+    icon: CalendarDays,
+    color: 'bg-cyan-50',
+    iconColor: 'text-cyan-600',
   },
   {
     label: 'Пользователи',

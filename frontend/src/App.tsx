@@ -19,6 +19,7 @@ import ReportsPage from './pages/ReportsPage';
 import UsersPage from './pages/UsersPage';
 import MorePage from './pages/MorePage';
 import CashFlowPage from './pages/CashFlowPage';
+import SchedulePage from './pages/SchedulePage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminTenantsPage from './pages/admin/AdminTenantsPage';
 import AdminTenantDetailPage from './pages/admin/AdminTenantDetailPage';
@@ -68,6 +69,7 @@ function AppRoutes() {
         <Route path="/suppliers/:id" element={<SupplierDetailPage />} />
         <Route path="/salary" element={<SalaryPage />} />
         <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/schedule" element={<SchedulePage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/cashflow" element={<CashFlowPage />} />
         <Route path="/more" element={<MorePage />} />

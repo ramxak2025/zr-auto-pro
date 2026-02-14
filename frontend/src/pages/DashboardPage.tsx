@@ -16,10 +16,15 @@ import {
   ClipboardList,
   Star,
   Trophy,
+  Zap,
+  Moon,
+  Clock,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { reportsApi, salaryApi } from '../api/services';
-import type { DashboardStats, SalarySummary, UserRole, EmployeeRanking } from '../types';
+import { reportsApi, salaryApi, scheduleApi } from '../api/services';
+import type { DashboardStats, SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -391,12 +396,163 @@ function MasterDashboard() {
 }
 
 // ---------------------------------------------------------------------------
+// Team Status Widget (game-like UX)
+// ---------------------------------------------------------------------------
+
+const ROLE_LABELS: Record<string, string> = {
+  owner: 'Владелец',
+  admin: 'Админ',
+  master: 'Мастер',
+  storekeeper: 'Кладовщик',
+  accountant: 'Бухгалтер',
+};
+
+function TeamStatusWidget() {
+  const { data: employees, isLoading } = useQuery<TodayEmployeeStatus[]>({
+    queryKey: ['today-status'],
+    queryFn: async () => {
+      const res = await scheduleApi.getTodayStatus();
+      return res.data;
+    },
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+
+  if (isLoading || !employees?.length) return null;
+
+  const working = employees.filter((e) => e.isWorking && e.lateStatus === 'on_time');
+  const latePeople = employees.filter((e) => e.isWorking && (e.lateStatus === 'late_minor' || e.lateStatus === 'late_major'));
+  const dayOff = employees.filter((e) => e.isDayOff);
+  const absent = employees.filter((e) => !e.isWorking && !e.isDayOff && e.hasSchedule);
+
+  function StatusAvatar({ emp, ring }: { emp: TodayEmployeeStatus; ring: string }) {
+    const initials = emp.fullName.split(' ').map((w) => w[0]).join('').slice(0, 2);
+    return (
+      <div className="flex flex-col items-center gap-1 min-w-[56px]">
+        <div className={`relative flex h-11 w-11 items-center justify-center rounded-full text-sm font-bold ring-[3px] ${ring} transition-all`}>
+          <div className="flex h-full w-full items-center justify-center rounded-full bg-gray-100 text-gray-700">
+            {initials}
+          </div>
+          {emp.lateStatus === 'late_minor' && (
+            <div className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-yellow-400 shadow-sm">
+              <Clock className="h-2.5 w-2.5 text-white" />
+            </div>
+          )}
+          {emp.lateStatus === 'late_major' && (
+            <div className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-orange-500 shadow-sm">
+              <AlertTriangle className="h-2.5 w-2.5 text-white" />
+            </div>
+          )}
+          {emp.isWorking && emp.lateStatus === 'on_time' && (
+            <div className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-green-500 shadow-sm">
+              <CheckCircle2 className="h-2.5 w-2.5 text-white" />
+            </div>
+          )}
+          {emp.isDayOff && (
+            <div className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-blue-400 shadow-sm">
+              <Moon className="h-2.5 w-2.5 text-white" />
+            </div>
+          )}
+        </div>
+        <span className="text-[10px] font-medium text-gray-700 text-center leading-tight truncate max-w-[56px]">
+          {emp.fullName.split(' ')[0]}
+        </span>
+        <span className="text-[8px] text-gray-400 -mt-0.5">{ROLE_LABELS[emp.role] || emp.role}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-gradient-to-br from-slate-50 via-white to-slate-50 shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-700 shadow-sm">
+            <Zap className="h-4 w-4 text-white" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Команда сегодня</h3>
+            <p className="text-[10px] text-gray-400">{employees.length} сотрудников</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {working.length > 0 && (
+            <span className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold text-green-700">
+              <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+              {working.length} на смене
+            </span>
+          )}
+          {latePeople.length > 0 && (
+            <span className="flex items-center gap-1 rounded-full bg-yellow-100 px-2.5 py-1 text-[10px] font-bold text-yellow-700">
+              {latePeople.length} опоздали
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Body */}
+      <div className="p-4 space-y-4">
+        {/* Working */}
+        {(working.length > 0 || latePeople.length > 0) && (
+          <div>
+            <p className="text-[10px] font-bold uppercase text-gray-400 tracking-wider mb-2.5 flex items-center gap-1.5">
+              <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+              На работе
+            </p>
+            <div className="flex flex-wrap gap-3">
+              {working.map((e) => (
+                <StatusAvatar key={e.userId} emp={e} ring="ring-green-400" />
+              ))}
+              {latePeople.map((e) => (
+                <StatusAvatar key={e.userId} emp={e}
+                  ring={e.lateStatus === 'late_minor' ? 'ring-yellow-400' : 'ring-orange-500'} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Day Off */}
+        {dayOff.length > 0 && (
+          <div>
+            <p className="text-[10px] font-bold uppercase text-gray-400 tracking-wider mb-2.5 flex items-center gap-1.5">
+              <Moon className="h-3 w-3 text-blue-400" />
+              Выходной
+            </p>
+            <div className="flex flex-wrap gap-3">
+              {dayOff.map((e) => (
+                <StatusAvatar key={e.userId} emp={e} ring="ring-blue-300" />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Absent */}
+        {absent.length > 0 && (
+          <div>
+            <p className="text-[10px] font-bold uppercase text-gray-400 tracking-wider mb-2.5 flex items-center gap-1.5">
+              <AlertCircle className="h-3 w-3 text-red-400" />
+              Не пришли
+            </p>
+            <div className="flex flex-wrap gap-3">
+              {absent.map((e) => (
+                <StatusAvatar key={e.userId} emp={e} ring="ring-red-300" />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
+  const canSeeTeam = hasPermission('user_management') || user?.role === (UserRoleEnum.OWNER as UserRole) || user?.role === (UserRoleEnum.ADMIN as UserRole);
 
   const greeting = getGreeting();
   const displayName = user?.fullName?.split(' ')[0] || user?.username || '';
@@ -414,6 +570,9 @@ export default function DashboardPage() {
           </p>
         </div>
       )}
+
+      {/* Team status widget — admin/owner only */}
+      {canSeeTeam && <TeamStatusWidget />}
 
       {/* Stats */}
       {isMaster ? <MasterDashboard /> : <AdminDashboard />}

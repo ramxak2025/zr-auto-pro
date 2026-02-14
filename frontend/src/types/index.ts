@@ -262,3 +262,61 @@ export interface EmployeeRanking {
   today: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
   month: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
 }
+
+// ─── Shifts & Schedule ────────────────────────────────────────
+
+export interface Shift {
+  id: string;
+  tenantId: string;
+  userId: string;
+  user?: User;
+  date: string;
+  openedAt: string;
+  closedAt?: string | null;
+  isAutoClosed: boolean;
+  note?: string;
+}
+
+export type LateStatus = 'on_time' | 'late_minor' | 'late_major';
+
+export interface ScheduleEntry {
+  id: string;
+  tenantId: string;
+  userId: string;
+  user?: User;
+  date: string;
+  shiftStart: string;
+  shiftEnd: string;
+  isDayOff: boolean;
+  actualArrival?: string | null;
+  lateMinutes: number;
+  lateStatus?: LateStatus | null;
+  note?: string;
+  isManualOverride: boolean;
+}
+
+export interface WorkMode {
+  id: string;
+  tenantId: string;
+  name: string;
+  type: 'rotating' | 'weekly';
+  workDays: number;
+  offDays: number;
+  weekDays: number[];
+  shiftStart: string;
+  shiftEnd: string;
+}
+
+export interface TodayEmployeeStatus {
+  userId: string;
+  fullName: string;
+  role: string;
+  isDayOff: boolean;
+  shiftStart?: string | null;
+  shiftEnd?: string | null;
+  actualArrival?: string | null;
+  lateMinutes: number;
+  lateStatus?: LateStatus | null;
+  isWorking: boolean;
+  hasSchedule: boolean;
+}
