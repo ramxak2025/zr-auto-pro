@@ -15,6 +15,10 @@ export class RegisterDto {
   @IsNotEmpty()
   username: string;
 
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
   @IsString()
   @IsNotEmpty()
   @MinLength(6)

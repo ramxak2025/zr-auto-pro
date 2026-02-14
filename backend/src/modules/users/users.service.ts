@@ -38,7 +38,7 @@ export class UsersService {
 
     if (query.search) {
       qb.andWhere(
-        '(user.fullName ILIKE :search OR user.username ILIKE :search)',
+        '(user.fullName ILIKE :search OR user.username ILIKE :search OR user.phone ILIKE :search)',
         { search: `%${query.search}%` },
       );
     }
@@ -85,6 +85,10 @@ export class UsersService {
     return this.repo.findOne({ where: { username } });
   }
 
+  async findByPhone(phone: string): Promise<User | null> {
+    return this.repo.findOne({ where: { phone } });
+  }
+
   async create(tenantId: string, dto: CreateUserDto): Promise<User> {
     const existing = await this.repo.findOne({
       where: { username: dto.username, tenantId },
@@ -94,6 +98,13 @@ export class UsersService {
       throw new ConflictException(
         `User with username "${dto.username}" already exists`,
       );
+    }
+
+    if (dto.phone) {
+      const existingPhone = await this.repo.findOne({ where: { phone: dto.phone } });
+      if (existingPhone) {
+        throw new ConflictException('Пользователь с таким телефоном уже существует');
+      }
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, 10);
@@ -122,6 +133,13 @@ export class UsersService {
         throw new ConflictException(
           `User with username "${dto.username}" already exists`,
         );
+      }
+    }
+
+    if (dto.phone && dto.phone !== user.phone) {
+      const existingPhone = await this.repo.findOne({ where: { phone: dto.phone } });
+      if (existingPhone) {
+        throw new ConflictException('Пользователь с таким телефоном уже существует');
       }
     }
 

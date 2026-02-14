@@ -18,6 +18,11 @@ export class CreateUserDto {
   @MaxLength(50)
   username: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  phone?: string;
+
   @IsString()
   @IsNotEmpty()
   @MinLength(6)

@@ -88,13 +88,13 @@ export class TenantsService {
       }
     }
 
-    // Check for duplicate owner username
+    // Check for duplicate owner username/phone
     const existingUser = await this.userRepo.findOne({
-      where: { username: dto.ownerUsername },
+      where: [{ username: dto.ownerUsername }, { phone: dto.ownerUsername }],
     });
     if (existingUser) {
       throw new ConflictException(
-        `User with username "${dto.ownerUsername}" already exists`,
+        `Пользователь с таким телефоном уже существует`,
       );
     }
 
@@ -129,6 +129,7 @@ export class TenantsService {
 
     const owner = this.userRepo.create({
       username: dto.ownerUsername,
+      phone: dto.ownerUsername,
       password: hashedPassword,
       fullName: dto.ownerFullName,
       role: UserRole.DIRECTOR,

@@ -7,7 +7,7 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   isSuperAdmin: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (phone: string, password: string) => Promise<void>;
   logout: () => void;
   hasPermission: (perm: keyof UserPermissions) => boolean;
 }
@@ -38,8 +38,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [token]);
 
-  const login = useCallback(async (username: string, password: string) => {
-    const res = await authApi.login({ username, password });
+  const login = useCallback(async (phone: string, password: string) => {
+    const res = await authApi.login({ phone, password });
     const { access_token, user: u } = res.data;
     localStorage.setItem('token', access_token);
     localStorage.setItem('user', JSON.stringify(u));

@@ -17,10 +17,10 @@ export class AuthService {
   ) {}
 
   async validateUser(
-    username: string,
+    phone: string,
     password: string,
   ): Promise<Omit<User, 'password'> | null> {
-    const user = await this.usersService.findByUsername(username);
+    const user = await this.usersService.findByPhone(phone);
 
     if (!user) {
       return null;
@@ -49,6 +49,7 @@ export class AuthService {
       user: {
         id: user.id,
         username: user.username,
+        phone: user.phone,
         fullName: user.fullName,
         role: user.role,
         salaryPercent: user.salaryPercent,
@@ -60,8 +61,14 @@ export class AuthService {
   }
 
   async register(tenantId: string, dto: RegisterDto): Promise<Omit<User, 'password'>> {
-    const existingUser = await this.usersService.findByUsername(dto.username);
+    if (dto.phone) {
+      const existingByPhone = await this.usersService.findByPhone(dto.phone);
+      if (existingByPhone) {
+        throw new ConflictException('Пользователь с таким телефоном уже существует');
+      }
+    }
 
+    const existingUser = await this.usersService.findByUsername(dto.username);
     if (existingUser) {
       throw new ConflictException('Username already exists');
     }

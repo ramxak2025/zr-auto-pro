@@ -29,9 +29,9 @@ type QueryParams = Record<string, string | number | boolean | undefined>;
 
 // Auth
 export const authApi = {
-  login: (data: { username: string; password: string }) =>
+  login: (data: { phone: string; password: string }) =>
     api.post<{ access_token: string; user: User }>('/auth/login', data),
-  register: (data: { username: string; password: string; fullName: string; role: string; salaryPercent?: number }) =>
+  register: (data: { username: string; phone?: string; password: string; fullName: string; role: string; salaryPercent?: number }) =>
     api.post<User>('/auth/register', data),
   getProfile: () => api.get<User>('/auth/profile'),
 };

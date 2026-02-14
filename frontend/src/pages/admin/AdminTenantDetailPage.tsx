@@ -547,7 +547,7 @@ export default function AdminTenantDetailPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-gray-900 truncate">{user.fullName}</p>
-                      <p className="text-[11px] text-gray-400 truncate">{user.username}</p>
+                      <p className="text-[11px] text-gray-400 truncate">{user.phone || user.username}</p>
                     </div>
                     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium flex-shrink-0 ${roleBadgeColors[user.role] || 'bg-gray-100 text-gray-600'}`}>
                       {roleLabels[user.role] || user.role}

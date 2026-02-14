@@ -103,6 +103,9 @@ export class User {
   @Column({ unique: true })
   username: string;
 
+  @Column({ nullable: true, unique: true })
+  phone: string;
+
   @Column()
   @Exclude()
   password: string;

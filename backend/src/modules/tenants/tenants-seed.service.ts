@@ -23,6 +23,7 @@ export class TenantsSeedService implements OnModuleInit {
 
   private async seedSuperAdmin(): Promise<void> {
     const username = process.env.SUPERADMIN_USERNAME || 'superadmin';
+    const phone = process.env.SUPERADMIN_PHONE || '+79884444436';
     const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
 
     const existingSuperAdmin = await this.userRepo.findOne({
@@ -30,14 +31,15 @@ export class TenantsSeedService implements OnModuleInit {
     });
 
     if (existingSuperAdmin) {
-      // Sync password so the admin can always log in
+      // Sync password and phone so the admin can always log in
       const hashedPassword = await bcrypt.hash(password, 10);
       existingSuperAdmin.password = hashedPassword;
       existingSuperAdmin.username = username;
+      existingSuperAdmin.phone = phone;
       existingSuperAdmin.isActive = true;
       await this.userRepo.save(existingSuperAdmin);
       this.logger.log(
-        `SuperAdmin password synced for "${existingSuperAdmin.username}"`,
+        `SuperAdmin password synced for "${existingSuperAdmin.username}" (phone: ${phone})`,
       );
       return;
     }
@@ -46,6 +48,7 @@ export class TenantsSeedService implements OnModuleInit {
 
     const superAdmin = this.userRepo.create({
       username,
+      phone,
       password: hashedPassword,
       fullName: 'Super Administrator',
       role: UserRole.SUPERADMIN,
@@ -56,7 +59,7 @@ export class TenantsSeedService implements OnModuleInit {
     await this.userRepo.save(superAdmin);
 
     this.logger.log(
-      `SuperAdmin user created successfully (username: "${username}")`,
+      `SuperAdmin user created successfully (username: "${username}", phone: "${phone}")`,
     );
   }
 }

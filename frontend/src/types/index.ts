@@ -26,6 +26,7 @@ export interface PlatformStats {
 export interface User {
   id: string;
   username: string;
+  phone?: string;
   fullName: string;
   role: UserRole;
   salaryPercent: number;

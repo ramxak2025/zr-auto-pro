@@ -92,6 +92,7 @@ function ToggleSwitch({ checked, onChange }: ToggleSwitchProps) {
 
 interface UserFormData {
   username: string;
+  phone: string;
   password: string;
   fullName: string;
   role: string;
@@ -113,7 +114,7 @@ function UserFormModal({
   onSubmit,
   isLoading,
 }: UserFormModalProps) {
-  const [username, setUsername] = useState(user?.username || '');
+  const [phone, setPhone] = useState(user?.phone || user?.username || '');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState(user?.fullName || '');
   const [role, setRole] = useState(user?.role || 'master');
@@ -125,7 +126,7 @@ function UserFormModal({
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!username.trim() || !isPhoneComplete(username)) {
+    if (!phone.trim() || !isPhoneComplete(phone)) {
       toast.error('Введите телефон полностью');
       return;
     }
@@ -137,8 +138,10 @@ function UserFormModal({
       toast.error('Введите ФИО');
       return;
     }
+    const rawPhone = getPhoneRaw(phone);
     onSubmit({
-      username: getPhoneRaw(username),
+      username: rawPhone,
+      phone: rawPhone,
       password: password.trim(),
       fullName: fullName.trim(),
       role,
@@ -158,8 +161,8 @@ function UserFormModal({
             Телефон <span className="text-red-500">*</span>
           </label>
           <PhoneInput
-            value={username}
-            onChange={setUsername}
+            value={phone}
+            onChange={setPhone}
             className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           />
         </div>
@@ -526,7 +529,7 @@ export default function UsersPage() {
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div>
                           <p className="text-[11px] text-gray-400 mb-0.5">Телефон</p>
-                          <p className="font-medium text-gray-900">{u.username}</p>
+                          <p className="font-medium text-gray-900">{u.phone || u.username}</p>
                         </div>
                         {u.role === 'master' && (
                           <div>
@@ -581,7 +584,7 @@ export default function UsersPage() {
                       className="transition-colors hover:bg-gray-50"
                     >
                       <td className="px-4 py-3 font-medium text-gray-900">
-                        {u.username}
+                        {u.phone || u.username}
                       </td>
                       <td className="px-4 py-3 text-gray-600">{u.fullName}</td>
                       <td className="px-4 py-3">

@@ -22,6 +22,11 @@ export class UpdateUserDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(30)
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
   @IsNotEmpty()
   @MinLength(6)
   @MaxLength(100)

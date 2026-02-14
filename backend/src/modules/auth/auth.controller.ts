@@ -29,12 +29,12 @@ export class AuthController {
   async login(@Body() loginDto: LoginDto) {
     try {
       const user = await this.authService.validateUser(
-        loginDto.username,
+        loginDto.phone,
         loginDto.password,
       );
 
       if (!user) {
-        throw new UnauthorizedException('Неверный логин или пароль');
+        throw new UnauthorizedException('Неверный телефон или пароль');
       }
 
       if (!user.isActive) {
@@ -47,7 +47,7 @@ export class AuthController {
         throw error;
       }
       this.logger.error(
-        `Login failed for "${loginDto.username}": ${error.message}`,
+        `Login failed for "${loginDto.phone}": ${error.message}`,
         error.stack,
       );
       throw new InternalServerErrorException(
