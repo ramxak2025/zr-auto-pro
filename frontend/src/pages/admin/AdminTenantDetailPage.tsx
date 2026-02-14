@@ -33,7 +33,7 @@ import LoadingSpinner from '../../components/LoadingSpinner';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
-  owner: 'Директор',
+  director: 'Директор',
   admin: 'Администратор',
   master: 'Мастер',
   storekeeper: 'Товаровед',
@@ -42,7 +42,7 @@ const roleLabels: Record<string, string> = {
 
 const roleBadgeColors: Record<string, string> = {
   superadmin: 'bg-red-50 text-red-700',
-  owner: 'bg-purple-50 text-purple-700',
+  director: 'bg-purple-50 text-purple-700',
   admin: 'bg-blue-50 text-blue-700',
   master: 'bg-green-50 text-green-700',
   storekeeper: 'bg-yellow-50 text-yellow-700',
@@ -394,7 +394,7 @@ export default function AdminTenantDetailPage() {
   }
 
   const users: User[] = tenant.users || [];
-  const ownerUser = users.find((u) => u.role === 'owner');
+  const ownerUser = users.find((u) => u.role === 'director');
   const subInfo = getSubscriptionInfo(tenant);
 
   return (

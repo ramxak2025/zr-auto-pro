@@ -110,6 +110,19 @@ async function migrateEnumsToVarchar() {
       }
     }
 
+    // Migrate old 'owner' role to 'director'
+    const usersTable = await client.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_name = 'users'`,
+    );
+    if (usersTable.rowCount > 0) {
+      const updated = await client.query(
+        `UPDATE users SET role = 'director' WHERE role = 'owner'`,
+      );
+      if (updated.rowCount > 0) {
+        logger.log(`Migrated ${updated.rowCount} users from 'owner' to 'director' role`);
+      }
+    }
+
     logger.log('Pre-startup migration complete');
   } catch (error) {
     logger.warn(`Migration warning (non-fatal): ${error.message}`);

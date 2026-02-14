@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, useMemo, FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -7,14 +7,17 @@ import {
   ArrowLeft,
   Pencil,
   Plus,
+  Minus,
   Loader2,
   Truck,
   Wallet,
   Package,
   CreditCard,
   Trash2,
+  Search,
 } from 'lucide-react';
 import { suppliersApi, productsApi } from '../api/services';
+import PhoneInput, { getPhoneRaw } from '../components/PhoneInput';
 import type {
   Supplier,
   Delivery,
@@ -78,7 +81,7 @@ function SupplierEditModal({
     }
     onSubmit({
       name: name.trim(),
-      phone: phone.trim(),
+      phone: getPhoneRaw(phone),
       contactPerson: contactPerson.trim(),
       comment: comment.trim(),
     });
@@ -102,10 +105,9 @@ function SupplierEditModal({
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
             Телефон
           </label>
-          <input
-            type="text"
+          <PhoneInput
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={setPhone}
             className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
         </div>
@@ -186,30 +188,42 @@ function DeliveryCreateModal({
 }: DeliveryCreateModalProps) {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [comment, setComment] = useState('');
-  const [lines, setLines] = useState<DeliveryLineInput[]>([
-    { key: crypto.randomUUID(), productId: '', quantity: 1, price: 0 },
-  ]);
+  const [lines, setLines] = useState<DeliveryLineInput[]>([]);
+  const [showCatalog, setShowCatalog] = useState(false);
+  const [catalogCategory, setCatalogCategory] = useState<string | null>(null);
+  const [catalogSearch, setCatalogSearch] = useState('');
 
-  function addLine() {
-    setLines((prev) => [
-      ...prev,
-      { key: crypto.randomUUID(), productId: '', quantity: 1, price: 0 },
-    ]);
+  // Build categories from products
+  const categories = useMemo(() => {
+    const catMap = new Map<string, Product[]>();
+    products.forEach((p) => {
+      const cat = p.category || 'Без категории';
+      if (!catMap.has(cat)) catMap.set(cat, []);
+      catMap.get(cat)!.push(p);
+    });
+    return catMap;
+  }, [products]);
+
+  function addProduct(product: Product) {
+    setLines((prev) => {
+      const existing = prev.find((l) => l.productId === product.id);
+      if (existing) {
+        return prev.map((l) => l.key === existing.key ? { ...l, quantity: l.quantity + 1 } : l);
+      }
+      return [...prev, {
+        key: crypto.randomUUID(), productId: product.id, quantity: 1, price: product.costPrice,
+        _name: product.name, _image: product.photo,
+      }];
+    });
   }
 
-  function updateLine(key: string, field: Partial<DeliveryLineInput>) {
-    setLines((prev) =>
-      prev.map((l) => {
-        if (l.key !== key) return l;
-        const updated = { ...l, ...field };
-        // Auto-fill price from product costPrice
-        if (field.productId) {
-          const product = products.find((p) => p.id === field.productId);
-          if (product) updated.price = product.costPrice;
-        }
-        return updated;
-      }),
-    );
+  function updateLineQty(key: string, qty: number) {
+    if (qty <= 0) setLines((prev) => prev.filter((l) => l.key !== key));
+    else setLines((prev) => prev.map((l) => l.key === key ? { ...l, quantity: qty } : l));
+  }
+
+  function updateLinePrice(key: string, price: number) {
+    setLines((prev) => prev.map((l) => l.key === key ? { ...l, price } : l));
   }
 
   function removeLine(key: string) {
@@ -225,127 +239,194 @@ function DeliveryCreateModal({
     }
     onSubmit({
       date,
-      items: validLines.map((l) => ({
-        productId: l.productId,
-        quantity: l.quantity,
-        price: l.price,
-      })),
+      items: validLines.map((l) => ({ productId: l.productId, quantity: l.quantity, price: l.price })),
       comment: comment.trim(),
     });
   }
 
   const total = lines.reduce((sum, l) => sum + l.price * l.quantity, 0);
 
+  // Filter products in catalog
+  const filteredProducts = useMemo(() => {
+    let items = catalogCategory ? (categories.get(catalogCategory) || []) : products;
+    if (catalogSearch) {
+      const q = catalogSearch.toLowerCase();
+      items = items.filter((p) => p.name.toLowerCase().includes(q));
+    }
+    return items;
+  }, [catalogCategory, catalogSearch, products, categories]);
+
+  // Get qty in cart for a product
+  function getCartQty(productId: string): number {
+    return lines.find((l) => l.productId === productId)?.quantity || 0;
+  }
+
+  if (!isOpen) return null;
+
+  // Fullscreen product catalog
+  if (showCatalog) {
+    return (
+      <div className="fixed inset-0 z-50 bg-white flex flex-col">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white">
+          <button type="button" onClick={() => { if (catalogCategory) setCatalogCategory(null); else setShowCatalog(false); }}
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200">
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <h2 className="text-lg font-bold text-gray-900 flex-1">
+            {catalogCategory || 'Выберите товар'}
+          </h2>
+          {lines.length > 0 && (
+            <button type="button" onClick={() => setShowCatalog(false)}
+              className="flex items-center gap-1.5 rounded-xl bg-primary-600 text-white px-3 py-2 text-sm font-semibold shadow-sm hover:bg-primary-700">
+              <Package className="h-4 w-4" />
+              {lines.length} шт
+            </button>
+          )}
+        </div>
+
+        {/* Search */}
+        <div className="px-4 py-2 border-b border-gray-100">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input type="text" value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)}
+              placeholder="Поиск товара..." className="w-full rounded-xl border border-gray-200 bg-gray-50 pl-10 pr-4 py-2.5 text-sm focus:border-primary-400 focus:outline-none" />
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {!catalogCategory && !catalogSearch ? (
+            // Category grid
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {[...categories.entries()].map(([cat, items]) => (
+                <button key={cat} type="button" onClick={() => setCatalogCategory(cat)}
+                  className="flex flex-col items-center gap-2 rounded-2xl border border-gray-200 bg-white p-4 hover:border-primary-300 hover:shadow-md transition-all active:scale-95">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-50 text-2xl">
+                    {items[0]?.photo ? (
+                      <img src={items[0].photo} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                    ) : '📦'}
+                  </div>
+                  <span className="text-sm font-semibold text-gray-900 text-center">{cat}</span>
+                  <span className="text-[11px] text-gray-400">{items.length} товаров</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            // Product grid
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {filteredProducts.map((p) => {
+                const qty = getCartQty(p.id);
+                return (
+                  <button key={p.id} type="button" onClick={() => addProduct(p)}
+                    className={`relative flex flex-col items-center gap-1.5 rounded-2xl border p-3 transition-all active:scale-95 ${
+                      qty > 0 ? 'border-primary-400 bg-primary-50/50 shadow-sm' : 'border-gray-200 bg-white hover:border-primary-300 hover:shadow-md'
+                    }`}>
+                    {p.photo ? (
+                      <img src={p.photo} alt="" className="h-14 w-14 rounded-xl object-cover" />
+                    ) : (
+                      <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-gray-100 text-gray-400">
+                        <Package className="h-6 w-6" />
+                      </div>
+                    )}
+                    <span className="text-xs font-semibold text-gray-900 text-center leading-tight line-clamp-2">{p.name}</span>
+                    <span className="text-[11px] text-gray-500">{formatMoney(p.costPrice)}</span>
+                    {qty > 0 && (
+                      <div className="absolute -top-1.5 -right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-primary-600 text-white text-[11px] font-bold shadow-sm">
+                        {qty}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+              {filteredProducts.length === 0 && (
+                <div className="col-span-full p-8 text-center text-sm text-gray-400">Ничего не найдено</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Новая поставка" size="xl">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Дата
-          </label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 max-w-xs"
-          />
-        </div>
-
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-gray-700">Товары</label>
-            <button
-              type="button"
-              onClick={addLine}
-              className="flex items-center gap-1 text-sm text-primary-600 hover:text-primary-700"
-            >
-              <Plus className="h-4 w-4" />
-              Добавить строку
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Дата</label>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
+          </div>
+          <div className="flex items-end">
+            <button type="button" onClick={() => setShowCatalog(true)}
+              className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm font-semibold text-amber-700 hover:bg-amber-100 transition-colors w-full justify-center">
+              <Package className="h-4 w-4" />Добавить товар
             </button>
           </div>
-
-          {lines.map((line) => (
-            <div key={line.key} className="flex items-center gap-3">
-              <select
-                value={line.productId}
-                onChange={(e) => updateLine(line.key, { productId: e.target.value })}
-                className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-              >
-                <option value="">Выберите товар</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="number"
-                value={line.quantity}
-                onChange={(e) =>
-                  updateLine(line.key, { quantity: parseInt(e.target.value) || 1 })
-                }
-                min="1"
-                placeholder="Кол-во"
-                className="w-24 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-              />
-              <input
-                type="number"
-                value={line.price}
-                onChange={(e) =>
-                  updateLine(line.key, {
-                    price: parseFloat(e.target.value) || 0,
-                  })
-                }
-                min="0"
-                step="0.01"
-                placeholder="Цена"
-                className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500/20"
-              />
-              <span className="w-28 text-right text-sm font-medium text-gray-900">
-                {formatMoney(line.price * line.quantity)}
-              </span>
-              <button
-                type="button"
-                onClick={() => removeLine(line.key)}
-                disabled={lines.length <= 1}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-30"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            </div>
-          ))}
-
-          <div className="flex justify-end text-sm font-semibold text-gray-900">
-            Итого: {formatMoney(total)}
-          </div>
         </div>
 
+        {/* Added products */}
+        {lines.length === 0 ? (
+          <div className="p-8 text-center border border-dashed border-gray-200 rounded-xl">
+            <Package className="h-8 w-8 text-gray-300 mx-auto mb-2" />
+            <p className="text-sm text-gray-400">Нажмите "Добавить товар" для выбора</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {lines.map((line) => {
+              const product = products.find((p) => p.id === line.productId);
+              return (
+                <div key={line.key} className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
+                  {(line as any)._image || product?.photo ? (
+                    <img src={(line as any)._image || product?.photo} alt="" className="h-10 w-10 rounded-lg object-cover flex-shrink-0" />
+                  ) : (
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-400 flex-shrink-0">
+                      <Package className="h-5 w-5" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{(line as any)._name || product?.name || line.productId}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden">
+                        <button type="button" onClick={() => updateLineQty(line.key, line.quantity - 1)}
+                          className="px-2 py-1 text-gray-500 hover:bg-gray-100"><Minus className="h-3 w-3" /></button>
+                        <span className="px-2 text-sm font-semibold text-gray-900 min-w-[24px] text-center">{line.quantity}</span>
+                        <button type="button" onClick={() => updateLineQty(line.key, line.quantity + 1)}
+                          className="px-2 py-1 text-gray-500 hover:bg-gray-100"><Plus className="h-3 w-3" /></button>
+                      </div>
+                      <span className="text-gray-300 text-xs">&times;</span>
+                      <input type="number" value={line.price} onChange={(e) => updateLinePrice(line.key, parseFloat(e.target.value) || 0)}
+                        className="w-24 rounded-lg border border-gray-200 px-2 py-1 text-sm text-gray-700 focus:border-primary-400 focus:outline-none" min="0" step="0.01" />
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-sm font-bold text-gray-900">{formatMoney(line.price * line.quantity)}</p>
+                    <button type="button" onClick={() => removeLine(line.key)}
+                      className="text-gray-300 hover:text-red-500 mt-1"><Trash2 className="h-3.5 w-3.5" /></button>
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex justify-end text-base font-bold text-gray-900 pt-2">
+              Итого: {formatMoney(total)}
+            </div>
+          </div>
+        )}
+
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Комментарий
-          </label>
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            rows={2}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Комментарий</label>
+          <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2}
+            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
         </div>
 
         <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
+          <button type="button" onClick={onClose} disabled={isLoading}
+            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
             Отмена
           </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
-          >
+          <button type="submit" disabled={isLoading}
+            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50">
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
             Создать поставку
           </button>

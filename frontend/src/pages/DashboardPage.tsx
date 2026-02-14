@@ -167,7 +167,7 @@ function ErrorBanner({ message }: { message: string }) {
 
 function AdminDashboard() {
   const { user } = useAuth();
-  const isOwner = user?.role === (UserRoleEnum.OWNER as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
+  const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
 
   const { data, isLoading, isError } = useQuery<DashboardStats>({
     queryKey: ['dashboard'],
@@ -400,11 +400,9 @@ function MasterDashboard() {
 // ---------------------------------------------------------------------------
 
 const ROLE_LABELS: Record<string, string> = {
-  owner: 'Владелец',
+  director: 'Директор',
   admin: 'Админ',
   master: 'Мастер',
-  storekeeper: 'Кладовщик',
-  accountant: 'Бухгалтер',
 };
 
 function TeamStatusWidget() {
@@ -552,7 +550,7 @@ function TeamStatusWidget() {
 export default function DashboardPage() {
   const { user, hasPermission } = useAuth();
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
-  const canSeeTeam = hasPermission('user_management') || user?.role === (UserRoleEnum.OWNER as UserRole) || user?.role === (UserRoleEnum.ADMIN as UserRole);
+  const canSeeTeam = hasPermission('user_management') || user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.ADMIN as UserRole);
 
   const greeting = getGreeting();
   const displayName = user?.fullName?.split(' ')[0] || user?.username || '';

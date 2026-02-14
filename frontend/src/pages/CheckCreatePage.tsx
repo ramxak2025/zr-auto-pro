@@ -31,12 +31,14 @@ import {
   checksApi,
   servicesApi,
   productsApi,
+  usersApi,
 } from '../api/services';
 import type {
   Client,
   Car,
   Service,
   Product,
+  User,
   CheckServiceLine,
   CheckProductLine,
   PaymentMethod,
@@ -150,7 +152,7 @@ function ClientSearch({ onSelect, selectedClient, onClear }: {
 // Data interfaces
 // ---------------------------------------------------------------------------
 
-interface ServiceLineData { key: string; serviceId: string; name: string; price: number; quantity: number; }
+interface ServiceLineData { key: string; serviceId: string; masterId?: string; name: string; price: number; quantity: number; }
 interface ProductLineData { key: string; productId: string; name: string; sellPrice: number; costPrice: number; quantity: number; }
 
 // ---------------------------------------------------------------------------
@@ -686,8 +688,15 @@ export default function CheckCreatePage() {
     staleTime: 5 * 60_000,
   });
 
+  const { data: mastersData } = useQuery<PaginatedResponse<User>>({
+    queryKey: ['users-masters'],
+    queryFn: async () => { const res = await usersApi.getAll({ role: 'master', limit: 100 }); return res.data; },
+    staleTime: 5 * 60_000,
+  });
+
   const allServices = servicesData?.data || [];
   const allProducts = productsData?.data || [];
+  const masters = mastersData?.data || [];
   const cars: Car[] = selectedClient?.cars || [];
 
   useEffect(() => {
@@ -699,7 +708,7 @@ export default function CheckCreatePage() {
 
   function addServiceLine(service: Service) {
     setServiceLines((prev) => [...prev, {
-      key: crypto.randomUUID(), serviceId: service.id, name: service.name, price: service.defaultPrice, quantity: 1,
+      key: crypto.randomUUID(), serviceId: service.id, masterId: isMaster ? user?.id : undefined, name: service.name, price: service.defaultPrice, quantity: 1,
     }]);
   }
 
@@ -759,7 +768,7 @@ export default function CheckCreatePage() {
 
   function handlePaymentSubmit(method: PaymentMethod, deferred: boolean, cashAmt?: number, cardAmt?: number) {
     const services: Omit<CheckServiceLine, 'id'>[] = serviceLines.map((l) => ({
-      serviceId: l.serviceId || undefined, name: l.name, price: l.price, quantity: l.quantity, total: l.price * l.quantity,
+      serviceId: l.serviceId || undefined, masterId: l.masterId || undefined, name: l.name, price: l.price, quantity: l.quantity, total: l.price * l.quantity,
     }));
 
     const products: Omit<CheckProductLine, 'id'>[] = productLines.map((l) => ({
@@ -768,6 +777,7 @@ export default function CheckCreatePage() {
     }));
 
     createMutation.mutate({
+      masterId: user?.id,
       clientId: selectedClient!.id, carId: selectedCarId, date,
       mileage: mileage ? parseInt(mileage) : undefined,
       services, products, paymentMethod: method,
@@ -900,6 +910,13 @@ export default function CheckCreatePage() {
                             className="w-10 rounded-lg border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-xs text-center text-gray-700 focus:border-emerald-400 focus:outline-none" />
                           <span className="ml-auto text-sm font-semibold text-gray-900">{formatMoney(line.price * line.quantity)}</span>
                         </div>
+                        {masters.length > 0 && (
+                          <select value={line.masterId || ''} onChange={(e) => updateServiceLine(line.key, { masterId: e.target.value || undefined })}
+                            className="mt-1 w-full rounded-lg border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600 focus:border-emerald-400 focus:outline-none">
+                            <option value="">Мастер не указан</option>
+                            {masters.map((m) => <option key={m.id} value={m.id}>{m.fullName}</option>)}
+                          </select>
+                        )}
                       </div>
                     </div>
                   );

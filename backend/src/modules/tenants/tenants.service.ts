@@ -125,13 +125,13 @@ export class TenantsService {
 
     // Create owner user for the tenant
     const hashedPassword = await bcrypt.hash(dto.ownerPassword, 10);
-    const ownerPermissions = DEFAULT_PERMISSIONS[UserRole.OWNER];
+    const ownerPermissions = DEFAULT_PERMISSIONS[UserRole.DIRECTOR];
 
     const owner = this.userRepo.create({
       username: dto.ownerUsername,
       password: hashedPassword,
       fullName: dto.ownerFullName,
-      role: UserRole.OWNER,
+      role: UserRole.DIRECTOR,
       permissions: ownerPermissions,
       tenantId: savedTenant.id,
       isActive: true,

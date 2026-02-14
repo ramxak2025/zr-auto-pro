@@ -97,11 +97,9 @@ const menuItems: MenuItem[] = [
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
-  owner: 'Владелец',
+  director: 'Директор',
   admin: 'Администратор',
   master: 'Мастер',
-  storekeeper: 'Товаровед',
-  accountant: 'Бухгалтер',
 };
 
 export default function MorePage() {

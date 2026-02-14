@@ -246,7 +246,7 @@ function TenantCard({
   onDelete: () => void;
 }) {
   const sub = getSubscriptionStatus(tenant);
-  const ownerUser = tenant.users?.find((u) => u.role === 'owner');
+  const ownerUser = tenant.users?.find((u) => u.role === 'director');
   const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
 
   return (

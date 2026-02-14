@@ -38,11 +38,9 @@ export interface User {
 
 export enum UserRole {
   SUPERADMIN = 'superadmin',
-  OWNER = 'owner',
+  DIRECTOR = 'director',
   ADMIN = 'admin',
   MASTER = 'master',
-  STOREKEEPER = 'storekeeper',
-  ACCOUNTANT = 'accountant',
 }
 
 export interface UserPermissions {
@@ -105,6 +103,8 @@ export interface Service {
 export interface CheckServiceLine {
   id?: string;
   serviceId?: string;
+  masterId?: string;
+  master?: { id: string; fullName: string };
   name: string;
   price: number;
   quantity: number;

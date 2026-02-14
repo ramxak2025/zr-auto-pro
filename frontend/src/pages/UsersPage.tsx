@@ -25,19 +25,15 @@ import LoadingSpinner from '../components/LoadingSpinner';
 const LIMIT = 20;
 
 const ROLE_LABELS: Record<string, string> = {
-  owner: 'Владелец',
+  director: 'Директор',
   admin: 'Администратор',
   master: 'Мастер',
-  storekeeper: 'Товаровед',
-  accountant: 'Бухгалтер',
 };
 
 const ROLE_BADGE_COLORS: Record<string, string> = {
-  owner: 'bg-purple-100 text-purple-700',
+  director: 'bg-purple-100 text-purple-700',
   admin: 'bg-blue-100 text-blue-700',
   master: 'bg-green-100 text-green-700',
-  storekeeper: 'bg-orange-100 text-orange-700',
-  accountant: 'bg-gray-100 text-gray-700',
 };
 
 const PERMISSION_LABELS: Record<keyof UserPermissions, string> = {
@@ -58,8 +54,6 @@ const PERMISSION_LABELS: Record<keyof UserPermissions, string> = {
 const ROLE_OPTIONS = [
   { value: 'admin', label: 'Администратор' },
   { value: 'master', label: 'Мастер' },
-  { value: 'storekeeper', label: 'Товаровед' },
-  { value: 'accountant', label: 'Бухгалтер' },
 ];
 
 // ---------------------------------------------------------------------------

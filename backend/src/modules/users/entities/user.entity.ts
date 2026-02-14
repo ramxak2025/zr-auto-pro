@@ -16,11 +16,9 @@ import { Tenant } from '../../tenants/entities/tenant.entity';
 
 export enum UserRole {
   SUPERADMIN = 'superadmin',
-  OWNER = 'owner',
+  DIRECTOR = 'director',
   ADMIN = 'admin',
   MASTER = 'master',
-  STOREKEEPER = 'storekeeper',
-  ACCOUNTANT = 'accountant',
 }
 
 export interface UserPermissions {
@@ -53,7 +51,7 @@ export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
     export_data: true,
     user_management: true,
   },
-  [UserRole.OWNER]: {
+  [UserRole.DIRECTOR]: {
     checks_view: true,
     checks_create: true,
     checks_edit: true,
@@ -93,34 +91,6 @@ export const DEFAULT_PERMISSIONS: Record<string, UserPermissions> = {
     suppliers_access: false,
     financial_reports: false,
     export_data: false,
-    user_management: false,
-  },
-  [UserRole.STOREKEEPER]: {
-    checks_view: true,
-    checks_create: false,
-    checks_edit: false,
-    checks_delete: false,
-    profit_view: false,
-    clients_view: true,
-    clients_edit: false,
-    warehouse_access: true,
-    suppliers_access: true,
-    financial_reports: false,
-    export_data: false,
-    user_management: false,
-  },
-  [UserRole.ACCOUNTANT]: {
-    checks_view: true,
-    checks_create: false,
-    checks_edit: false,
-    checks_delete: false,
-    profit_view: true,
-    clients_view: true,
-    clients_edit: false,
-    warehouse_access: true,
-    suppliers_access: true,
-    financial_reports: true,
-    export_data: true,
     user_management: false,
   },
 };

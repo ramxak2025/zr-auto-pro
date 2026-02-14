@@ -7,6 +7,7 @@ import {
 } from 'typeorm';
 import { Check } from './check.entity';
 import { Service } from '../../services/entities/service.entity';
+import { User } from '../../users/entities/user.entity';
 
 @Entity('check_services')
 export class CheckService {
@@ -26,6 +27,13 @@ export class CheckService {
 
   @Column('uuid', { nullable: true })
   serviceId: string;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'masterId' })
+  master: User;
+
+  @Column('uuid', { nullable: true })
+  masterId: string;
 
   @Column()
   name: string;

@@ -17,6 +17,10 @@ export class CreateCheckServiceDto {
   @IsUUID()
   serviceId?: string;
 
+  @IsOptional()
+  @IsUUID()
+  masterId?: string;
+
   @IsString()
   name: string;
 

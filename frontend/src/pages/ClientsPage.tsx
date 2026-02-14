@@ -18,6 +18,7 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import LoadingSpinner from '../components/LoadingSpinner';
+import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../components/PhoneInput';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,13 +64,13 @@ function ClientFormModal({
       toast.error('Введите ФИО клиента');
       return;
     }
-    if (!phone.trim()) {
-      toast.error('Введите телефон клиента');
+    if (!phone.trim() || !isPhoneComplete(phone)) {
+      toast.error('Введите телефон клиента полностью');
       return;
     }
     onSubmit({
       fullName: trimmedName,
-      phone: phone.trim(),
+      phone: getPhoneRaw(phone),
       comment: comment.trim(),
     });
   }
@@ -98,11 +99,9 @@ function ClientFormModal({
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
             Телефон <span className="text-red-500">*</span>
           </label>
-          <input
-            type="text"
+          <PhoneInput
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="+7 (___) ___-__-__"
+            onChange={setPhone}
             className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
         </div>

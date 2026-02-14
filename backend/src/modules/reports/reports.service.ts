@@ -293,38 +293,93 @@ export class ReportsService {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     monthStart.setHours(0, 0, 0, 0);
 
-    const buildQuery = (from: Date, to: Date) =>
-      this.checkRepo
-        .createQueryBuilder('check')
-        .select('check.masterId', 'masterId')
-        .addSelect('user.fullName', 'masterName')
-        .addSelect('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
-        .addSelect('COUNT(check.id)', 'checkCount')
-        .innerJoin('check.master', 'user')
-        .where('check.date BETWEEN :dateFrom AND :dateTo', { dateFrom: from, dateTo: to })
-        .andWhere('check.deletedAt IS NULL')
-        .andWhere('check.tenantId = :tenantId', { tenantId })
-        .groupBy('check.masterId')
-        .addGroupBy('user.fullName')
-        .orderBy('revenue', 'DESC')
+    // New logic:
+    // - Check creator (check.masterId) gets product revenue + their own service revenue
+    // - Other masters (check_services.masterId) only get their own service revenue
+    // We combine: service revenue per service-level masterId + product revenue per check-level masterId
+
+    const buildRanking = async (from: Date, to: Date) => {
+      // 1) Service revenue grouped by service-level masterId
+      const serviceRevenue = await this.checkServiceRepo
+        .createQueryBuilder('cs')
+        .select('COALESCE(cs."masterId", check."masterId")', 'masterId')
+        .addSelect('COALESCE(SUM(cs.total), 0)', 'revenue')
+        .innerJoin('cs.check', 'check')
+        .where('check.date BETWEEN :from AND :to', { from, to })
+        .andWhere('check."deletedAt" IS NULL')
+        .andWhere('check."tenantId" = :tenantId', { tenantId })
+        .groupBy('COALESCE(cs."masterId", check."masterId")')
         .getRawMany();
 
-    const [todayResults, monthResults] = await Promise.all([
-      buildQuery(todayStart, todayEnd),
-      buildQuery(monthStart, todayEnd),
+      // 2) Product revenue grouped by check-level masterId (check creator gets product credit)
+      const productRevenue = await this.checkRepo
+        .createQueryBuilder('check')
+        .select('check."masterId"', 'masterId')
+        .addSelect('COALESCE(SUM(check."productTotal"), 0)', 'revenue')
+        .where('check.date BETWEEN :from AND :to', { from, to })
+        .andWhere('check."deletedAt" IS NULL')
+        .andWhere('check."tenantId" = :tenantId', { tenantId })
+        .groupBy('check."masterId"')
+        .getRawMany();
+
+      // 3) Check counts per check-level masterId
+      const checkCounts = await this.checkRepo
+        .createQueryBuilder('check')
+        .select('check."masterId"', 'masterId')
+        .addSelect('COUNT(check.id)', 'checkCount')
+        .where('check.date BETWEEN :from AND :to', { from, to })
+        .andWhere('check."deletedAt" IS NULL')
+        .andWhere('check."tenantId" = :tenantId', { tenantId })
+        .groupBy('check."masterId"')
+        .getRawMany();
+
+      // Merge all data
+      const revenueMap = new Map<string, number>();
+      const checkCountMap = new Map<string, number>();
+
+      for (const r of serviceRevenue) {
+        if (r.masterId) {
+          revenueMap.set(r.masterId, (revenueMap.get(r.masterId) || 0) + (parseFloat(r.revenue) || 0));
+        }
+      }
+      for (const r of productRevenue) {
+        if (r.masterId) {
+          revenueMap.set(r.masterId, (revenueMap.get(r.masterId) || 0) + (parseFloat(r.revenue) || 0));
+        }
+      }
+      for (const r of checkCounts) {
+        if (r.masterId) {
+          checkCountMap.set(r.masterId, parseInt(r.checkCount, 10) || 0);
+        }
+      }
+
+      // Get user names
+      const masterIds = [...revenueMap.keys()];
+      if (masterIds.length === 0) return [];
+
+      const users = await this.userRepo
+        .createQueryBuilder('u')
+        .select(['u.id', 'u.fullName'])
+        .whereInIds(masterIds)
+        .getMany();
+
+      const nameMap = new Map(users.map((u) => [u.id, u.fullName]));
+
+      return masterIds
+        .map((id) => ({
+          masterId: id,
+          masterName: nameMap.get(id) || 'Неизвестный',
+          revenue: revenueMap.get(id) || 0,
+          checkCount: checkCountMap.get(id) || 0,
+        }))
+        .sort((a, b) => b.revenue - a.revenue);
+    };
+
+    const [today, month] = await Promise.all([
+      buildRanking(todayStart, todayEnd),
+      buildRanking(monthStart, todayEnd),
     ]);
 
-    const mapResult = (rows: any[]) =>
-      rows.map((row) => ({
-        masterId: row.masterId,
-        masterName: row.masterName,
-        revenue: parseFloat(row.revenue) || 0,
-        checkCount: parseInt(row.checkCount, 10) || 0,
-      }));
-
-    return {
-      today: mapResult(todayResults),
-      month: mapResult(monthResults),
-    };
+    return { today, month };
   }
 }

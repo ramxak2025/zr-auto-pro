@@ -44,6 +44,7 @@ export class ChecksService {
       .leftJoinAndSelect('check.client', 'client')
       .leftJoinAndSelect('check.car', 'car')
       .leftJoinAndSelect('check.services', 'services')
+      .leftJoinAndSelect('services.master', 'serviceMaster')
       .leftJoinAndSelect('check.products', 'products')
       .where('check.deletedAt IS NULL')
       .andWhere('check.tenantId = :tenantId', { tenantId });
@@ -75,7 +76,7 @@ export class ChecksService {
   async findById(tenantId: string, id: string) {
     const check = await this.checkRepo.findOne({
       where: { id, tenantId },
-      relations: ['master', 'client', 'car', 'services', 'products'],
+      relations: ['master', 'client', 'car', 'services', 'services.master', 'products'],
     });
     if (!check) throw new NotFoundException('Check not found');
     return check;
@@ -88,6 +89,7 @@ export class ChecksService {
     const serviceLines: CheckServiceEntity[] = (dto.services || []).map((s) => {
       const line = new CheckServiceEntity();
       line.serviceId = s.serviceId || null as any;
+      line.masterId = s.masterId || dto.masterId;
       line.name = s.name;
       line.price = s.price;
       line.quantity = s.quantity;
