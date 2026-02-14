@@ -46,8 +46,13 @@ export class AuthController {
       if (error instanceof UnauthorizedException) {
         throw error;
       }
-      this.logger.error(`Login failed for "${loginDto.username}": ${error.message}`, error.stack);
-      throw new InternalServerErrorException('Ошибка при входе. Попробуйте позже.');
+      this.logger.error(
+        `Login failed for "${loginDto.username}": ${error.message}`,
+        error.stack,
+      );
+      throw new InternalServerErrorException(
+        `Ошибка при входе: ${error.message}`,
+      );
     }
   }
 

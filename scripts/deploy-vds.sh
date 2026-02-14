@@ -10,6 +10,7 @@ set -euo pipefail
 SERVER_IP=$(curl -s ifconfig.me || hostname -I | awk '{print $1}')
 APP_DIR="/opt/zr-auto-pro"
 REPO_URL="https://github.com/ramxak2025/zr-auto-pro.git"
+BRANCH="${1:-claude/auto-service-crm-app-SPKll}"
 
 echo "============================================="
 echo "  ZR Auto Pro — Деплой на VDS"
@@ -58,9 +59,10 @@ if [ -d "$APP_DIR/.git" ]; then
   echo "Репозиторий уже существует, обновляю..."
   cd "$APP_DIR"
   git fetch origin
-  git reset --hard origin/main
+  git checkout "$BRANCH" 2>/dev/null || git checkout -b "$BRANCH" "origin/$BRANCH"
+  git reset --hard "origin/$BRANCH"
 else
-  git clone "$REPO_URL" "$APP_DIR"
+  git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
   cd "$APP_DIR"
 fi
 
