@@ -69,20 +69,16 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
 
 const roleBadgeColors: Record<string, string> = {
   superadmin: 'bg-red-50 text-red-700',
-  owner: 'bg-purple-50 text-purple-700',
+  director: 'bg-purple-50 text-purple-700',
   admin: 'bg-blue-50 text-blue-700',
   master: 'bg-green-50 text-green-700',
-  storekeeper: 'bg-yellow-50 text-yellow-700',
-  accountant: 'bg-gray-100 text-gray-600',
 };
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
-  owner: 'Владелец',
+  director: 'Директор',
   admin: 'Администратор',
   master: 'Мастер',
-  storekeeper: 'Товаровед',
-  accountant: 'Бухгалтер',
 };
 
 function getPageTitle(pathname: string): string[] {
@@ -222,10 +218,10 @@ export default function Layout({ children }: { children: ReactNode }) {
       {/* ─── Desktop sidebar ─── */}
       <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
         {/* Logo */}
-        <div className="flex items-center border-b border-gray-200 px-5 py-3">
-          <img src="/logo.png" alt="Autexa" className="h-10 w-auto shrink-0 object-contain" />
+        <div className="flex flex-col items-start border-b border-gray-200 px-4 py-3 gap-1">
+          <img src="/logo.png" alt="Autexa" className="h-9 w-auto max-w-full object-contain" />
           {user?.tenant && (
-            <span className="ml-3 text-xs text-gray-400 truncate">{user.tenant.name || ''}</span>
+            <span className="text-[11px] text-gray-400 truncate max-w-full">{user.tenant.name || ''}</span>
           )}
         </div>
 
@@ -329,7 +325,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
         {/* ─── Mobile top bar ─── */}
         <header className="md:hidden sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white pl-3 pr-4">
-          <img src="/logo.png" alt="Autexa" className="h-10 w-auto shrink-0 object-contain" />
+          <img src="/logo.png" alt="Autexa" className="h-8 w-auto max-w-[50vw] object-contain" />
           <div className="flex items-center gap-2">
             <ShiftButton />
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-50 text-primary-700 text-xs font-semibold">

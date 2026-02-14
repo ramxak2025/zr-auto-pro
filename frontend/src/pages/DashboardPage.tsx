@@ -89,7 +89,7 @@ interface QuickAction {
   label: string;
   to: string;
   icon: React.ReactNode;
-  permissionKey?: string;
+  permissionKey?: keyof import('../types').UserPermissions;
 }
 
 function QuickActions() {
@@ -123,7 +123,7 @@ function QuickActions() {
   ];
 
   const visible = actions.filter(
-    (a) => !a.permissionKey || hasPermission(a.permissionKey as any),
+    (a) => !a.permissionKey || hasPermission(a.permissionKey),
   );
 
   if (visible.length === 0) return null;

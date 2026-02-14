@@ -22,7 +22,10 @@ import type {
   ScheduleEntry,
   WorkMode,
   TodayEmployeeStatus,
+  UserPermissions,
 } from '../types';
+
+type QueryParams = Record<string, string | number | boolean | undefined>;
 
 // Auth
 export const authApi = {
@@ -35,12 +38,14 @@ export const authApi = {
 
 // Admin - Tenants (SuperAdmin only)
 export const adminApi = {
-  getTenants: (params?: Record<string, any>) =>
+  getTenants: (params?: QueryParams) =>
     api.get<PaginatedResponse<Tenant>>('/admin/tenants', { params }),
   getTenant: (id: string) => api.get<Tenant>(`/admin/tenants/${id}`),
   getStats: () => api.get<PlatformStats>('/admin/tenants/stats'),
-  createTenant: (data: any) => api.post<Tenant>('/admin/tenants', data),
-  updateTenant: (id: string, data: any) => api.patch<Tenant>(`/admin/tenants/${id}`, data),
+  createTenant: (data: Partial<Tenant> & { ownerUsername?: string; ownerPassword?: string; ownerFullName?: string }) =>
+    api.post<Tenant>('/admin/tenants', data),
+  updateTenant: (id: string, data: Partial<Tenant>) =>
+    api.patch<Tenant>(`/admin/tenants/${id}`, data),
   activateTenant: (id: string) => api.post(`/admin/tenants/${id}/activate`),
   deactivateTenant: (id: string) => api.post(`/admin/tenants/${id}/deactivate`),
   extendSubscription: (id: string, data: { subscriptionEnd: string; note?: string }) =>
@@ -50,49 +55,51 @@ export const adminApi = {
 
 // Users
 export const usersApi = {
-  getAll: (params?: Record<string, any>) =>
+  getAll: (params?: QueryParams) =>
     api.get<PaginatedResponse<User>>('/users', { params }),
   getMasters: () => api.get<User[]>('/users/masters'),
   getById: (id: string) => api.get<User>(`/users/${id}`),
-  create: (data: any) => api.post<User>('/users', data),
-  update: (id: string, data: any) => api.patch<User>(`/users/${id}`, data),
-  updatePermissions: (id: string, data: any) =>
+  create: (data: { username: string; password: string; fullName: string; role: string; salaryPercent?: number }) =>
+    api.post<User>('/users', data),
+  update: (id: string, data: Partial<{ username: string; password: string; fullName: string; role: string; salaryPercent: number; isActive: boolean }>) =>
+    api.patch<User>(`/users/${id}`, data),
+  updatePermissions: (id: string, data: Partial<UserPermissions>) =>
     api.patch<User>(`/users/${id}/permissions`, data),
   delete: (id: string) => api.delete(`/users/${id}`),
 };
 
 // Clients
 export const clientsApi = {
-  getAll: (params?: Record<string, any>) =>
+  getAll: (params?: QueryParams) =>
     api.get<PaginatedResponse<Client>>('/clients', { params }),
   getById: (id: string) => api.get<Client>(`/clients/${id}`),
   getStats: (id: string) => api.get<{ totalPayments: number }>(`/clients/${id}/stats`),
-  create: (data: any) => api.post<Client>('/clients', data),
-  update: (id: string, data: any) => api.patch<Client>(`/clients/${id}`, data),
+  create: (data: Partial<Client>) => api.post<Client>('/clients', data),
+  update: (id: string, data: Partial<Client>) => api.patch<Client>(`/clients/${id}`, data),
   delete: (id: string) => api.delete(`/clients/${id}`),
 };
 
 // Cars
 export const carsApi = {
-  getAll: (params?: Record<string, any>) =>
+  getAll: (params?: QueryParams) =>
     api.get<PaginatedResponse<Car>>('/cars', { params }),
   getById: (id: string) => api.get<Car>(`/cars/${id}`),
-  create: (data: any) => api.post<Car>('/cars', data),
-  update: (id: string, data: any) => api.patch<Car>(`/cars/${id}`, data),
+  create: (data: Partial<Car>) => api.post<Car>('/cars', data),
+  update: (id: string, data: Partial<Car>) => api.patch<Car>(`/cars/${id}`, data),
   delete: (id: string) => api.delete(`/cars/${id}`),
 };
 
 // Products
 export const productsApi = {
-  getAll: (params?: Record<string, any>) =>
+  getAll: (params?: QueryParams) =>
     api.get<PaginatedResponse<Product>>('/products', { params }),
   getById: (id: string) => api.get<Product>(`/products/${id}`),
   getCategories: () => api.get<string[]>('/products/categories'),
   getLowStock: () => api.get<Product[]>('/products/low-stock'),
-  getMovements: (id: string, params?: Record<string, any>) =>
+  getMovements: (id: string, params?: QueryParams) =>
     api.get<PaginatedResponse<StockMovement>>(`/products/${id}/movements`, { params }),
-  create: (data: any) => api.post<Product>('/products', data),
-  update: (id: string, data: any) => api.patch<Product>(`/products/${id}`, data),
+  create: (data: Partial<Product>) => api.post<Product>('/products', data),
+  update: (id: string, data: Partial<Product>) => api.patch<Product>(`/products/${id}`, data),
   delete: (id: string) => api.delete(`/products/${id}`),
   writeoff: (id: string, data: { quantity: number; reason: string }) =>
     api.post(`/products/${id}/writeoff`, data),
@@ -102,22 +109,23 @@ export const productsApi = {
 
 // Services
 export const servicesApi = {
-  getAll: (params?: Record<string, any>) =>
+  getAll: (params?: QueryParams) =>
     api.get<PaginatedResponse<Service>>('/services', { params }),
   getById: (id: string) => api.get<Service>(`/services/${id}`),
   getCategories: () => api.get<string[]>('/services/categories'),
-  create: (data: any) => api.post<Service>('/services', data),
-  update: (id: string, data: any) => api.patch<Service>(`/services/${id}`, data),
+  create: (data: Partial<Service>) => api.post<Service>('/services', data),
+  update: (id: string, data: Partial<Service>) => api.patch<Service>(`/services/${id}`, data),
   delete: (id: string) => api.delete(`/services/${id}`),
 };
 
 // Checks
 export const checksApi = {
-  getAll: (params?: Record<string, any>) =>
+  getAll: (params?: QueryParams) =>
     api.get<PaginatedResponse<Check>>('/checks', { params }),
   getById: (id: string) => api.get<Check>(`/checks/${id}`),
-  create: (data: any) => api.post<Check>('/checks', data),
-  update: (id: string, data: any) => api.patch<Check>(`/checks/${id}`, data),
+  create: (data: Partial<Check> & Record<string, unknown>) =>
+    api.post<Check>('/checks', data),
+  update: (id: string, data: Partial<Check>) => api.patch<Check>(`/checks/${id}`, data),
   delete: (id: string) => api.delete(`/checks/${id}`),
   getPrintUrl: (id: string) => `/api/checks/${id}/print`,
 };
@@ -125,31 +133,31 @@ export const checksApi = {
 // Salary
 export const salaryApi = {
   getMySummary: () => api.get<SalarySummary>('/salary/my'),
-  getMyDetails: (params?: Record<string, any>) =>
+  getMyDetails: (params?: QueryParams) =>
     api.get('/salary/my/details', { params }),
-  getAllMasters: (params?: Record<string, any>) =>
+  getAllMasters: (params?: QueryParams) =>
     api.get<MasterSalary[]>('/salary/masters', { params }),
   getMaster: (id: string) =>
     api.get<SalarySummary>(`/salary/masters/${id}`),
-  getMasterDetails: (id: string, params?: Record<string, any>) =>
+  getMasterDetails: (id: string, params?: QueryParams) =>
     api.get(`/salary/masters/${id}/details`, { params }),
 };
 
 // Suppliers
 export const suppliersApi = {
-  getAll: (params?: Record<string, any>) =>
+  getAll: (params?: QueryParams) =>
     api.get<PaginatedResponse<Supplier>>('/suppliers', { params }),
   getById: (id: string) => api.get<Supplier>(`/suppliers/${id}`),
-  create: (data: any) => api.post<Supplier>('/suppliers', data),
-  update: (id: string, data: any) => api.patch<Supplier>(`/suppliers/${id}`, data),
+  create: (data: Partial<Supplier>) => api.post<Supplier>('/suppliers', data),
+  update: (id: string, data: Partial<Supplier>) => api.patch<Supplier>(`/suppliers/${id}`, data),
   delete: (id: string) => api.delete(`/suppliers/${id}`),
-  getDeliveries: (id: string, params?: Record<string, any>) =>
+  getDeliveries: (id: string, params?: QueryParams) =>
     api.get<PaginatedResponse<Delivery>>(`/suppliers/${id}/deliveries`, { params }),
-  createDelivery: (id: string, data: any) =>
+  createDelivery: (id: string, data: Partial<Delivery>) =>
     api.post<Delivery>(`/suppliers/${id}/deliveries`, data),
-  getPayments: (id: string, params?: Record<string, any>) =>
+  getPayments: (id: string, params?: QueryParams) =>
     api.get<PaginatedResponse<SupplierPayment>>(`/suppliers/${id}/payments`, { params }),
-  createPayment: (id: string, data: any) =>
+  createPayment: (id: string, data: Partial<SupplierPayment>) =>
     api.post<SupplierPayment>(`/suppliers/${id}/payments`, data),
 };
 
@@ -168,13 +176,13 @@ export const uploadsApi = {
 
 // Reports
 export const reportsApi = {
-  getFinancial: (params: Record<string, any>) =>
+  getFinancial: (params: QueryParams) =>
     api.get<FinancialReport>('/reports/financial', { params }),
-  getByMaster: (params: Record<string, any>) =>
+  getByMaster: (params: QueryParams) =>
     api.get('/reports/by-master', { params }),
-  getByService: (params: Record<string, any>) =>
+  getByService: (params: QueryParams) =>
     api.get('/reports/by-service', { params }),
-  getByProduct: (params: Record<string, any>) =>
+  getByProduct: (params: QueryParams) =>
     api.get('/reports/by-product', { params }),
   getDashboard: () => api.get<DashboardStats>('/reports/dashboard'),
   getEmployeeRanking: () => api.get<EmployeeRanking>('/reports/employee-ranking'),
@@ -186,7 +194,7 @@ export const shiftsApi = {
   closeShift: (note?: string) => api.post<Shift>('/shifts/close', { note }),
   getMyShift: () => api.get<Shift | null>('/shifts/my'),
   getTodayShifts: () => api.get<Shift[]>('/shifts/today'),
-  getHistory: (params?: Record<string, any>) =>
+  getHistory: (params?: QueryParams) =>
     api.get<PaginatedResponse<Shift>>('/shifts/history', { params }),
 };
 
@@ -195,8 +203,10 @@ export const scheduleApi = {
   getSchedule: (params: { dateFrom: string; dateTo: string; userId?: string }) =>
     api.get<ScheduleEntry[]>('/schedule', { params }),
   getTodayStatus: () => api.get<TodayEmployeeStatus[]>('/schedule/today-status'),
-  createEntry: (data: any) => api.post<ScheduleEntry>('/schedule/entry', data),
-  updateEntry: (id: string, data: any) => api.patch<ScheduleEntry>(`/schedule/entry/${id}`, data),
+  createEntry: (data: Partial<ScheduleEntry>) =>
+    api.post<ScheduleEntry>('/schedule/entry', data),
+  updateEntry: (id: string, data: Partial<ScheduleEntry>) =>
+    api.patch<ScheduleEntry>(`/schedule/entry/${id}`, data),
   generateSchedule: (data: {
     userId: string;
     workModeId: string;
@@ -205,8 +215,9 @@ export const scheduleApi = {
     startOffset?: number;
   }) => api.post<ScheduleEntry[]>('/schedule/generate', data),
   getWorkModes: () => api.get<WorkMode[]>('/schedule/work-modes'),
-  createWorkMode: (data: any) => api.post<WorkMode>('/schedule/work-modes', data),
-  updateWorkMode: (id: string, data: any) =>
+  createWorkMode: (data: Partial<WorkMode>) =>
+    api.post<WorkMode>('/schedule/work-modes', data),
+  updateWorkMode: (id: string, data: Partial<WorkMode>) =>
     api.patch<WorkMode>(`/schedule/work-modes/${id}`, data),
   deleteWorkMode: (id: string) => api.delete(`/schedule/work-modes/${id}`),
 };

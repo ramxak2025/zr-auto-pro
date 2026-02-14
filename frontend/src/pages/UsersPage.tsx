@@ -361,8 +361,8 @@ export default function UsersPage() {
       });
       return res.data;
     },
-    keepPreviousData: true,
-  } as any);
+    placeholderData: (prev) => prev,
+  });
 
   // ---- Mutations ----
   const createMutation = useMutation({
