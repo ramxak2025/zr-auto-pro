@@ -994,7 +994,7 @@ export default function CheckCreatePage() {
 
         <form id="check-form" onSubmit={handleSubmit} className="space-y-4">
           {/* ── Client section (compact) ── */}
-          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm relative z-20">
+          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm relative z-40">
             <div className="px-4 py-3 border-b border-gray-50 rounded-t-2xl">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Клиент</p>
             </div>
@@ -1040,7 +1040,7 @@ export default function CheckCreatePage() {
           </div>
 
           {/* ── Receipt — unified services + products ── */}
-          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+          <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden relative z-[1]">
             {/* Add buttons */}
             <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-50">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex-1">Позиции</p>
