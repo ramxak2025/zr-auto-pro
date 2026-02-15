@@ -128,13 +128,13 @@ export class ChecksService {
       .getOne();
     const nextNumber = (lastCheck?.number || 0) + 1;
 
-    const check = this.checkRepo.create({
+    const checkData: Partial<Check> = {
       tenantId,
       number: nextNumber,
       masterId: dto.masterId,
-      clientId: dto.clientId || null,
-      clientName: dto.clientName || (dto.clientId ? undefined : 'Розничный покупатель'),
-      carId: dto.carId || null,
+      clientId: dto.clientId ?? null,
+      clientName: dto.clientName || (dto.clientId ? null : 'Розничный покупатель'),
+      carId: dto.carId ?? null,
       mileage: dto.mileage,
       comment: dto.comment,
       paymentMethod: dto.paymentMethod,
@@ -150,8 +150,9 @@ export class ChecksService {
       serviceSalaryTotal,
       totalCost,
       profit,
-    });
+    };
 
+    const check = this.checkRepo.create(checkData as Check);
     const saved = await this.checkRepo.save(check);
 
     // Deduct stock for each product

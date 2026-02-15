@@ -53,17 +53,17 @@ export class Check {
   client: Client;
 
   @Column('uuid', { nullable: true })
-  clientId: string;
+  clientId: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
-  clientName: string;
+  clientName: string | null;
 
   @ManyToOne(() => Car, (car) => car.checks, { nullable: true })
   @JoinColumn({ name: 'carId' })
   car: Car;
 
   @Column('uuid', { nullable: true })
-  carId: string;
+  carId: string | null;
 
   @Column({ type: 'int', nullable: true })
   mileage: number;
