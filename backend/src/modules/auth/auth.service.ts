@@ -22,6 +22,14 @@ export class AuthService {
   ): Promise<Omit<User, 'password'> | null> {
     let user = await this.usersService.findByPhone(phone);
 
+    // Fallback: try alternative phone formats (with/without +)
+    if (!user && phone.startsWith('+')) {
+      user = await this.usersService.findByPhone(phone.slice(1));
+    }
+    if (!user && !phone.startsWith('+')) {
+      user = await this.usersService.findByPhone('+' + phone);
+    }
+
     // Fallback: try username for users created before phone migration
     if (!user) {
       user = await this.usersService.findByUsername(phone);
@@ -78,12 +86,8 @@ export class AuthService {
       throw new ConflictException('Username already exists');
     }
 
-    const hashedPassword = await bcrypt.hash(dto.password, 10);
-
-    const user = await this.usersService.create(tenantId, {
-      ...dto,
-      password: hashedPassword,
-    });
+    // usersService.create() already hashes the password — do NOT hash here
+    const user = await this.usersService.create(tenantId, dto);
 
     const { password: _password, ...result } = user;
     return result;

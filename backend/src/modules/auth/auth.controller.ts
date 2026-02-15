@@ -28,19 +28,25 @@ export class AuthController {
   @Post('login')
   async login(@Body() loginDto: LoginDto) {
     try {
+      // Normalize phone: trim whitespace
+      const phone = loginDto.phone.trim();
+
       const user = await this.authService.validateUser(
-        loginDto.phone,
+        phone,
         loginDto.password,
       );
 
       if (!user) {
+        this.logger.warn(`Login failed: invalid credentials for "${phone}"`);
         throw new UnauthorizedException('Неверный телефон или пароль');
       }
 
       if (!user.isActive) {
+        this.logger.warn(`Login failed: account deactivated for "${phone}"`);
         throw new UnauthorizedException('Учётная запись деактивирована');
       }
 
+      this.logger.log(`Login successful for "${phone}" (user: ${user.id})`);
       return this.authService.login(user);
     } catch (error) {
       if (error instanceof UnauthorizedException) {
@@ -51,7 +57,7 @@ export class AuthController {
         error.stack,
       );
       throw new InternalServerErrorException(
-        `Ошибка при входе: ${error.message}`,
+        'Ошибка при входе. Попробуйте позже.',
       );
     }
   }

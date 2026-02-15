@@ -52,8 +52,8 @@ export default function LoginPage() {
       await login(getPhoneRaw(username), password);
       toast.success('Добро пожаловать!');
     } catch (err: any) {
-      const message =
-        err?.response?.data?.message || 'Неверный телефон или пароль';
+      const raw = err?.response?.data?.message;
+      const message = Array.isArray(raw) ? raw[0] : raw || 'Неверный телефон или пароль';
       toast.error(message);
     } finally {
       setIsSubmitting(false);

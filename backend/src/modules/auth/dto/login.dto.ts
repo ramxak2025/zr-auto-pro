@@ -1,12 +1,11 @@
-import { IsString, IsNotEmpty, MinLength } from 'class-validator';
+import { IsString, IsNotEmpty } from 'class-validator';
 
 export class LoginDto {
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Введите телефон' })
   phone: string;
 
   @IsString()
-  @IsNotEmpty()
-  @MinLength(6)
+  @IsNotEmpty({ message: 'Введите пароль' })
   password: string;
 }

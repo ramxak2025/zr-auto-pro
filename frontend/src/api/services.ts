@@ -59,9 +59,9 @@ export const usersApi = {
     api.get<PaginatedResponse<User>>('/users', { params }),
   getMasters: () => api.get<User[]>('/users/masters'),
   getById: (id: string) => api.get<User>(`/users/${id}`),
-  create: (data: { username: string; password: string; fullName: string; role: string; salaryPercent?: number }) =>
+  create: (data: { username: string; phone?: string; password: string; fullName: string; role: string; salaryPercent?: number }) =>
     api.post<User>('/users', data),
-  update: (id: string, data: Partial<{ username: string; password: string; fullName: string; role: string; salaryPercent: number; isActive: boolean }>) =>
+  update: (id: string, data: Partial<{ username: string; phone: string; password: string; fullName: string; role: string; salaryPercent: number; isActive: boolean }>) =>
     api.patch<User>(`/users/${id}`, data),
   updatePermissions: (id: string, data: Partial<UserPermissions>) =>
     api.patch<User>(`/users/${id}/permissions`, data),
