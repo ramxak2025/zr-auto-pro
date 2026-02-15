@@ -58,11 +58,17 @@ export class CreateCheckDto {
   @IsUUID()
   masterId: string;
 
+  @IsOptional()
   @IsUUID()
-  clientId: string;
+  clientId?: string;
 
+  @IsOptional()
   @IsUUID()
-  carId: string;
+  carId?: string;
+
+  @IsOptional()
+  @IsString()
+  clientName?: string;
 
   @IsOptional()
   @IsNumber()

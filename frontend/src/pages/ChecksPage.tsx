@@ -139,7 +139,7 @@ function CheckCard({ check, onClick, showProfit }: { check: Check; onClick: () =
       {/* Client + car info */}
       <div className="space-y-1">
         <p className="text-sm text-gray-700 font-medium">
-          {check.client?.fullName ?? 'Клиент не указан'}
+          {check.client?.fullName ?? check.clientName ?? 'Розничный покупатель'}
         </p>
         {check.car && (
           <div className="flex items-center gap-1.5 text-xs text-gray-500">
@@ -403,7 +403,7 @@ export default function ChecksPage() {
                           {formatDate(check.date)}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="text-gray-900 font-medium">{check.client?.fullName ?? '—'}</div>
+                          <div className="text-gray-900 font-medium">{check.client?.fullName ?? check.clientName ?? 'Розничный покупатель'}</div>
                           {check.car && (
                             <div className="flex items-center gap-1 text-xs text-gray-400 mt-0.5">
                               <Car className="h-3 w-3" />

@@ -14,6 +14,7 @@ import {
 } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { normalizePhone } from '../../common/utils/normalize-phone';
 
 @Injectable()
 export class UsersService {
@@ -86,7 +87,19 @@ export class UsersService {
   }
 
   async findByPhone(phone: string): Promise<User | null> {
-    return this.repo.findOne({ where: { phone } });
+    // Try exact match first, then normalized
+    const user = await this.repo.findOne({ where: { phone } });
+    if (user) return user;
+
+    const normalized = normalizePhone(phone);
+    if (normalized !== phone) {
+      return this.repo.findOne({ where: { phone: normalized } });
+    }
+    return null;
+  }
+
+  async updatePhoneSilently(userId: string, phone: string): Promise<void> {
+    await this.repo.update(userId, { phone });
   }
 
   async create(tenantId: string, dto: CreateUserDto): Promise<User> {
@@ -100,7 +113,9 @@ export class UsersService {
       );
     }
 
+    // Normalize phone before saving
     if (dto.phone) {
+      dto.phone = normalizePhone(dto.phone);
       const existingPhone = await this.repo.findOne({ where: { phone: dto.phone } });
       if (existingPhone) {
         throw new ConflictException('Пользователь с таким телефоном уже существует');
@@ -136,10 +151,13 @@ export class UsersService {
       }
     }
 
-    if (dto.phone && dto.phone !== user.phone) {
-      const existingPhone = await this.repo.findOne({ where: { phone: dto.phone } });
-      if (existingPhone) {
-        throw new ConflictException('Пользователь с таким телефоном уже существует');
+    if (dto.phone) {
+      dto.phone = normalizePhone(dto.phone);
+      if (dto.phone !== user.phone) {
+        const existingPhone = await this.repo.findOne({ where: { phone: dto.phone } });
+        if (existingPhone) {
+          throw new ConflictException('Пользователь с таким телефоном уже существует');
+        }
       }
     }
 

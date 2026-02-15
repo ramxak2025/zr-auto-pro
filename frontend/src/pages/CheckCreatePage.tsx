@@ -25,6 +25,7 @@ import {
   MessageSquare,
   Pause,
   Clock,
+  ShoppingBag,
 } from 'lucide-react';
 import {
   clientsApi,
@@ -830,6 +831,8 @@ export default function CheckCreatePage() {
   const { user } = useAuth();
   const isMaster = user?.role === UserRole.MASTER;
 
+  // Client mode: 'retail' (default) or 'specific'
+  const [clientMode, setClientMode] = useState<'retail' | 'specific'>('retail');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedCarId, setSelectedCarId] = useState('');
   const [mileage, setMileage] = useState('');
@@ -932,8 +935,10 @@ export default function CheckCreatePage() {
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!selectedClient) { toast.error('Выберите клиента'); return; }
-    if (!selectedCarId) { toast.error('Выберите автомобиль'); return; }
+    if (clientMode === 'specific') {
+      if (!selectedClient) { toast.error('Выберите клиента'); return; }
+      if (!selectedCarId && cars.length > 0) { toast.error('Выберите автомобиль'); return; }
+    }
     if (serviceLines.length === 0 && productLines.length === 0) { toast.error('Добавьте услугу или товар'); return; }
     setShowPaymentSheet(true);
   }
@@ -948,16 +953,25 @@ export default function CheckCreatePage() {
       quantity: l.quantity, totalSell: l.sellPrice * l.quantity, totalCost: l.costPrice * l.quantity,
     }));
 
-    createMutation.mutate({
+    const payload: any = {
       masterId: user?.id,
-      clientId: selectedClient!.id, carId: selectedCarId, date,
+      date,
       mileage: mileage ? parseInt(mileage) : undefined,
       services, products, paymentMethod: method,
       discount: discountValue || undefined,
       comment: comment.trim() || undefined,
       isDeferred: deferred,
       cashAmount: cashAmt, cardAmount: cardAmt,
-    });
+    };
+
+    if (clientMode === 'specific' && selectedClient) {
+      payload.clientId = selectedClient.id;
+      payload.carId = selectedCarId || undefined;
+    } else {
+      payload.clientName = 'Розничный покупатель';
+    }
+
+    createMutation.mutate(payload);
     setShowPaymentSheet(false);
   }
 
@@ -993,26 +1007,80 @@ export default function CheckCreatePage() {
         </div>
 
         <form id="check-form" onSubmit={handleSubmit} className="space-y-4">
-          {/* ── Client section (compact) ── */}
+          {/* ── Client section ── */}
           <div className="rounded-2xl border border-gray-100 bg-white shadow-sm relative z-40">
-            <div className="px-4 py-3 border-b border-gray-50 rounded-t-2xl">
+            <div className="px-4 py-3 border-b border-gray-50 rounded-t-2xl flex items-center justify-between">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Клиент</p>
+              <div className="flex rounded-lg bg-gray-100 p-0.5">
+                <button type="button"
+                  onClick={() => { setClientMode('retail'); setSelectedClient(null); setSelectedCarId(''); }}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${clientMode === 'retail' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                  Розничный
+                </button>
+                <button type="button"
+                  onClick={() => setClientMode('specific')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all ${clientMode === 'specific' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                  По клиенту
+                </button>
+              </div>
             </div>
             <div className="p-4 space-y-3">
-              <ClientSearch onSelect={setSelectedClient} selectedClient={selectedClient}
-                onClear={() => { setSelectedClient(null); setSelectedCarId(''); }}
-                onAddNew={() => setShowAddClientModal(true)} />
-              {selectedClient && (
-                <div className="grid gap-2.5 grid-cols-3">
-                  <div>
-                    <label className="text-[11px] font-medium text-gray-500 mb-1 block">Авто *</label>
-                    <select value={selectedCarId} onChange={(e) => setSelectedCarId(e.target.value)} disabled={cars.length === 0}
-                      className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-2.5 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10 disabled:bg-gray-100">
-                      <option value="">{cars.length === 0 ? 'Нет' : 'Выбрать'}</option>
-                      {cars.map((car) => <option key={car.id} value={car.id}>{car.plateNumber}</option>)}
-                    </select>
+              {clientMode === 'retail' ? (
+                <div className="flex items-center gap-3 rounded-xl bg-gray-50 px-4 py-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary-100 text-primary-600 flex-shrink-0">
+                    <ShoppingBag className="h-4 w-4" />
                   </div>
-                  <div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900">Розничный покупатель</p>
+                    <p className="text-xs text-gray-400">Без привязки к клиенту</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <ClientSearch onSelect={setSelectedClient} selectedClient={selectedClient}
+                    onClear={() => { setSelectedClient(null); setSelectedCarId(''); }}
+                    onAddNew={() => setShowAddClientModal(true)} />
+                  {selectedClient && (
+                    <div className="grid gap-2.5 grid-cols-2">
+                      <div>
+                        <label className="text-[11px] font-medium text-gray-500 mb-1 block">Авто</label>
+                        <select value={selectedCarId} onChange={(e) => setSelectedCarId(e.target.value)} disabled={cars.length === 0}
+                          className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 px-2.5 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10 disabled:bg-gray-100">
+                          <option value="">{cars.length === 0 ? 'Нет авто' : 'Выбрать'}</option>
+                          {cars.map((car) => <option key={car.id} value={car.id}>{car.plateNumber} {car.makeModel}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-medium text-gray-500 mb-1 block">Пробег</label>
+                        <div className="relative">
+                          <Gauge className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                          <input type="number" value={mileage} onChange={(e) => setMileage(e.target.value)} min="0" placeholder="0"
+                            className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-8 pr-2 py-2 text-sm placeholder-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10" />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Date row — always visible */}
+              <div className="flex items-center gap-2.5">
+                <div className="flex-1">
+                  <label className="text-[11px] font-medium text-gray-500 mb-1 block">Дата</label>
+                  {isMaster ? (
+                    <div className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-2 text-sm text-gray-500">
+                      <Calendar className="h-3.5 w-3.5" />{new Date(date).toLocaleDateString('ru-RU')}
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                      <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+                        className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-8 pr-2 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10" />
+                    </div>
+                  )}
+                </div>
+                {clientMode === 'retail' && (
+                  <div className="flex-1">
                     <label className="text-[11px] font-medium text-gray-500 mb-1 block">Пробег</label>
                     <div className="relative">
                       <Gauge className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
@@ -1020,22 +1088,8 @@ export default function CheckCreatePage() {
                         className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-8 pr-2 py-2 text-sm placeholder-gray-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10" />
                     </div>
                   </div>
-                  <div>
-                    <label className="text-[11px] font-medium text-gray-500 mb-1 block">Дата</label>
-                    {isMaster ? (
-                      <div className="flex items-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50 px-2.5 py-2 text-sm text-gray-500">
-                        <Calendar className="h-3.5 w-3.5" />{new Date(date).toLocaleDateString('ru-RU')}
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
-                        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-                          className="block w-full rounded-xl border border-gray-200 bg-gray-50/50 pl-8 pr-2 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/10" />
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
 

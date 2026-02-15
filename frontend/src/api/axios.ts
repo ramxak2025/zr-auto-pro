@@ -5,6 +5,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 15000,
 });
 
 api.interceptors.request.use((config) => {
@@ -15,9 +16,31 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Retry logic for network errors
+const MAX_RETRIES = 2;
+const RETRY_DELAY = 1000;
+
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const config = error.config;
+
+    // Retry on network errors or 5xx (not on 4xx client errors)
+    const isNetworkError = !error.response;
+    const isServerError = error.response?.status >= 500;
+    const isRetryable = (isNetworkError || isServerError) && config;
+
+    if (isRetryable) {
+      config._retryCount = config._retryCount || 0;
+
+      if (config._retryCount < MAX_RETRIES) {
+        config._retryCount++;
+        await new Promise((r) => setTimeout(r, RETRY_DELAY * config._retryCount));
+        return api(config);
+      }
+    }
+
+    // Handle 401 — session expired
     if (error.response?.status === 401) {
       const hadToken = !!localStorage.getItem('token');
       localStorage.removeItem('token');
@@ -26,6 +49,7 @@ api.interceptors.response.use(
         window.location.href = '/login';
       }
     }
+
     return Promise.reject(error);
   },
 );

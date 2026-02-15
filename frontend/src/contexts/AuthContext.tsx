@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import type { User, UserPermissions } from '../types';
 import { authApi } from '../api/services';
 
@@ -19,7 +19,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [isLoading, setIsLoading] = useState(true);
 
+  // Track whether login() just set the token to avoid double-fetch
+  const loginInProgressRef = useRef(false);
+
   useEffect(() => {
+    // If login() just set the token and user, skip the profile fetch
+    if (loginInProgressRef.current) {
+      loginInProgressRef.current = false;
+      setIsLoading(false);
+      return;
+    }
+
     if (token) {
       authApi
         .getProfile()
@@ -41,6 +51,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = useCallback(async (phone: string, password: string) => {
     const res = await authApi.login({ phone, password });
     const { access_token, user: u } = res.data;
+
+    // Mark that we're setting token from login (user data already available)
+    loginInProgressRef.current = true;
+
     localStorage.setItem('token', access_token);
     localStorage.setItem('user', JSON.stringify(u));
     setToken(access_token);

@@ -137,9 +137,10 @@ export interface Check {
   master?: User;
   masterId: string;
   client?: Client;
-  clientId: string;
+  clientId?: string;
+  clientName?: string;
   car?: Car;
-  carId: string;
+  carId?: string;
   mileage?: number;
   services: CheckServiceLine[];
   products: CheckProductLine[];

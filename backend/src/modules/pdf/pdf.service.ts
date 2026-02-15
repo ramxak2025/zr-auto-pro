@@ -12,7 +12,7 @@ const PAYMENT_LABELS: Record<string, string> = {
 export class PdfService {
   generateCheckHtml(check: Check, tenantName?: string): string {
     const date = new Date(check.date).toLocaleDateString('ru-RU');
-    const clientName = check.client?.fullName || '—';
+    const clientName = check.client?.fullName || check.clientName || 'Розничный покупатель';
     const clientPhone = check.client?.phone || '';
     const carInfo = check.car
       ? `${check.car.makeModel} (${check.car.plateNumber})`

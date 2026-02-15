@@ -48,18 +48,21 @@ export class Check {
   @Column('uuid')
   masterId: string;
 
-  @ManyToOne(() => Client, (client) => client.checks)
+  @ManyToOne(() => Client, (client) => client.checks, { nullable: true })
   @JoinColumn({ name: 'clientId' })
   client: Client;
 
-  @Column('uuid')
+  @Column('uuid', { nullable: true })
   clientId: string;
 
-  @ManyToOne(() => Car, (car) => car.checks)
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  clientName: string;
+
+  @ManyToOne(() => Car, (car) => car.checks, { nullable: true })
   @JoinColumn({ name: 'carId' })
   car: Car;
 
-  @Column('uuid')
+  @Column('uuid', { nullable: true })
   carId: string;
 
   @Column({ type: 'int', nullable: true })

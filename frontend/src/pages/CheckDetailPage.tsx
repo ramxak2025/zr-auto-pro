@@ -287,7 +287,7 @@ export default function CheckDetailPage() {
                   {check.client.fullName}
                 </Link>
               ) : (
-                <p className="text-sm text-gray-900">{'\u2014'}</p>
+                <p className="text-sm text-gray-900">{check.clientName || 'Розничный покупатель'}</p>
               )}
             </div>
           </div>
