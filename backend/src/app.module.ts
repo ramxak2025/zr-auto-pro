@@ -36,6 +36,8 @@ import { ScheduleModule } from './modules/schedule/schedule.module';
         synchronize: (config.get('DB_SYNCHRONIZE') ?? 'true') === 'true',
         dropSchema: false,
         logging: ['error', 'warn', 'schema'],
+        retryAttempts: 20,
+        retryDelay: 3000,
       }),
     }),
     AuthModule,

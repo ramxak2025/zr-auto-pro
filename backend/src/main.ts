@@ -20,7 +20,17 @@ async function migrateEnumsToVarchar() {
   });
 
   try {
-    await client.connect();
+    // Wait for DB to be ready (handles Docker/restart delays)
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      try {
+        await client.connect();
+        break;
+      } catch (err) {
+        if (attempt === 10) throw err;
+        logger.warn(`DB not ready, retrying in 2s (attempt ${attempt}/10)...`);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
     logger.log('Running pre-startup migration...');
 
     // List of enum columns to convert to varchar
