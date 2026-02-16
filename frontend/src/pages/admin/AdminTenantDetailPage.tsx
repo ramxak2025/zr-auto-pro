@@ -22,7 +22,7 @@ import {
 import toast from 'react-hot-toast';
 import { getApiError } from '../../api/axios';
 import { adminApi } from '../../api/services';
-import type { Tenant, User } from '../../types';
+import type { Tenant, TariffPlan, TariffPlanInfo, User } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -48,6 +48,20 @@ const roleBadgeColors: Record<string, string> = {
   master: 'bg-green-50 text-green-700',
   storekeeper: 'bg-yellow-50 text-yellow-700',
   accountant: 'bg-gray-100 text-gray-600',
+};
+
+const tariffLabels: Record<TariffPlan, string> = {
+  start: 'Старт',
+  standard: 'Стандарт',
+  business: 'Бизнес',
+  premium: 'Премиум',
+};
+
+const tariffColors: Record<TariffPlan, string> = {
+  start: 'bg-gray-100 text-gray-700',
+  standard: 'bg-blue-50 text-blue-700',
+  business: 'bg-purple-50 text-purple-700',
+  premium: 'bg-amber-50 text-amber-700',
 };
 
 // ---------------------------------------------------------------------------
@@ -339,6 +353,101 @@ function ExtendSubscriptionModal({
 }
 
 // ---------------------------------------------------------------------------
+// Change Tariff Modal
+// ---------------------------------------------------------------------------
+
+function ChangeTariffModal({
+  isOpen,
+  onClose,
+  tenant,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  tenant: Tenant;
+}) {
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState<TariffPlan>(tenant.tariffPlan || 'start');
+
+  const { data: plans } = useQuery<TariffPlanInfo[]>({
+    queryKey: ['admin', 'tariff-plans'],
+    queryFn: async () => {
+      const res = await adminApi.getTariffPlans();
+      return res.data;
+    },
+  });
+
+  const setTariffMutation = useMutation({
+    mutationFn: () => adminApi.setTariff(tenant.id, { tariffPlan: selected }),
+    onSuccess: () => {
+      toast.success('Тариф изменён');
+      queryClient.invalidateQueries({ queryKey: ['admin', 'tenant', tenant.id] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
+      onClose();
+    },
+    onError: (err) => toast.error(getApiError(err, 'Не удалось изменить тариф')),
+  });
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Изменить тариф">
+      <div className="space-y-4">
+        <div className="rounded-lg bg-gray-50 p-3">
+          <p className="text-xs text-gray-500">Текущий тариф</p>
+          <p className="text-sm font-semibold text-gray-900 mt-0.5">
+            {tariffLabels[tenant.tariffPlan || 'start']}
+            {tenant.tariffPrice ? ` — ${Number(tenant.tariffPrice).toLocaleString('ru-RU')} руб/мес` : ' — Бесплатно'}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {(plans || []).map((plan) => (
+            <button
+              key={plan.id}
+              type="button"
+              onClick={() => setSelected(plan.id)}
+              className={`rounded-xl border-2 p-3 text-left transition-all ${
+                selected === plan.id
+                  ? 'border-indigo-500 bg-indigo-50 shadow-sm'
+                  : 'border-gray-200 bg-white hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-bold text-gray-900">{plan.label}</p>
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${tariffColors[plan.id] || 'bg-gray-100 text-gray-600'}`}>
+                  {plan.price === 0 ? 'Бесплатно' : `${plan.price.toLocaleString('ru-RU')} руб`}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-500 mt-1">до {plan.maxUsers} сотрудников</p>
+              <ul className="mt-2 space-y-0.5">
+                {plan.features.map((f, i) => (
+                  <li key={i} className="text-[11px] text-gray-400 flex items-center gap-1">
+                    <CheckIcon className="h-3 w-3 text-green-500 flex-shrink-0" />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
+          <button type="button" onClick={onClose}
+            className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+            Отмена
+          </button>
+          <button
+            onClick={() => setTariffMutation.mutate()}
+            disabled={setTariffMutation.isPending || selected === (tenant.tariffPlan || 'start')}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {setTariffMutation.isPending ? 'Сохранение...' : 'Применить'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -350,6 +459,7 @@ export default function AdminTenantDetailPage() {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isExtendOpen, setIsExtendOpen] = useState(false);
+  const [isTariffOpen, setIsTariffOpen] = useState(false);
 
   const {
     data: tenant,
@@ -445,28 +555,53 @@ export default function AdminTenantDetailPage() {
         </div>
       </div>
 
-      {/* Subscription card */}
-      <div className={`rounded-xl border p-4 ${subInfo.isExpired ? 'border-red-200 bg-red-50/50' : 'border-indigo-200 bg-indigo-50/30'}`}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs text-gray-500 mb-0.5">Подписка</p>
-            <p className={`text-lg font-bold ${subInfo.color}`}>{subInfo.label}</p>
-            {tenant.subscriptionEnd && (
-              <p className="text-[11px] text-gray-400 mt-0.5">
-                {subInfo.isExpired
-                  ? `Истекла ${formatDate(tenant.subscriptionEnd)}`
-                  : `Окончание: ${formatDate(tenant.subscriptionEnd)}`}
-              </p>
-            )}
-            {tenant.subscriptionNote && (
-              <p className="text-[11px] text-gray-500 mt-1 italic">{tenant.subscriptionNote}</p>
-            )}
+      {/* Tariff + Subscription row */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {/* Tariff card */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Тариф</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${tariffColors[tenant.tariffPlan || 'start']}`}>
+                  {tariffLabels[tenant.tariffPlan || 'start']}
+                </span>
+                <span className="text-sm font-bold text-gray-900">
+                  {Number(tenant.tariffPrice || 0) === 0 ? 'Бесплатно' : `${Number(tenant.tariffPrice).toLocaleString('ru-RU')} руб/мес`}
+                </span>
+              </div>
+            </div>
+            <button onClick={() => setIsTariffOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 flex-shrink-0">
+              <Pencil className="h-3.5 w-3.5" />
+              Изменить
+            </button>
           </div>
-          <button onClick={() => setIsExtendOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-indigo-700 flex-shrink-0">
-            <CalendarClock className="h-4 w-4" />
-            Продлить
-          </button>
+        </div>
+
+        {/* Subscription card */}
+        <div className={`rounded-xl border p-4 ${subInfo.isExpired ? 'border-red-200 bg-red-50/50' : 'border-indigo-200 bg-indigo-50/30'}`}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Подписка</p>
+              <p className={`text-lg font-bold ${subInfo.color}`}>{subInfo.label}</p>
+              {tenant.subscriptionEnd && (
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  {subInfo.isExpired
+                    ? `Истекла ${formatDate(tenant.subscriptionEnd)}`
+                    : `Окончание: ${formatDate(tenant.subscriptionEnd)}`}
+                </p>
+              )}
+              {tenant.subscriptionNote && (
+                <p className="text-[11px] text-gray-500 mt-1 italic">{tenant.subscriptionNote}</p>
+              )}
+            </div>
+            <button onClick={() => setIsExtendOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-indigo-700 flex-shrink-0">
+              <CalendarClock className="h-4 w-4" />
+              Продлить
+            </button>
+          </div>
         </div>
       </div>
 
@@ -572,6 +707,10 @@ export default function AdminTenantDetailPage() {
 
       {isExtendOpen && (
         <ExtendSubscriptionModal isOpen={isExtendOpen} onClose={() => setIsExtendOpen(false)} tenant={tenant} />
+      )}
+
+      {isTariffOpen && (
+        <ChangeTariffModal isOpen={isTariffOpen} onClose={() => setIsTariffOpen(false)} tenant={tenant} />
       )}
 
       <ConfirmDialog

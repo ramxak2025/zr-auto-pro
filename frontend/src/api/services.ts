@@ -2,6 +2,8 @@ import api from './axios';
 import type {
   User,
   Tenant,
+  TariffPlan,
+  TariffPlanInfo,
   PlatformStats,
   Client,
   Car,
@@ -50,6 +52,9 @@ export const adminApi = {
   deactivateTenant: (id: string) => api.post(`/admin/tenants/${id}/deactivate`),
   extendSubscription: (id: string, data: { subscriptionEnd: string; note?: string }) =>
     api.post<Tenant>(`/admin/tenants/${id}/extend-subscription`, data),
+  getTariffPlans: () => api.get<TariffPlanInfo[]>('/admin/tenants/tariff-plans'),
+  setTariff: (id: string, data: { tariffPlan: TariffPlan; tariffPrice?: number; maxUsers?: number }) =>
+    api.post<Tenant>(`/admin/tenants/${id}/set-tariff`, data),
   deleteTenant: (id: string) => api.delete(`/admin/tenants/${id}`),
 };
 

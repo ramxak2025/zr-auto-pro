@@ -14,7 +14,7 @@ import {
 import toast from 'react-hot-toast';
 import { getApiError } from '../../api/axios';
 import { adminApi } from '../../api/services';
-import type { Tenant, PaginatedResponse } from '../../types';
+import type { Tenant, TariffPlan, TariffPlanInfo, PaginatedResponse } from '../../types';
 import Modal from '../../components/Modal';
 import Pagination from '../../components/Pagination';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -55,6 +55,20 @@ function getSubscriptionStatus(tenant: Tenant): {
   return { label: `до ${formatDate(tenant.subscriptionEnd)}`, color: 'text-green-700', bg: 'bg-green-50' };
 }
 
+const tariffLabels: Record<TariffPlan, string> = {
+  start: 'Старт',
+  standard: 'Стандарт',
+  business: 'Бизнес',
+  premium: 'Премиум',
+};
+
+const tariffColors: Record<TariffPlan, string> = {
+  start: 'bg-gray-100 text-gray-600',
+  standard: 'bg-blue-50 text-blue-700',
+  business: 'bg-purple-50 text-purple-700',
+  premium: 'bg-amber-50 text-amber-700',
+};
+
 type StatusFilter = 'all' | 'active' | 'inactive' | 'expired';
 
 // ---------------------------------------------------------------------------
@@ -67,6 +81,7 @@ interface CreateTenantForm {
   email: string;
   address: string;
   description: string;
+  tariffPlan: TariffPlan;
   maxUsers: number;
   subscriptionEnd: string;
   ownerUsername: string;
@@ -80,7 +95,8 @@ const emptyForm: CreateTenantForm = {
   email: '',
   address: '',
   description: '',
-  maxUsers: 5,
+  tariffPlan: 'start',
+  maxUsers: 3,
   subscriptionEnd: '',
   ownerUsername: '',
   ownerPassword: '',
@@ -96,6 +112,14 @@ function CreateTenantModal({
 }) {
   const queryClient = useQueryClient();
   const [form, setForm] = useState<CreateTenantForm>(emptyForm);
+
+  const { data: tariffPlans } = useQuery<TariffPlanInfo[]>({
+    queryKey: ['admin', 'tariff-plans'],
+    queryFn: async () => {
+      const res = await adminApi.getTariffPlans();
+      return res.data;
+    },
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: CreateTenantForm) => adminApi.createTenant({
@@ -180,6 +204,35 @@ function CreateTenantModal({
               <label className="block text-sm font-medium text-gray-700 mb-1">Адрес</label>
               <input type="text" value={form.address} onChange={(e) => handleChange('address', e.target.value)}
                 placeholder="г. Москва, ул. Примерная, д. 1" className={inputClass} />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Тариф</label>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {(tariffPlans || []).map((plan) => (
+                  <button
+                    key={plan.id}
+                    type="button"
+                    onClick={() => {
+                      setForm((prev) => ({
+                        ...prev,
+                        tariffPlan: plan.id,
+                        maxUsers: plan.maxUsers,
+                      }));
+                    }}
+                    className={`rounded-lg border-2 p-2.5 text-left transition-colors ${
+                      form.tariffPlan === plan.id
+                        ? 'border-indigo-500 bg-indigo-50'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <p className="text-xs font-bold text-gray-900">{plan.label}</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      {plan.price === 0 ? 'Бесплатно' : `${plan.price.toLocaleString('ru-RU')} руб/мес`}
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">до {plan.maxUsers} чел.</p>
+                  </button>
+                ))}
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Макс. пользователей</label>
@@ -299,7 +352,12 @@ function TenantCard({
         </div>
 
         {/* Stats row */}
-        <div className="flex items-center gap-4 text-[12px] text-gray-500">
+        <div className="flex items-center gap-3 text-[12px] text-gray-500">
+          {tenant.tariffPlan && (
+            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${tariffColors[tenant.tariffPlan] || 'bg-gray-100 text-gray-600'}`}>
+              {tariffLabels[tenant.tariffPlan] || tenant.tariffPlan}
+            </span>
+          )}
           <div className="flex items-center gap-1">
             <Users className="h-3.5 w-3.5" />
             <span>{userCount} чел.</span>

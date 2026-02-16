@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import { Tenant } from './entities/tenant.entity';
+import { Tenant, TariffPlan, TARIFF_CONFIG } from './entities/tenant.entity';
 import {
   User,
   UserRole,
@@ -106,6 +106,12 @@ export class TenantsService {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '');
 
+    // Resolve tariff defaults
+    const tariffPlan = dto.tariffPlan || TariffPlan.START;
+    const tariffCfg = TARIFF_CONFIG[tariffPlan];
+    const maxUsers = dto.maxUsers || tariffCfg.maxUsers;
+    const tariffPrice = dto.tariffPrice ?? tariffCfg.price;
+
     // Create tenant
     const tenant = this.tenantRepo.create({
       name: dto.name,
@@ -114,7 +120,9 @@ export class TenantsService {
       address: dto.address,
       email: dto.email,
       description: dto.description,
-      maxUsers: dto.maxUsers,
+      tariffPlan,
+      tariffPrice,
+      maxUsers,
       subscriptionEnd: dto.subscriptionEnd
         ? new Date(dto.subscriptionEnd)
         : null,
@@ -189,6 +197,28 @@ export class TenantsService {
       tenant.subscriptionNote = data.note;
     }
     return this.tenantRepo.save(tenant);
+  }
+
+  async setTariff(
+    id: string,
+    data: { tariffPlan: TariffPlan; tariffPrice?: number; maxUsers?: number },
+  ): Promise<Tenant> {
+    const tenant = await this.findById(id);
+    const tariffCfg = TARIFF_CONFIG[data.tariffPlan];
+    tenant.tariffPlan = data.tariffPlan;
+    tenant.tariffPrice = data.tariffPrice ?? tariffCfg.price;
+    tenant.maxUsers = data.maxUsers || tariffCfg.maxUsers;
+    this.logger.log(
+      `Tenant "${tenant.name}" tariff changed to ${data.tariffPlan} (${tenant.tariffPrice} руб.)`,
+    );
+    return this.tenantRepo.save(tenant);
+  }
+
+  getTariffPlans() {
+    return Object.entries(TARIFF_CONFIG).map(([key, cfg]) => ({
+      id: key,
+      ...cfg,
+    }));
   }
 
   async remove(id: string): Promise<void> {

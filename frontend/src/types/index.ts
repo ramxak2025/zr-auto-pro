@@ -1,3 +1,13 @@
+export type TariffPlan = 'start' | 'standard' | 'business' | 'premium';
+
+export interface TariffPlanInfo {
+  id: TariffPlan;
+  label: string;
+  price: number;
+  maxUsers: number;
+  features: string[];
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -8,6 +18,8 @@ export interface Tenant {
   description?: string;
   logo?: string;
   isActive: boolean;
+  tariffPlan?: TariffPlan;
+  tariffPrice?: number;
   maxUsers: number;
   subscriptionEnd?: string | null;
   subscriptionNote?: string | null;

@@ -15,6 +15,7 @@ import { SuperAdminGuard } from '../auth/guards/superadmin.guard';
 import { TenantsService } from './tenants.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { TariffPlan } from './entities/tenant.entity';
 
 @Controller('admin/tenants')
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
@@ -34,6 +35,11 @@ export class TenantsController {
   @Get('stats')
   getStats() {
     return this.tenantsService.getStats();
+  }
+
+  @Get('tariff-plans')
+  getTariffPlans() {
+    return this.tenantsService.getTariffPlans();
   }
 
   @Get(':id')
@@ -62,6 +68,14 @@ export class TenantsController {
   @Post(':id/deactivate')
   deactivate(@Param('id', ParseUUIDPipe) id: string) {
     return this.tenantsService.deactivate(id);
+  }
+
+  @Post(':id/set-tariff')
+  setTariff(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() data: { tariffPlan: TariffPlan; tariffPrice?: number; maxUsers?: number },
+  ) {
+    return this.tenantsService.setTariff(id, data);
   }
 
   @Post(':id/extend-subscription')

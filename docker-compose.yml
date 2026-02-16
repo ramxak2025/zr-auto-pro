@@ -55,6 +55,45 @@ services:
     ports:
       - '8080:80'
 
+  # Automated daily backups (every 6 hours + keeps 30 days)
+  db-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: ${DB_PASSWORD:-postgres}
+      PGDATABASE: zr_auto_pro
+    volumes:
+      - ./backups:/backups
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        echo "[backup] Starting backup service..."
+        # Run backup immediately on startup, then every 6 hours
+        while true; do
+          TIMESTAMP=$$(date +%Y%m%d_%H%M%S)
+          FILE="/backups/zr_auto_pro_$${TIMESTAMP}.sql.gz"
+          echo "[backup] $$(date) Creating backup..."
+          pg_dump -U postgres zr_auto_pro | gzip > "$$FILE"
+          if [ -s "$$FILE" ]; then
+            SIZE=$$(du -h "$$FILE" | cut -f1)
+            echo "[backup] $$(date) OK: $$FILE ($$SIZE)"
+          else
+            echo "[backup] $$(date) ERROR: empty backup!"
+            rm -f "$$FILE"
+          fi
+          # Remove backups older than 30 days
+          find /backups -name "zr_auto_pro_*.sql.gz" -mtime +30 -delete 2>/dev/null
+          echo "[backup] $$(date) Next backup in 6 hours"
+          sleep 21600
+        done
+
 volumes:
   pgdata:
   uploads:

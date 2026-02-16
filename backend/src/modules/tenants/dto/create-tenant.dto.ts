@@ -4,10 +4,13 @@ import {
   IsEmail,
   IsInt,
   IsDateString,
+  IsEnum,
+  IsNumber,
   Min,
   MinLength,
   MaxLength,
 } from 'class-validator';
+import { TariffPlan } from '../entities/tenant.entity';
 
 export class CreateTenantDto {
   @IsString()
@@ -38,6 +41,15 @@ export class CreateTenantDto {
   @IsString()
   @MaxLength(1000)
   description?: string;
+
+  @IsOptional()
+  @IsEnum(TariffPlan)
+  tariffPlan?: TariffPlan;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariffPrice?: number;
 
   @IsOptional()
   @IsInt()
