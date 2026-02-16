@@ -55,6 +55,8 @@ export const adminApi = {
   getTariffPlans: () => api.get<TariffPlanInfo[]>('/admin/tenants/tariff-plans'),
   setTariff: (id: string, data: { tariffPlan: TariffPlan; tariffPrice?: number; maxUsers?: number }) =>
     api.post<Tenant>(`/admin/tenants/${id}/set-tariff`, data),
+  resetPassword: (tenantId: string, userId: string, newPassword: string) =>
+    api.post(`/admin/tenants/${tenantId}/reset-password`, { userId, newPassword }),
   deleteTenant: (id: string) => api.delete(`/admin/tenants/${id}`),
 };
 

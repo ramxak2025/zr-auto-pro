@@ -221,6 +221,33 @@ export class TenantsService {
     }));
   }
 
+  async resetUserPassword(
+    tenantId: string,
+    userId: string,
+    newPassword: string,
+  ): Promise<{ success: boolean }> {
+    const user = await this.userRepo.findOne({
+      where: { id: userId, tenantId },
+    });
+
+    if (!user) {
+      throw new NotFoundException(`User not found in this tenant`);
+    }
+
+    if (newPassword.length < 6) {
+      throw new BadRequestException('Пароль должен быть не менее 6 символов');
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    await this.userRepo.save(user);
+
+    this.logger.log(
+      `Password reset for user "${user.username}" (tenant: ${tenantId})`,
+    );
+
+    return { success: true };
+  }
+
   async remove(id: string): Promise<void> {
     const tenant = await this.findById(id);
     await this.tenantRepo.softRemove(tenant);

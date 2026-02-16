@@ -87,14 +87,26 @@ export class UsersService {
   }
 
   async findByPhone(phone: string): Promise<User | null> {
-    // Try exact match first, then normalized
-    const user = await this.repo.findOne({ where: { phone } });
+    // Try exact match on phone column
+    let user = await this.repo.findOne({ where: { phone } });
     if (user) return user;
 
+    // Try normalized format
     const normalized = normalizePhone(phone);
     if (normalized !== phone) {
-      return this.repo.findOne({ where: { phone: normalized } });
+      user = await this.repo.findOne({ where: { phone: normalized } });
+      if (user) return user;
     }
+
+    // Also search by username (phone is often stored as username)
+    user = await this.repo.findOne({ where: { username: phone } });
+    if (user) return user;
+
+    if (normalized !== phone) {
+      user = await this.repo.findOne({ where: { username: normalized } });
+      if (user) return user;
+    }
+
     return null;
   }
 

@@ -26,25 +26,33 @@ export class TenantsSeedService implements OnModuleInit {
     const phone = process.env.SUPERADMIN_PHONE || '+79884444436';
     const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
 
-    const existingSuperAdmin = await this.userRepo.findOne({
-      where: { role: UserRole.SUPERADMIN },
-    });
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Search including soft-deleted records to avoid unique constraint conflicts
+    const existingSuperAdmin = await this.userRepo
+      .createQueryBuilder('user')
+      .withDeleted()
+      .where('user.role = :role', { role: UserRole.SUPERADMIN })
+      .orWhere('user.username = :username', { username })
+      .orWhere('user.phone = :phone', { phone })
+      .getOne();
 
     if (existingSuperAdmin) {
-      // Sync password and phone so the admin can always log in
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // Restore if soft-deleted, sync all credentials
+      existingSuperAdmin.deletedAt = null;
       existingSuperAdmin.password = hashedPassword;
       existingSuperAdmin.username = username;
       existingSuperAdmin.phone = phone;
+      existingSuperAdmin.role = UserRole.SUPERADMIN;
+      existingSuperAdmin.fullName = existingSuperAdmin.fullName || 'Super Administrator';
+      existingSuperAdmin.permissions = DEFAULT_PERMISSIONS[UserRole.SUPERADMIN];
       existingSuperAdmin.isActive = true;
       await this.userRepo.save(existingSuperAdmin);
       this.logger.log(
-        `SuperAdmin password synced for "${existingSuperAdmin.username}" (phone: ${phone})`,
+        `SuperAdmin synced: "${username}" (phone: ${phone})`,
       );
       return;
     }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
 
     const superAdmin = this.userRepo.create({
       username,
@@ -59,7 +67,7 @@ export class TenantsSeedService implements OnModuleInit {
     await this.userRepo.save(superAdmin);
 
     this.logger.log(
-      `SuperAdmin user created successfully (username: "${username}", phone: "${phone}")`,
+      `SuperAdmin created: "${username}" (phone: "${phone}")`,
     );
   }
 }

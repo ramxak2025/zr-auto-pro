@@ -86,6 +86,14 @@ export class TenantsController {
     return this.tenantsService.extendSubscription(id, data);
   }
 
+  @Post(':id/reset-password')
+  resetPassword(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() data: { userId: string; newPassword: string },
+  ) {
+    return this.tenantsService.resetUserPassword(id, data.userId, data.newPassword);
+  }
+
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.tenantsService.remove(id);

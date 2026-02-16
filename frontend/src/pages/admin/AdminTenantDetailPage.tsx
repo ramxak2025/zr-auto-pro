@@ -460,6 +460,8 @@ export default function AdminTenantDetailPage() {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [isExtendOpen, setIsExtendOpen] = useState(false);
   const [isTariffOpen, setIsTariffOpen] = useState(false);
+  const [resetTarget, setResetTarget] = useState<User | null>(null);
+  const [newPassword, setNewPassword] = useState('');
 
   const {
     data: tenant,
@@ -483,6 +485,17 @@ export default function AdminTenantDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
     },
     onError: (err) => toast.error(getApiError(err, 'Ошибка')),
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: ({ userId, password }: { userId: string; password: string }) =>
+      adminApi.resetPassword(id!, userId, password),
+    onSuccess: () => {
+      toast.success('Пароль сброшен');
+      setResetTarget(null);
+      setNewPassword('');
+    },
+    onError: (err) => toast.error(getApiError(err, 'Не удалось сбросить пароль')),
   });
 
   const deleteMutation = useMutation({
@@ -645,12 +658,13 @@ export default function AdminTenantDetailPage() {
                   </div>
                   <CopyButton text={ownerUser.username} />
                 </div>
-                <div className="rounded-lg bg-purple-100/50 p-2.5">
-                  <div className="flex items-center gap-1.5 text-[11px] text-purple-600">
-                    <Key className="h-3 w-3" />
-                    <span>Пароль задаётся при создании</span>
-                  </div>
-                </div>
+                <button
+                  onClick={() => { setResetTarget(ownerUser); setNewPassword(''); }}
+                  className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-purple-100 px-3 py-2 text-[12px] font-medium text-purple-700 hover:bg-purple-200 transition-colors"
+                >
+                  <Key className="h-3 w-3" />
+                  Сбросить пароль
+                </button>
               </div>
             </div>
           )}
@@ -692,6 +706,13 @@ export default function AdminTenantDetailPage() {
                     ) : (
                       <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 flex-shrink-0">Откл.</span>
                     )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setResetTarget(user); setNewPassword(''); }}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 hover:bg-amber-50 hover:text-amber-600 transition-colors flex-shrink-0"
+                      title="Сбросить пароль"
+                    >
+                      <Key className="h-3.5 w-3.5" />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -712,6 +733,40 @@ export default function AdminTenantDetailPage() {
       {isTariffOpen && (
         <ChangeTariffModal isOpen={isTariffOpen} onClose={() => setIsTariffOpen(false)} tenant={tenant} />
       )}
+
+      {/* Reset password modal */}
+      <Modal isOpen={!!resetTarget} onClose={() => setResetTarget(null)} title="Сбросить пароль">
+        <div className="space-y-4">
+          <div className="rounded-lg bg-gray-50 p-3">
+            <p className="text-xs text-gray-500">Сотрудник</p>
+            <p className="text-sm font-semibold text-gray-900 mt-0.5">{resetTarget?.fullName}</p>
+            <p className="text-[11px] text-gray-400 mt-0.5">{resetTarget?.phone || resetTarget?.username}</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Новый пароль</label>
+            <input
+              type="text"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              placeholder="Минимум 6 символов"
+              className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
+            <button type="button" onClick={() => setResetTarget(null)}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+              Отмена
+            </button>
+            <button
+              onClick={() => resetTarget && resetPasswordMutation.mutate({ userId: resetTarget.id, password: newPassword })}
+              disabled={!newPassword || newPassword.length < 6 || resetPasswordMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+            >
+              {resetPasswordMutation.isPending ? 'Сброс...' : 'Сбросить пароль'}
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       <ConfirmDialog
         isOpen={isDeleteOpen}
