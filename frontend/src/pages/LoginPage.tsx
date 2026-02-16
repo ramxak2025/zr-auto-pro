@@ -52,8 +52,14 @@ export default function LoginPage() {
       await login(getPhoneRaw(username), password);
       toast.success('Добро пожаловать!');
     } catch (err: any) {
+      const status = err?.response?.status;
       const raw = err?.response?.data?.message;
-      const message = Array.isArray(raw) ? raw[0] : raw || 'Неверный телефон или пароль';
+      let message: string;
+      if (!err?.response || status >= 502) {
+        message = 'Сервер недоступен. Попробуйте позже.';
+      } else {
+        message = Array.isArray(raw) ? raw[0] : raw || 'Неверный телефон или пароль';
+      }
       toast.error(message);
     } finally {
       setIsSubmitting(false);
