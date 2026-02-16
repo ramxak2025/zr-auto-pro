@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
@@ -12,6 +13,8 @@ import { normalizePhone } from '../../common/utils/normalize-phone';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -42,12 +45,16 @@ export class AuthService {
     }
 
     if (!user) {
+      this.logger.warn(`Login: no user found for phone="${phone}" (normalized="${normalized}")`);
       return null;
     }
+
+    this.logger.debug(`Login: found user id=${user.id} username="${user.username}" phone="${user.phone}"`);
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
+      this.logger.warn(`Login: wrong password for user "${user.username}" (id: ${user.id})`);
       return null;
     }
 

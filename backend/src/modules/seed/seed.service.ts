@@ -47,23 +47,31 @@ export class SeedService implements OnModuleInit {
     const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
     const fullName = process.env.SUPERADMIN_FULLNAME || 'Super Admin';
 
-    const existing = await this.userRepo.findOne({
-      where: { role: UserRole.SUPERADMIN },
-    });
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Search including soft-deleted records to avoid unique constraint conflicts
+    const existing = await this.userRepo
+      .createQueryBuilder('user')
+      .withDeleted()
+      .where('user.role = :role', { role: UserRole.SUPERADMIN })
+      .orWhere('user.username = :username', { username })
+      .orWhere('user.phone = :phone', { phone })
+      .getOne();
 
     if (existing) {
-      // Always sync password and phone so the admin can log in with the known credentials
-      const hashedPassword = await bcrypt.hash(password, 10);
+      // Restore if soft-deleted, sync all credentials
+      existing.deletedAt = null;
       existing.password = hashedPassword;
       existing.username = username;
       existing.phone = phone;
+      existing.role = UserRole.SUPERADMIN;
+      existing.fullName = existing.fullName || fullName;
+      existing.permissions = DEFAULT_PERMISSIONS[UserRole.SUPERADMIN];
       existing.isActive = true;
       await this.userRepo.save(existing);
-      this.logger.log(`SuperAdmin password synced for "${existing.username}" (phone: ${phone})`);
+      this.logger.log(`SuperAdmin synced: "${username}" (phone: ${phone})`);
       return;
     }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
 
     const superadmin = this.userRepo.create({
       username,

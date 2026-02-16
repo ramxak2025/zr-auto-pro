@@ -4,11 +4,10 @@ import { Tenant } from './entities/tenant.entity';
 import { User } from '../users/entities/user.entity';
 import { TenantsService } from './tenants.service';
 import { TenantsController } from './tenants.controller';
-import { TenantsSeedService } from './tenants-seed.service';
 
 @Module({
   imports: [TypeOrmModule.forFeature([Tenant, User])],
-  providers: [TenantsService, TenantsSeedService],
+  providers: [TenantsService],
   controllers: [TenantsController],
   exports: [TenantsService],
 })
