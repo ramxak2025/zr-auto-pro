@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Supplier } from './entities/supplier.entity';
-import { Delivery } from './entities/delivery.entity';
-import { DeliveryItem } from './entities/delivery-item.entity';
-import { SupplierPayment } from './entities/supplier-payment.entity';
+
+import { Supplier } from './supplier.entity';
+import { Delivery } from './delivery.entity';
+import { DeliveryItem } from './delivery-item.entity';
+import { SupplierPayment } from './supplier-payment.entity';
 import { SuppliersService } from './suppliers.service';
 import { SuppliersController } from './suppliers.controller';
 import { ProductsModule } from '../products/products.module';
@@ -13,8 +14,8 @@ import { ProductsModule } from '../products/products.module';
     TypeOrmModule.forFeature([Supplier, Delivery, DeliveryItem, SupplierPayment]),
     ProductsModule,
   ],
-  providers: [SuppliersService],
   controllers: [SuppliersController],
+  providers: [SuppliersService],
   exports: [SuppliersService],
 })
 export class SuppliersModule {}

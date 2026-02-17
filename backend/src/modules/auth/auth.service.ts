@@ -1,13 +1,9 @@
-import {
-  Injectable,
-  UnauthorizedException,
-  ConflictException,
-} from '@nestjs/common';
+import { Injectable, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+
 import { UsersService } from '../users/users.service';
-import { RegisterDto } from './dto/register.dto';
-import { User } from '../users/entities/user.entity';
+import { User } from '../users/user.entity';
 
 @Injectable()
 export class AuthService {
@@ -16,31 +12,13 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async validateUser(
-    phone: string,
-    password: string,
-  ): Promise<Omit<User, 'password'> | null> {
-    let user = await this.usersService.findByPhone(phone);
-
-    // Fallback: try alternative phone formats (with/without +)
-    if (!user && phone.startsWith('+')) {
-      user = await this.usersService.findByPhone(phone.slice(1));
-    }
-    if (!user && !phone.startsWith('+')) {
-      user = await this.usersService.findByPhone('+' + phone);
-    }
-
-    // Fallback: try username for users created before phone migration
-    if (!user) {
-      user = await this.usersService.findByUsername(phone);
-    }
-
+  async validateUser(username: string, password: string): Promise<Omit<User, 'password'> | null> {
+    const user = await this.usersService.findByUsername(username);
     if (!user) {
       return null;
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
-
     if (!isPasswordValid) {
       return null;
     }
@@ -49,47 +27,40 @@ export class AuthService {
     return result;
   }
 
-  async login(user: Omit<User, 'password'>) {
+  async login(user: Omit<User, 'password'>): Promise<{ token: string; user: Omit<User, 'password'> }> {
     const payload = {
       sub: user.id,
-      username: user.username,
       role: user.role,
       tenantId: user.tenantId,
     };
 
     return {
-      access_token: this.jwtService.sign(payload),
-      user: {
-        id: user.id,
-        username: user.username,
-        phone: user.phone,
-        fullName: user.fullName,
-        role: user.role,
-        salaryPercent: user.salaryPercent,
-        permissions: user.permissions,
-        isActive: user.isActive,
-        tenantId: user.tenantId,
-      },
+      token: this.jwtService.sign(payload),
+      user,
     };
   }
 
-  async register(tenantId: string, dto: RegisterDto): Promise<Omit<User, 'password'>> {
-    if (dto.phone) {
-      const existingByPhone = await this.usersService.findByPhone(dto.phone);
-      if (existingByPhone) {
-        throw new ConflictException('Пользователь с таким телефоном уже существует');
-      }
-    }
-
-    const existingUser = await this.usersService.findByUsername(dto.username);
-    if (existingUser) {
+  async register(dto: {
+    username: string;
+    password: string;
+    fullName: string;
+    phone?: string;
+    tenantId?: string;
+  }): Promise<{ token: string; user: Omit<User, 'password'> }> {
+    const existing = await this.usersService.findByUsername(dto.username);
+    if (existing) {
       throw new ConflictException('Username already exists');
     }
 
-    // usersService.create() already hashes the password — do NOT hash here
-    const user = await this.usersService.create(tenantId, dto);
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(dto.password, salt);
 
-    const { password: _password, ...result } = user;
-    return result;
+    const created = await this.usersService.create({
+      ...dto,
+      password: hashedPassword,
+    });
+
+    const { password: _password, ...user } = created;
+    return this.login(user);
   }
 }

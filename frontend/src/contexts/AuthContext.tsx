@@ -1,80 +1,69 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import type { User, UserPermissions } from '../types';
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { authApi } from '../api/services';
+import { User, UserPermissions, UserRole } from '../types';
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  isLoading: boolean;
-  isSuperAdmin: boolean;
-  login: (phone: string, password: string) => Promise<void>;
+  loading: boolean;
+  login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   hasPermission: (perm: keyof UserPermissions) => boolean;
+  isRole: (...roles: UserRole[]) => boolean;
 }
 
-const AuthContext = createContext<AuthContextType | null>(null);
+const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (token) {
       authApi
-        .getProfile()
-        .then((res) => {
-          setUser(res.data);
-        })
+        .me()
+        .then((res) => setUser(res.data))
         .catch(() => {
           localStorage.removeItem('token');
-          localStorage.removeItem('user');
           setToken(null);
-          setUser(null);
         })
-        .finally(() => setIsLoading(false));
+        .finally(() => setLoading(false));
     } else {
-      setIsLoading(false);
+      setLoading(false);
     }
   }, [token]);
 
-  const login = useCallback(async (phone: string, password: string) => {
-    const res = await authApi.login({ phone, password });
-    const { access_token, user: u } = res.data;
-    localStorage.setItem('token', access_token);
-    localStorage.setItem('user', JSON.stringify(u));
-    setToken(access_token);
+  const login = async (username: string, password: string) => {
+    const res = await authApi.login({ username, password });
+    const { token: t, user: u } = res.data;
+    localStorage.setItem('token', t);
+    setToken(t);
     setUser(u);
-  }, []);
+  };
 
-  const logout = useCallback(() => {
+  const logout = () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('user');
     setToken(null);
     setUser(null);
-    window.location.href = '/login';
-  }, []);
+  };
 
-  const hasPermission = useCallback(
-    (perm: keyof UserPermissions) => {
-      if (!user) return false;
-      if (user.role === 'superadmin' || user.role === 'director') return true;
-      return !!user.permissions?.[perm];
-    },
-    [user],
-  );
+  const hasPermission = (perm: keyof UserPermissions): boolean => {
+    if (!user) return false;
+    if (user.role === UserRole.SUPERADMIN || user.role === UserRole.DIRECTOR) return true;
+    return !!user.permissions?.[perm];
+  };
 
-  const isSuperAdmin = user?.role === 'superadmin';
+  const isRole = (...roles: UserRole[]): boolean => {
+    if (!user) return false;
+    return roles.includes(user.role);
+  };
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, isSuperAdmin, login, logout, hasPermission }}>
+    <AuthContext.Provider value={{ user, token, loading, login, logout, hasPermission, isRole }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
-}
+export const useAuth = () => useContext(AuthContext);

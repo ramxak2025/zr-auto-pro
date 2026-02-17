@@ -1,152 +1,17 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Plus, Users, Phone, Calendar, Trash2, Edit2 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import {
-  Plus,
-  Pencil,
-  Trash2,
-  Loader2,
-  Users,
-} from 'lucide-react';
 import { clientsApi } from '../api/services';
-import { getApiError } from '../api/axios';
-import type { Client, PaginatedResponse } from '../types';
-import SearchInput from '../components/SearchInput';
-import Pagination from '../components/Pagination';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import EmptyState from '../components/EmptyState';
+import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
-import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../components/PhoneInput';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('ru-RU');
-}
-
-// ---------------------------------------------------------------------------
-// Client Form Modal
-// ---------------------------------------------------------------------------
-
-interface ClientFormData {
-  fullName: string;
-  phone: string;
-  comment: string;
-}
-
-interface ClientFormModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  client?: Client | null;
-  onSubmit: (data: ClientFormData) => void;
-  isLoading: boolean;
-}
-
-function ClientFormModal({
-  isOpen,
-  onClose,
-  client,
-  onSubmit,
-  isLoading,
-}: ClientFormModalProps) {
-  const [fullName, setFullName] = useState(client?.fullName || '');
-  const [phone, setPhone] = useState(client?.phone || '');
-  const [comment, setComment] = useState(client?.comment || '');
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const trimmedName = fullName.trim();
-    if (!trimmedName) {
-      toast.error('Введите ФИО клиента');
-      return;
-    }
-    if (!phone.trim() || !isPhoneComplete(phone)) {
-      toast.error('Введите телефон клиента полностью');
-      return;
-    }
-    onSubmit({
-      fullName: trimmedName,
-      phone: getPhoneRaw(phone),
-      comment: comment.trim(),
-    });
-  }
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={client ? 'Редактировать клиента' : 'Новый клиент'}
-    >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            ФИО <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
-            placeholder="Иванов Иван Иванович"
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Телефон <span className="text-red-500">*</span>
-          </label>
-          <PhoneInput
-            value={phone}
-            onChange={setPhone}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Комментарий
-          </label>
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            rows={3}
-            placeholder="Дополнительная информация..."
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
-        </div>
-
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            {client ? 'Сохранить' : 'Создать'}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main Page
-// ---------------------------------------------------------------------------
-
-const LIMIT = 20;
+import EmptyState from '../components/EmptyState';
+import Pagination from '../components/Pagination';
+import PhoneInput from '../components/PhoneInput';
+import { Client, PaginatedResponse } from '../types';
 
 export default function ClientsPage() {
   const navigate = useNavigate();
@@ -154,280 +19,301 @@ export default function ClientsPage() {
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const limit = 20;
 
   // Modal state
-  const [formOpen, setFormOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<Client | null>(null);
 
-  // ---- Queries ----
+  // Delete confirm state
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const {
-    data: clientsData,
-    isLoading,
-    isError,
-  } = useQuery<PaginatedResponse<Client>>({
-    queryKey: ['clients', { search, page }],
+  // Form state
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [comment, setComment] = useState('');
+
+  // Query
+  const { data, isLoading } = useQuery<PaginatedResponse<Client>>({
+    queryKey: ['clients', { search, page, limit }],
     queryFn: async () => {
-      const res = await clientsApi.getAll({
-        search: search || undefined,
-        page,
-        limit: LIMIT,
-      });
+      const res = await clientsApi.getAll({ search, page, limit });
       return res.data;
     },
-    keepPreviousData: true,
-  } as any);
+  });
 
-  // ---- Mutations ----
-
+  // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: ClientFormData) => clientsApi.create(data),
+    mutationFn: (data: { fullName: string; phone: string; comment?: string }) =>
+      clientsApi.create(data),
     onSuccess: () => {
-      toast.success('Клиент создан');
       queryClient.invalidateQueries({ queryKey: ['clients'] });
-      closeForm();
+      toast.success('Клиент создан');
+      closeModal();
     },
-    onError: (err) => {
-      toast.error(getApiError(err, 'Не удалось создать клиента'));
+    onError: () => {
+      toast.error('Ошибка при создании клиента');
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: ClientFormData }) =>
+    mutationFn: ({ id, data }: { id: string; data: { fullName: string; phone: string; comment?: string } }) =>
       clientsApi.update(id, data),
     onSuccess: () => {
-      toast.success('Клиент обновлён');
       queryClient.invalidateQueries({ queryKey: ['clients'] });
-      closeForm();
+      toast.success('Клиент обновлён');
+      closeModal();
     },
-    onError: (err) => {
-      toast.error(getApiError(err, 'Не удалось обновить клиента'));
+    onError: () => {
+      toast.error('Ошибка при обновлении клиента');
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => clientsApi.delete(id),
+    mutationFn: (id: string) => clientsApi.remove(id),
     onSuccess: () => {
-      toast.success('Клиент удалён');
       queryClient.invalidateQueries({ queryKey: ['clients'] });
-      setDeleteTarget(null);
+      toast.success('Клиент удалён');
     },
-    onError: (err) => {
-      toast.error(getApiError(err, 'Не удалось удалить клиента'));
+    onError: () => {
+      toast.error('Ошибка при удалении клиента');
     },
   });
 
-  // ---- Handlers ----
-
-  function openCreate() {
+  const openCreateModal = () => {
     setEditingClient(null);
-    setFormOpen(true);
-  }
+    setFullName('');
+    setPhone('');
+    setComment('');
+    setModalOpen(true);
+  };
 
-  function openEdit(client: Client) {
+  const openEditModal = (client: Client, e: React.MouseEvent) => {
+    e.stopPropagation();
     setEditingClient(client);
-    setFormOpen(true);
-  }
+    setFullName(client.fullName);
+    setPhone(client.phone);
+    setComment(client.comment || '');
+    setModalOpen(true);
+  };
 
-  function closeForm() {
-    setFormOpen(false);
+  const closeModal = () => {
+    setModalOpen(false);
     setEditingClient(null);
-  }
+  };
 
-  function handleFormSubmit(data: ClientFormData) {
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const payload = { fullName, phone, comment: comment || undefined };
     if (editingClient) {
-      updateMutation.mutate({ id: editingClient.id, data });
+      updateMutation.mutate({ id: editingClient.id, data: payload });
     } else {
-      createMutation.mutate(data);
+      createMutation.mutate(payload);
     }
-  }
+  };
 
-  function handleSearchChange(v: string) {
-    setSearch(v);
-    setPage(1);
-  }
+  const handleDelete = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDeleteId(id);
+    setConfirmOpen(true);
+  };
 
-  const clients = clientsData?.data || [];
-  const total = clientsData?.total || 0;
-  const isMutating = createMutation.isPending || updateMutation.isPending;
+  const confirmDelete = () => {
+    if (deleteId) {
+      deleteMutation.mutate(deleteId);
+      setDeleteId(null);
+    }
+  };
 
-  // ---- Render ----
+  const clients = data?.data || [];
+  const total = data?.total || 0;
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  };
 
   return (
-    <div className="space-y-4 md:space-y-6">
+    <div>
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Клиенты</h1>
-          <p className="text-sm text-gray-500 mt-0.5">Всего: {total}</p>
-        </div>
-        <button
-          onClick={openCreate}
-          className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 md:px-4 py-2 md:py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-primary-700"
-        >
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Добавить клиента</span>
+      <div className="page-header">
+        <h1 className="page-title">Клиенты</h1>
+        <button onClick={openCreateModal} className="btn-primary">
+          <Plus className="w-4 h-4" />
+          Новый клиент
         </button>
       </div>
 
       {/* Search */}
-      <div className="max-w-full md:max-w-sm">
+      <div className="mb-4">
         <SearchInput
           value={search}
-          onChange={handleSearchChange}
-          placeholder="ФИО, телефон или госномер авто..."
+          onChange={(val) => {
+            setSearch(val);
+            setPage(1);
+          }}
+          placeholder="Поиск по имени или телефону..."
         />
       </div>
 
       {/* Content */}
       {isLoading ? (
         <LoadingSpinner />
-      ) : isError ? (
-        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-          <p className="text-sm">Не удалось загрузить список клиентов</p>
-        </div>
       ) : clients.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 bg-white">
-          <EmptyState
-            icon={Users}
-            title={search ? 'Ничего не найдено' : 'Нет клиентов'}
-            description={
-              search
-                ? 'Попробуйте изменить параметры поиска'
-                : 'Добавьте первого клиента для начала работы'
-            }
-            action={
-              !search ? (
-                <button
-                  onClick={openCreate}
-                  className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700"
-                >
-                  <Plus className="h-4 w-4" />
-                  Добавить клиента
-                </button>
-              ) : undefined
-            }
-          />
-        </div>
+        <EmptyState
+          icon={Users}
+          title="Нет клиентов"
+          description={search ? 'По вашему запросу ничего не найдено' : 'Добавьте первого клиента'}
+          action={
+            !search
+              ? { label: 'Добавить клиента', onClick: openCreateModal }
+              : undefined
+          }
+        />
       ) : (
         <>
-          {/* ─── Mobile card list ─── */}
-          <div className="md:hidden space-y-3">
-            {clients.map((client) => (
-              <button
-                key={client.id}
-                type="button"
-                onClick={() => navigate(`/clients/${client.id}`)}
-                className="w-full text-left bg-white rounded-xl border border-gray-100 shadow-sm p-4 hover:shadow-md active:bg-gray-50 transition-all"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{client.fullName}</p>
-                    <p className="text-sm text-gray-500 mt-0.5">{client.phone}</p>
-                  </div>
-                  <div className="flex items-center gap-1 ml-2">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); openEdit(client); }}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(client); }}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-400 mt-2">{formatDate(client.createdAt)}</p>
-              </button>
-            ))}
-          </div>
-
-          {/* ─── Desktop table ─── */}
-          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/50">
-                    <th className="px-4 py-3 font-semibold text-gray-600">ФИО</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Телефон</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Дата</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                      Действия
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {clients.map((client) => (
-                    <tr
-                      key={client.id}
-                      onClick={() => navigate(`/clients/${client.id}`)}
-                      className="cursor-pointer transition-colors hover:bg-gray-50"
-                    >
-                      <td className="px-4 py-3 font-medium text-gray-900">
-                        {client.fullName}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">{client.phone}</td>
-                      <td className="px-4 py-3 text-gray-600">
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Имя</th>
+                  <th>Телефон</th>
+                  <th>Кол-во авто</th>
+                  <th>Дата</th>
+                  <th className="w-24">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {clients.map((client) => (
+                  <tr
+                    key={client.id}
+                    onClick={() => navigate(`/clients/${client.id}`)}
+                    className="cursor-pointer hover:bg-gray-50"
+                  >
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <span className="font-medium text-gray-900">
+                          {client.fullName}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <span className="text-gray-600">{client.phone}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="badge-info">
+                        {client.cars?.length || 0}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2 text-gray-500">
+                        <Calendar className="w-4 h-4 flex-shrink-0" />
                         {formatDate(client.createdAt)}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEdit(client);
-                            }}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-                            title="Редактировать"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteTarget(client);
-                            }}
-                            className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                            title="Удалить"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => openEditModal(client, e)}
+                          className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
+                          title="Редактировать"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => handleDelete(client.id, e)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                          title="Удалить"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          <Pagination page={page} total={total} limit={LIMIT} onChange={setPage} />
+          <Pagination
+            page={page}
+            total={total}
+            limit={limit}
+            onChange={setPage}
+          />
         </>
       )}
 
-      {/* Create / Edit Modal */}
-      {formOpen && (
-        <ClientFormModal
-          key={editingClient?.id || 'new'}
-          isOpen={formOpen}
-          onClose={closeForm}
-          client={editingClient}
-          onSubmit={handleFormSubmit}
-          isLoading={isMutating}
-        />
-      )}
+      {/* Create/Edit Modal */}
+      <Modal
+        isOpen={modalOpen}
+        onClose={closeModal}
+        title={editingClient ? 'Редактировать клиента' : 'Новый клиент'}
+      >
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="label">ФИО</label>
+            <input
+              type="text"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="input"
+              placeholder="Введите ФИО клиента"
+              required
+            />
+          </div>
 
-      {/* Delete Confirm Dialog */}
+          <div>
+            <label className="label">Телефон</label>
+            <PhoneInput
+              value={phone}
+              onChange={setPhone}
+              placeholder="+998 (__) ___-__-__"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="label">Комментарий</label>
+            <textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              className="input"
+              rows={3}
+              placeholder="Комментарий (необязательно)"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={closeModal} className="btn-secondary">
+              Отмена
+            </button>
+            <button
+              type="submit"
+              disabled={createMutation.isPending || updateMutation.isPending}
+              className="btn-primary"
+            >
+              {editingClient ? 'Сохранить' : 'Создать'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete Confirm */}
       <ConfirmDialog
-        isOpen={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+        isOpen={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={confirmDelete}
         title="Удалить клиента"
-        message={`Вы уверены, что хотите удалить клиента "${deleteTarget?.fullName}"? Это действие нельзя отменить.`}
+        message="Вы уверены, что хотите удалить этого клиента? Это действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
       />

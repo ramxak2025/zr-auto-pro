@@ -1,135 +1,132 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Car } from 'lucide-react';
+import { Car, Calendar, User } from 'lucide-react';
 import { carsApi } from '../api/services';
-import type { Car as CarType, PaginatedResponse } from '../types';
 import SearchInput from '../components/SearchInput';
-import Pagination from '../components/Pagination';
-import EmptyState from '../components/EmptyState';
 import LoadingSpinner from '../components/LoadingSpinner';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('ru-RU');
-}
-
-// ---------------------------------------------------------------------------
-// Main Page
-// ---------------------------------------------------------------------------
-
-const LIMIT = 20;
+import EmptyState from '../components/EmptyState';
+import Pagination from '../components/Pagination';
+import { Car as CarType, PaginatedResponse } from '../types';
 
 export default function CarsPage() {
   const navigate = useNavigate();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const limit = 20;
 
-  const {
-    data: carsData,
-    isLoading,
-    isError,
-  } = useQuery<PaginatedResponse<CarType>>({
-    queryKey: ['cars', { search, page }],
+  const { data, isLoading } = useQuery<PaginatedResponse<CarType>>({
+    queryKey: ['cars', { search, page, limit }],
     queryFn: async () => {
-      const res = await carsApi.getAll({
-        search: search || undefined,
-        page,
-        limit: LIMIT,
-      });
+      const res = await carsApi.getAll({ search, page, limit });
       return res.data;
     },
-    keepPreviousData: true,
-  } as any);
+  });
 
-  function handleSearchChange(v: string) {
-    setSearch(v);
-    setPage(1);
-  }
+  const cars = data?.data || [];
+  const total = data?.total || 0;
 
-  const cars = carsData?.data || [];
-  const total = carsData?.total || 0;
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  };
 
   return (
-    <div className="space-y-6">
+    <div>
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Автомобили</h1>
-        <p className="text-sm text-gray-500 mt-1">Всего: {total}</p>
+      <div className="page-header">
+        <h1 className="page-title">Автомобили</h1>
       </div>
 
       {/* Search */}
-      <div className="max-w-sm">
+      <div className="mb-4">
         <SearchInput
           value={search}
-          onChange={handleSearchChange}
-          placeholder="Поиск по госномеру или марке..."
+          onChange={(val) => {
+            setSearch(val);
+            setPage(1);
+          }}
+          placeholder="Поиск по гос номеру или марке..."
         />
       </div>
 
       {/* Content */}
       {isLoading ? (
         <LoadingSpinner />
-      ) : isError ? (
-        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-          <p className="text-sm">Не удалось загрузить список автомобилей</p>
-        </div>
       ) : cars.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 bg-white">
-          <EmptyState
-            icon={Car}
-            title={search ? 'Ничего не найдено' : 'Нет автомобилей'}
-            description={
-              search
-                ? 'Попробуйте изменить параметры поиска'
-                : 'Автомобили добавляются через карточку клиента'
-            }
-          />
-        </div>
+        <EmptyState
+          icon={Car}
+          title="Нет автомобилей"
+          description={
+            search
+              ? 'По вашему запросу ничего не найдено'
+              : 'Автомобили будут добавлены через карточку клиента'
+          }
+        />
       ) : (
         <>
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/50">
-                    <th className="px-4 py-3 font-semibold text-gray-600">Госномер</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">
-                      Марка / Модель
-                    </th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Владелец</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600">Дата</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {cars.map((car) => (
-                    <tr
-                      key={car.id}
-                      onClick={() => navigate(`/clients/${car.clientId}`)}
-                      className="cursor-pointer transition-colors hover:bg-gray-50"
-                    >
-                      <td className="px-4 py-3 font-medium text-gray-900">
-                        {car.plateNumber}
-                      </td>
-                      <td className="px-4 py-3 text-gray-600">{car.makeModel}</td>
-                      <td className="px-4 py-3 text-gray-600">
-                        {car.client?.fullName || '\u2014'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-500">
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Гос номер</th>
+                  <th>Марка / Модель</th>
+                  <th>Владелец</th>
+                  <th>Дата</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cars.map((car) => (
+                  <tr
+                    key={car.id}
+                    onClick={() => {
+                      if (car.clientId) {
+                        navigate(`/clients/${car.clientId}`);
+                      }
+                    }}
+                    className="cursor-pointer hover:bg-gray-50"
+                  >
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <Car className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <span className="font-semibold text-gray-900">
+                          {car.plateNumber}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className="text-gray-700">{car.makeModel}</span>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <User className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                        <span className="text-gray-600">
+                          {car.client?.fullName || '—'}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2 text-gray-500">
+                        <Calendar className="w-4 h-4 flex-shrink-0" />
                         {formatDate(car.createdAt)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          <Pagination page={page} total={total} limit={LIMIT} onChange={setPage} />
+          <Pagination
+            page={page}
+            total={total}
+            limit={limit}
+            onChange={setPage}
+          />
         </>
       )}
     </div>

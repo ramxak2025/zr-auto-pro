@@ -1,152 +1,137 @@
-import { type ReactNode } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
-import {
-  LayoutDashboard,
-  Building2,
-  LogOut,
-  ChevronRight,
-} from 'lucide-react';
+import { ReactNode } from 'react';
+import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { LayoutDashboard, Building2, ArrowLeft, LogOut } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-interface NavItem {
-  label: string;
-  path: string;
-  icon: typeof LayoutDashboard;
-}
-
-const navItems: NavItem[] = [
-  { label: 'Dashboard', path: '/', icon: LayoutDashboard },
-  { label: 'Автосервисы', path: '/tenants', icon: Building2 },
+const navItems = [
+  { label: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
+  { label: 'Tenants', path: '/admin/tenants', icon: Building2 },
 ];
-
-function getPageTitle(pathname: string): string[] {
-  const segments = pathname.split('/').filter(Boolean);
-  if (segments.length === 0) return ['Dashboard'];
-
-  const labelMap: Record<string, string> = {
-    tenants: 'Автосервисы',
-  };
-
-  const titles: string[] = [];
-  const first = labelMap[segments[0]] || segments[0].charAt(0).toUpperCase() + segments[0].slice(1);
-  titles.push(first);
-
-  if (segments.length > 1) {
-    titles.push('Детали');
-  }
-
-  return titles;
-}
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
-  const breadcrumbs = getPageTitle(location.pathname);
+  const isActive = (path: string) => location.pathname.startsWith(path);
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
+    <div className="flex h-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
+      <aside className="hidden md:flex md:flex-col w-64 bg-white border-r border-gray-200">
         {/* Logo */}
-        <div className="flex flex-col items-start border-b border-gray-200 px-4 py-3 gap-1">
-          <img src="/logo.png" alt="Autexa" className="h-10 w-auto max-w-full object-contain" />
-          <span className="text-[11px] font-medium text-primary-600">
-            Панель управления
-          </span>
+        <div className="flex items-center h-16 px-6 border-b border-gray-200">
+          <span className="text-lg font-bold text-gray-900">Admin Panel</span>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto px-3 py-4">
+        <nav className="flex-1 overflow-y-auto py-4 px-3">
           <ul className="space-y-1">
             {navItems.map((item) => {
               const Icon = item.icon;
-
+              const active = isActive(item.path);
               return (
                 <li key={item.path}>
-                  <NavLink
+                  <Link
                     to={item.path}
-                    end={item.path === '/'}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
-                        isActive
-                          ? 'bg-primary-50 text-primary-700'
-                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                      }`
-                    }
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                      active
+                        ? 'bg-primary-50 text-primary-600'
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                    }`}
                   >
-                    <Icon className="h-5 w-5 flex-shrink-0" />
-                    <span>{item.label}</span>
-                  </NavLink>
+                    <Icon className="w-5 h-5 flex-shrink-0" />
+                    {item.label}
+                  </Link>
                 </li>
               );
             })}
           </ul>
+
+          <div className="mt-6 pt-6 border-t border-gray-200">
+            <Link
+              to="/dashboard"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5 flex-shrink-0" />
+              Back to App
+            </Link>
+          </div>
         </nav>
 
-        {/* Sidebar footer */}
-        <div className="border-t border-gray-200 px-4 py-3">
+        {/* User Info */}
+        <div className="border-t border-gray-200 p-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
-              {user?.fullName?.charAt(0) || 'S'}
+            <div className="flex-shrink-0 w-9 h-9 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center text-sm font-semibold">
+              {user?.fullName?.charAt(0)?.toUpperCase() || 'A'}
             </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-gray-900">
-                {user?.fullName || 'Super Admin'}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">
+                {user?.fullName}
               </p>
-              <p className="truncate text-xs text-gray-500">Super Admin</p>
+              <p className="text-xs text-gray-500 truncate">Superadmin</p>
             </div>
+            <button
+              onClick={handleLogout}
+              className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors"
+              title="Logout"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </aside>
 
-      {/* Main area */}
-      <div className="flex flex-1 flex-col md:pl-[260px]">
-        {/* Top bar */}
-        <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-gray-200 bg-white px-4 md:px-6">
-          {/* Breadcrumbs */}
-          <div className="flex items-center gap-1.5 text-sm">
-            {breadcrumbs.map((crumb, index) => (
-              <span key={index} className="flex items-center gap-1.5">
-                {index > 0 && (
-                  <ChevronRight className="h-4 w-4 text-gray-400" />
-                )}
-                <span
-                  className={
-                    index === breadcrumbs.length - 1
-                      ? 'font-semibold text-gray-900'
-                      : 'text-gray-500'
-                  }
-                >
-                  {crumb}
-                </span>
-              </span>
-            ))}
-          </div>
-
-          {/* User info + logout */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2.5">
-              <span className="text-sm font-medium text-gray-700">
-                {user?.fullName || 'Super Admin'}
-              </span>
-              <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">
-                Super Admin
-              </span>
-            </div>
-            <button
-              onClick={logout}
-              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
-              title="Выйти"
+      {/* Mobile Header for Admin */}
+      <div className="flex flex-1 flex-col min-w-0">
+        <header className="md:hidden flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200">
+          <span className="text-lg font-bold text-gray-900">Admin</span>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/dashboard"
+              className="p-2 text-gray-500 hover:text-gray-700"
             >
-              <LogOut className="h-4 w-4" />
-              <span className="hidden sm:inline">Выйти</span>
+              <ArrowLeft className="w-5 h-5" />
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="p-2 text-gray-500 hover:text-red-500"
+            >
+              <LogOut className="w-5 h-5" />
             </button>
           </div>
         </header>
 
-        {/* Page content */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">{children}</main>
+        {/* Mobile Tab Navigation */}
+        <nav className="md:hidden flex items-center bg-white border-b border-gray-200 px-2">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = isActive(item.path);
+            return (
+              <Link
+                key={item.path}
+                to={item.path}
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  active
+                    ? 'border-primary-600 text-primary-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <main className="flex-1 overflow-y-auto p-4 md:p-6">
+          {children}
+        </main>
       </div>
     </div>
   );

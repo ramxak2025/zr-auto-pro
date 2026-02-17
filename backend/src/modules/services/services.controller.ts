@@ -7,61 +7,44 @@ import {
   Param,
   Query,
   Body,
+  Request,
   UseGuards,
 } from '@nestjs/common';
+
 import { ServicesService } from './services.service';
-import { CreateServiceDto } from './dto/create-service.dto';
-import { UpdateServiceDto } from './dto/update-service.dto';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { TenantGuard } from '../auth/guards/tenant.guard';
-import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { RequirePermissions } from '../auth/decorators/permissions.decorator';
-import { TenantId } from '../auth/decorators/tenant-id.decorator';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @Controller('services')
-@UseGuards(JwtAuthGuard, TenantGuard)
+@UseGuards(JwtAuthGuard)
 export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
 
   @Get()
-  findAll(
-    @TenantId() tenantId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+  async findAll(
+    @Request() req: any,
     @Query('search') search?: string,
     @Query('category') category?: string,
   ) {
-    return this.servicesService.findAll(tenantId, { page, limit, search, category });
-  }
-
-  @Get('categories')
-  getCategories(@TenantId() tenantId: string) {
-    return this.servicesService.getCategories(tenantId);
+    return this.servicesService.findAll(req.user.tenantId, search, category);
   }
 
   @Get(':id')
-  findById(@TenantId() tenantId: string, @Param('id') id: string) {
-    return this.servicesService.findById(tenantId, id);
+  async findById(@Param('id') id: string) {
+    return this.servicesService.findById(id);
   }
 
   @Post()
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('warehouse_access')
-  create(@TenantId() tenantId: string, @Body() dto: CreateServiceDto) {
-    return this.servicesService.create(tenantId, dto);
+  async create(@Request() req: any, @Body() body: any) {
+    return this.servicesService.create({ ...body, tenantId: req.user.tenantId });
   }
 
   @Patch(':id')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('warehouse_access')
-  update(@TenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateServiceDto) {
-    return this.servicesService.update(tenantId, id, dto);
+  async update(@Param('id') id: string, @Body() body: any) {
+    return this.servicesService.update(id, body);
   }
 
   @Delete(':id')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('warehouse_access')
-  remove(@TenantId() tenantId: string, @Param('id') id: string) {
-    return this.servicesService.remove(tenantId, id);
+  async remove(@Param('id') id: string) {
+    return this.servicesService.remove(id);
   }
 }

@@ -1,98 +1,94 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
+import { UserRole } from './types';
+
+// Layouts
 import Layout from './components/Layout';
 import AdminLayout from './components/AdminLayout';
+import LoadingSpinner from './components/LoadingSpinner';
+
+// Pages
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
-import ClientsPage from './pages/ClientsPage';
-import ClientDetailPage from './pages/ClientDetailPage';
-import CarsPage from './pages/CarsPage';
 import ChecksPage from './pages/ChecksPage';
 import CheckCreatePage from './pages/CheckCreatePage';
 import CheckDetailPage from './pages/CheckDetailPage';
+import ClientsPage from './pages/ClientsPage';
+import ClientDetailPage from './pages/ClientDetailPage';
+import CarsPage from './pages/CarsPage';
 import ProductsPage from './pages/ProductsPage';
 import ServicesPage from './pages/ServicesPage';
 import SuppliersPage from './pages/SuppliersPage';
 import SupplierDetailPage from './pages/SupplierDetailPage';
 import SalaryPage from './pages/SalaryPage';
 import ReportsPage from './pages/ReportsPage';
-import UsersPage from './pages/UsersPage';
-import MorePage from './pages/MorePage';
 import CashFlowPage from './pages/CashFlowPage';
+import UsersPage from './pages/UsersPage';
 import SchedulePage from './pages/SchedulePage';
+import MorePage from './pages/MorePage';
 import TariffPage from './pages/TariffPage';
+
+// Admin pages
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminTenantsPage from './pages/admin/AdminTenantsPage';
 import AdminTenantDetailPage from './pages/admin/AdminTenantDetailPage';
 
-function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth();
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
-      </div>
-    );
-  }
-  if (!user) return <Navigate to="/login" replace />;
-  return <>{children}</>;
-}
-
-function AppRoutes() {
-  const { isSuperAdmin } = useAuth();
-
-  if (isSuperAdmin) {
-    return (
-      <AdminLayout>
-        <Routes>
-          <Route path="/" element={<AdminDashboardPage />} />
-          <Route path="/tenants" element={<AdminTenantsPage />} />
-          <Route path="/tenants/:id" element={<AdminTenantDetailPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AdminLayout>
-    );
-  }
-
-  return (
-    <Layout>
-      <Routes>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/clients" element={<ClientsPage />} />
-        <Route path="/clients/:id" element={<ClientDetailPage />} />
-        <Route path="/cars" element={<CarsPage />} />
-        <Route path="/checks" element={<ChecksPage />} />
-        <Route path="/checks/new" element={<CheckCreatePage />} />
-        <Route path="/checks/:id" element={<CheckDetailPage />} />
-        <Route path="/products" element={<ProductsPage />} />
-        <Route path="/services" element={<ServicesPage />} />
-        <Route path="/suppliers" element={<SuppliersPage />} />
-        <Route path="/suppliers/:id" element={<SupplierDetailPage />} />
-        <Route path="/salary" element={<SalaryPage />} />
-        <Route path="/reports" element={<ReportsPage />} />
-        <Route path="/schedule" element={<SchedulePage />} />
-        <Route path="/users" element={<UsersPage />} />
-        <Route path="/cashflow" element={<CashFlowPage />} />
-        <Route path="/tariff" element={<TariffPage />} />
-        <Route path="/more" element={<MorePage />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Layout>
-  );
-}
-
 export default function App() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return <LoadingSpinner />;
+  }
+
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
+      {/* Public: Login */}
       <Route
-        path="/*"
-        element={
-          <PrivateRoute>
-            <AppRoutes />
-          </PrivateRoute>
-        }
+        path="/login"
+        element={user ? <Navigate to="/" replace /> : <LoginPage />}
       />
+
+      {/* Protected routes */}
+      {user ? (
+        <>
+          {/* Main app routes inside Layout */}
+          <Route element={<Layout />}>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/checks" element={<ChecksPage />} />
+            <Route path="/checks/new" element={<CheckCreatePage />} />
+            <Route path="/checks/:id" element={<CheckDetailPage />} />
+            <Route path="/clients" element={<ClientsPage />} />
+            <Route path="/clients/:id" element={<ClientDetailPage />} />
+            <Route path="/cars" element={<CarsPage />} />
+            <Route path="/products" element={<ProductsPage />} />
+            <Route path="/services" element={<ServicesPage />} />
+            <Route path="/suppliers" element={<SuppliersPage />} />
+            <Route path="/suppliers/:id" element={<SupplierDetailPage />} />
+            <Route path="/salary" element={<SalaryPage />} />
+            <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/cashflow" element={<CashFlowPage />} />
+            <Route path="/users" element={<UsersPage />} />
+            <Route path="/schedule" element={<SchedulePage />} />
+            <Route path="/more" element={<MorePage />} />
+            <Route path="/tariff" element={<TariffPage />} />
+          </Route>
+
+          {/* Admin routes inside AdminLayout (superadmin only) */}
+          {user.role === UserRole.SUPERADMIN && (
+            <Route element={<AdminLayout />}>
+              <Route path="/admin" element={<AdminDashboardPage />} />
+              <Route path="/admin/tenants" element={<AdminTenantsPage />} />
+              <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
+            </Route>
+          )}
+
+          {/* Catch-all: redirect to dashboard */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </>
+      ) : (
+        /* Not logged in: redirect everything to login */
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      )}
     </Routes>
   );
 }

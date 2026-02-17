@@ -1,188 +1,13 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
-import { Client } from 'pg';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
-
-/**
- * Pre-startup migration: converts old PostgreSQL enum columns to varchar
- * so TypeORM synchronize can work with the updated entity definitions.
- * Safe to run multiple times — does nothing if already migrated.
- */
-async function migrateEnumsToVarchar() {
-  const logger = new Logger('Migration');
-
-  const client = new Client({
-    host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || '5432', 10),
-    user: process.env.DB_USERNAME || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
-    database: process.env.DB_NAME || 'zr_auto_pro',
-  });
-
-  try {
-    // Wait for DB to be ready (handles Docker/restart delays)
-    for (let attempt = 1; attempt <= 10; attempt++) {
-      try {
-        await client.connect();
-        break;
-      } catch (err) {
-        if (attempt === 10) throw err;
-        logger.warn(`DB not ready, retrying in 2s (attempt ${attempt}/10)...`);
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    }
-    logger.log('Running pre-startup migration...');
-
-    // List of enum columns to convert to varchar
-    const migrations = [
-      {
-        table: 'users',
-        column: 'role',
-        enumType: 'users_role_enum',
-        defaultVal: "'master'",
-        length: 30,
-      },
-      {
-        table: 'checks',
-        column: '"paymentMethod"',
-        enumType: 'checks_paymentmethod_enum',
-        defaultVal: "'cash'",
-        length: 20,
-      },
-      {
-        table: 'deliveries',
-        column: '"paymentStatus"',
-        enumType: 'deliveries_paymentstatus_enum',
-        defaultVal: "'unpaid'",
-        length: 20,
-      },
-      {
-        table: 'stock_movements',
-        column: 'type',
-        enumType: 'stock_movements_type_enum',
-        defaultVal: "'income'",
-        length: 20,
-      },
-    ];
-
-    for (const m of migrations) {
-      // Check if the enum type exists
-      const enumCheck = await client.query(
-        `SELECT 1 FROM pg_type WHERE typname = $1`,
-        [m.enumType],
-      );
-
-      if (enumCheck.rowCount > 0) {
-        logger.log(`Migrating ${m.table}.${m.column} from enum to varchar...`);
-
-        // Check if table exists first
-        const tableCheck = await client.query(
-          `SELECT 1 FROM information_schema.tables WHERE table_name = $1`,
-          [m.table],
-        );
-
-        if (tableCheck.rowCount > 0) {
-          await client.query(`
-            ALTER TABLE "${m.table}"
-            ALTER COLUMN ${m.column} SET DATA TYPE varchar(${m.length})
-            USING ${m.column}::text
-          `);
-          await client.query(`
-            ALTER TABLE "${m.table}"
-            ALTER COLUMN ${m.column} SET DEFAULT ${m.defaultVal}
-          `);
-        }
-
-        // Drop the old enum type
-        await client.query(`DROP TYPE IF EXISTS "${m.enumType}" CASCADE`);
-        logger.log(`Migrated ${m.table}.${m.column} successfully`);
-      }
-    }
-
-    // Handle old check.number generated column issue
-    const checksTable = await client.query(
-      `SELECT 1 FROM information_schema.tables WHERE table_name = 'checks'`,
-    );
-    if (checksTable.rowCount > 0) {
-      try {
-        const colInfo = await client.query(`
-          SELECT is_identity FROM information_schema.columns
-          WHERE table_name = 'checks' AND column_name = 'number'
-        `);
-        if (colInfo.rows[0]?.is_identity === 'YES') {
-          await client.query(
-            `ALTER TABLE "checks" ALTER COLUMN "number" DROP IDENTITY IF EXISTS`,
-          );
-          logger.log('Removed identity from checks.number');
-        }
-      } catch {
-        // column might not exist yet — fine
-      }
-    }
-
-    // Migrate old 'owner' role to 'director'
-    const usersTable = await client.query(
-      `SELECT 1 FROM information_schema.tables WHERE table_name = 'users'`,
-    );
-    if (usersTable.rowCount > 0) {
-      const updated = await client.query(
-        `UPDATE users SET role = 'director' WHERE role = 'owner'`,
-      );
-      if (updated.rowCount > 0) {
-        logger.log(`Migrated ${updated.rowCount} users from 'owner' to 'director' role`);
-      }
-
-      // Change CASCADE → SET NULL on users.tenantId FK to prevent data loss
-      const fkCheck = await client.query(`
-        SELECT rc.delete_rule
-        FROM information_schema.referential_constraints rc
-        JOIN information_schema.key_column_usage kcu
-          ON rc.constraint_name = kcu.constraint_name
-        WHERE kcu.table_name = 'users' AND kcu.column_name = 'tenantId'
-        LIMIT 1
-      `);
-      if (fkCheck.rowCount > 0 && fkCheck.rows[0].delete_rule === 'CASCADE') {
-        const fkName = await client.query(`
-          SELECT kcu.constraint_name
-          FROM information_schema.key_column_usage kcu
-          WHERE kcu.table_name = 'users' AND kcu.column_name = 'tenantId'
-          LIMIT 1
-        `);
-        if (fkName.rowCount > 0) {
-          const name = fkName.rows[0].constraint_name;
-          await client.query(`ALTER TABLE "users" DROP CONSTRAINT "${name}"`);
-          await client.query(`
-            ALTER TABLE "users" ADD CONSTRAINT "${name}"
-            FOREIGN KEY ("tenantId") REFERENCES "tenants"("id") ON DELETE SET NULL
-          `);
-          logger.log('Changed users.tenantId FK from CASCADE to SET NULL');
-        }
-      }
-    }
-
-    logger.log('Pre-startup migration complete');
-  } catch (error) {
-    logger.warn(`Migration warning (non-fatal): ${error.message}`);
-  } finally {
-    await client.end();
-  }
-}
+import { DataSource } from 'typeorm';
 
 async function bootstrap() {
-  const logger = new Logger('Bootstrap');
-
-  // Run enum→varchar migration BEFORE NestJS/TypeORM starts
-  await migrateEnumsToVarchar();
-
-  const app = await NestFactory.create(AppModule, {
-    logger: ['error', 'warn', 'log'],
-  });
+  const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix('api');
-  app.enableCors({
-    origin: true,
-    credentials: true,
-  });
+  app.enableCors({ origin: true, credentials: true });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -191,11 +16,16 @@ async function bootstrap() {
     }),
   );
 
+  // Run pending migrations on startup
+  try {
+    const ds = app.get(DataSource);
+    await ds.runMigrations();
+  } catch (e) {
+    console.log('No migrations to run');
+  }
+
   const port = process.env.PORT || 3000;
   await app.listen(port);
-  logger.log(`Server running on port ${port}`);
+  console.log(`Server running on port ${port}`);
 }
-bootstrap().catch((err) => {
-  console.error('Failed to start application:', err);
-  process.exit(1);
-});
+bootstrap();

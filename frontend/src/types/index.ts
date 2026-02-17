@@ -264,8 +264,6 @@ export interface EmployeeRanking {
   month: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
 }
 
-// ─── Shifts & Schedule ────────────────────────────────────────
-
 export interface Shift {
   id: string;
   tenantId: string;

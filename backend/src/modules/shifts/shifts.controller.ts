@@ -2,60 +2,42 @@ import {
   Controller,
   Get,
   Post,
+  Param,
   Body,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ShiftsService } from './shifts.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { TenantGuard } from '../auth/guards/tenant.guard';
-import { TenantId } from '../auth/decorators/tenant-id.decorator';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @Controller('shifts')
-@UseGuards(JwtAuthGuard, TenantGuard)
+@UseGuards(JwtAuthGuard)
 export class ShiftsController {
   constructor(private readonly shiftsService: ShiftsService) {}
 
-  @Post('open')
-  open(@TenantId() tenantId: string, @CurrentUser() user: any) {
-    return this.shiftsService.openShift(tenantId, user.id);
-  }
-
-  @Post('close')
-  close(
-    @TenantId() tenantId: string,
-    @CurrentUser() user: any,
-    @Body('note') note?: string,
-  ) {
-    return this.shiftsService.closeShift(tenantId, user.id, note);
+  @Get()
+  async findAll(@Req() req: any, @Query('date') date?: string) {
+    const tenantId = req.user.tenantId;
+    return this.shiftsService.findAll(tenantId, date);
   }
 
   @Get('my')
-  getMyShift(@TenantId() tenantId: string, @CurrentUser() user: any) {
-    return this.shiftsService.getMyShift(tenantId, user.id);
+  async getMyShift(@Req() req: any) {
+    const userId = req.user.id;
+    const todayStr = new Date().toISOString().split('T')[0];
+    return this.shiftsService.getMyShift(userId, todayStr);
   }
 
-  @Get('today')
-  getTodayShifts(@TenantId() tenantId: string) {
-    return this.shiftsService.getTodayShifts(tenantId);
+  @Post('open')
+  async openShift(@Req() req: any, @Body() body: { note?: string }) {
+    const tenantId = req.user.tenantId;
+    const userId = req.user.id;
+    return this.shiftsService.openShift(tenantId, userId, body.note);
   }
 
-  @Get('history')
-  getHistory(
-    @TenantId() tenantId: string,
-    @Query('userId') userId?: string,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
-    return this.shiftsService.getShiftHistory(tenantId, {
-      userId,
-      dateFrom,
-      dateTo,
-      page,
-      limit,
-    });
+  @Post(':id/close')
+  async closeShift(@Param('id') id: string) {
+    return this.shiftsService.closeShift(id);
   }
 }

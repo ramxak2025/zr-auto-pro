@@ -4,434 +4,188 @@ import {
   TrendingUp,
   TrendingDown,
   DollarSign,
-  Package,
+  ShoppingCart,
   Users,
   Receipt,
-  ChevronDown,
+  Lock,
 } from 'lucide-react';
+import { format, startOfMonth } from 'date-fns';
+
 import { reportsApi } from '../api/services';
-import type { FinancialReport } from '../types';
-import LoadingSpinner from '../components/LoadingSpinner';
+import { useAuth } from '../contexts/AuthContext';
 import DatePeriodPicker from '../components/DatePeriodPicker';
+import LoadingSpinner from '../components/LoadingSpinner';
+import { FinancialReport } from '../types';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatMoney(value: number): string {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: 'UZS',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value);
 }
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function monthAgoISO(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
-// ---------------------------------------------------------------------------
-// Stat Card
-// ---------------------------------------------------------------------------
-
-interface StatCardProps {
-  title: string;
-  value: string;
-  icon: React.ElementType;
-  bgColor: string;
-  iconColor: string;
-  valueColor?: string;
-}
-
-function StatCard({ title, value, icon: Icon, bgColor, iconColor, valueColor }: StatCardProps) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-3">
-        <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${bgColor}`}>
-          <Icon className={`h-5 w-5 ${iconColor}`} />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm text-gray-500">{title}</p>
-          <p className={`text-lg font-bold truncate ${valueColor || 'text-gray-900'}`}>
-            {value}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Tab types
-// ---------------------------------------------------------------------------
-
-type TabKey = 'masters' | 'services' | 'products';
-
-interface MasterRow {
-  masterName: string;
-  revenue: number;
-  checkCount: number;
-  salaryTotal: number;
-}
-
-interface ServiceRow {
-  serviceName: string;
-  count: number;
-  revenue: number;
-}
-
-interface ProductRow {
-  productName: string;
-  count: number;
-  revenue: number;
-  cost: number;
-  profit: number;
-}
-
-// ---------------------------------------------------------------------------
-// Main Component
-// ---------------------------------------------------------------------------
-
-const TABS: { key: TabKey; label: string }[] = [
-  { key: 'masters', label: 'По мастерам' },
-  { key: 'services', label: 'По услугам' },
-  { key: 'products', label: 'По товарам' },
-];
 
 export default function ReportsPage() {
-  const [dateFrom, setDateFrom] = useState(monthAgoISO());
-  const [dateTo, setDateTo] = useState(todayISO());
-  const [activeTab, setActiveTab] = useState<TabKey>('masters');
+  const { hasPermission } = useAuth();
 
-  // ---- Financial summary ----
-  const {
-    data: report,
-    isLoading: reportLoading,
-    isError: reportError,
-  } = useQuery<FinancialReport>({
-    queryKey: ['reports', 'financial', { dateFrom, dateTo }],
-    queryFn: async () => {
-      const res = await reportsApi.getFinancial({ dateFrom, dateTo });
-      return res.data;
-    },
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+
+  const [dateFrom, setDateFrom] = useState(monthStart);
+  const [dateTo, setDateTo] = useState(today);
+
+  const canView = hasPermission('financial_reports');
+
+  const { data: report, isLoading } = useQuery({
+    queryKey: ['financial-report', dateFrom, dateTo],
+    queryFn: () => reportsApi.getFinancial({ dateFrom, dateTo }),
+    select: (res) => res.data as FinancialReport,
+    enabled: canView,
   });
 
-  // ---- By master ----
-  const { data: mastersData, isLoading: mastersLoading } = useQuery<MasterRow[]>({
-    queryKey: ['reports', 'masters', { dateFrom, dateTo }],
-    queryFn: async () => {
-      const res = await reportsApi.getByMaster({ dateFrom, dateTo });
-      return res.data;
-    },
-    enabled: activeTab === 'masters',
-  });
-
-  // ---- By service ----
-  const { data: servicesData, isLoading: servicesLoading } = useQuery<ServiceRow[]>({
-    queryKey: ['reports', 'services', { dateFrom, dateTo }],
-    queryFn: async () => {
-      const res = await reportsApi.getByService({ dateFrom, dateTo });
-      return res.data;
-    },
-    enabled: activeTab === 'services',
-  });
-
-  // ---- By product ----
-  const { data: productsData, isLoading: productsLoading } = useQuery<ProductRow[]>({
-    queryKey: ['reports', 'products', { dateFrom, dateTo }],
-    queryFn: async () => {
-      const res = await reportsApi.getByProduct({ dateFrom, dateTo });
-      return res.data;
-    },
-    enabled: activeTab === 'products',
-  });
-
-  // ---- Stat cards data ----
-  const stats = report
-    ? [
-        {
-          title: 'Выручка',
-          value: formatMoney(report.revenue),
-          icon: DollarSign,
-          bgColor: 'bg-blue-50',
-          iconColor: 'text-blue-600',
-        },
-        {
-          title: 'Себестоимость',
-          value: formatMoney(report.productCost),
-          icon: Package,
-          bgColor: 'bg-gray-100',
-          iconColor: 'text-gray-600',
-        },
-        {
-          title: 'Зарплаты',
-          value: formatMoney(report.salaries),
-          icon: Users,
-          bgColor: 'bg-orange-50',
-          iconColor: 'text-orange-600',
-        },
-        {
-          title: 'Валовая прибыль',
-          value: formatMoney(report.grossProfit),
-          icon: TrendingUp,
-          bgColor: 'bg-teal-50',
-          iconColor: 'text-teal-600',
-        },
-        {
-          title: 'Чистая прибыль',
-          value: formatMoney(report.netProfit),
-          icon: report.netProfit >= 0 ? TrendingUp : TrendingDown,
-          bgColor: report.netProfit >= 0 ? 'bg-green-50' : 'bg-red-50',
-          iconColor: report.netProfit >= 0 ? 'text-green-600' : 'text-red-600',
-          valueColor: report.netProfit >= 0 ? 'text-green-600' : 'text-red-600',
-        },
-        {
-          title: 'Чеки',
-          value: String(report.checkCount),
-          icon: Receipt,
-          bgColor: 'bg-blue-50',
-          iconColor: 'text-blue-600',
-        },
-      ]
-    : [];
-
-  // ---- Tab content ----
-  function renderTabContent() {
-    if (activeTab === 'masters') {
-      if (mastersLoading) return <LoadingSpinner />;
-      const rows = mastersData || [];
-      if (rows.length === 0) {
-        return (
-          <p className="py-8 text-center text-sm text-gray-500">Нет данных</p>
-        );
-      }
-      return (
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-2 p-3">
-            {rows.map((r, i) => (
-              <div key={i} className="rounded-xl bg-white border border-gray-100 px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-900">{r.masterName}</span>
-                  <span className="text-sm font-bold text-gray-900">{formatMoney(r.salaryTotal)}</span>
-                </div>
-                <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
-                  <span>{formatMoney(r.revenue)} выр.</span>
-                  <span>{r.checkCount} чеков</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50/50">
-                  <th className="px-4 py-3 font-semibold text-gray-600">Мастер</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Чеков</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Зарплата</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {rows.map((r, i) => (
-                  <tr key={i} className="transition-colors hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{r.masterName}</td>
-                    <td className="px-4 py-3 text-gray-600 text-right">
-                      {formatMoney(r.revenue)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-right">{r.checkCount}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900 text-right">
-                      {formatMoney(r.salaryTotal)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      );
-    }
-
-    if (activeTab === 'services') {
-      if (servicesLoading) return <LoadingSpinner />;
-      const rows = servicesData || [];
-      if (rows.length === 0) {
-        return (
-          <p className="py-8 text-center text-sm text-gray-500">Нет данных</p>
-        );
-      }
-      return (
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-2 p-3">
-            {rows.map((r, i) => (
-              <div key={i} className="rounded-xl bg-white border border-gray-100 px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-900">{r.serviceName}</span>
-                  <span className="text-sm font-bold text-gray-900">{formatMoney(r.revenue)}</span>
-                </div>
-                <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
-                  <span>{r.count} раз</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50/50">
-                  <th className="px-4 py-3 font-semibold text-gray-600">Услуга</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {rows.map((r, i) => (
-                  <tr key={i} className="transition-colors hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{r.serviceName}</td>
-                    <td className="px-4 py-3 text-gray-600 text-right">{r.count}</td>
-                    <td className="px-4 py-3 font-medium text-gray-900 text-right">
-                      {formatMoney(r.revenue)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      );
-    }
-
-    if (activeTab === 'products') {
-      if (productsLoading) return <LoadingSpinner />;
-      const rows = productsData || [];
-      if (rows.length === 0) {
-        return (
-          <p className="py-8 text-center text-sm text-gray-500">Нет данных</p>
-        );
-      }
-      return (
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-2 p-3">
-            {rows.map((r, i) => (
-              <div key={i} className="rounded-xl bg-white border border-gray-100 px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-900">{r.productName}</span>
-                  <span className={`text-sm font-bold ${r.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {formatMoney(r.profit)}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
-                  <span>{r.count} шт.</span>
-                  <span>{formatMoney(r.revenue)} выр.</span>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table */}
-          <div className="hidden md:block overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50/50">
-                  <th className="px-4 py-3 font-semibold text-gray-600">Товар</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Себестоимость</th>
-                  <th className="px-4 py-3 font-semibold text-gray-600 text-right">Прибыль</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {rows.map((r, i) => (
-                  <tr key={i} className="transition-colors hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-900">{r.productName}</td>
-                    <td className="px-4 py-3 text-gray-600 text-right">{r.count}</td>
-                    <td className="px-4 py-3 text-gray-600 text-right">
-                      {formatMoney(r.revenue)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 text-right">
-                      {formatMoney(r.cost)}
-                    </td>
-                    <td
-                      className={`px-4 py-3 font-medium text-right ${
-                        r.profit >= 0 ? 'text-green-600' : 'text-red-600'
-                      }`}
-                    >
-                      {formatMoney(r.profit)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      );
-    }
-
-    return null;
+  if (!canView) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="mb-4 p-4 bg-gray-100 rounded-full">
+          <Lock className="w-10 h-10 text-gray-400" />
+        </div>
+        <h2 className="text-xl font-semibold text-gray-900 mb-2">
+          Доступ ограничен
+        </h2>
+        <p className="text-gray-500 max-w-sm">
+          У вас нет прав для просмотра финансовых отчетов. Обратитесь к
+          администратору.
+        </p>
+      </div>
+    );
   }
 
-  // ---- Render ----
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Финансовые отчёты</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Аналитика доходов и расходов за выбранный период
-        </p>
-      </div>
+      <h1 className="text-2xl font-bold text-gray-900">Финансовые отчеты</h1>
 
-      {/* Period Selector */}
-      <div className="flex items-center gap-2">
-        <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(from, to) => { setDateFrom(from); setDateTo(to); }} />
-      </div>
+      {/* Date picker */}
+      <DatePeriodPicker
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onChange={(from, to) => {
+          setDateFrom(from);
+          setDateTo(to);
+        }}
+      />
 
-      {/* Stat Cards */}
-      {reportLoading ? (
+      {isLoading ? (
         <LoadingSpinner />
-      ) : reportError ? (
-        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-          <p className="text-sm">Не удалось загрузить финансовый отчёт</p>
+      ) : !report ? (
+        <div className="text-center py-12 text-gray-500">
+          Не удалось загрузить данные
         </div>
       ) : (
-        <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {stats.map((s) => (
-              <StatCard key={s.title} {...s} />
-            ))}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Revenue */}
+          <div className="stat-card border-l-4 border-blue-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="stat-label">Выручка</div>
+                <div className="stat-value text-blue-600">
+                  {formatCurrency(report.revenue)}
+                </div>
+              </div>
+              <div className="p-3 bg-blue-50 rounded-xl">
+                <TrendingUp className="w-6 h-6 text-blue-500" />
+              </div>
+            </div>
           </div>
 
-          {/* Tabs */}
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-            {/* Tab headers */}
-            <div className="flex border-b border-gray-200">
-              {TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setActiveTab(t.key)}
-                  className={`px-6 py-3 text-sm font-medium transition-colors ${
-                    activeTab === t.key
-                      ? 'border-b-2 border-blue-600 text-blue-600'
-                      : 'text-gray-500 hover:text-gray-700'
+          {/* Product cost */}
+          <div className="stat-card border-l-4 border-red-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="stat-label">Себестоимость товаров</div>
+                <div className="stat-value text-red-600">
+                  {formatCurrency(report.productCost)}
+                </div>
+              </div>
+              <div className="p-3 bg-red-50 rounded-xl">
+                <ShoppingCart className="w-6 h-6 text-red-500" />
+              </div>
+            </div>
+          </div>
+
+          {/* Salaries */}
+          <div className="stat-card border-l-4 border-red-400">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="stat-label">Зарплаты</div>
+                <div className="stat-value text-red-500">
+                  {formatCurrency(report.salaries)}
+                </div>
+              </div>
+              <div className="p-3 bg-red-50 rounded-xl">
+                <Users className="w-6 h-6 text-red-400" />
+              </div>
+            </div>
+          </div>
+
+          {/* Gross profit */}
+          <div className="stat-card border-l-4 border-green-500">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="stat-label">Валовая прибыль</div>
+                <div className="stat-value text-green-600">
+                  {formatCurrency(report.grossProfit)}
+                </div>
+              </div>
+              <div className="p-3 bg-green-50 rounded-xl">
+                <TrendingUp className="w-6 h-6 text-green-500" />
+              </div>
+            </div>
+          </div>
+
+          {/* Net profit */}
+          <div className="stat-card border-l-4 border-green-600">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="stat-label">Чистая прибыль</div>
+                <div
+                  className={`stat-value ${
+                    report.netProfit >= 0 ? 'text-green-600' : 'text-red-600'
                   }`}
                 >
-                  {t.label}
-                </button>
-              ))}
+                  {formatCurrency(report.netProfit)}
+                </div>
+              </div>
+              <div
+                className={`p-3 rounded-xl ${
+                  report.netProfit >= 0 ? 'bg-green-50' : 'bg-red-50'
+                }`}
+              >
+                {report.netProfit >= 0 ? (
+                  <DollarSign className="w-6 h-6 text-green-600" />
+                ) : (
+                  <TrendingDown className="w-6 h-6 text-red-600" />
+                )}
+              </div>
             </div>
-
-            {/* Tab content */}
-            <div className="p-0">{renderTabContent()}</div>
           </div>
-        </>
+
+          {/* Check count */}
+          <div className="stat-card border-l-4 border-blue-400">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="stat-label">Количество чеков</div>
+                <div className="stat-value text-blue-500">
+                  {report.checkCount}
+                </div>
+              </div>
+              <div className="p-3 bg-blue-50 rounded-xl">
+                <Receipt className="w-6 h-6 text-blue-400" />
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

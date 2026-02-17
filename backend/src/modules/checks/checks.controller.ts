@@ -4,88 +4,72 @@ import {
   Post,
   Patch,
   Delete,
-  Body,
   Param,
+  Body,
   Query,
-  Res,
+  Req,
   UseGuards,
 } from '@nestjs/common';
-import { Response } from 'express';
 import { ChecksService } from './checks.service';
-import { PdfService } from '../pdf/pdf.service';
-import { CreateCheckDto } from './dto/create-check.dto';
-import { UpdateCheckDto } from './dto/update-check.dto';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { TenantGuard } from '../auth/guards/tenant.guard';
-import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { RequirePermissions } from '../auth/decorators/permissions.decorator';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { TenantId } from '../auth/decorators/tenant-id.decorator';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @Controller('checks')
-@UseGuards(JwtAuthGuard, TenantGuard)
+@UseGuards(JwtAuthGuard)
 export class ChecksController {
-  constructor(
-    private readonly checksService: ChecksService,
-    private readonly pdfService: PdfService,
-  ) {}
+  constructor(private readonly checksService: ChecksService) {}
 
   @Get()
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('checks_view')
-  findAll(
-    @TenantId() tenantId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('masterId') masterId?: string,
-    @Query('clientId') clientId?: string,
+  async findAll(
+    @Req() req: any,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('masterId') masterId?: string,
+    @Query('clientId') clientId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.checksService.findAll(tenantId, { page, limit, masterId, clientId, dateFrom, dateTo });
+    const tenantId = req.user.tenantId;
+    return this.checksService.findAll(tenantId, {
+      dateFrom,
+      dateTo,
+      masterId,
+      clientId,
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 50,
+    });
+  }
+
+  @Get('dashboard')
+  async getDashboardStats(@Req() req: any) {
+    const tenantId = req.user.tenantId;
+    return this.checksService.getDashboardStats(tenantId);
+  }
+
+  @Get('ranking')
+  async getEmployeeRanking(@Req() req: any) {
+    const tenantId = req.user.tenantId;
+    return this.checksService.getEmployeeRanking(tenantId);
   }
 
   @Get(':id')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('checks_view')
-  findOne(@TenantId() tenantId: string, @Param('id') id: string) {
-    return this.checksService.findById(tenantId, id);
-  }
-
-  @Get(':id/print')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('checks_view')
-  async printCheck(
-    @TenantId() tenantId: string,
-    @Param('id') id: string,
-    @Res() res: Response,
-  ) {
-    const check = await this.checksService.findById(tenantId, id);
-    const tenantName = await this.checksService.getTenantName(tenantId);
-    const html = this.pdfService.generateCheckHtml(check, tenantName);
-
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(html);
+  async findOne(@Param('id') id: string) {
+    return this.checksService.findById(id);
   }
 
   @Post()
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('checks_create')
-  create(@TenantId() tenantId: string, @Body() dto: CreateCheckDto, @CurrentUser() user: any) {
-    return this.checksService.create(tenantId, dto, user.id);
+  async create(@Req() req: any, @Body() dto: any) {
+    dto.tenantId = req.user.tenantId;
+    return this.checksService.create(dto);
   }
 
   @Patch(':id')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('checks_edit')
-  update(@TenantId() tenantId: string, @Param('id') id: string, @Body() dto: UpdateCheckDto) {
-    return this.checksService.update(tenantId, id, dto);
+  async update(@Param('id') id: string, @Body() dto: any) {
+    return this.checksService.update(id, dto);
   }
 
   @Delete(':id')
-  @UseGuards(PermissionsGuard)
-  @RequirePermissions('checks_delete')
-  remove(@TenantId() tenantId: string, @Param('id') id: string) {
-    return this.checksService.remove(tenantId, id);
+  async remove(@Param('id') id: string) {
+    await this.checksService.remove(id);
+    return { message: 'Check deleted successfully' };
   }
 }

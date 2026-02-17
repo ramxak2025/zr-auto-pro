@@ -4,582 +4,718 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   Building2,
+  Users,
+  Plus,
+  Pencil,
+  Trash2,
+  Loader2,
+  CalendarDays,
   Phone,
   Mail,
   MapPin,
-  Users,
-  Calendar,
-  Power,
-  Pencil,
-  Trash2,
-  Hash,
-  CalendarClock,
-  Key,
-  UserCircle,
-  Copy,
-  Check as CheckIcon,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { getApiError } from '../../api/axios';
-import { adminApi } from '../../api/services';
-import type { Tenant, User } from '../../types';
+import { format, parseISO, isPast } from 'date-fns';
+import { ru } from 'date-fns/locale';
+
+import { tenantsApi, usersApi } from '../../api/services';
+import { Tenant, User, UserRole, UserPermissions } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
-import PhoneInput, { isPhoneComplete, getPhoneRaw } from '../../components/PhoneInput';
+import EmptyState from '../../components/EmptyState';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+const roleBadgeMap: Record<string, string> = {
+  director: 'badge-blue',
+  admin: 'badge-green',
+  master: 'badge-yellow',
+};
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
   director: 'Директор',
-  admin: 'Администратор',
+  admin: 'Админ',
   master: 'Мастер',
-  storekeeper: 'Товаровед',
-  accountant: 'Бухгалтер',
 };
 
-const roleBadgeColors: Record<string, string> = {
-  superadmin: 'bg-red-50 text-red-700',
-  director: 'bg-purple-50 text-purple-700',
-  admin: 'bg-blue-50 text-blue-700',
-  master: 'bg-green-50 text-green-700',
-  storekeeper: 'bg-yellow-50 text-yellow-700',
-  accountant: 'bg-gray-100 text-gray-600',
+const defaultPermissions: UserPermissions = {
+  checks_view: true,
+  checks_create: true,
+  checks_edit: false,
+  checks_delete: false,
+  profit_view: false,
+  clients_view: true,
+  clients_edit: false,
+  warehouse_access: false,
+  suppliers_access: false,
+  financial_reports: false,
+  export_data: false,
+  user_management: false,
 };
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
-}
-
-function formatDateTime(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function getSubscriptionInfo(tenant: Tenant): {
-  label: string;
-  color: string;
-  isExpired: boolean;
-  daysLeft: number | null;
-} {
-  if (!tenant.subscriptionEnd) {
-    return { label: 'Бессрочная', color: 'text-blue-700', isExpired: false, daysLeft: null };
-  }
-  const end = new Date(tenant.subscriptionEnd);
-  const now = new Date();
-  const daysLeft = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
-  if (daysLeft < 0) {
-    return { label: 'Истекла', color: 'text-red-700', isExpired: true, daysLeft };
-  }
-  if (daysLeft <= 7) {
-    return { label: `Осталось ${daysLeft} дн.`, color: 'text-orange-700', isExpired: false, daysLeft };
-  }
-  return { label: `до ${formatDate(tenant.subscriptionEnd)}`, color: 'text-green-700', isExpired: false, daysLeft };
-}
-
-// ---------------------------------------------------------------------------
-// Info row component
-// ---------------------------------------------------------------------------
-
-function InfoRow({
-  icon: Icon,
-  label,
-  value,
-  valueClass,
-}: {
-  icon: typeof Phone;
-  label: string;
-  value: string | number | undefined;
-  valueClass?: string;
-}) {
-  return (
-    <div className="flex items-center gap-3 py-2.5">
-      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-gray-400 flex-shrink-0">
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-[11px] text-gray-400">{label}</p>
-        <p className={`text-sm font-medium ${valueClass || 'text-gray-900'}`}>{value || '--'}</p>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Copy button helper
-// ---------------------------------------------------------------------------
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function handleCopy() {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  return (
-    <button
-      onClick={handleCopy}
-      className="flex h-6 w-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
-      title="Копировать"
-    >
-      {copied ? <CheckIcon className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-    </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Edit Tenant Modal
-// ---------------------------------------------------------------------------
-
-interface EditTenantForm {
+// ----------- Tenant Edit Form -----------
+interface TenantFormData {
   name: string;
   phone: string;
-  email: string;
   address: string;
+  email: string;
   description: string;
   maxUsers: number;
+  isActive: boolean;
+  subscriptionEnd: string;
+  subscriptionNote: string;
 }
 
-function EditTenantModal({
-  isOpen,
-  onClose,
-  tenant,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  tenant: Tenant;
-}) {
-  const queryClient = useQueryClient();
-  const [form, setForm] = useState<EditTenantForm>({
-    name: tenant.name,
-    phone: tenant.phone || '',
-    email: tenant.email || '',
-    address: tenant.address || '',
-    description: tenant.description || '',
-    maxUsers: tenant.maxUsers,
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (data: EditTenantForm) => adminApi.updateTenant(tenant.id, data),
-    onSuccess: () => {
-      toast.success('Сохранено');
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tenant', tenant.id] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
-      onClose();
-    },
-    onError: (err) => toast.error(getApiError(err, 'Не удалось сохранить')),
-  });
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.name.trim()) { toast.error('Название обязательно'); return; }
-    if (form.phone.trim() && !isPhoneComplete(form.phone)) { toast.error('Введите телефон полностью'); return; }
-    updateMutation.mutate({
-      ...form,
-      phone: form.phone.trim() ? getPhoneRaw(form.phone) : '',
-    });
-  }
-
-  function handleChange(field: keyof EditTenantForm, value: string | number) {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  }
-
-  const inputClass =
-    'block w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20';
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Редактировать" size="lg">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Название *</label>
-            <input type="text" value={form.name} onChange={(e) => handleChange('name', e.target.value)} required className={inputClass} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Телефон</label>
-            <PhoneInput
-              value={form.phone}
-              onChange={(v) => handleChange('phone', v)}
-              className={inputClass}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <input type="email" value={form.email} onChange={(e) => handleChange('email', e.target.value)} className={inputClass} />
-          </div>
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Адрес</label>
-            <input type="text" value={form.address} onChange={(e) => handleChange('address', e.target.value)} className={inputClass} />
-          </div>
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Описание</label>
-            <textarea value={form.description} onChange={(e) => handleChange('description', e.target.value)} rows={3} className={inputClass + ' resize-none'} />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Макс. пользователей</label>
-            <input type="number" min={1} max={100} value={form.maxUsers} onChange={(e) => handleChange('maxUsers', parseInt(e.target.value, 10) || 1)} className={inputClass} />
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
-          <button type="button" onClick={onClose} className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">Отмена</button>
-          <button type="submit" disabled={updateMutation.isPending} className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
-            {updateMutation.isPending ? 'Сохранение...' : 'Сохранить'}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
+// ----------- User Form -----------
+interface UserFormData {
+  fullName: string;
+  username: string;
+  password: string;
+  phone: string;
+  role: UserRole;
+  salaryPercent: number;
+  isActive: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Extend Subscription Modal
-// ---------------------------------------------------------------------------
-
-function ExtendSubscriptionModal({
-  isOpen,
-  onClose,
-  tenant,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  tenant: Tenant;
-}) {
-  const queryClient = useQueryClient();
-
-  const getDefaultDate = () => {
-    const base = tenant.subscriptionEnd ? new Date(tenant.subscriptionEnd) : new Date();
-    if (base < new Date()) base.setTime(new Date().getTime());
-    base.setDate(base.getDate() + 30);
-    return base.toISOString().split('T')[0];
-  };
-
-  const [endDate, setEndDate] = useState(getDefaultDate());
-  const [note, setNote] = useState('');
-
-  const extendMutation = useMutation({
-    mutationFn: () => adminApi.extendSubscription(tenant.id, { subscriptionEnd: endDate, note: note || undefined }),
-    onSuccess: () => {
-      toast.success('Подписка продлена');
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tenant', tenant.id] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
-      onClose();
-    },
-    onError: (err) => toast.error(getApiError(err, 'Не удалось продлить подписку')),
-  });
-
-  function addDays(days: number) {
-    const base = endDate ? new Date(endDate) : new Date();
-    base.setDate(base.getDate() + days);
-    setEndDate(base.toISOString().split('T')[0]);
-  }
-
-  const inputClass =
-    'block w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20';
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Продлить подписку">
-      <div className="space-y-4">
-        <div className="rounded-lg bg-gray-50 p-3">
-          <p className="text-xs text-gray-500">Текущая подписка</p>
-          <p className="text-sm font-semibold text-gray-900 mt-0.5">
-            {tenant.subscriptionEnd ? `до ${formatDate(tenant.subscriptionEnd)}` : 'Бессрочная'}
-          </p>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Новая дата окончания</label>
-          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={inputClass} />
-        </div>
-
-        <div className="flex gap-2">
-          <button type="button" onClick={() => addDays(30)}
-            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">+30 дней</button>
-          <button type="button" onClick={() => addDays(90)}
-            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">+90 дней</button>
-          <button type="button" onClick={() => addDays(365)}
-            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">+1 год</button>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Заметка</label>
-          <input type="text" value={note} onChange={(e) => setNote(e.target.value)}
-            placeholder="Оплата за 1 месяц..." className={inputClass} />
-        </div>
-
-        <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
-          <button type="button" onClick={onClose}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">Отмена</button>
-          <button onClick={() => extendMutation.mutate()} disabled={!endDate || extendMutation.isPending}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
-            {extendMutation.isPending ? 'Сохранение...' : 'Продлить'}
-          </button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Main page
-// ---------------------------------------------------------------------------
+const emptyUserForm: UserFormData = {
+  fullName: '',
+  username: '',
+  password: '',
+  phone: '',
+  role: UserRole.MASTER,
+  salaryPercent: 0,
+  isActive: true,
+};
 
 export default function AdminTenantDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [isEditOpen, setIsEditOpen] = useState(false);
-  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  const [isExtendOpen, setIsExtendOpen] = useState(false);
+  // Tenant edit modal
+  const [tenantModalOpen, setTenantModalOpen] = useState(false);
+  const [tenantForm, setTenantForm] = useState<TenantFormData>({
+    name: '',
+    phone: '',
+    address: '',
+    email: '',
+    description: '',
+    maxUsers: 5,
+    isActive: true,
+    subscriptionEnd: '',
+    subscriptionNote: '',
+  });
 
-  const {
-    data: tenant,
-    isLoading,
-    isError,
-  } = useQuery<Tenant>({
-    queryKey: ['admin', 'tenant', id],
-    queryFn: async () => {
-      const res = await adminApi.getTenant(id!);
-      return res.data;
-    },
+  // User modal
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [userForm, setUserForm] = useState<UserFormData>({ ...emptyUserForm });
+  const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
+
+  // Queries
+  const { data: tenant, isLoading } = useQuery({
+    queryKey: ['tenant', id],
+    queryFn: () => tenantsApi.getById(id!),
+    select: (res) => res.data as Tenant,
     enabled: !!id,
   });
 
-  const toggleActiveMutation = useMutation({
-    mutationFn: () =>
-      tenant?.isActive ? adminApi.deactivateTenant(id!) : adminApi.activateTenant(id!),
+  const tenantUsers = tenant?.users ?? [];
+
+  // Mutations
+  const updateTenantMutation = useMutation({
+    mutationFn: (data: any) => tenantsApi.update(id!, data),
     onSuccess: () => {
-      toast.success(tenant?.isActive ? 'Деактивирован' : 'Активирован');
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tenant', id] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
+      queryClient.invalidateQueries({ queryKey: ['tenant', id] });
+      queryClient.invalidateQueries({ queryKey: ['tenants'] });
+      queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+      toast.success('Организация обновлена');
+      setTenantModalOpen(false);
     },
-    onError: (err) => toast.error(getApiError(err, 'Ошибка')),
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Ошибка обновления');
+    },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => adminApi.deleteTenant(id!),
+  const createUserMutation = useMutation({
+    mutationFn: (data: any) => usersApi.create(data),
     onSuccess: () => {
-      toast.success('Удалён');
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tenants'] });
-      navigate('/tenants');
+      queryClient.invalidateQueries({ queryKey: ['tenant', id] });
+      toast.success('Пользователь создан');
+      closeUserModal();
     },
-    onError: (err) => toast.error(getApiError(err, 'Ошибка')),
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Ошибка создания пользователя');
+    },
   });
 
-  if (isLoading) return <LoadingSpinner size="lg" />;
+  const updateUserMutation = useMutation({
+    mutationFn: ({ userId, data }: { userId: string; data: any }) =>
+      usersApi.update(userId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tenant', id] });
+      toast.success('Пользователь обновлён');
+      closeUserModal();
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Ошибка обновления');
+    },
+  });
 
-  if (isError || !tenant) {
+  const deleteUserMutation = useMutation({
+    mutationFn: (userId: string) => usersApi.remove(userId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tenant', id] });
+      toast.success('Пользователь удалён');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Ошибка удаления');
+    },
+  });
+
+  // Tenant edit handlers
+  const openTenantEdit = () => {
+    if (!tenant) return;
+    setTenantForm({
+      name: tenant.name,
+      phone: tenant.phone || '',
+      address: tenant.address || '',
+      email: tenant.email || '',
+      description: tenant.description || '',
+      maxUsers: tenant.maxUsers,
+      isActive: tenant.isActive,
+      subscriptionEnd: tenant.subscriptionEnd
+        ? tenant.subscriptionEnd.slice(0, 10)
+        : '',
+      subscriptionNote: tenant.subscriptionNote || '',
+    });
+    setTenantModalOpen(true);
+  };
+
+  const handleTenantSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    updateTenantMutation.mutate({
+      name: tenantForm.name,
+      phone: tenantForm.phone || undefined,
+      address: tenantForm.address || undefined,
+      email: tenantForm.email || undefined,
+      description: tenantForm.description || undefined,
+      maxUsers: Number(tenantForm.maxUsers),
+      isActive: tenantForm.isActive,
+      subscriptionEnd: tenantForm.subscriptionEnd || null,
+      subscriptionNote: tenantForm.subscriptionNote || null,
+    });
+  };
+
+  // User handlers
+  const openCreateUser = () => {
+    setEditingUser(null);
+    setUserForm({ ...emptyUserForm });
+    setUserModalOpen(true);
+  };
+
+  const openEditUser = (user: User) => {
+    setEditingUser(user);
+    setUserForm({
+      fullName: user.fullName,
+      username: user.username,
+      password: '',
+      phone: user.phone || '',
+      role: user.role,
+      salaryPercent: user.salaryPercent,
+      isActive: user.isActive,
+    });
+    setUserModalOpen(true);
+  };
+
+  const closeUserModal = () => {
+    setUserModalOpen(false);
+    setEditingUser(null);
+    setUserForm({ ...emptyUserForm });
+  };
+
+  const handleUserSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userForm.fullName.trim() || !userForm.username.trim()) {
+      toast.error('Заполните обязательные поля');
+      return;
+    }
+
+    const payload: any = {
+      fullName: userForm.fullName,
+      username: userForm.username,
+      phone: userForm.phone || undefined,
+      role: userForm.role,
+      salaryPercent: Number(userForm.salaryPercent),
+      isActive: userForm.isActive,
+      tenantId: id,
+      permissions: { ...defaultPermissions },
+    };
+
+    if (editingUser) {
+      if (userForm.password) payload.password = userForm.password;
+      updateUserMutation.mutate({ userId: editingUser.id, data: payload });
+    } else {
+      if (!userForm.password) {
+        toast.error('Введите пароль');
+        return;
+      }
+      payload.password = userForm.password;
+      createUserMutation.mutate(payload);
+    }
+  };
+
+  const isUserSaving = createUserMutation.isPending || updateUserMutation.isPending;
+
+  if (isLoading) return <LoadingSpinner />;
+
+  if (!tenant) {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-red-100">
-          <Building2 className="h-7 w-7 text-red-500" />
-        </div>
-        <h2 className="mt-4 text-lg font-semibold text-gray-900">Не найден</h2>
-        <button onClick={() => navigate('/tenants')}
-          className="mt-5 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700">
-          <ArrowLeft className="h-4 w-4" />К списку
-        </button>
-      </div>
+      <EmptyState
+        icon={Building2}
+        title="Организация не найдена"
+        action={{ label: 'Назад', onClick: () => navigate('/admin/tenants') }}
+      />
     );
   }
 
-  const users: User[] = tenant.users || [];
-  const ownerUser = users.find((u) => u.role === 'director');
-  const subInfo = getSubscriptionInfo(tenant);
+  const subscriptionEnd = tenant.subscriptionEnd
+    ? parseISO(tenant.subscriptionEnd)
+    : null;
+  const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <button onClick={() => navigate('/tenants')}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 bg-white text-gray-500 hover:bg-gray-50 flex-shrink-0">
-            <ArrowLeft className="h-4 w-4" />
+    <div>
+      {/* Back + Header */}
+      <div className="mb-6">
+        <button
+          onClick={() => navigate('/admin/tenants')}
+          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Назад к организациям
+        </button>
+        <div className="flex items-center justify-between">
+          <h1 className="page-title">{tenant.name}</h1>
+          <button onClick={openTenantEdit} className="btn-secondary">
+            <Pencil className="w-4 h-4" />
+            Редактировать
           </button>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-lg font-bold text-gray-900 truncate">{tenant.name}</h1>
+        </div>
+      </div>
+
+      {/* Tenant Info Card */}
+      <div className="card card-body mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-3">
+            {tenant.phone && (
+              <div className="flex items-center gap-2 text-sm">
+                <Phone className="w-4 h-4 text-gray-400" />
+                <span className="text-gray-700">{tenant.phone}</span>
+              </div>
+            )}
+            {tenant.email && (
+              <div className="flex items-center gap-2 text-sm">
+                <Mail className="w-4 h-4 text-gray-400" />
+                <span className="text-gray-700">{tenant.email}</span>
+              </div>
+            )}
+            {tenant.address && (
+              <div className="flex items-center gap-2 text-sm">
+                <MapPin className="w-4 h-4 text-gray-400" />
+                <span className="text-gray-700">{tenant.address}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2 text-sm">
+              <Users className="w-4 h-4 text-gray-400" />
+              <span className="text-gray-700">
+                Пользователей: {tenantUsers.length} / {tenant.maxUsers}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-gray-500">Статус:</span>
               {tenant.isActive ? (
-                <span className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 flex-shrink-0">Активен</span>
+                <span className="badge-green">Активна</span>
               ) : (
-                <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 flex-shrink-0">Откл.</span>
+                <span className="badge-red">Неактивна</span>
               )}
             </div>
-            <p className="text-[11px] text-gray-400 truncate">{tenant.id}</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <button onClick={() => setIsEditOpen(true)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-600 text-white hover:bg-indigo-700" title="Редактировать">
-            <Pencil className="h-4 w-4" />
-          </button>
-          <button onClick={() => toggleActiveMutation.mutate()} disabled={toggleActiveMutation.isPending}
-            className={`flex h-9 w-9 items-center justify-center rounded-lg border ${tenant.isActive ? 'border-amber-300 text-amber-600 hover:bg-amber-50' : 'border-green-300 text-green-600 hover:bg-green-50'} disabled:opacity-50`}
-            title={tenant.isActive ? 'Деактивировать' : 'Активировать'}>
-            <Power className="h-4 w-4" />
-          </button>
-          <button onClick={() => setIsDeleteOpen(true)}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-red-300 text-red-500 hover:bg-red-50" title="Удалить">
-            <Trash2 className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Subscription card */}
-      <div className={`rounded-xl border p-4 ${subInfo.isExpired ? 'border-red-200 bg-red-50/50' : 'border-indigo-200 bg-indigo-50/30'}`}>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-xs text-gray-500 mb-0.5">Подписка</p>
-            <p className={`text-lg font-bold ${subInfo.color}`}>{subInfo.label}</p>
-            {tenant.subscriptionEnd && (
-              <p className="text-[11px] text-gray-400 mt-0.5">
-                {subInfo.isExpired
-                  ? `Истекла ${formatDate(tenant.subscriptionEnd)}`
-                  : `Окончание: ${formatDate(tenant.subscriptionEnd)}`}
-              </p>
-            )}
-            {tenant.subscriptionNote && (
-              <p className="text-[11px] text-gray-500 mt-1 italic">{tenant.subscriptionNote}</p>
-            )}
-          </div>
-          <button onClick={() => setIsExtendOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-indigo-700 flex-shrink-0">
-            <CalendarClock className="h-4 w-4" />
-            Продлить
-          </button>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Left: Info + Owner */}
-        <div className="space-y-4 lg:col-span-1">
-          {/* Info */}
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="border-b border-gray-100 px-4 py-3">
-              <h2 className="text-sm font-semibold text-gray-900">Информация</h2>
-            </div>
-            <div className="divide-y divide-gray-50 px-4">
-              <InfoRow icon={Building2} label="Название" value={tenant.name} />
-              <InfoRow icon={Phone} label="Телефон" value={tenant.phone} />
-              <InfoRow icon={Mail} label="Email" value={tenant.email} />
-              <InfoRow icon={MapPin} label="Адрес" value={tenant.address} />
-              <InfoRow icon={Hash} label="Макс. сотрудников" value={tenant.maxUsers} />
-              <InfoRow icon={Calendar} label="Создан" value={formatDateTime(tenant.createdAt)} />
-            </div>
-          </div>
-
-          {/* Owner credentials */}
-          {ownerUser && (
-            <div className="rounded-xl border border-purple-200 bg-purple-50/30 shadow-sm">
-              <div className="border-b border-purple-100 px-4 py-3">
-                <h2 className="text-sm font-semibold text-purple-900">Доступы директора</h2>
-              </div>
-              <div className="px-4 py-3 space-y-3">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-[11px] text-gray-400">ФИО</p>
-                    <p className="text-sm font-medium text-gray-900 truncate">{ownerUser.fullName}</p>
-                  </div>
-                  <CopyButton text={ownerUser.fullName} />
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="text-[11px] text-gray-400 flex items-center gap-1"><UserCircle className="h-3 w-3" />Телефон</p>
-                    <p className="text-sm font-mono font-semibold text-purple-700">{ownerUser.username}</p>
-                  </div>
-                  <CopyButton text={ownerUser.username} />
-                </div>
-                <div className="rounded-lg bg-purple-100/50 p-2.5">
-                  <div className="flex items-center gap-1.5 text-[11px] text-purple-600">
-                    <Key className="h-3 w-3" />
-                    <span>Пароль задаётся при создании</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right: Users */}
-        <div className="lg:col-span-2">
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold text-gray-900">Сотрудники</h2>
-                <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-600">
-                  {users.length} / {tenant.maxUsers}
+            <div className="flex items-center gap-2 text-sm">
+              <CalendarDays className="w-4 h-4 text-gray-400" />
+              <span className="text-gray-500">Подписка до:</span>
+              {subscriptionEnd ? (
+                <span className={isExpired ? 'text-red-600 font-medium' : 'text-gray-700'}>
+                  {format(subscriptionEnd, 'd MMMM yyyy', { locale: ru })}
+                  {isExpired && <span className="badge-red ml-1">Истекла</span>}
                 </span>
-              </div>
+              ) : (
+                <span className="text-gray-400">Не указано</span>
+              )}
             </div>
-
-            {users.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <Users className="h-10 w-10 text-gray-300 mb-3" />
-                <p className="text-sm text-gray-500">Нет сотрудников</p>
+            {tenant.subscriptionNote && (
+              <div className="text-sm text-gray-500">
+                Примечание: {tenant.subscriptionNote}
               </div>
-            ) : (
-              <div className="divide-y divide-gray-50">
-                {users.map((user) => (
-                  <div key={user.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-50 text-indigo-600 text-xs font-semibold flex-shrink-0">
-                      {user.fullName?.charAt(0) || user.username.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-gray-900 truncate">{user.fullName}</p>
-                      <p className="text-[11px] text-gray-400 truncate">{user.phone || user.username}</p>
-                    </div>
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium flex-shrink-0 ${roleBadgeColors[user.role] || 'bg-gray-100 text-gray-600'}`}>
+            )}
+            {tenant.slug && (
+              <div className="text-sm text-gray-500">
+                Slug: <span className="font-mono text-gray-700">{tenant.slug}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {tenant.description && (
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <p className="text-sm text-gray-600">{tenant.description}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Users Section */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-gray-900">Пользователи</h2>
+        <button onClick={openCreateUser} className="btn-primary btn-sm">
+          <Plus className="w-4 h-4" />
+          Новый пользователь
+        </button>
+      </div>
+
+      {tenantUsers.length === 0 ? (
+        <EmptyState
+          icon={Users}
+          title="Нет пользователей"
+          description="Создайте первого пользователя для этой организации"
+          action={{ label: 'Создать', onClick: openCreateUser }}
+        />
+      ) : (
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Имя</th>
+                <th>Логин</th>
+                <th>Роль</th>
+                <th>% ставка</th>
+                <th>Статус</th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tenantUsers.map((user) => (
+                <tr key={user.id}>
+                  <td className="font-medium text-gray-900">{user.fullName}</td>
+                  <td>{user.username}</td>
+                  <td>
+                    <span className={roleBadgeMap[user.role] || 'badge-gray'}>
                       {roleLabels[user.role] || user.role}
                     </span>
+                  </td>
+                  <td>{user.salaryPercent}%</td>
+                  <td>
                     {user.isActive ? (
-                      <span className="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 flex-shrink-0">Акт.</span>
+                      <span className="badge-green">Активен</span>
                     ) : (
-                      <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 flex-shrink-0">Откл.</span>
+                      <span className="badge-red">Неактивен</span>
                     )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  </td>
+                  <td>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => openEditUser(user)}
+                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
+                        title="Редактировать"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => setDeleteUserId(user.id)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                        title="Удалить"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      </div>
-
-      {/* Modals */}
-      {isEditOpen && (
-        <EditTenantModal isOpen={isEditOpen} onClose={() => setIsEditOpen(false)} tenant={tenant} />
       )}
 
-      {isExtendOpen && (
-        <ExtendSubscriptionModal isOpen={isExtendOpen} onClose={() => setIsExtendOpen(false)} tenant={tenant} />
-      )}
+      {/* Tenant Edit Modal */}
+      <Modal
+        isOpen={tenantModalOpen}
+        onClose={() => setTenantModalOpen(false)}
+        title="Редактировать организацию"
+        size="lg"
+      >
+        <form onSubmit={handleTenantSubmit} className="space-y-4">
+          <div>
+            <label className="label">Название</label>
+            <input
+              type="text"
+              className="input"
+              value={tenantForm.name}
+              onChange={(e) => setTenantForm({ ...tenantForm, name: e.target.value })}
+              required
+            />
+          </div>
+          <div>
+            <label className="label">Телефон</label>
+            <input
+              type="tel"
+              className="input"
+              value={tenantForm.phone}
+              onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="label">Адрес</label>
+            <input
+              type="text"
+              className="input"
+              value={tenantForm.address}
+              onChange={(e) => setTenantForm({ ...tenantForm, address: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="label">Email</label>
+            <input
+              type="email"
+              className="input"
+              value={tenantForm.email}
+              onChange={(e) => setTenantForm({ ...tenantForm, email: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="label">Описание</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={tenantForm.description}
+              onChange={(e) =>
+                setTenantForm({ ...tenantForm, description: e.target.value })
+              }
+            />
+          </div>
+          <div>
+            <label className="label">Максимум пользователей</label>
+            <input
+              type="number"
+              className="input"
+              value={tenantForm.maxUsers}
+              onChange={(e) =>
+                setTenantForm({ ...tenantForm, maxUsers: Number(e.target.value) })
+              }
+              min={1}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={tenantForm.isActive}
+                onChange={(e) =>
+                  setTenantForm({ ...tenantForm, isActive: e.target.checked })
+                }
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
+            </label>
+            <span className="text-sm font-medium text-gray-700">
+              {tenantForm.isActive ? 'Активна' : 'Неактивна'}
+            </span>
+          </div>
+          <div>
+            <label className="label">Подписка до</label>
+            <input
+              type="date"
+              className="input"
+              value={tenantForm.subscriptionEnd}
+              onChange={(e) =>
+                setTenantForm({ ...tenantForm, subscriptionEnd: e.target.value })
+              }
+            />
+          </div>
+          <div>
+            <label className="label">Примечание к подписке</label>
+            <input
+              type="text"
+              className="input"
+              value={tenantForm.subscriptionNote}
+              onChange={(e) =>
+                setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })
+              }
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setTenantModalOpen(false)}
+              className="btn-secondary"
+            >
+              Отмена
+            </button>
+            <button
+              type="submit"
+              disabled={updateTenantMutation.isPending}
+              className="btn-primary"
+            >
+              {updateTenantMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Сохранение...
+                </>
+              ) : (
+                'Сохранить'
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
+      {/* User Create/Edit Modal */}
+      <Modal
+        isOpen={userModalOpen}
+        onClose={closeUserModal}
+        title={editingUser ? 'Редактировать пользователя' : 'Новый пользователь'}
+        size="md"
+      >
+        <form onSubmit={handleUserSubmit} className="space-y-4">
+          <div>
+            <label className="label">ФИО</label>
+            <input
+              type="text"
+              className="input"
+              value={userForm.fullName}
+              onChange={(e) => setUserForm({ ...userForm, fullName: e.target.value })}
+              placeholder="Иванов Иван Иванович"
+              required
+            />
+          </div>
+          <div>
+            <label className="label">Логин</label>
+            <input
+              type="text"
+              className="input"
+              value={userForm.username}
+              onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
+              placeholder="ivanov"
+              required
+            />
+          </div>
+          {!editingUser ? (
+            <div>
+              <label className="label">Пароль</label>
+              <input
+                type="password"
+                className="input"
+                value={userForm.password}
+                onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+                placeholder="Введите пароль"
+                required
+              />
+            </div>
+          ) : (
+            <div>
+              <label className="label">Новый пароль (оставьте пустым, чтобы не менять)</label>
+              <input
+                type="password"
+                className="input"
+                value={userForm.password}
+                onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+                placeholder="Новый пароль"
+              />
+            </div>
+          )}
+          <div>
+            <label className="label">Телефон</label>
+            <input
+              type="tel"
+              className="input"
+              value={userForm.phone}
+              onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })}
+              placeholder="+998 (90) 123-45-67"
+            />
+          </div>
+          <div>
+            <label className="label">Роль</label>
+            <select
+              className="input"
+              value={userForm.role}
+              onChange={(e) =>
+                setUserForm({ ...userForm, role: e.target.value as UserRole })
+              }
+            >
+              <option value={UserRole.DIRECTOR}>Директор</option>
+              <option value={UserRole.ADMIN}>Админ</option>
+              <option value={UserRole.MASTER}>Мастер</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">% ставка от услуг</label>
+            <input
+              type="number"
+              className="input"
+              value={userForm.salaryPercent}
+              onChange={(e) =>
+                setUserForm({ ...userForm, salaryPercent: Number(e.target.value) })
+              }
+              min={0}
+              max={100}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                className="sr-only peer"
+                checked={userForm.isActive}
+                onChange={(e) =>
+                  setUserForm({ ...userForm, isActive: e.target.checked })
+                }
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
+            </label>
+            <span className="text-sm font-medium text-gray-700">
+              {userForm.isActive ? 'Активен' : 'Неактивен'}
+            </span>
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={closeUserModal} className="btn-secondary">
+              Отмена
+            </button>
+            <button type="submit" disabled={isUserSaving} className="btn-primary">
+              {isUserSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Сохранение...
+                </>
+              ) : editingUser ? (
+                'Сохранить'
+              ) : (
+                'Создать'
+              )}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete User Confirmation */}
       <ConfirmDialog
-        isOpen={isDeleteOpen}
-        onClose={() => setIsDeleteOpen(false)}
-        onConfirm={() => deleteMutation.mutate()}
-        title="Удалить автосервис"
-        message={`Удалить "${tenant.name}"? Все данные безвозвратно удалятся.`}
+        isOpen={!!deleteUserId}
+        onClose={() => setDeleteUserId(null)}
+        onConfirm={() => {
+          if (deleteUserId) deleteUserMutation.mutate(deleteUserId);
+          setDeleteUserId(null);
+        }}
+        title="Удалить пользователя"
+        message="Вы уверены, что хотите удалить этого пользователя?"
         confirmText="Удалить"
         variant="danger"
       />

@@ -1,83 +1,63 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, ILike } from 'typeorm';
-import { Service } from './entities/service.entity';
-import { CreateServiceDto } from './dto/create-service.dto';
-import { UpdateServiceDto } from './dto/update-service.dto';
+import { Repository, FindOptionsWhere, ILike } from 'typeorm';
+
+import { ServiceEntity } from './service.entity';
 
 @Injectable()
 export class ServicesService {
   constructor(
-    @InjectRepository(Service)
-    private readonly repo: Repository<Service>,
+    @InjectRepository(ServiceEntity)
+    private readonly servicesRepo: Repository<ServiceEntity>,
   ) {}
 
-  async findAll(tenantId: string, query: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    category?: string;
-  }): Promise<{ data: Service[]; total: number; page: number; limit: number }> {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 20;
-    const skip = (page - 1) * limit;
+  async findAll(
+    tenantId: string,
+    search?: string,
+    category?: string,
+  ): Promise<ServiceEntity[]> {
+    const where: FindOptionsWhere<ServiceEntity> = { tenantId };
 
-    const where: any = { tenantId };
-
-    if (query.search) {
-      where.name = ILike(`%${query.search}%`);
+    if (search) {
+      where.name = ILike(`%${search}%`);
     }
 
-    if (query.category) {
-      where.category = query.category;
+    if (category) {
+      where.category = category;
     }
 
-    const [data, total] = await this.repo.findAndCount({
+    return this.servicesRepo.find({
       where,
-      skip,
-      take: limit,
-      order: { createdAt: 'DESC' },
+      order: { name: 'ASC' },
     });
-
-    return { data, total, page, limit };
   }
 
-  async findById(tenantId: string, id: string): Promise<Service> {
-    const service = await this.repo.findOne({ where: { id, tenantId } });
-
+  async findById(id: string): Promise<ServiceEntity> {
+    const service = await this.servicesRepo.findOne({ where: { id } });
     if (!service) {
-      throw new NotFoundException(`Service with ID "${id}" not found`);
+      throw new NotFoundException(`Service with id "${id}" not found`);
     }
-
     return service;
   }
 
-  async create(tenantId: string, dto: CreateServiceDto): Promise<Service> {
-    const service = this.repo.create({ ...dto, tenantId });
-    return this.repo.save(service);
+  async create(dto: Partial<ServiceEntity>): Promise<ServiceEntity> {
+    const service = this.servicesRepo.create(dto);
+    return this.servicesRepo.save(service);
   }
 
-  async update(tenantId: string, id: string, dto: UpdateServiceDto): Promise<Service> {
-    const service = await this.findById(tenantId, id);
+  async update(id: string, dto: Partial<ServiceEntity>): Promise<ServiceEntity> {
+    const service = await this.servicesRepo.findOne({ where: { id } });
+    if (!service) {
+      throw new NotFoundException(`Service with id "${id}" not found`);
+    }
     Object.assign(service, dto);
-    return this.repo.save(service);
+    return this.servicesRepo.save(service);
   }
 
-  async remove(tenantId: string, id: string): Promise<void> {
-    const service = await this.findById(tenantId, id);
-    await this.repo.softRemove(service);
-  }
-
-  async getCategories(tenantId: string): Promise<string[]> {
-    const results = await this.repo
-      .createQueryBuilder('service')
-      .select('DISTINCT service.category', 'category')
-      .where('service.tenantId = :tenantId', { tenantId })
-      .andWhere('service.category IS NOT NULL')
-      .andWhere('service.deletedAt IS NULL')
-      .orderBy('service.category', 'ASC')
-      .getRawMany();
-
-    return results.map((r) => r.category);
+  async remove(id: string): Promise<void> {
+    const result = await this.servicesRepo.delete(id);
+    if (result.affected === 0) {
+      throw new NotFoundException(`Service with id "${id}" not found`);
+    }
   }
 }

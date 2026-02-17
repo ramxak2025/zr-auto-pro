@@ -1,50 +1,34 @@
-import { useState, useMemo, FormEvent } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import toast from 'react-hot-toast';
-import { getApiError } from '../api/axios';
 import {
   ArrowLeft,
-  Pencil,
+  Edit2,
   Plus,
-  Minus,
-  Loader2,
   Truck,
-  Wallet,
-  Package,
   CreditCard,
-  Trash2,
-  Search,
+  Package,
+  Phone,
+  User,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { format } from 'date-fns';
+import { ru } from 'date-fns/locale';
+
 import { suppliersApi, productsApi } from '../api/services';
-import PhoneInput, { getPhoneRaw } from '../components/PhoneInput';
-import type {
+import Modal from '../components/Modal';
+import LoadingSpinner from '../components/LoadingSpinner';
+import EmptyState from '../components/EmptyState';
+import PhoneInput from '../components/PhoneInput';
+import {
   Supplier,
   Delivery,
   SupplierPayment,
   Product,
   PaginatedResponse,
 } from '../types';
-import Modal from '../components/Modal';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
-import Pagination from '../components/Pagination';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatMoney(value: number): string {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
-}
-
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('ru-RU');
-}
-
-// ---------------------------------------------------------------------------
-// Edit Supplier Modal
-// ---------------------------------------------------------------------------
+type TabType = 'deliveries' | 'payments';
 
 interface SupplierFormData {
   name: string;
@@ -53,946 +37,756 @@ interface SupplierFormData {
   comment: string;
 }
 
-interface SupplierEditModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  supplier: Supplier;
-  onSubmit: (data: SupplierFormData) => void;
-  isLoading: boolean;
-}
-
-function SupplierEditModal({
-  isOpen,
-  onClose,
-  supplier,
-  onSubmit,
-  isLoading,
-}: SupplierEditModalProps) {
-  const [name, setName] = useState(supplier.name);
-  const [phone, setPhone] = useState(supplier.phone || '');
-  const [contactPerson, setContactPerson] = useState(supplier.contactPerson || '');
-  const [comment, setComment] = useState(supplier.comment || '');
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) {
-      toast.error('Введите название');
-      return;
-    }
-    onSubmit({
-      name: name.trim(),
-      phone: getPhoneRaw(phone),
-      contactPerson: contactPerson.trim(),
-      comment: comment.trim(),
-    });
-  }
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Редактировать поставщика">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Название <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Телефон
-          </label>
-          <PhoneInput
-            value={phone}
-            onChange={setPhone}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Контактное лицо
-          </label>
-          <input
-            type="text"
-            value={contactPerson}
-            onChange={(e) => setContactPerson(e.target.value)}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Комментарий
-          </label>
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            rows={3}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
-        </div>
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            Сохранить
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Delivery Create Modal
-// ---------------------------------------------------------------------------
-
-interface DeliveryLineInput {
-  key: string;
+interface DeliveryItemForm {
   productId: string;
   quantity: number;
   price: number;
 }
 
-interface DeliveryCreateModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSubmit: (data: {
-    date: string;
-    items: { productId: string; quantity: number; price: number }[];
-    comment: string;
-  }) => void;
-  isLoading: boolean;
-  products: Product[];
+interface DeliveryFormData {
+  date: string;
+  items: DeliveryItemForm[];
+  comment: string;
 }
 
-function DeliveryCreateModal({
-  isOpen,
-  onClose,
-  onSubmit,
-  isLoading,
-  products,
-}: DeliveryCreateModalProps) {
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [comment, setComment] = useState('');
-  const [lines, setLines] = useState<DeliveryLineInput[]>([]);
-  const [showCatalog, setShowCatalog] = useState(false);
-  const [catalogCategory, setCatalogCategory] = useState<string | null>(null);
-  const [catalogSearch, setCatalogSearch] = useState('');
-
-  // Build categories from products
-  const categories = useMemo(() => {
-    const catMap = new Map<string, Product[]>();
-    products.forEach((p) => {
-      const cat = p.category || 'Без категории';
-      if (!catMap.has(cat)) catMap.set(cat, []);
-      catMap.get(cat)!.push(p);
-    });
-    return catMap;
-  }, [products]);
-
-  function addProduct(product: Product) {
-    setLines((prev) => {
-      const existing = prev.find((l) => l.productId === product.id);
-      if (existing) {
-        return prev.map((l) => l.key === existing.key ? { ...l, quantity: l.quantity + 1 } : l);
-      }
-      return [...prev, {
-        key: crypto.randomUUID(), productId: product.id, quantity: 1, price: product.costPrice,
-        _name: product.name, _image: product.photo,
-      }];
-    });
-  }
-
-  function updateLineQty(key: string, qty: number) {
-    if (qty <= 0) setLines((prev) => prev.filter((l) => l.key !== key));
-    else setLines((prev) => prev.map((l) => l.key === key ? { ...l, quantity: qty } : l));
-  }
-
-  function updateLinePrice(key: string, price: number) {
-    setLines((prev) => prev.map((l) => l.key === key ? { ...l, price } : l));
-  }
-
-  function removeLine(key: string) {
-    setLines((prev) => prev.filter((l) => l.key !== key));
-  }
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const validLines = lines.filter((l) => l.productId && l.quantity > 0);
-    if (validLines.length === 0) {
-      toast.error('Добавьте хотя бы один товар');
-      return;
-    }
-    onSubmit({
-      date,
-      items: validLines.map((l) => ({ productId: l.productId, quantity: l.quantity, price: l.price })),
-      comment: comment.trim(),
-    });
-  }
-
-  const total = lines.reduce((sum, l) => sum + l.price * l.quantity, 0);
-
-  // Filter products in catalog
-  const filteredProducts = useMemo(() => {
-    let items = catalogCategory ? (categories.get(catalogCategory) || []) : products;
-    if (catalogSearch) {
-      const q = catalogSearch.toLowerCase();
-      items = items.filter((p) => p.name.toLowerCase().includes(q));
-    }
-    return items;
-  }, [catalogCategory, catalogSearch, products, categories]);
-
-  // Get qty in cart for a product
-  function getCartQty(productId: string): number {
-    return lines.find((l) => l.productId === productId)?.quantity || 0;
-  }
-
-  if (!isOpen) return null;
-
-  // Fullscreen product catalog
-  if (showCatalog) {
-    return (
-      <div className="fixed inset-0 z-50 bg-white flex flex-col">
-        {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white">
-          <button type="button" onClick={() => { if (catalogCategory) setCatalogCategory(null); else setShowCatalog(false); }}
-            className="flex h-9 w-9 items-center justify-center rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200">
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <h2 className="text-lg font-bold text-gray-900 flex-1">
-            {catalogCategory || 'Выберите товар'}
-          </h2>
-          {lines.length > 0 && (
-            <button type="button" onClick={() => setShowCatalog(false)}
-              className="flex items-center gap-1.5 rounded-xl bg-primary-600 text-white px-3 py-2 text-sm font-semibold shadow-sm hover:bg-primary-700">
-              <Package className="h-4 w-4" />
-              {lines.length} шт
-            </button>
-          )}
-        </div>
-
-        {/* Search */}
-        <div className="px-4 py-2 border-b border-gray-100">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input type="text" value={catalogSearch} onChange={(e) => setCatalogSearch(e.target.value)}
-              placeholder="Поиск товара..." className="w-full rounded-xl border border-gray-200 bg-gray-50 pl-10 pr-4 py-2.5 text-sm focus:border-primary-400 focus:outline-none" />
-          </div>
-        </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
-          {!catalogCategory && !catalogSearch ? (
-            // Category grid
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {[...categories.entries()].map(([cat, items]) => (
-                <button key={cat} type="button" onClick={() => setCatalogCategory(cat)}
-                  className="flex flex-col items-center gap-2 rounded-2xl border border-gray-200 bg-white p-4 hover:border-primary-300 hover:shadow-md transition-all active:scale-95">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-50 text-2xl">
-                    {items[0]?.photo ? (
-                      <img src={items[0].photo} alt="" className="h-10 w-10 rounded-lg object-cover" />
-                    ) : '📦'}
-                  </div>
-                  <span className="text-sm font-semibold text-gray-900 text-center">{cat}</span>
-                  <span className="text-[11px] text-gray-400">{items.length} товаров</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            // Product grid
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {filteredProducts.map((p) => {
-                const qty = getCartQty(p.id);
-                return (
-                  <button key={p.id} type="button" onClick={() => addProduct(p)}
-                    className={`relative flex flex-col items-center gap-1.5 rounded-2xl border p-3 transition-all active:scale-95 ${
-                      qty > 0 ? 'border-primary-400 bg-primary-50/50 shadow-sm' : 'border-gray-200 bg-white hover:border-primary-300 hover:shadow-md'
-                    }`}>
-                    {p.photo ? (
-                      <img src={p.photo} alt="" className="h-14 w-14 rounded-xl object-cover" />
-                    ) : (
-                      <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-gray-100 text-gray-400">
-                        <Package className="h-6 w-6" />
-                      </div>
-                    )}
-                    <span className="text-xs font-semibold text-gray-900 text-center leading-tight line-clamp-2">{p.name}</span>
-                    <span className="text-[11px] text-gray-500">{formatMoney(p.costPrice)}</span>
-                    {qty > 0 && (
-                      <div className="absolute -top-1.5 -right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-primary-600 text-white text-[11px] font-bold shadow-sm">
-                        {qty}
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-              {filteredProducts.length === 0 && (
-                <div className="col-span-full p-8 text-center text-sm text-gray-400">Ничего не найдено</div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Новая поставка" size="xl">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Дата</label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-              className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
-          </div>
-          <div className="flex items-end">
-            <button type="button" onClick={() => setShowCatalog(true)}
-              className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-4 py-2.5 text-sm font-semibold text-amber-700 hover:bg-amber-100 transition-colors w-full justify-center">
-              <Package className="h-4 w-4" />Добавить товар
-            </button>
-          </div>
-        </div>
-
-        {/* Added products */}
-        {lines.length === 0 ? (
-          <div className="p-8 text-center border border-dashed border-gray-200 rounded-xl">
-            <Package className="h-8 w-8 text-gray-300 mx-auto mb-2" />
-            <p className="text-sm text-gray-400">Нажмите "Добавить товар" для выбора</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {lines.map((line) => {
-              const product = products.find((p) => p.id === line.productId);
-              return (
-                <div key={line.key} className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white p-3 shadow-sm">
-                  {(line as any)._image || product?.photo ? (
-                    <img src={(line as any)._image || product?.photo} alt="" className="h-10 w-10 rounded-lg object-cover flex-shrink-0" />
-                  ) : (
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100 text-gray-400 flex-shrink-0">
-                      <Package className="h-5 w-5" />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{(line as any)._name || product?.name || line.productId}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <div className="flex items-center rounded-lg border border-gray-200 overflow-hidden">
-                        <button type="button" onClick={() => updateLineQty(line.key, line.quantity - 1)}
-                          className="px-2 py-1 text-gray-500 hover:bg-gray-100"><Minus className="h-3 w-3" /></button>
-                        <span className="px-2 text-sm font-semibold text-gray-900 min-w-[24px] text-center">{line.quantity}</span>
-                        <button type="button" onClick={() => updateLineQty(line.key, line.quantity + 1)}
-                          className="px-2 py-1 text-gray-500 hover:bg-gray-100"><Plus className="h-3 w-3" /></button>
-                      </div>
-                      <span className="text-gray-300 text-xs">&times;</span>
-                      <input type="number" value={line.price} onChange={(e) => updateLinePrice(line.key, parseFloat(e.target.value) || 0)}
-                        className="w-24 rounded-lg border border-gray-200 px-2 py-1 text-sm text-gray-700 focus:border-primary-400 focus:outline-none" min="0" step="0.01" />
-                    </div>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold text-gray-900">{formatMoney(line.price * line.quantity)}</p>
-                    <button type="button" onClick={() => removeLine(line.key)}
-                      className="text-gray-300 hover:text-red-500 mt-1"><Trash2 className="h-3.5 w-3.5" /></button>
-                  </div>
-                </div>
-              );
-            })}
-            <div className="flex justify-end text-base font-bold text-gray-900 pt-2">
-              Итого: {formatMoney(total)}
-            </div>
-          </div>
-        )}
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Комментарий</label>
-          <textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={2}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
-        </div>
-
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button type="button" onClick={onClose} disabled={isLoading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            Отмена
-          </button>
-          <button type="submit" disabled={isLoading}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50">
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            Создать поставку
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
+interface PaymentFormData {
+  amount: number;
+  date: string;
+  comment: string;
 }
 
-// ---------------------------------------------------------------------------
-// Payment Create Modal
-// ---------------------------------------------------------------------------
-
-interface PaymentCreateModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSubmit: (data: { amount: number; date: string; comment: string }) => void;
-  isLoading: boolean;
-  currentDebt: number;
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: 'UZS',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
-function PaymentCreateModal({
-  isOpen,
-  onClose,
-  onSubmit,
-  isLoading,
-  currentDebt,
-}: PaymentCreateModalProps) {
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [comment, setComment] = useState('');
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const val = parseFloat(amount);
-    if (!val || val <= 0) {
-      toast.error('Введите сумму оплаты');
-      return;
-    }
-    onSubmit({
-      amount: val,
-      date,
-      comment: comment.trim(),
-    });
+function statusBadge(status: string) {
+  switch (status) {
+    case 'paid':
+      return <span className="badge-success">Оплачено</span>;
+    case 'partial':
+      return <span className="badge-warning">Частично</span>;
+    case 'unpaid':
+      return <span className="badge-danger">Не оплачено</span>;
+    default:
+      return <span className="badge-default">{status}</span>;
   }
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Новая оплата">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <p className="text-sm text-gray-600">
-          Текущий долг:{' '}
-          <span className="font-semibold text-red-600">
-            {formatMoney(currentDebt)}
-          </span>
-        </p>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Сумма <span className="text-red-500">*</span>
-          </label>
-          <input
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            min="0"
-            step="0.01"
-            placeholder="0"
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Дата
-          </label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Комментарий
-          </label>
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            rows={2}
-            className="block w-full rounded-lg border border-gray-300 px-4 py-2.5 text-sm text-gray-900 shadow-sm transition-colors focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
-          />
-        </div>
-
-        <div className="flex items-center justify-end gap-3 pt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-          >
-            Отмена
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:opacity-50"
-          >
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
-            Оплатить
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
 }
-
-// ---------------------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------------------
-
-type TabKey = 'deliveries' | 'payments';
-
-// ---------------------------------------------------------------------------
-// Main Page
-// ---------------------------------------------------------------------------
-
-const LIMIT = 20;
 
 export default function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const [activeTab, setActiveTab] = useState<TabKey>('deliveries');
-  const [editOpen, setEditOpen] = useState(false);
-  const [deliveryOpen, setDeliveryOpen] = useState(false);
-  const [paymentOpen, setPaymentOpen] = useState(false);
-  const [deliveryPage, setDeliveryPage] = useState(1);
-  const [paymentPage, setPaymentPage] = useState(1);
+  const [activeTab, setActiveTab] = useState<TabType>('deliveries');
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
 
-  // ---- Queries ----
-
+  // Supplier data
   const {
     data: supplier,
     isLoading,
     isError,
-  } = useQuery<Supplier>({
+  } = useQuery({
     queryKey: ['supplier', id],
-    queryFn: async () => {
-      const res = await suppliersApi.getById(id!);
-      return res.data;
-    },
+    queryFn: () => suppliersApi.getById(id!),
+    select: (res) => res.data as Supplier,
     enabled: !!id,
   });
 
-  const { data: deliveriesData } = useQuery<PaginatedResponse<Delivery>>({
-    queryKey: ['supplier-deliveries', id, deliveryPage],
-    queryFn: async () => {
-      const res = await suppliersApi.getDeliveries(id!, {
-        page: deliveryPage,
-        limit: LIMIT,
-      });
-      return res.data;
+  // Deliveries
+  const { data: deliveriesData } = useQuery({
+    queryKey: ['supplier-deliveries', id],
+    queryFn: () => suppliersApi.getDeliveries({ supplierId: id }),
+    select: (res) => {
+      const d = res.data;
+      return Array.isArray(d) ? d : ((d as PaginatedResponse<Delivery>).data || []);
     },
-    enabled: !!id && activeTab === 'deliveries',
-    keepPreviousData: true,
-  } as any);
+    enabled: !!id,
+  });
+  const deliveries: Delivery[] = deliveriesData || [];
 
-  const { data: paymentsData } = useQuery<PaginatedResponse<SupplierPayment>>({
-    queryKey: ['supplier-payments', id, paymentPage],
-    queryFn: async () => {
-      const res = await suppliersApi.getPayments(id!, {
-        page: paymentPage,
-        limit: LIMIT,
-      });
-      return res.data;
+  // Payments
+  const { data: paymentsData } = useQuery({
+    queryKey: ['supplier-payments', id],
+    queryFn: () => suppliersApi.getPayments({ supplierId: id }),
+    select: (res) => {
+      const d = res.data;
+      return Array.isArray(d) ? d : ((d as PaginatedResponse<SupplierPayment>).data || []);
     },
-    enabled: !!id && activeTab === 'payments',
-    keepPreviousData: true,
-  } as any);
+    enabled: !!id,
+  });
+  const payments: SupplierPayment[] = paymentsData || [];
 
-  const { data: productsData } = useQuery<PaginatedResponse<Product>>({
-    queryKey: ['products-all-for-delivery'],
-    queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 1000 });
-      return res.data;
+  // Products for delivery items
+  const { data: productsData } = useQuery({
+    queryKey: ['products-all'],
+    queryFn: () => productsApi.getAll({ limit: 1000 }),
+    select: (res) => {
+      const d = res.data;
+      return Array.isArray(d) ? d : ((d as PaginatedResponse<Product>).data || []);
     },
-    staleTime: 5 * 60_000,
-    enabled: deliveryOpen,
+  });
+  const products: Product[] = productsData || [];
+
+  // Edit supplier form
+  const [editForm, setEditForm] = useState<SupplierFormData>({
+    name: '',
+    phone: '',
+    contactPerson: '',
+    comment: '',
   });
 
-  // ---- Mutations ----
+  const openEditModal = () => {
+    if (!supplier) return;
+    setEditForm({
+      name: supplier.name,
+      phone: supplier.phone || '',
+      contactPerson: supplier.contactPerson || '',
+      comment: supplier.comment || '',
+    });
+    setIsEditModalOpen(true);
+  };
 
-  const updateSupplierMutation = useMutation({
+  const updateMutation = useMutation({
     mutationFn: (data: SupplierFormData) => suppliersApi.update(id!, data),
     onSuccess: () => {
-      toast.success('Поставщик обновлён');
+      toast.success('Поставщик обновлен');
       queryClient.invalidateQueries({ queryKey: ['supplier', id] });
-      setEditOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      setIsEditModalOpen(false);
     },
-    onError: (err) => toast.error(getApiError(err, 'Не удалось обновить поставщика')),
+    onError: () => toast.error('Ошибка при обновлении'),
   });
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editForm.name.trim()) {
+      toast.error('Введите название');
+      return;
+    }
+    updateMutation.mutate(editForm);
+  };
+
+  // Delivery form
+  const emptyDeliveryForm: DeliveryFormData = {
+    date: format(new Date(), 'yyyy-MM-dd'),
+    items: [{ productId: '', quantity: 1, price: 0 }],
+    comment: '',
+  };
+  const [deliveryForm, setDeliveryForm] =
+    useState<DeliveryFormData>(emptyDeliveryForm);
+
+  const openDeliveryModal = () => {
+    setDeliveryForm(emptyDeliveryForm);
+    setIsDeliveryModalOpen(true);
+  };
+
+  const addDeliveryItem = () => {
+    setDeliveryForm({
+      ...deliveryForm,
+      items: [...deliveryForm.items, { productId: '', quantity: 1, price: 0 }],
+    });
+  };
+
+  const removeDeliveryItem = (index: number) => {
+    if (deliveryForm.items.length <= 1) return;
+    setDeliveryForm({
+      ...deliveryForm,
+      items: deliveryForm.items.filter((_, i) => i !== index),
+    });
+  };
+
+  const updateDeliveryItem = (
+    index: number,
+    field: keyof DeliveryItemForm,
+    value: string | number
+  ) => {
+    const updated = [...deliveryForm.items];
+    updated[index] = { ...updated[index], [field]: value };
+    setDeliveryForm({ ...deliveryForm, items: updated });
+  };
 
   const createDeliveryMutation = useMutation({
-    mutationFn: (data: any) => suppliersApi.createDelivery(id!, data),
+    mutationFn: (data: any) => suppliersApi.createDelivery(data),
     onSuccess: () => {
       toast.success('Поставка создана');
-      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
       queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] });
-      setDeliveryOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      setIsDeliveryModalOpen(false);
     },
-    onError: (err) => toast.error(getApiError(err, 'Не удалось создать поставку')),
+    onError: () => toast.error('Ошибка при создании поставки'),
   });
+
+  const handleDeliverySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const validItems = deliveryForm.items.filter(
+      (item) => item.productId && item.quantity > 0 && item.price > 0
+    );
+    if (validItems.length === 0) {
+      toast.error('Добавьте хотя бы один товар');
+      return;
+    }
+    createDeliveryMutation.mutate({
+      supplierId: id,
+      date: deliveryForm.date,
+      items: validItems,
+      comment: deliveryForm.comment,
+    });
+  };
+
+  // Payment form
+  const emptyPaymentForm: PaymentFormData = {
+    amount: 0,
+    date: format(new Date(), 'yyyy-MM-dd'),
+    comment: '',
+  };
+  const [paymentForm, setPaymentForm] =
+    useState<PaymentFormData>(emptyPaymentForm);
+
+  const openPaymentModal = () => {
+    setPaymentForm(emptyPaymentForm);
+    setIsPaymentModalOpen(true);
+  };
 
   const createPaymentMutation = useMutation({
-    mutationFn: (data: any) => suppliersApi.createPayment(id!, data),
+    mutationFn: (data: any) => suppliersApi.createPayment(data),
     onSuccess: () => {
-      toast.success('Оплата зарегистрирована');
-      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      toast.success('Оплата записана');
       queryClient.invalidateQueries({ queryKey: ['supplier-payments', id] });
-      setPaymentOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      setIsPaymentModalOpen(false);
     },
-    onError: (err) => toast.error(getApiError(err, 'Не удалось создать оплату')),
+    onError: () => toast.error('Ошибка при записи оплаты'),
   });
 
-  // ---- Render ----
+  const handlePaymentSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!paymentForm.amount || paymentForm.amount <= 0) {
+      toast.error('Введите сумму оплаты');
+      return;
+    }
+    createPaymentMutation.mutate({
+      supplierId: id,
+      amount: paymentForm.amount,
+      date: paymentForm.date,
+      comment: paymentForm.comment,
+    });
+  };
 
   if (isLoading) return <LoadingSpinner />;
 
   if (isError || !supplier) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-6">
         <button
           onClick={() => navigate('/suppliers')}
-          className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 transition-colors"
+          className="btn-secondary"
         >
-          <ArrowLeft className="h-4 w-4" />
-          Назад к поставщикам
+          <ArrowLeft className="w-4 h-4" />
+          Назад
         </button>
-        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-          <p className="text-sm">Поставщик не найден</p>
-        </div>
+        <EmptyState
+          icon={Truck}
+          title="Поставщик не найден"
+          description="Возможно, он был удален"
+        />
       </div>
     );
   }
 
-  const deliveries = deliveriesData?.data || [];
-  const deliveriesTotal = deliveriesData?.total || 0;
-  const payments = paymentsData?.data || [];
-  const paymentsTotal = paymentsData?.total || 0;
-  const allProducts = productsData?.data || [];
-
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <button
-            onClick={() => navigate('/suppliers')}
-            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-600 transition-colors hover:bg-gray-50"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">{supplier.name}</h1>
-            {supplier.contactPerson && (
-              <p className="text-sm text-gray-500 mt-0.5">
-                {supplier.contactPerson}
-                {supplier.phone ? ` \u00B7 ${supplier.phone}` : ''}
-              </p>
-            )}
+      {/* Back button */}
+      <button
+        onClick={() => navigate('/suppliers')}
+        className="btn-secondary"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Назад к поставщикам
+      </button>
+
+      {/* Supplier info card */}
+      <div className="card">
+        <div className="card-body">
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">
+                {supplier.name}
+              </h1>
+              {supplier.contactPerson && (
+                <p className="mt-1 text-gray-600 flex items-center gap-2">
+                  <User className="w-4 h-4" />
+                  {supplier.contactPerson}
+                </p>
+              )}
+              {supplier.phone && (
+                <p className="mt-1 text-gray-600 flex items-center gap-2">
+                  <Phone className="w-4 h-4" />
+                  {supplier.phone}
+                </p>
+              )}
+              {supplier.comment && (
+                <p className="mt-2 text-sm text-gray-500">{supplier.comment}</p>
+              )}
+            </div>
+            <button onClick={openEditModal} className="btn-secondary">
+              <Edit2 className="w-4 h-4" />
+              Редактировать
+            </button>
           </div>
         </div>
-        <button
-          onClick={() => setEditOpen(true)}
-          className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-        >
-          <Pencil className="h-4 w-4" />
-          Редактировать
-        </button>
       </div>
 
-      {/* Financial cards */}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100">
-              <Package className="h-5 w-5 text-blue-600" />
-            </div>
-            <span className="text-sm text-gray-500">Закупки</span>
+      {/* Stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="stat-card">
+          <div className="stat-label">Закупки всего</div>
+          <div className="stat-value text-blue-600">
+            {formatCurrency(supplier.totalPurchases)}
           </div>
-          <p className="text-2xl font-bold text-gray-900">
-            {formatMoney(supplier.totalPurchases)}
-          </p>
         </div>
-
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100">
-              <CreditCard className="h-5 w-5 text-green-600" />
-            </div>
-            <span className="text-sm text-gray-500">Оплачено</span>
+        <div className="stat-card">
+          <div className="stat-label">Оплачено</div>
+          <div className="stat-value text-green-600">
+            {formatCurrency(supplier.totalPaid)}
           </div>
-          <p className="text-2xl font-bold text-gray-900">
-            {formatMoney(supplier.totalPaid)}
-          </p>
         </div>
-
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-100">
-              <Wallet className="h-5 w-5 text-red-600" />
-            </div>
-            <span className="text-sm text-gray-500">Долг</span>
-          </div>
-          <p
-            className={`text-2xl font-bold ${
+        <div className="stat-card">
+          <div className="stat-label">Текущий долг</div>
+          <div
+            className={`stat-value ${
               supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'
             }`}
           >
-            {formatMoney(supplier.currentDebt)}
-          </p>
+            {formatCurrency(supplier.currentDebt)}
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="flex gap-6">
-          <button
-            onClick={() => setActiveTab('deliveries')}
-            className={`flex items-center gap-2 border-b-2 pb-3 pt-1 text-sm font-medium transition-colors ${
-              activeTab === 'deliveries'
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Truck className="h-4 w-4" />
-            Поставки
-          </button>
-          <button
-            onClick={() => setActiveTab('payments')}
-            className={`flex items-center gap-2 border-b-2 pb-3 pt-1 text-sm font-medium transition-colors ${
-              activeTab === 'payments'
-                ? 'border-primary-600 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Wallet className="h-4 w-4" />
-            Оплаты
-          </button>
-        </nav>
+      <div className="flex gap-1 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('deliveries')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'deliveries'
+              ? 'border-primary-600 text-primary-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <Truck className="w-4 h-4 inline-block mr-1.5" />
+          Поставки ({deliveries.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('payments')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'payments'
+              ? 'border-primary-600 text-primary-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <CreditCard className="w-4 h-4 inline-block mr-1.5" />
+          Оплаты ({payments.length})
+        </button>
       </div>
 
-      {/* Deliveries tab */}
+      {/* Deliveries Tab */}
       {activeTab === 'deliveries' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Поставки</h2>
-            <button
-              onClick={() => setDeliveryOpen(true)}
-              className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700"
-            >
-              <Plus className="h-4 w-4" />
+          <div className="flex justify-end">
+            <button onClick={openDeliveryModal} className="btn-primary">
+              <Plus className="w-4 h-4" />
               Новая поставка
             </button>
           </div>
 
           {deliveries.length === 0 ? (
-            <div className="rounded-xl border border-gray-200 bg-white">
-              <EmptyState
-                icon={Truck}
-                title="Нет поставок"
-                description="Создайте первую поставку от этого поставщика"
-              />
-            </div>
+            <EmptyState
+              icon={Truck}
+              title="Нет поставок"
+              description="Создайте первую поставку от этого поставщика"
+              action={{ label: 'Новая поставка', onClick: openDeliveryModal }}
+            />
           ) : (
-            <>
-              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-gray-50/50">
-                        <th className="px-4 py-3 font-semibold text-gray-600">
-                          Дата
-                        </th>
-                        <th className="px-4 py-3 font-semibold text-gray-600">
-                          Товаров
-                        </th>
-                        <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                          Сумма
-                        </th>
-                        <th className="px-4 py-3 font-semibold text-gray-600">
-                          Статус
-                        </th>
-                        <th className="px-4 py-3 font-semibold text-gray-600">
-                          Комментарий
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {deliveries.map((delivery) => {
-                        const statusMap: Record<
-                          string,
-                          { label: string; className: string }
-                        > = {
-                          paid: {
-                            label: 'Оплачена',
-                            className: 'bg-green-50 text-green-700 border-green-200',
-                          },
-                          partial: {
-                            label: 'Частично',
-                            className:
-                              'bg-yellow-50 text-yellow-700 border-yellow-200',
-                          },
-                          unpaid: {
-                            label: 'Не оплачена',
-                            className: 'bg-red-50 text-red-700 border-red-200',
-                          },
-                        };
-                        const status =
-                          statusMap[delivery.paymentStatus] || statusMap.unpaid;
-                        return (
-                          <tr key={delivery.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 text-gray-900">
-                              {formatDate(delivery.date)}
-                            </td>
-                            <td className="px-4 py-3 text-gray-600">
-                              {delivery.items?.length || 0}
-                            </td>
-                            <td className="px-4 py-3 text-right font-medium text-gray-900">
-                              {formatMoney(delivery.totalAmount)}
-                            </td>
-                            <td className="px-4 py-3">
-                              <span
-                                className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${status.className}`}
-                              >
-                                {status.label}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-gray-500 max-w-xs truncate">
-                              {delivery.comment || '\u2014'}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <Pagination
-                page={deliveryPage}
-                total={deliveriesTotal}
-                limit={LIMIT}
-                onChange={setDeliveryPage}
-              />
-            </>
+            <div className="table-container">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th className="text-right">Сумма</th>
+                    <th>Статус</th>
+                    <th>Комментарий</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deliveries.map((delivery) => (
+                    <tr key={delivery.id}>
+                      <td className="text-gray-900">
+                        {format(new Date(delivery.date), 'dd.MM.yyyy', {
+                          locale: ru,
+                        })}
+                      </td>
+                      <td className="text-right font-medium text-gray-900">
+                        {formatCurrency(delivery.totalAmount)}
+                      </td>
+                      <td>{statusBadge(delivery.paymentStatus)}</td>
+                      <td className="text-gray-500 text-sm">
+                        {delivery.comment || '\u2014'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
 
-      {/* Payments tab */}
+      {/* Payments Tab */}
       {activeTab === 'payments' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Оплаты</h2>
-            <button
-              onClick={() => setPaymentOpen(true)}
-              className="flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700"
-            >
-              <Plus className="h-4 w-4" />
+          <div className="flex justify-end">
+            <button onClick={openPaymentModal} className="btn-primary">
+              <Plus className="w-4 h-4" />
               Новая оплата
             </button>
           </div>
 
           {payments.length === 0 ? (
-            <div className="rounded-xl border border-gray-200 bg-white">
-              <EmptyState
-                icon={Wallet}
-                title="Нет оплат"
-                description="Зарегистрируйте оплату поставщику"
-              />
-            </div>
+            <EmptyState
+              icon={CreditCard}
+              title="Нет оплат"
+              description="Запишите первую оплату поставщику"
+              action={{ label: 'Новая оплата', onClick: openPaymentModal }}
+            />
           ) : (
-            <>
-              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200 bg-gray-50/50">
-                        <th className="px-4 py-3 font-semibold text-gray-600">
-                          Дата
-                        </th>
-                        <th className="px-4 py-3 font-semibold text-gray-600 text-right">
-                          Сумма
-                        </th>
-                        <th className="px-4 py-3 font-semibold text-gray-600">
-                          Комментарий
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {payments.map((payment) => (
-                        <tr key={payment.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-gray-900">
-                            {formatDate(payment.date)}
-                          </td>
-                          <td className="px-4 py-3 text-right font-medium text-green-600">
-                            {formatMoney(payment.amount)}
-                          </td>
-                          <td className="px-4 py-3 text-gray-500">
-                            {payment.comment || '\u2014'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <Pagination
-                page={paymentPage}
-                total={paymentsTotal}
-                limit={LIMIT}
-                onChange={setPaymentPage}
-              />
-            </>
+            <div className="table-container">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Дата</th>
+                    <th className="text-right">Сумма</th>
+                    <th>Комментарий</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payments.map((payment) => (
+                    <tr key={payment.id}>
+                      <td className="text-gray-900">
+                        {format(new Date(payment.date), 'dd.MM.yyyy', {
+                          locale: ru,
+                        })}
+                      </td>
+                      <td className="text-right font-medium text-green-600">
+                        {formatCurrency(payment.amount)}
+                      </td>
+                      <td className="text-gray-500 text-sm">
+                        {payment.comment || '\u2014'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
 
-      {/* Edit supplier modal */}
-      {editOpen && supplier && (
-        <SupplierEditModal
-          key={supplier.id}
-          isOpen={editOpen}
-          onClose={() => setEditOpen(false)}
-          supplier={supplier}
-          onSubmit={(data) => updateSupplierMutation.mutate(data)}
-          isLoading={updateSupplierMutation.isPending}
-        />
-      )}
+      {/* Edit Supplier Modal */}
+      <Modal
+        isOpen={isEditModalOpen}
+        onClose={() => setIsEditModalOpen(false)}
+        title="Редактировать поставщика"
+      >
+        <form onSubmit={handleEditSubmit} className="space-y-4">
+          <div>
+            <label className="label">Название *</label>
+            <input
+              type="text"
+              className="input"
+              value={editForm.name}
+              onChange={(e) =>
+                setEditForm({ ...editForm, name: e.target.value })
+              }
+            />
+          </div>
+          <div>
+            <label className="label">Контактное лицо</label>
+            <input
+              type="text"
+              className="input"
+              value={editForm.contactPerson}
+              onChange={(e) =>
+                setEditForm({ ...editForm, contactPerson: e.target.value })
+              }
+            />
+          </div>
+          <div>
+            <label className="label">Телефон</label>
+            <PhoneInput
+              value={editForm.phone}
+              onChange={(val) => setEditForm({ ...editForm, phone: val })}
+            />
+          </div>
+          <div>
+            <label className="label">Комментарий</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={editForm.comment}
+              onChange={(e) =>
+                setEditForm({ ...editForm, comment: e.target.value })
+              }
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setIsEditModalOpen(false)}
+              className="btn-secondary"
+            >
+              Отмена
+            </button>
+            <button
+              type="submit"
+              disabled={updateMutation.isPending}
+              className="btn-primary"
+            >
+              {updateMutation.isPending ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
-      {/* Delivery create modal */}
-      {deliveryOpen && (
-        <DeliveryCreateModal
-          isOpen={deliveryOpen}
-          onClose={() => setDeliveryOpen(false)}
-          onSubmit={(data) => createDeliveryMutation.mutate(data)}
-          isLoading={createDeliveryMutation.isPending}
-          products={allProducts}
-        />
-      )}
+      {/* Create Delivery Modal */}
+      <Modal
+        isOpen={isDeliveryModalOpen}
+        onClose={() => setIsDeliveryModalOpen(false)}
+        title="Новая поставка"
+        size="lg"
+      >
+        <form onSubmit={handleDeliverySubmit} className="space-y-4">
+          <div>
+            <label className="label">Дата</label>
+            <input
+              type="date"
+              className="input"
+              value={deliveryForm.date}
+              onChange={(e) =>
+                setDeliveryForm({ ...deliveryForm, date: e.target.value })
+              }
+            />
+          </div>
 
-      {/* Payment create modal */}
-      {paymentOpen && (
-        <PaymentCreateModal
-          isOpen={paymentOpen}
-          onClose={() => setPaymentOpen(false)}
-          onSubmit={(data) => createPaymentMutation.mutate(data)}
-          isLoading={createPaymentMutation.isPending}
-          currentDebt={supplier.currentDebt}
-        />
-      )}
+          <div>
+            <label className="label">Товары</label>
+            <div className="space-y-3">
+              {deliveryForm.items.map((item, index) => (
+                <div
+                  key={index}
+                  className="flex items-end gap-2 p-3 bg-gray-50 rounded-lg"
+                >
+                  <div className="flex-1">
+                    <label className="label text-xs">Товар</label>
+                    <select
+                      className="input"
+                      value={item.productId}
+                      onChange={(e) =>
+                        updateDeliveryItem(index, 'productId', e.target.value)
+                      }
+                    >
+                      <option value="">Выберите товар</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="w-24">
+                    <label className="label text-xs">Кол-во</label>
+                    <input
+                      type="number"
+                      className="input"
+                      min={1}
+                      value={item.quantity}
+                      onChange={(e) =>
+                        updateDeliveryItem(
+                          index,
+                          'quantity',
+                          parseInt(e.target.value) || 0
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="w-32">
+                    <label className="label text-xs">Цена</label>
+                    <input
+                      type="number"
+                      className="input"
+                      min={0}
+                      value={item.price}
+                      onChange={(e) =>
+                        updateDeliveryItem(
+                          index,
+                          'price',
+                          parseFloat(e.target.value) || 0
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="w-28 text-right text-sm font-medium text-gray-700 pb-2">
+                    {formatCurrency(item.quantity * item.price)}
+                  </div>
+                  {deliveryForm.items.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeDeliveryItem(index)}
+                      className="btn-secondary btn-sm text-red-500 hover:text-red-700 pb-2"
+                    >
+                      &times;
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addDeliveryItem}
+              className="btn-secondary btn-sm mt-2"
+            >
+              <Plus className="w-3 h-3" />
+              Добавить товар
+            </button>
+          </div>
+
+          <div>
+            <label className="label">Комментарий</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={deliveryForm.comment}
+              onChange={(e) =>
+                setDeliveryForm({ ...deliveryForm, comment: e.target.value })
+              }
+              placeholder="Примечание к поставке..."
+            />
+          </div>
+
+          <div className="text-right text-sm font-semibold text-gray-700">
+            Итого:{' '}
+            {formatCurrency(
+              deliveryForm.items.reduce(
+                (sum, item) => sum + item.quantity * item.price,
+                0
+              )
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setIsDeliveryModalOpen(false)}
+              className="btn-secondary"
+            >
+              Отмена
+            </button>
+            <button
+              type="submit"
+              disabled={createDeliveryMutation.isPending}
+              className="btn-primary"
+            >
+              {createDeliveryMutation.isPending
+                ? 'Сохранение...'
+                : 'Создать поставку'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Create Payment Modal */}
+      <Modal
+        isOpen={isPaymentModalOpen}
+        onClose={() => setIsPaymentModalOpen(false)}
+        title="Новая оплата поставщику"
+      >
+        <form onSubmit={handlePaymentSubmit} className="space-y-4">
+          <div>
+            <label className="label">Сумма *</label>
+            <input
+              type="number"
+              className="input"
+              min={0}
+              value={paymentForm.amount || ''}
+              onChange={(e) =>
+                setPaymentForm({
+                  ...paymentForm,
+                  amount: parseFloat(e.target.value) || 0,
+                })
+              }
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <label className="label">Дата</label>
+            <input
+              type="date"
+              className="input"
+              value={paymentForm.date}
+              onChange={(e) =>
+                setPaymentForm({ ...paymentForm, date: e.target.value })
+              }
+            />
+          </div>
+          <div>
+            <label className="label">Комментарий</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={paymentForm.comment}
+              onChange={(e) =>
+                setPaymentForm({ ...paymentForm, comment: e.target.value })
+              }
+              placeholder="Примечание к оплате..."
+            />
+          </div>
+
+          {supplier.currentDebt > 0 && (
+            <p className="text-sm text-gray-500">
+              Текущий долг:{' '}
+              <span className="font-medium text-red-600">
+                {formatCurrency(supplier.currentDebt)}
+              </span>
+            </p>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setIsPaymentModalOpen(false)}
+              className="btn-secondary"
+            >
+              Отмена
+            </button>
+            <button
+              type="submit"
+              disabled={createPaymentMutation.isPending}
+              className="btn-primary"
+            >
+              {createPaymentMutation.isPending
+                ? 'Сохранение...'
+                : 'Записать оплату'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

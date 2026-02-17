@@ -2,377 +2,252 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   DollarSign,
-  Calendar,
-  CalendarDays,
-  CalendarRange,
+  Banknote,
+  CreditCard,
+  Shield,
   TrendingUp,
-  Info,
-  ChevronDown,
-  Wallet,
+  Users,
 } from 'lucide-react';
+import { format, startOfWeek, startOfMonth } from 'date-fns';
+
 import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import type { MasterSalary, SalarySummary } from '../types';
-import LoadingSpinner from '../components/LoadingSpinner';
 import DatePeriodPicker from '../components/DatePeriodPicker';
+import LoadingSpinner from '../components/LoadingSpinner';
+import EmptyState from '../components/EmptyState';
+import { UserRole, MasterSalary, SalarySummary } from '../types';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatMoney(value: number): string {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
+function formatCurrency(value: number): string {
+  return new Intl.NumberFormat('ru-RU', {
+    style: 'currency',
+    currency: 'UZS',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(value);
 }
-
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function monthAgoISO(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 1);
-  return d.toISOString().slice(0, 10);
-}
-
-// ---------------------------------------------------------------------------
-// Stat Card
-// ---------------------------------------------------------------------------
-
-interface StatCardProps {
-  title: string;
-  value: string;
-  icon: React.ElementType;
-  color: string;
-}
-
-function StatCard({ title, value, icon: Icon, color }: StatCardProps) {
-  const colorMap: Record<string, string> = {
-    blue: 'bg-blue-50 text-blue-600',
-    green: 'bg-green-50 text-green-600',
-    orange: 'bg-orange-50 text-orange-600',
-    purple: 'bg-purple-50 text-purple-600',
-  };
-
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-3">
-        <div
-          className={`flex h-10 w-10 items-center justify-center rounded-lg ${colorMap[color] || colorMap.blue}`}
-        >
-          <Icon className="h-5 w-5" />
-        </div>
-        <div>
-          <p className="text-sm text-gray-500">{title}</p>
-          <p className="text-lg font-bold text-gray-900">{value}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Master View
-// ---------------------------------------------------------------------------
 
 function MasterSalaryView() {
-  const { data, isLoading, isError } = useQuery<SalarySummary>({
-    queryKey: ['salary', 'my'],
-    queryFn: async () => {
-      const res = await salaryApi.getMySummary();
-      return res.data;
-    },
+  const { data: summary, isLoading } = useQuery({
+    queryKey: ['salary-my'],
+    queryFn: () => salaryApi.getMy(),
+    select: (res) => res.data as SalarySummary,
   });
 
   if (isLoading) return <LoadingSpinner />;
 
-  if (isError) {
+  if (!summary) {
     return (
-      <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-        <p className="text-sm">Не удалось загрузить данные о зарплате</p>
-      </div>
+      <EmptyState
+        icon={DollarSign}
+        title="Нет данных о зарплате"
+        description="Данные появятся после закрытия первого чека"
+      />
     );
   }
 
-  if (!data) return null;
-
-  const cards = [
-    { title: 'Сегодня', value: formatMoney(data.today), icon: DollarSign, color: 'blue' },
-    { title: 'Неделя', value: formatMoney(data.week), icon: Calendar, color: 'green' },
-    { title: 'Месяц', value: formatMoney(data.month), icon: CalendarDays, color: 'orange' },
-    { title: 'Всего', value: formatMoney(data.total), icon: TrendingUp, color: 'purple' },
-  ];
-
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Моя зарплата</h1>
-        <p className="mt-1 text-sm text-gray-500">{data.masterName}</p>
+        <p className="text-gray-500 mt-1">
+          {summary.masterName} &middot; Ставка: {summary.salaryPercent}%
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {cards.map((c) => (
-          <StatCard key={c.title} {...c} />
-        ))}
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="stat-card">
+          <div className="stat-label">Сегодня</div>
+          <div className="stat-value text-green-600">
+            {formatCurrency(summary.today)}
+          </div>
+          {summary.todayChecks !== undefined && (
+            <p className="text-xs text-gray-400 mt-1">
+              {summary.todayChecks} чек(ов)
+            </p>
+          )}
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Неделя</div>
+          <div className="stat-value text-blue-600">
+            {formatCurrency(summary.week)}
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Месяц</div>
+          <div className="stat-value text-purple-600">
+            {formatCurrency(summary.month)}
+          </div>
+          {summary.monthChecks !== undefined && (
+            <p className="text-xs text-gray-400 mt-1">
+              {summary.monthChecks} чек(ов)
+            </p>
+          )}
+        </div>
+        <div className="stat-card">
+          <div className="stat-label">Всего</div>
+          <div className="stat-value text-gray-900">
+            {formatCurrency(summary.total)}
+          </div>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 p-4 text-blue-700">
-        <Info className="h-5 w-5 flex-shrink-0" />
-        <p className="text-sm">Ваш процент: {data.salaryPercent}%</p>
+      {/* Today breakdown by payment method */}
+      <div className="card">
+        <div className="card-body">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            Сегодня по способу оплаты
+          </h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="flex items-center gap-3 p-3 bg-green-50 rounded-lg">
+              <div className="p-2 bg-green-100 rounded-lg">
+                <Banknote className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <p className="text-sm text-green-700">Наличные</p>
+                <p className="text-lg font-semibold text-green-800">
+                  {formatCurrency(summary.todayCash || 0)}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <CreditCard className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm text-blue-700">Карта</p>
+                <p className="text-lg font-semibold text-blue-800">
+                  {formatCurrency(summary.todayCard || 0)}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-3 bg-orange-50 rounded-lg">
+              <div className="p-2 bg-orange-100 rounded-lg">
+                <Shield className="w-5 h-5 text-orange-600" />
+              </div>
+              <div>
+                <p className="text-sm text-orange-700">Гарантия</p>
+                <p className="text-lg font-semibold text-orange-800">
+                  {formatCurrency(summary.todayWarranty || 0)}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Mobile accordion card for a master
-// ---------------------------------------------------------------------------
-
-function MasterAccordion({ master: m }: { master: MasterSalary }) {
-  const [open, setOpen] = useState(false);
-  const initials = m.masterName.split(' ').map((w) => w[0]).join('').slice(0, 2);
-
-  return (
-    <div className="rounded-xl bg-white border border-gray-100 shadow-sm overflow-hidden">
-      <button type="button" onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-3 w-full px-4 py-3.5 text-left active:bg-gray-50 transition-colors">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-50 text-sm font-bold text-primary-600 flex-shrink-0">
-          {initials}
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-900 truncate">{m.masterName}</p>
-          <p className="text-[11px] text-gray-400">Ставка {m.salaryPercent}%</p>
-        </div>
-        <span className="text-sm font-bold text-green-600 flex-shrink-0 mr-1">{formatMoney(m.totalEarnings)}</span>
-        <ChevronDown className={`h-4 w-4 text-gray-400 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="border-t border-gray-100 px-4 py-3 space-y-2.5 bg-gray-50/50">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-500">Чеков</span>
-            <span className="text-sm font-medium text-gray-900">{m.checkCount}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-500">Выручка</span>
-            <span className="text-sm font-medium text-gray-900">{formatMoney(m.totalRevenue)}</span>
-          </div>
-          <div className="flex items-center justify-between pt-1.5 border-t border-gray-100">
-            <span className="text-xs font-semibold text-gray-700">Заработок</span>
-            <span className="text-sm font-bold text-green-600">{formatMoney(m.totalEarnings)}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Admin / Owner View
-// ---------------------------------------------------------------------------
-
-const MONTH_LABELS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
-
-function getMonthRange(year: number, month: number): { from: string; to: string } {
-  const from = new Date(year, month, 1);
-  const to = new Date(year, month + 1, 0); // last day of month
-  return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
-  };
-}
-
-function getLast12Months(): { label: string; year: number; month: number }[] {
-  const now = new Date();
-  const result: { label: string; year: number; month: number }[] = [];
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    result.push({
-      label: MONTH_LABELS[d.getMonth()],
-      year: d.getFullYear(),
-      month: d.getMonth(),
-    });
-  }
-  return result.reverse();
 }
 
 function AdminSalaryView() {
-  const [dateFrom, setDateFrom] = useState(monthAgoISO());
-  const [dateTo, setDateTo] = useState(todayISO());
-  const [selectedMonth, setSelectedMonth] = useState<number | null>(null);
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
 
-  const months = getLast12Months();
+  const [dateFrom, setDateFrom] = useState(monthStart);
+  const [dateTo, setDateTo] = useState(today);
 
-  function handleMonthClick(idx: number) {
-    const m = months[idx];
-    const range = getMonthRange(m.year, m.month);
-    setSelectedMonth(idx);
-    setDateFrom(range.from);
-    setDateTo(range.to);
-  }
-
-  function handleDatePickerChange(from: string, to: string) {
-    setSelectedMonth(null);
-    setDateFrom(from);
-    setDateTo(to);
-  }
-
-  const { data, isLoading, isError } = useQuery<MasterSalary[]>({
-    queryKey: ['salary', 'masters', { dateFrom, dateTo }],
-    queryFn: async () => {
-      const res = await salaryApi.getAllMasters({ dateFrom, dateTo });
-      return res.data;
+  const { data: salaries, isLoading } = useQuery({
+    queryKey: ['salary-all', dateFrom, dateTo],
+    queryFn: () => salaryApi.getAll({ dateFrom, dateTo }),
+    select: (res) => {
+      const d = res.data;
+      return Array.isArray(d) ? (d as MasterSalary[]) : ((d as any).data || []) as MasterSalary[];
     },
   });
 
-  const masters = data || [];
+  const masters = salaries || [];
+
   const totalRevenue = masters.reduce((s, m) => s + m.totalRevenue, 0);
   const totalEarnings = masters.reduce((s, m) => s + m.totalEarnings, 0);
   const totalChecks = masters.reduce((s, m) => s + m.checkCount, 0);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-bold text-gray-900">Зарплата мастеров</h1>
-        <p className="text-xs text-gray-400 mt-0.5">
-          Отчёт по зарплатам за выбранный период
-        </p>
-      </div>
+      {/* Header */}
+      <h1 className="text-2xl font-bold text-gray-900">Зарплаты мастеров</h1>
 
       {/* Date filter */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={handleDatePickerChange} />
-        </div>
+      <DatePeriodPicker
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onChange={(from, to) => {
+          setDateFrom(from);
+          setDateTo(to);
+        }}
+      />
 
-        {/* Month shortcut buttons */}
-        <div className="flex flex-wrap gap-1.5">
-          {months.map((m, idx) => (
-            <button
-              key={`${m.year}-${m.month}`}
-              type="button"
-              onClick={() => handleMonthClick(idx)}
-              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                selectedMonth === idx
-                  ? 'bg-primary-600 text-white shadow-sm'
-                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              {m.label}
-              {m.year !== new Date().getFullYear() && (
-                <span className="ml-0.5 text-[10px] opacity-60">{String(m.year).slice(2)}</span>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Content */}
       {isLoading ? (
         <LoadingSpinner />
-      ) : isError ? (
-        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-          <p className="text-sm">Не удалось загрузить данные</p>
-        </div>
       ) : masters.length === 0 ? (
-        <div className="rounded-xl border border-gray-200 bg-white p-12 text-center">
-          <CalendarRange className="mx-auto h-12 w-12 text-gray-300" />
-          <p className="mt-4 text-sm text-gray-500">
-            Нет данных за выбранный период
-          </p>
-        </div>
+        <EmptyState
+          icon={Users}
+          title="Нет данных"
+          description="За выбранный период нет данных по зарплатам"
+        />
       ) : (
-        <>
-          {/* Mobile accordion cards */}
-          <div className="md:hidden space-y-2">
-            {/* Summary card */}
-            <div className="rounded-xl bg-gradient-to-r from-primary-50 to-blue-50 border border-primary-100 p-4">
-              <p className="text-[11px] font-semibold text-primary-600 uppercase tracking-wider mb-2">Итого</p>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="text-center min-w-0">
-                  <p className="text-lg font-bold text-gray-900">{totalChecks}</p>
-                  <p className="text-[10px] text-gray-500">Чеков</p>
-                </div>
-                <div className="text-center min-w-0">
-                  <p className="text-xs font-bold text-gray-900 truncate">{formatMoney(totalRevenue)}</p>
-                  <p className="text-[10px] text-gray-500">Выручка</p>
-                </div>
-                <div className="text-center min-w-0">
-                  <p className="text-xs font-bold text-green-600 truncate">{formatMoney(totalEarnings)}</p>
-                  <p className="text-[10px] text-gray-500">Заработок</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Master accordion items */}
-            {masters.map((m) => (
-              <MasterAccordion key={m.masterId} master={m} />
-            ))}
-          </div>
-
-          {/* Desktop table */}
-          <div className="hidden md:block overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/50">
-                    <th className="px-4 py-3 font-semibold text-gray-600">Мастер</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">% от услуг</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Кол-во чеков</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Выручка</th>
-                    <th className="px-4 py-3 font-semibold text-gray-600 text-right">Заработок</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {masters.map((m) => (
-                    <tr key={m.masterId} className="transition-colors hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-900">{m.masterName}</td>
-                      <td className="px-4 py-3 text-gray-600 text-right">{m.salaryPercent}%</td>
-                      <td className="px-4 py-3 text-gray-600 text-right">{m.checkCount}</td>
-                      <td className="px-4 py-3 text-gray-600 text-right">{formatMoney(m.totalRevenue)}</td>
-                      <td className="px-4 py-3 font-medium text-gray-900 text-right">{formatMoney(m.totalEarnings)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-gray-200 bg-gray-50/80 font-semibold">
-                    <td className="px-4 py-3 text-gray-900">Итого</td>
-                    <td className="px-4 py-3 text-right text-gray-600">&mdash;</td>
-                    <td className="px-4 py-3 text-right text-gray-900">{totalChecks}</td>
-                    <td className="px-4 py-3 text-right text-gray-900">{formatMoney(totalRevenue)}</td>
-                    <td className="px-4 py-3 text-right text-gray-900">{formatMoney(totalEarnings)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        </>
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Мастер</th>
+                <th className="text-right">% ставка</th>
+                <th className="text-right">Выручка</th>
+                <th className="text-right">Заработок</th>
+                <th className="text-right">Чеков</th>
+              </tr>
+            </thead>
+            <tbody>
+              {masters.map((master) => (
+                <tr key={master.masterId}>
+                  <td className="font-medium text-gray-900">
+                    {master.masterName}
+                  </td>
+                  <td className="text-right text-gray-600">
+                    {master.salaryPercent}%
+                  </td>
+                  <td className="text-right text-gray-900">
+                    {formatCurrency(master.totalRevenue)}
+                  </td>
+                  <td className="text-right font-medium text-green-600">
+                    {formatCurrency(master.totalEarnings)}
+                  </td>
+                  <td className="text-right text-gray-600">
+                    {master.checkCount}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-gray-300">
+                <td className="font-semibold text-gray-900">Итого</td>
+                <td></td>
+                <td className="text-right font-semibold text-gray-900">
+                  {formatCurrency(totalRevenue)}
+                </td>
+                <td className="text-right font-semibold text-green-600">
+                  {formatCurrency(totalEarnings)}
+                </td>
+                <td className="text-right font-semibold text-gray-600">
+                  {totalChecks}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
       )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main Component
-// ---------------------------------------------------------------------------
-
 export default function SalaryPage() {
-  const { user, hasPermission } = useAuth();
+  const { isRole } = useAuth();
 
-  if (!user) return <LoadingSpinner />;
+  const isMaster = isRole(UserRole.MASTER);
 
-  // Owner / Admin see all masters
-  if (hasPermission('profit_view')) {
-    return <AdminSalaryView />;
-  }
-
-  // Masters see their own salary
-  if (user.role === 'master') {
+  if (isMaster) {
     return <MasterSalaryView />;
   }
 
-  // Others - no access
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-      <p className="text-sm">У вас нет доступа к этой странице</p>
-    </div>
-  );
+  return <AdminSalaryView />;
 }

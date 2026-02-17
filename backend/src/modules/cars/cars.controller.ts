@@ -7,60 +7,50 @@ import {
   Param,
   Body,
   Query,
+  Req,
   UseGuards,
-  ParseUUIDPipe,
 } from '@nestjs/common';
 import { CarsService } from './cars.service';
-import { CreateCarDto } from './dto/create-car.dto';
-import { UpdateCarDto } from './dto/update-car.dto';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { TenantGuard } from '../auth/guards/tenant.guard';
-import { PermissionsGuard } from '../auth/guards/permissions.guard';
-import { RequirePermissions } from '../auth/decorators/permissions.decorator';
-import { TenantId } from '../auth/decorators/tenant-id.decorator';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { Car } from './car.entity';
 
 @Controller('cars')
-@UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard)
 export class CarsController {
   constructor(private readonly carsService: CarsService) {}
 
   @Get()
-  @RequirePermissions('clients_view')
-  findAll(
-    @TenantId() tenantId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('search') search?: string,
+  async findAll(
+    @Req() req: any,
     @Query('clientId') clientId?: string,
+    @Query('tenantId') queryTenantId?: string,
   ) {
-    return this.carsService.findAll(tenantId, { page, limit, search, clientId });
+    const tenantId =
+      req.user.role === 'superadmin' && queryTenantId
+        ? queryTenantId
+        : req.user.tenantId;
+    return this.carsService.findAll(tenantId, clientId);
   }
 
   @Get(':id')
-  @RequirePermissions('clients_view')
-  findOne(@TenantId() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
-    return this.carsService.findById(tenantId, id);
+  async findOne(@Param('id') id: string) {
+    return this.carsService.findById(id);
   }
 
   @Post()
-  @RequirePermissions('clients_edit')
-  create(@TenantId() tenantId: string, @Body() dto: CreateCarDto) {
-    return this.carsService.create(tenantId, dto);
+  async create(@Req() req: any, @Body() dto: Partial<Car>) {
+    dto.tenantId = req.user.tenantId;
+    return this.carsService.create(dto);
   }
 
   @Patch(':id')
-  @RequirePermissions('clients_edit')
-  update(
-    @TenantId() tenantId: string,
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateCarDto,
-  ) {
-    return this.carsService.update(tenantId, id, dto);
+  async update(@Param('id') id: string, @Body() dto: Partial<Car>) {
+    return this.carsService.update(id, dto);
   }
 
   @Delete(':id')
-  @RequirePermissions('clients_edit')
-  remove(@TenantId() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
-    return this.carsService.remove(tenantId, id);
+  async remove(@Param('id') id: string) {
+    await this.carsService.remove(id);
+    return { message: 'Car deleted successfully' };
   }
 }

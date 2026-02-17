@@ -1,81 +1,56 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
 import * as bcrypt from 'bcrypt';
-import {
-  User,
-  UserRole,
-  DEFAULT_PERMISSIONS,
-} from '../users/entities/user.entity';
+import { UsersService } from '../users/users.service';
+import { TenantsService } from '../tenants/tenants.service';
 
 @Injectable()
 export class SeedService implements OnModuleInit {
   private readonly logger = new Logger(SeedService.name);
 
   constructor(
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
+    private readonly usersService: UsersService,
+    private readonly tenantsService: TenantsService,
   ) {}
 
-  async onModuleInit() {
-    await this.seedSuperAdmin();
-    await this.migratePhones();
-  }
-
-  /**
-   * Fill phone from username for users created before phone-based auth migration.
-   */
-  private async migratePhones() {
-    const usersWithoutPhone = await this.userRepo.find({
-      where: { phone: IsNull() },
-    });
-
-    for (const user of usersWithoutPhone) {
-      user.phone = user.username;
-      await this.userRepo.save(user);
-      this.logger.log(`Migrated phone for user "${user.username}" (id: ${user.id})`);
-    }
-
-    if (usersWithoutPhone.length > 0) {
-      this.logger.log(`Phone migration complete: ${usersWithoutPhone.length} user(s) updated`);
-    }
-  }
-
-  private async seedSuperAdmin() {
-    const username = process.env.SUPERADMIN_USERNAME || 'superadmin';
-    const phone = process.env.SUPERADMIN_PHONE || '+79884444436';
-    const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
-    const fullName = process.env.SUPERADMIN_FULLNAME || 'Super Admin';
-
-    const existing = await this.userRepo.findOne({
-      where: { role: UserRole.SUPERADMIN },
-    });
+  async onModuleInit(): Promise<void> {
+    const existing = await this.usersService.findByUsername('admin');
 
     if (existing) {
-      // Always sync password and phone so the admin can log in with the known credentials
-      const hashedPassword = await bcrypt.hash(password, 10);
-      existing.password = hashedPassword;
-      existing.username = username;
-      existing.phone = phone;
-      existing.isActive = true;
-      await this.userRepo.save(existing);
-      this.logger.log(`SuperAdmin password synced for "${existing.username}" (phone: ${phone})`);
+      this.logger.log('Seed: superadmin already exists');
       return;
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const tenant = await this.tenantsService.create({
+      name: 'Автосервис',
+      phone: '+7 000 000 0000',
+    });
 
-    const superadmin = this.userRepo.create({
-      username,
-      phone,
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash('admin123', salt);
+
+    await this.usersService.create({
+      username: 'admin',
       password: hashedPassword,
-      fullName,
-      role: UserRole.SUPERADMIN,
-      permissions: DEFAULT_PERMISSIONS[UserRole.SUPERADMIN],
+      fullName: 'Администратор',
+      role: 'superadmin',
+      tenantId: tenant.id,
+      permissions: {
+        manageUsers: true,
+        manageTenants: true,
+        manageClients: true,
+        manageCars: true,
+        manageProducts: true,
+        manageServices: true,
+        manageChecks: true,
+        manageSuppliers: true,
+        manageSalary: true,
+        manageSchedule: true,
+        manageShifts: true,
+        viewReports: true,
+      },
       isActive: true,
-    } as Partial<User>);
+    });
 
-    await this.userRepo.save(superadmin);
-    this.logger.log(`SuperAdmin created: "${username}" (phone: ${phone})`);
+    this.logger.log('Seed: superadmin created');
   }
 }

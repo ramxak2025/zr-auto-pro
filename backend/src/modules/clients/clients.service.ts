@@ -1,90 +1,69 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Client } from './entities/client.entity';
-import { CreateClientDto } from './dto/create-client.dto';
-import { UpdateClientDto } from './dto/update-client.dto';
+import { Repository, ILike } from 'typeorm';
+import { Client } from './client.entity';
 
 @Injectable()
 export class ClientsService {
   constructor(
     @InjectRepository(Client)
-    private readonly repo: Repository<Client>,
+    private readonly clientsRepo: Repository<Client>,
   ) {}
 
-  async findAll(tenantId: string, query: { page?: number; limit?: number; search?: string }) {
-    const page = query.page || 1;
-    const limit = query.limit || 20;
-    const skip = (page - 1) * limit;
+  async findAll(
+    tenantId: string,
+    search?: string,
+    page = 1,
+    limit = 50,
+  ): Promise<{ data: Client[]; total: number; page: number; limit: number }> {
+    const where: any[] = [];
 
-    const qb = this.repo.createQueryBuilder('client');
-    qb.leftJoinAndSelect('client.cars', 'car', 'car.deletedAt IS NULL');
-
-    qb.where('client.tenantId = :tenantId', { tenantId });
-
-    if (query.search) {
-      qb.andWhere(
-        `(client.fullName ILIKE :search OR client.phone ILIKE :search OR client.id IN (SELECT sc."clientId" FROM cars sc WHERE sc."tenantId" = :tenantId AND sc."deletedAt" IS NULL AND (sc."plateNumber" ILIKE :search OR sc."makeModel" ILIKE :search)))`,
-        { search: `%${query.search}%` },
+    if (search) {
+      where.push(
+        { tenantId, fullName: ILike(`%${search}%`) },
+        { tenantId, phone: ILike(`%${search}%`) },
       );
+    } else {
+      where.push({ tenantId });
     }
 
-    qb.orderBy('client.createdAt', 'DESC');
-    qb.skip(skip).take(limit);
-
-    const [data, total] = await qb.getManyAndCount();
+    const [data, total] = await this.clientsRepo.findAndCount({
+      where,
+      relations: ['cars'],
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
 
     return { data, total, page, limit };
   }
 
-  async findById(tenantId: string, id: string): Promise<Client> {
-    const client = await this.repo.findOne({
-      where: { id, tenantId },
-      relations: ['cars', 'checks'],
+  async findById(id: string): Promise<Client> {
+    const client = await this.clientsRepo.findOne({
+      where: { id },
+      relations: ['cars', 'cars.client'],
     });
-
     if (!client) {
-      throw new NotFoundException(`Client with id ${id} not found`);
+      throw new NotFoundException(`Client with id "${id}" not found`);
     }
-
     return client;
   }
 
-  async findByPhone(tenantId: string, phone: string): Promise<Client | null> {
-    return this.repo.findOne({ where: { phone, tenantId } });
+  async create(dto: Partial<Client>): Promise<Client> {
+    const client = this.clientsRepo.create(dto);
+    return this.clientsRepo.save(client);
   }
 
-  async create(tenantId: string, dto: CreateClientDto): Promise<Client> {
-    const client = this.repo.create({ ...dto, tenantId });
-    return this.repo.save(client);
-  }
-
-  async update(tenantId: string, id: string, dto: UpdateClientDto): Promise<Client> {
-    const client = await this.findById(tenantId, id);
+  async update(id: string, dto: Partial<Client>): Promise<Client> {
+    const client = await this.findById(id);
     Object.assign(client, dto);
-    return this.repo.save(client);
+    return this.clientsRepo.save(client);
   }
 
-  async remove(tenantId: string, id: string): Promise<void> {
-    const client = await this.findById(tenantId, id);
-    await this.repo.softRemove(client);
-  }
-
-  async getClientStats(tenantId: string, id: string) {
-    const client = await this.findById(tenantId, id);
-
-    const result = await this.repo
-      .createQueryBuilder('client')
-      .leftJoin('client.checks', 'check')
-      .select('COALESCE(SUM(check.totalRevenue), 0)', 'totalPayments')
-      .where('client.id = :id', { id })
-      .andWhere('client.tenantId = :tenantId', { tenantId })
-      .getRawOne();
-
-    return {
-      clientId: client.id,
-      fullName: client.fullName,
-      totalPayments: parseFloat(result.totalPayments) || 0,
-    };
+  async remove(id: string): Promise<void> {
+    const result = await this.clientsRepo.delete(id);
+    if (result.affected === 0) {
+      throw new NotFoundException(`Client with id "${id}" not found`);
+    }
   }
 }

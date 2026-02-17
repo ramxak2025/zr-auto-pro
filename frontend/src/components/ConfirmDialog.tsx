@@ -1,4 +1,3 @@
-import { AlertTriangle } from 'lucide-react';
 import Modal from './Modal';
 
 interface ConfirmDialogProps {
@@ -20,32 +19,16 @@ export default function ConfirmDialog({
   confirmText = 'Confirm',
   variant = 'primary',
 }: ConfirmDialogProps) {
-  function handleConfirm() {
+  const handleConfirm = () => {
     onConfirm();
     onClose();
-  }
+  };
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title} size="sm">
-      <div className="flex flex-col items-center text-center">
-        <div
-          className={`flex h-12 w-12 items-center justify-center rounded-full ${
-            variant === 'danger'
-              ? 'bg-red-50 text-red-600'
-              : 'bg-primary-50 text-primary-600'
-          }`}
-        >
-          <AlertTriangle className="h-6 w-6" />
-        </div>
-
-        <p className="mt-4 text-sm text-gray-600 leading-relaxed">{message}</p>
-      </div>
-
-      <div className="mt-6 flex items-center justify-end gap-3">
-        <button
-          onClick={onClose}
-          className="btn-secondary"
-        >
+      <p className="text-sm text-gray-600 mb-6">{message}</p>
+      <div className="flex items-center justify-end gap-3">
+        <button onClick={onClose} className="btn-secondary">
           Cancel
         </button>
         <button

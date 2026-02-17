@@ -1,107 +1,42 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between } from 'typeorm';
-import { Check } from '../checks/entities/check.entity';
-import { CheckService as CheckServiceEntity } from '../checks/entities/check-service.entity';
-import { CheckProduct } from '../checks/entities/check-product.entity';
-import { User } from '../users/entities/user.entity';
-
-export interface FinancialReportQuery {
-  dateFrom: Date;
-  dateTo: Date;
-  period?: 'day' | 'week' | 'month' | 'year';
-}
-
-export interface DateRangeQuery {
-  dateFrom: Date;
-  dateTo: Date;
-}
-
-export interface FinancialReportResult {
-  dateFrom: Date;
-  dateTo: Date;
-  revenue: number;
-  productCost: number;
-  salaries: number;
-  grossProfit: number;
-  netProfit: number;
-  checkCount: number;
-}
-
-export interface SalesByMasterResult {
-  masterId: string;
-  masterName: string;
-  revenue: number;
-  checkCount: number;
-  salaryTotal: number;
-}
-
-export interface SalesByServiceResult {
-  serviceName: string;
-  count: number;
-  revenue: number;
-}
-
-export interface SalesByProductResult {
-  productName: string;
-  count: number;
-  revenue: number;
-  cost: number;
-  profit: number;
-}
-
-export interface DashboardStatsResult {
-  todayRevenue: number;
-  todayChecks: number;
-  weekRevenue: number;
-  monthRevenue: number;
-  todayProfit: number;
-  monthProfit: number;
-}
+import { Check } from '../checks/check.entity';
 
 @Injectable()
 export class ReportsService {
   constructor(
     @InjectRepository(Check)
-    private readonly checkRepo: Repository<Check>,
-    @InjectRepository(CheckServiceEntity)
-    private readonly checkServiceRepo: Repository<CheckServiceEntity>,
-    @InjectRepository(CheckProduct)
-    private readonly checkProductRepo: Repository<CheckProduct>,
-    @InjectRepository(User)
-    private readonly userRepo: Repository<User>,
+    private readonly checksRepo: Repository<Check>,
   ) {}
 
   async getFinancialReport(
     tenantId: string,
-    query: FinancialReportQuery,
-  ): Promise<FinancialReportResult> {
-    const { dateFrom, dateTo } = query;
+    dateFrom: string,
+    dateTo: string,
+  ): Promise<{
+    dateFrom: string;
+    dateTo: string;
+    revenue: number;
+    productCost: number;
+    salaries: number;
+    grossProfit: number;
+    netProfit: number;
+    checkCount: number;
+  }> {
+    const checks = await this.checksRepo.find({
+      where: {
+        tenantId,
+        date: Between(dateFrom, dateTo),
+      },
+    });
 
-    const result = await this.checkRepo
-      .createQueryBuilder('check')
-      .select('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
-      .addSelect('COALESCE(SUM(check.productCostTotal), 0)', 'productCost')
-      .addSelect(
-        'COALESCE(SUM(check.serviceSalaryTotal), 0)',
-        'salaries',
-      )
-      .addSelect('COALESCE(SUM(check.profit), 0)', 'netProfit')
-      .addSelect('COUNT(check.id)', 'checkCount')
-      .where('check.date BETWEEN :dateFrom AND :dateTo', {
-        dateFrom,
-        dateTo,
-      })
-      .andWhere('check.deletedAt IS NULL')
-      .andWhere('check.tenantId = :tenantId', { tenantId })
-      .getRawOne();
-
-    const revenue = parseFloat(result.revenue) || 0;
-    const productCost = parseFloat(result.productCost) || 0;
-    const salaries = parseFloat(result.salaries) || 0;
-    const netProfit = parseFloat(result.netProfit) || 0;
+    const revenue = checks.reduce((sum, c) => sum + c.totalRevenue, 0);
+    const productCost = checks.reduce((sum, c) => sum + c.productCostTotal, 0);
+    const salaries = checks.reduce((sum, c) => sum + c.serviceSalaryTotal, 0);
     const grossProfit = revenue - productCost;
-    const checkCount = parseInt(result.checkCount, 10) || 0;
+    const netProfit = grossProfit - salaries;
+    const checkCount = checks.length;
 
     return {
       dateFrom,
@@ -115,271 +50,53 @@ export class ReportsService {
     };
   }
 
-  async getSalesByMaster(
+  async getCashFlow(
     tenantId: string,
-    query: DateRangeQuery,
-  ): Promise<SalesByMasterResult[]> {
-    const { dateFrom, dateTo } = query;
+    dateFrom: string,
+    dateTo: string,
+  ): Promise<
+    {
+      date: string;
+      cash: number;
+      card: number;
+      warranty: number;
+      total: number;
+    }[]
+  > {
+    const checks = await this.checksRepo.find({
+      where: {
+        tenantId,
+        date: Between(dateFrom, dateTo),
+      },
+      order: { date: 'ASC' },
+    });
 
-    const results = await this.checkRepo
-      .createQueryBuilder('check')
-      .select('check.masterId', 'masterId')
-      .addSelect('user.fullName', 'masterName')
-      .addSelect('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
-      .addSelect('COUNT(check.id)', 'checkCount')
-      .addSelect(
-        'COALESCE(SUM(check.serviceSalaryTotal), 0)',
-        'salaryTotal',
-      )
-      .innerJoin('check.master', 'user')
-      .where('check.date BETWEEN :dateFrom AND :dateTo', {
-        dateFrom,
-        dateTo,
-      })
-      .andWhere('check.deletedAt IS NULL')
-      .andWhere('check.tenantId = :tenantId', { tenantId })
-      .groupBy('check.masterId')
-      .addGroupBy('user.fullName')
-      .orderBy('revenue', 'DESC')
-      .getRawMany();
+    // Group checks by date
+    const groupedByDate: Record<
+      string,
+      { cash: number; card: number; warranty: number; total: number }
+    > = {};
 
-    return results.map((row) => ({
-      masterId: row.masterId,
-      masterName: row.masterName,
-      revenue: parseFloat(row.revenue) || 0,
-      checkCount: parseInt(row.checkCount, 10) || 0,
-      salaryTotal: parseFloat(row.salaryTotal) || 0,
-    }));
-  }
-
-  async getSalesByService(
-    tenantId: string,
-    query: DateRangeQuery,
-  ): Promise<SalesByServiceResult[]> {
-    const { dateFrom, dateTo } = query;
-
-    const results = await this.checkServiceRepo
-      .createQueryBuilder('cs')
-      .select('cs.name', 'serviceName')
-      .addSelect('COALESCE(SUM(cs.quantity), 0)', 'count')
-      .addSelect('COALESCE(SUM(cs.total), 0)', 'revenue')
-      .innerJoin('cs.check', 'check')
-      .where('check.date BETWEEN :dateFrom AND :dateTo', {
-        dateFrom,
-        dateTo,
-      })
-      .andWhere('check.deletedAt IS NULL')
-      .andWhere('check.tenantId = :tenantId', { tenantId })
-      .groupBy('cs.name')
-      .orderBy('revenue', 'DESC')
-      .getRawMany();
-
-    return results.map((row) => ({
-      serviceName: row.serviceName,
-      count: parseInt(row.count, 10) || 0,
-      revenue: parseFloat(row.revenue) || 0,
-    }));
-  }
-
-  async getSalesByProduct(
-    tenantId: string,
-    query: DateRangeQuery,
-  ): Promise<SalesByProductResult[]> {
-    const { dateFrom, dateTo } = query;
-
-    const results = await this.checkProductRepo
-      .createQueryBuilder('cp')
-      .select('cp.name', 'productName')
-      .addSelect('COALESCE(SUM(cp.quantity), 0)', 'count')
-      .addSelect('COALESCE(SUM(cp.totalSell), 0)', 'revenue')
-      .addSelect('COALESCE(SUM(cp.totalCost), 0)', 'cost')
-      .addSelect(
-        'COALESCE(SUM(cp.totalSell), 0) - COALESCE(SUM(cp.totalCost), 0)',
-        'profit',
-      )
-      .innerJoin('cp.check', 'check')
-      .where('check.date BETWEEN :dateFrom AND :dateTo', {
-        dateFrom,
-        dateTo,
-      })
-      .andWhere('check.deletedAt IS NULL')
-      .andWhere('check.tenantId = :tenantId', { tenantId })
-      .groupBy('cp.name')
-      .orderBy('revenue', 'DESC')
-      .getRawMany();
-
-    return results.map((row) => ({
-      productName: row.productName,
-      count: parseInt(row.count, 10) || 0,
-      revenue: parseFloat(row.revenue) || 0,
-      cost: parseFloat(row.cost) || 0,
-      profit: parseFloat(row.profit) || 0,
-    }));
-  }
-
-  async getDashboardStats(tenantId: string): Promise<DashboardStatsResult> {
-    const now = new Date();
-
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
-
-    const weekStart = new Date(now);
-    const dayOfWeek = weekStart.getDay();
-    const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-    weekStart.setDate(weekStart.getDate() - diffToMonday);
-    weekStart.setHours(0, 0, 0, 0);
-
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    monthStart.setHours(0, 0, 0, 0);
-
-    const todayResult = await this.checkRepo
-      .createQueryBuilder('check')
-      .select('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
-      .addSelect('COUNT(check.id)', 'checkCount')
-      .addSelect('COALESCE(SUM(check.profit), 0)', 'profit')
-      .where('check.date BETWEEN :dateFrom AND :dateTo', {
-        dateFrom: todayStart,
-        dateTo: todayEnd,
-      })
-      .andWhere('check.deletedAt IS NULL')
-      .andWhere('check.tenantId = :tenantId', { tenantId })
-      .getRawOne();
-
-    const weekResult = await this.checkRepo
-      .createQueryBuilder('check')
-      .select('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
-      .where('check.date BETWEEN :dateFrom AND :dateTo', {
-        dateFrom: weekStart,
-        dateTo: todayEnd,
-      })
-      .andWhere('check.deletedAt IS NULL')
-      .andWhere('check.tenantId = :tenantId', { tenantId })
-      .getRawOne();
-
-    const monthResult = await this.checkRepo
-      .createQueryBuilder('check')
-      .select('COALESCE(SUM(check.totalRevenue), 0)', 'revenue')
-      .addSelect('COALESCE(SUM(check.profit), 0)', 'profit')
-      .where('check.date BETWEEN :dateFrom AND :dateTo', {
-        dateFrom: monthStart,
-        dateTo: todayEnd,
-      })
-      .andWhere('check.deletedAt IS NULL')
-      .andWhere('check.tenantId = :tenantId', { tenantId })
-      .getRawOne();
-
-    return {
-      todayRevenue: parseFloat(todayResult.revenue) || 0,
-      todayChecks: parseInt(todayResult.checkCount, 10) || 0,
-      weekRevenue: parseFloat(weekResult.revenue) || 0,
-      monthRevenue: parseFloat(monthResult.revenue) || 0,
-      todayProfit: parseFloat(todayResult.profit) || 0,
-      monthProfit: parseFloat(monthResult.profit) || 0,
-    };
-  }
-
-  async getEmployeeRanking(tenantId: string): Promise<{
-    today: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
-    month: Array<{ masterId: string; masterName: string; revenue: number; checkCount: number }>;
-  }> {
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    monthStart.setHours(0, 0, 0, 0);
-
-    // New logic:
-    // - Check creator (check.masterId) gets product revenue + their own service revenue
-    // - Other masters (check_services.masterId) only get their own service revenue
-    // We combine: service revenue per service-level masterId + product revenue per check-level masterId
-
-    const buildRanking = async (from: Date, to: Date) => {
-      // 1) Service revenue grouped by service-level masterId
-      const serviceRevenue = await this.checkServiceRepo
-        .createQueryBuilder('cs')
-        .select('COALESCE(cs."masterId", check."masterId")', 'masterId')
-        .addSelect('COALESCE(SUM(cs.total), 0)', 'revenue')
-        .innerJoin('cs.check', 'check')
-        .where('check.date BETWEEN :from AND :to', { from, to })
-        .andWhere('check."deletedAt" IS NULL')
-        .andWhere('check."tenantId" = :tenantId', { tenantId })
-        .groupBy('COALESCE(cs."masterId", check."masterId")')
-        .getRawMany();
-
-      // 2) Product revenue grouped by check-level masterId (check creator gets product credit)
-      const productRevenue = await this.checkRepo
-        .createQueryBuilder('check')
-        .select('check."masterId"', 'masterId')
-        .addSelect('COALESCE(SUM(check."productTotal"), 0)', 'revenue')
-        .where('check.date BETWEEN :from AND :to', { from, to })
-        .andWhere('check."deletedAt" IS NULL')
-        .andWhere('check."tenantId" = :tenantId', { tenantId })
-        .groupBy('check."masterId"')
-        .getRawMany();
-
-      // 3) Check counts per check-level masterId
-      const checkCounts = await this.checkRepo
-        .createQueryBuilder('check')
-        .select('check."masterId"', 'masterId')
-        .addSelect('COUNT(check.id)', 'checkCount')
-        .where('check.date BETWEEN :from AND :to', { from, to })
-        .andWhere('check."deletedAt" IS NULL')
-        .andWhere('check."tenantId" = :tenantId', { tenantId })
-        .groupBy('check."masterId"')
-        .getRawMany();
-
-      // Merge all data
-      const revenueMap = new Map<string, number>();
-      const checkCountMap = new Map<string, number>();
-
-      for (const r of serviceRevenue) {
-        if (r.masterId) {
-          revenueMap.set(r.masterId, (revenueMap.get(r.masterId) || 0) + (parseFloat(r.revenue) || 0));
-        }
-      }
-      for (const r of productRevenue) {
-        if (r.masterId) {
-          revenueMap.set(r.masterId, (revenueMap.get(r.masterId) || 0) + (parseFloat(r.revenue) || 0));
-        }
-      }
-      for (const r of checkCounts) {
-        if (r.masterId) {
-          checkCountMap.set(r.masterId, parseInt(r.checkCount, 10) || 0);
-        }
+    for (const check of checks) {
+      const date = check.date;
+      if (!groupedByDate[date]) {
+        groupedByDate[date] = { cash: 0, card: 0, warranty: 0, total: 0 };
       }
 
-      // Get user names
-      const masterIds = [...revenueMap.keys()];
-      if (masterIds.length === 0) return [];
+      const method = check.paymentMethod || 'cash';
+      if (method === 'cash') {
+        groupedByDate[date].cash += check.totalRevenue;
+      } else if (method === 'card') {
+        groupedByDate[date].card += check.totalRevenue;
+      } else if (method === 'warranty') {
+        groupedByDate[date].warranty += check.totalRevenue;
+      }
+      groupedByDate[date].total += check.totalRevenue;
+    }
 
-      const users = await this.userRepo
-        .createQueryBuilder('u')
-        .select(['u.id', 'u.fullName'])
-        .whereInIds(masterIds)
-        .getMany();
-
-      const nameMap = new Map(users.map((u) => [u.id, u.fullName]));
-
-      return masterIds
-        .map((id) => ({
-          masterId: id,
-          masterName: nameMap.get(id) || 'Неизвестный',
-          revenue: revenueMap.get(id) || 0,
-          checkCount: checkCountMap.get(id) || 0,
-        }))
-        .sort((a, b) => b.revenue - a.revenue);
-    };
-
-    const [today, month] = await Promise.all([
-      buildRanking(todayStart, todayEnd),
-      buildRanking(monthStart, todayEnd),
-    ]);
-
-    return { today, month };
+    return Object.entries(groupedByDate).map(([date, values]) => ({
+      date,
+      ...values,
+    }));
   }
 }

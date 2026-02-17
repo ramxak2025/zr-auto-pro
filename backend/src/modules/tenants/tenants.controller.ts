@@ -4,76 +4,63 @@ import {
   Post,
   Patch,
   Delete,
-  Body,
   Param,
-  Query,
+  Body,
+  Req,
   UseGuards,
-  ParseUUIDPipe,
+  ForbiddenException,
 } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { SuperAdminGuard } from '../auth/guards/superadmin.guard';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantsService } from './tenants.service';
-import { CreateTenantDto } from './dto/create-tenant.dto';
-import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { Tenant } from './tenant.entity';
 
-@Controller('admin/tenants')
-@UseGuards(JwtAuthGuard, SuperAdminGuard)
+@Controller('tenants')
+@UseGuards(JwtAuthGuard)
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 
   @Get()
-  findAll(
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('search') search?: string,
-    @Query('isActive') isActive?: string,
-  ) {
-    return this.tenantsService.findAll({ page, limit, search, isActive });
+  async findAll(@Req() req): Promise<Tenant[]> {
+    this.requireSuperadmin(req);
+    return this.tenantsService.findAll();
   }
 
   @Get('stats')
-  getStats() {
+  async getStats(
+    @Req() req,
+  ): Promise<{ totalTenants: number; activeTenants: number; totalUsers: number }> {
+    this.requireSuperadmin(req);
     return this.tenantsService.getStats();
   }
 
   @Get(':id')
-  findById(@Param('id', ParseUUIDPipe) id: string) {
+  async findById(@Param('id') id: string): Promise<Tenant> {
     return this.tenantsService.findById(id);
   }
 
   @Post()
-  create(@Body() dto: CreateTenantDto) {
+  async create(@Req() req, @Body() dto: Partial<Tenant>): Promise<Tenant> {
+    this.requireSuperadmin(req);
     return this.tenantsService.create(dto);
   }
 
   @Patch(':id')
-  update(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateTenantDto,
-  ) {
+  async update(
+    @Param('id') id: string,
+    @Body() dto: Partial<Tenant>,
+  ): Promise<Tenant> {
     return this.tenantsService.update(id, dto);
   }
 
-  @Post(':id/activate')
-  activate(@Param('id', ParseUUIDPipe) id: string) {
-    return this.tenantsService.activate(id);
-  }
-
-  @Post(':id/deactivate')
-  deactivate(@Param('id', ParseUUIDPipe) id: string) {
-    return this.tenantsService.deactivate(id);
-  }
-
-  @Post(':id/extend-subscription')
-  extendSubscription(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() data: { subscriptionEnd: string; note?: string },
-  ) {
-    return this.tenantsService.extendSubscription(id, data);
-  }
-
   @Delete(':id')
-  remove(@Param('id', ParseUUIDPipe) id: string) {
+  async remove(@Req() req, @Param('id') id: string): Promise<void> {
+    this.requireSuperadmin(req);
     return this.tenantsService.remove(id);
+  }
+
+  private requireSuperadmin(req): void {
+    if (req.user?.role !== 'superadmin') {
+      throw new ForbiddenException('Only superadmin can perform this action');
+    }
   }
 }
