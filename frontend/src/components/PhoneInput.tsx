@@ -11,15 +11,15 @@ function formatPhone(raw: string): string {
 
   if (digits.length === 0) return '';
 
-  // Format as +998 (XX) XXX-XX-XX for Uzbek numbers or generic formatting
-  if (digits.length <= 3) return `+${digits}`;
-  if (digits.length <= 5) return `+${digits.slice(0, 3)} (${digits.slice(3)}`;
-  if (digits.length <= 8)
-    return `+${digits.slice(0, 3)} (${digits.slice(3, 5)}) ${digits.slice(5)}`;
-  if (digits.length <= 10)
-    return `+${digits.slice(0, 3)} (${digits.slice(3, 5)}) ${digits.slice(5, 8)}-${digits.slice(8)}`;
+  // Format as +7 (XXX) XXX-XX-XX for Russian numbers
+  if (digits.length <= 1) return `+${digits}`;
+  if (digits.length <= 4) return `+${digits.slice(0, 1)} (${digits.slice(1)}`;
+  if (digits.length <= 7)
+    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4)}`;
+  if (digits.length <= 9)
+    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
 
-  return `+${digits.slice(0, 3)} (${digits.slice(3, 5)}) ${digits.slice(5, 8)}-${digits.slice(8, 10)}-${digits.slice(10, 12)}`;
+  return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
 }
 
 export default function PhoneInput({
