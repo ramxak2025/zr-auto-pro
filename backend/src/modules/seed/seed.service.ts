@@ -47,7 +47,13 @@ export class SeedService implements OnModuleInit {
     const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
     const fullName = process.env.SUPERADMIN_FULLNAME || 'Super Admin';
 
+    this.logger.log(`Seeding SuperAdmin: username="${username}", phone="${phone}", password length=${password.length}`);
+
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Verify hash immediately after creation
+    const hashVerify = await bcrypt.compare(password, hashedPassword);
+    this.logger.log(`Password hash verification: ${hashVerify ? 'OK' : 'FAILED!'}`);
 
     // Search including soft-deleted records to avoid unique constraint conflicts
     const existing = await this.userRepo
@@ -59,6 +65,7 @@ export class SeedService implements OnModuleInit {
       .getOne();
 
     if (existing) {
+      this.logger.log(`Found existing user id=${existing.id}, username="${existing.username}", phone="${existing.phone}", role=${existing.role}, deletedAt=${existing.deletedAt}`);
       // Restore if soft-deleted, sync all credentials
       existing.deletedAt = null;
       existing.password = hashedPassword;
@@ -69,7 +76,13 @@ export class SeedService implements OnModuleInit {
       existing.permissions = DEFAULT_PERMISSIONS[UserRole.SUPERADMIN];
       existing.isActive = true;
       await this.userRepo.save(existing);
-      this.logger.log(`SuperAdmin synced: "${username}" (phone: ${phone})`);
+
+      // Verify password was saved correctly by re-reading from DB
+      const saved = await this.userRepo.findOne({ where: { id: existing.id } });
+      if (saved) {
+        const dbVerify = await bcrypt.compare(password, saved.password);
+        this.logger.log(`SuperAdmin synced id=${saved.id}. DB password verify: ${dbVerify ? 'OK' : 'FAILED!'} hash=${saved.password.substring(0, 20)}...`);
+      }
       return;
     }
 
@@ -83,7 +96,14 @@ export class SeedService implements OnModuleInit {
       isActive: true,
     } as Partial<User>);
 
-    await this.userRepo.save(superadmin);
+    const created = await this.userRepo.save(superadmin);
+
+    // Verify password was saved correctly
+    const saved = await this.userRepo.findOne({ where: { id: created.id } });
+    if (saved) {
+      const dbVerify = await bcrypt.compare(password, saved.password);
+      this.logger.log(`SuperAdmin created id=${saved.id}. DB password verify: ${dbVerify ? 'OK' : 'FAILED!'}`);
+    }
     this.logger.log(`SuperAdmin created: "${username}" (phone: ${phone})`);
   }
 }

@@ -30,6 +30,7 @@ export class AuthController {
     try {
       // Normalize phone: trim whitespace
       const phone = loginDto.phone.trim();
+      this.logger.log(`Login attempt: phone="${phone}", password length=${loginDto.password?.length}`);
 
       const user = await this.authService.validateUser(
         phone,

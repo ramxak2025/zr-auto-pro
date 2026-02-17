@@ -49,12 +49,14 @@ export class AuthService {
       return null;
     }
 
-    this.logger.debug(`Login: found user id=${user.id} username="${user.username}" phone="${user.phone}"`);
+    this.logger.log(`Login: found user id=${user.id} username="${user.username}" phone="${user.phone}" role=${user.role} isActive=${user.isActive}`);
+    this.logger.log(`Login: stored hash prefix="${user.password?.substring(0, 20)}..." input password length=${password.length}`);
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
+    this.logger.log(`Login: bcrypt.compare result=${isPasswordValid}`);
 
     if (!isPasswordValid) {
-      this.logger.warn(`Login: wrong password for user "${user.username}" (id: ${user.id})`);
+      this.logger.warn(`Login: wrong password for user "${user.username}" (id: ${user.id}). Hash: ${user.password?.substring(0, 29)}`);
       return null;
     }
 
