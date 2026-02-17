@@ -39,7 +39,7 @@ export class TenantsSeedService implements OnModuleInit {
 
     if (existingSuperAdmin) {
       // Restore if soft-deleted, sync all credentials
-      existingSuperAdmin.deletedAt = null;
+      existingSuperAdmin.deletedAt = null as unknown as Date;
       existingSuperAdmin.password = hashedPassword;
       existingSuperAdmin.username = username;
       existingSuperAdmin.phone = phone;
