@@ -19,4 +19,4 @@ docker compose up -d
 echo "=== Deployment complete ==="
 echo "Frontend: http://localhost:8080"
 echo "Backend:  http://localhost:3000"
-echo "Default login: admin / admin123"
+echo "Default login: +998 (00) 000-00-00 / admin123"

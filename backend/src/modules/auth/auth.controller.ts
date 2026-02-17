@@ -16,10 +16,10 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
-  async login(@Body() body: { username: string; password: string }) {
-    const user = await this.authService.validateUser(body.username, body.password);
+  async login(@Body() body: { phone: string; password: string }) {
+    const user = await this.authService.validateUser(body.phone, body.password);
     if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Неверный номер телефона или пароль');
     }
     return this.authService.login(user);
   }
@@ -28,10 +28,9 @@ export class AuthController {
   async register(
     @Body()
     body: {
-      username: string;
+      phone: string;
       password: string;
       fullName: string;
-      phone?: string;
       tenantId?: string;
     },
   ) {

@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { User } from './user.entity';
 
 @Injectable()
@@ -60,7 +61,17 @@ export class UsersService {
     });
   }
 
+  async findByPhone(phone: string): Promise<User | null> {
+    return this.usersRepo.findOne({
+      where: { phone },
+    });
+  }
+
   async create(dto: Partial<User>): Promise<User> {
+    if (dto.password && !dto.password.startsWith('$2b$')) {
+      const salt = await bcrypt.genSalt(10);
+      dto.password = await bcrypt.hash(dto.password, salt);
+    }
     const user = this.usersRepo.create(dto);
     const saved = await this.usersRepo.save(user);
     const { password, ...result } = saved;
@@ -71,6 +82,12 @@ export class UsersService {
     const user = await this.usersRepo.findOne({ where: { id } });
     if (!user) {
       throw new NotFoundException(`User with id "${id}" not found`);
+    }
+    if (dto.password && dto.password.trim()) {
+      const salt = await bcrypt.genSalt(10);
+      dto.password = await bcrypt.hash(dto.password, salt);
+    } else {
+      delete dto.password;
     }
     Object.assign(user, dto);
     const saved = await this.usersRepo.save(user);

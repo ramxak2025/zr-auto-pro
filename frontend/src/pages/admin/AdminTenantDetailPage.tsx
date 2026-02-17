@@ -69,9 +69,8 @@ interface TenantFormData {
 // ----------- User Form -----------
 interface UserFormData {
   fullName: string;
-  username: string;
-  password: string;
   phone: string;
+  password: string;
   role: UserRole;
   salaryPercent: number;
   isActive: boolean;
@@ -79,9 +78,8 @@ interface UserFormData {
 
 const emptyUserForm: UserFormData = {
   fullName: '',
-  username: '',
-  password: '',
   phone: '',
+  password: '',
   role: UserRole.MASTER,
   salaryPercent: 0,
   isActive: true,
@@ -218,9 +216,8 @@ export default function AdminTenantDetailPage() {
     setEditingUser(user);
     setUserForm({
       fullName: user.fullName,
-      username: user.username,
-      password: '',
       phone: user.phone || '',
+      password: '',
       role: user.role,
       salaryPercent: user.salaryPercent,
       isActive: user.isActive,
@@ -236,15 +233,14 @@ export default function AdminTenantDetailPage() {
 
   const handleUserSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userForm.fullName.trim() || !userForm.username.trim()) {
-      toast.error('Заполните обязательные поля');
+    if (!userForm.fullName.trim() || !userForm.phone.trim()) {
+      toast.error('Заполните обязательные поля (ФИО и телефон)');
       return;
     }
 
     const payload: any = {
       fullName: userForm.fullName,
-      username: userForm.username,
-      phone: userForm.phone || undefined,
+      phone: userForm.phone,
       role: userForm.role,
       salaryPercent: Number(userForm.salaryPercent),
       isActive: userForm.isActive,
@@ -397,7 +393,7 @@ export default function AdminTenantDetailPage() {
             <thead>
               <tr>
                 <th>Имя</th>
-                <th>Логин</th>
+                <th>Телефон</th>
                 <th>Роль</th>
                 <th>% ставка</th>
                 <th>Статус</th>
@@ -408,7 +404,7 @@ export default function AdminTenantDetailPage() {
               {tenantUsers.map((user) => (
                 <tr key={user.id}>
                   <td className="font-medium text-gray-900">{user.fullName}</td>
-                  <td>{user.username}</td>
+                  <td>{user.phone}</td>
                   <td>
                     <span className={roleBadgeMap[user.role] || 'badge-gray'}>
                       {roleLabels[user.role] || user.role}
@@ -599,13 +595,13 @@ export default function AdminTenantDetailPage() {
             />
           </div>
           <div>
-            <label className="label">Логин</label>
+            <label className="label">Телефон (логин для входа)</label>
             <input
-              type="text"
+              type="tel"
               className="input"
-              value={userForm.username}
-              onChange={(e) => setUserForm({ ...userForm, username: e.target.value })}
-              placeholder="ivanov"
+              value={userForm.phone}
+              onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })}
+              placeholder="+998 (90) 123-45-67"
               required
             />
           </div>
@@ -633,16 +629,6 @@ export default function AdminTenantDetailPage() {
               />
             </div>
           )}
-          <div>
-            <label className="label">Телефон</label>
-            <input
-              type="tel"
-              className="input"
-              value={userForm.phone}
-              onChange={(e) => setUserForm({ ...userForm, phone: e.target.value })}
-              placeholder="+998 (90) 123-45-67"
-            />
-          </div>
           <div>
             <label className="label">Роль</label>
             <select

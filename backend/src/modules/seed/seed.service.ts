@@ -13,7 +13,8 @@ export class SeedService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const existing = await this.usersService.findByUsername('admin');
+    const adminPhone = '+998 (00) 000-00-00';
+    const existing = await this.usersService.findByPhone(adminPhone);
 
     if (existing) {
       this.logger.log('Seed: superadmin already exists');
@@ -22,14 +23,14 @@ export class SeedService implements OnModuleInit {
 
     const tenant = await this.tenantsService.create({
       name: 'Автосервис',
-      phone: '+7 000 000 0000',
+      phone: '+998 (00) 000-00-00',
     });
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash('admin123', salt);
 
     await this.usersService.create({
-      username: 'admin',
+      phone: adminPhone,
       password: hashedPassword,
       fullName: 'Администратор',
       role: 'superadmin',
@@ -51,6 +52,6 @@ export class SeedService implements OnModuleInit {
       isActive: true,
     });
 
-    this.logger.log('Seed: superadmin created');
+    this.logger.log('Seed: superadmin created with phone ' + adminPhone);
   }
 }

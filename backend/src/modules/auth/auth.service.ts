@@ -12,8 +12,8 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async validateUser(username: string, password: string): Promise<Omit<User, 'password'> | null> {
-    const user = await this.usersService.findByUsername(username);
+  async validateUser(phone: string, password: string): Promise<Omit<User, 'password'> | null> {
+    const user = await this.usersService.findByPhone(phone);
     if (!user) {
       return null;
     }
@@ -41,15 +41,14 @@ export class AuthService {
   }
 
   async register(dto: {
-    username: string;
+    phone: string;
     password: string;
     fullName: string;
-    phone?: string;
     tenantId?: string;
   }): Promise<{ token: string; user: Omit<User, 'password'> }> {
-    const existing = await this.usersService.findByUsername(dto.username);
+    const existing = await this.usersService.findByPhone(dto.phone);
     if (existing) {
-      throw new ConflictException('Username already exists');
+      throw new ConflictException('Пользователь с таким номером уже существует');
     }
 
     const salt = await bcrypt.genSalt(10);

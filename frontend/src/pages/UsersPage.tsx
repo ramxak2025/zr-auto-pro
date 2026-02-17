@@ -10,6 +10,7 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import PhoneInput from '../components/PhoneInput';
 
 const roleBadgeMap: Record<string, string> = {
   director: 'badge-blue',
@@ -40,9 +41,8 @@ const permissionLabels: Record<keyof UserPermissions, string> = {
 
 interface UserFormData {
   fullName: string;
-  username: string;
-  password: string;
   phone: string;
+  password: string;
   role: UserRole;
   salaryPercent: number;
   isActive: boolean;
@@ -66,9 +66,8 @@ const defaultPermissions: UserPermissions = {
 
 const emptyForm: UserFormData = {
   fullName: '',
-  username: '',
-  password: '',
   phone: '',
+  password: '',
   role: UserRole.MASTER,
   salaryPercent: 0,
   isActive: true,
@@ -147,9 +146,8 @@ export default function UsersPage() {
     setEditingUser(user);
     setForm({
       fullName: user.fullName,
-      username: user.username,
-      password: '',
       phone: user.phone || '',
+      password: '',
       role: user.role,
       salaryPercent: user.salaryPercent,
       isActive: user.isActive,
@@ -166,8 +164,12 @@ export default function UsersPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.fullName.trim() || !form.username.trim()) {
-      toast.error('Заполните обязательные поля');
+    if (!form.fullName.trim()) {
+      toast.error('Введите ФИО');
+      return;
+    }
+    if (!form.phone.trim()) {
+      toast.error('Введите номер телефона');
       return;
     }
     if (!editingUser && !form.password) {
@@ -177,8 +179,7 @@ export default function UsersPage() {
 
     const payload: any = {
       fullName: form.fullName,
-      username: form.username,
-      phone: form.phone || undefined,
+      phone: form.phone,
       role: form.role,
       salaryPercent: Number(form.salaryPercent),
       isActive: form.isActive,
@@ -235,7 +236,7 @@ export default function UsersPage() {
             <thead>
               <tr>
                 <th>Имя</th>
-                <th>Логин</th>
+                <th>Телефон</th>
                 <th>Роль</th>
                 <th>% ставка</th>
                 <th>Статус</th>
@@ -246,7 +247,7 @@ export default function UsersPage() {
               {users.map((user) => (
                 <tr key={user.id}>
                   <td className="font-medium text-gray-900">{user.fullName}</td>
-                  <td>{user.username}</td>
+                  <td>{user.phone}</td>
                   <td>
                     <span className={roleBadgeMap[user.role] || 'badge-gray'}>
                       {roleLabels[user.role] || user.role}
@@ -306,16 +307,13 @@ export default function UsersPage() {
             />
           </div>
 
-          {/* Username */}
+          {/* Phone (login) */}
           <div>
-            <label className="label">Логин</label>
-            <input
-              type="text"
-              className="input"
-              value={form.username}
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
-              placeholder="ivanov"
-              required
+            <label className="label">Телефон (логин для входа)</label>
+            <PhoneInput
+              value={form.phone}
+              onChange={(value) => setForm({ ...form, phone: value })}
+              placeholder="+998 (XX) XXX-XX-XX"
             />
           </div>
 
@@ -344,18 +342,6 @@ export default function UsersPage() {
               />
             </div>
           )}
-
-          {/* Phone */}
-          <div>
-            <label className="label">Телефон</label>
-            <input
-              type="tel"
-              className="input"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              placeholder="+998 (90) 123-45-67"
-            />
-          </div>
 
           {/* Role */}
           <div>

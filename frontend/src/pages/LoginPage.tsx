@@ -1,34 +1,59 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
-import { LogIn, Loader2 } from 'lucide-react';
+import { LogIn, Loader2, Phone } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 
-interface LoginFormData {
-  username: string;
-  password: string;
+function formatPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 0) return '';
+  if (digits.length <= 3) return `+${digits}`;
+  if (digits.length <= 5) return `+${digits.slice(0, 3)} (${digits.slice(3)}`;
+  if (digits.length <= 8)
+    return `+${digits.slice(0, 3)} (${digits.slice(3, 5)}) ${digits.slice(5)}`;
+  if (digits.length <= 10)
+    return `+${digits.slice(0, 3)} (${digits.slice(3, 5)}) ${digits.slice(5, 8)}-${digits.slice(8)}`;
+  return `+${digits.slice(0, 3)} (${digits.slice(3, 5)}) ${digits.slice(5, 8)}-${digits.slice(8, 10)}-${digits.slice(10, 12)}`;
 }
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const passwordRef = useRef<HTMLInputElement>(null);
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<LoginFormData>();
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const digits = raw.replace(/\D/g, '');
+    setPhone(formatPhone(digits));
+    setPhoneError('');
+  };
 
-  const onSubmit = async (data: LoginFormData) => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPhoneError('');
+    setPasswordError('');
+
+    if (!phone.trim()) {
+      setPhoneError('Введите номер телефона');
+      return;
+    }
+    if (!password.trim()) {
+      setPasswordError('Введите пароль');
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await login(data.username, data.password);
+      await login(phone, password);
       navigate('/', { replace: true });
     } catch (error: any) {
       const message =
-        error?.response?.data?.message || 'Ошибка входа. Проверьте логин и пароль.';
+        error?.response?.data?.message || 'Неверный номер телефона или пароль';
       toast.error(message);
     } finally {
       setSubmitting(false);
@@ -57,26 +82,29 @@ export default function LoginPage() {
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-            {/* Username */}
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {/* Phone */}
             <div>
-              <label htmlFor="username" className="label">
-                Имя пользователя
+              <label htmlFor="phone" className="label">
+                Номер телефона
               </label>
-              <input
-                id="username"
-                type="text"
-                autoComplete="username"
-                placeholder="Введите логин"
-                className={`input ${errors.username ? 'input-error' : ''}`}
-                {...register('username', {
-                  required: 'Введите имя пользователя',
-                })}
-              />
-              {errors.username && (
-                <p className="mt-1 text-sm text-red-600">
-                  {errors.username.message}
-                </p>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Phone className="h-5 w-5 text-gray-400" />
+                </div>
+                <input
+                  id="phone"
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
+                  placeholder="+998 (XX) XXX-XX-XX"
+                  value={phone}
+                  onChange={handlePhoneChange}
+                  className={`input pl-10 ${phoneError ? 'input-error' : ''}`}
+                />
+              </div>
+              {phoneError && (
+                <p className="mt-1 text-sm text-red-600">{phoneError}</p>
               )}
             </div>
 
@@ -87,18 +115,19 @@ export default function LoginPage() {
               </label>
               <input
                 id="password"
+                ref={passwordRef}
                 type="password"
                 autoComplete="current-password"
                 placeholder="Введите пароль"
-                className={`input ${errors.password ? 'input-error' : ''}`}
-                {...register('password', {
-                  required: 'Введите пароль',
-                })}
+                value={password}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setPasswordError('');
+                }}
+                className={`input ${passwordError ? 'input-error' : ''}`}
               />
-              {errors.password && (
-                <p className="mt-1 text-sm text-red-600">
-                  {errors.password.message}
-                </p>
+              {passwordError && (
+                <p className="mt-1 text-sm text-red-600">{passwordError}</p>
               )}
             </div>
 
