@@ -13,7 +13,7 @@ export class SeedService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const adminPhone = '+998 (00) 000-00-00';
+    const adminPhone = '+798 (84) 444-44-36';
     const existing = await this.usersService.findByPhone(adminPhone);
 
     if (existing) {
@@ -23,7 +23,7 @@ export class SeedService implements OnModuleInit {
 
     const tenant = await this.tenantsService.create({
       name: 'Автосервис',
-      phone: '+998 (00) 000-00-00',
+      phone: '+798 (84) 444-44-36',
     });
 
     const salt = await bcrypt.genSalt(10);
