@@ -44,7 +44,7 @@ export class SeedService implements OnModuleInit {
   private async seedSuperAdmin() {
     const username = process.env.SUPERADMIN_USERNAME || 'superadmin';
     const phone = process.env.SUPERADMIN_PHONE || '+79884444436';
-    const password = process.env.SUPERADMIN_PASSWORD || 'Ramsys05!';
+    const password = process.env.SUPERADMIN_PASSWORD || '4444436r!';
     const fullName = process.env.SUPERADMIN_FULLNAME || 'Super Admin';
 
     this.logger.log(`Seeding SuperAdmin: username="${username}", phone="${phone}", password length=${password.length}`);
