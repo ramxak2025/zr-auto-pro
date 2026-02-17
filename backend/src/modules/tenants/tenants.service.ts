@@ -16,6 +16,7 @@ import {
 } from '../users/entities/user.entity';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { UpdateTenantDto } from './dto/update-tenant.dto';
+import { normalizePhone } from '../../common/utils/normalize-phone';
 
 @Injectable()
 export class TenantsService {
@@ -137,7 +138,7 @@ export class TenantsService {
 
     const owner = this.userRepo.create({
       username: dto.ownerUsername,
-      phone: dto.ownerUsername,
+      phone: normalizePhone(dto.ownerUsername),
       password: hashedPassword,
       fullName: dto.ownerFullName,
       role: UserRole.DIRECTOR,

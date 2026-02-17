@@ -16,9 +16,9 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserPermissions, UserRole } from './entities/user.entity';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { Permissions } from '../../common/decorators/permissions.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { TenantGuard } from '../auth/guards/tenant.guard';
 import { TenantId } from '../auth/decorators/tenant-id.decorator';
 
@@ -29,7 +29,7 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get()
-  @Permissions('user_management')
+  @RequirePermissions('user_management')
   findAll(
     @TenantId() tenantId: string,
     @Query('page') page?: number,
@@ -51,13 +51,13 @@ export class UsersController {
   }
 
   @Post()
-  @Permissions('user_management')
+  @RequirePermissions('user_management')
   create(@TenantId() tenantId: string, @Body() dto: CreateUserDto) {
     return this.usersService.create(tenantId, dto);
   }
 
   @Patch(':id')
-  @Permissions('user_management')
+  @RequirePermissions('user_management')
   update(
     @TenantId() tenantId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -67,7 +67,7 @@ export class UsersController {
   }
 
   @Patch(':id/permissions')
-  @Permissions('user_management')
+  @RequirePermissions('user_management')
   updatePermissions(
     @TenantId() tenantId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -77,7 +77,7 @@ export class UsersController {
   }
 
   @Delete(':id')
-  @Permissions('user_management')
+  @RequirePermissions('user_management')
   remove(@TenantId() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
     return this.usersService.remove(tenantId, id);
   }
