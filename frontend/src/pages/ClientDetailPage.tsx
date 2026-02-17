@@ -445,7 +445,7 @@ export default function ClientDetailPage() {
             <PhoneInput
               value={phone}
               onChange={setPhone}
-              placeholder="+998 (__) ___-__-__"
+              placeholder="+7 (___) ___-__-__"
               required
             />
           </div>

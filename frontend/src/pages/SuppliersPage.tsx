@@ -245,7 +245,7 @@ export default function SuppliersPage() {
               <PhoneInput
                 value={form.phone}
                 onChange={(val) => setForm({ ...form, phone: val })}
-                placeholder="+998 (XX) XXX-XX-XX"
+                placeholder="+7 (XXX) XXX-XX-XX"
               />
             </div>
           </div>

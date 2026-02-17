@@ -62,9 +62,21 @@ export class UsersService {
   }
 
   async findByPhone(phone: string): Promise<User | null> {
-    return this.usersRepo.findOne({
+    // First try exact match
+    const exact = await this.usersRepo.findOne({
       where: { phone },
     });
+    if (exact) return exact;
+
+    // Fallback: normalize to digits and search
+    const digits = phone.replace(/\D/g, '');
+    if (!digits) return null;
+
+    const users = await this.usersRepo
+      .createQueryBuilder('user')
+      .where("regexp_replace(user.phone, '\\D', '', 'g') = :digits", { digits })
+      .getOne();
+    return users;
   }
 
   async create(dto: Partial<User>): Promise<User> {

@@ -270,7 +270,7 @@ export default function AdminTenantsPage() {
               className="input"
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              placeholder="+998 (90) 123-45-67"
+              placeholder="+7 (XXX) XXX-XX-XX"
             />
           </div>
 

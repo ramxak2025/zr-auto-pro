@@ -313,7 +313,7 @@ export default function UsersPage() {
             <PhoneInput
               value={form.phone}
               onChange={(value) => setForm({ ...form, phone: value })}
-              placeholder="+998 (XX) XXX-XX-XX"
+              placeholder="+7 (XXX) XXX-XX-XX"
             />
           </div>
 

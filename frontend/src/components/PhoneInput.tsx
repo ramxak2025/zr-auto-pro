@@ -29,7 +29,11 @@ export default function PhoneInput({
 }: PhoneInputProps) {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
-    const digits = raw.replace(/\D/g, '');
+    let digits = raw.replace(/\D/g, '');
+    // Normalize: replace leading 8 with 7 for Russian numbers
+    if (digits.length > 0 && digits[0] === '8') {
+      digits = '7' + digits.slice(1);
+    }
     onChange(formatPhone(digits));
   };
 
