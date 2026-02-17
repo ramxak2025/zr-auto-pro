@@ -1,5 +1,4 @@
-import { ReactNode } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate, Link, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
   ClipboardList,
@@ -52,7 +51,7 @@ const mobileTabs: MobileTab[] = [
   { label: 'More', path: '/more', icon: MoreHorizontal },
 ];
 
-export default function Layout({ children }: { children: ReactNode }) {
+export default function Layout() {
   const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -128,7 +127,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       {/* Main Content */}
       <div className="flex flex-1 flex-col min-w-0">
         <main className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6">
-          {children}
+          <Outlet />
         </main>
 
         {/* Mobile Bottom Tab Bar */}

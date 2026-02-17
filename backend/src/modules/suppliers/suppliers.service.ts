@@ -90,7 +90,7 @@ export class SuppliersService {
   }
 
   async createDelivery(dto: Partial<Delivery> & { items: Partial<DeliveryItem>[] }): Promise<Delivery> {
-    const supplier = await this.findById(dto.supplierId);
+    const supplier = await this.findById(dto.supplierId!);
 
     // Calculate totals for each item and overall total
     let totalAmount = 0;
@@ -164,14 +164,14 @@ export class SuppliersService {
   }
 
   async createPayment(dto: Partial<SupplierPayment>): Promise<SupplierPayment> {
-    const supplier = await this.findById(dto.supplierId);
+    const supplier = await this.findById(dto.supplierId!);
 
     const payment = this.paymentsRepo.create(dto);
     const savedPayment = await this.paymentsRepo.save(payment);
 
     // Update supplier aggregates
-    supplier.totalPaid += dto.amount;
-    supplier.currentDebt -= dto.amount;
+    supplier.totalPaid += dto.amount!;
+    supplier.currentDebt -= dto.amount!;
     await this.suppliersRepo.save(supplier);
 
     return savedPayment;

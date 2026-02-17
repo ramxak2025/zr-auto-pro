@@ -112,6 +112,21 @@
   .badge-gray {
     @apply badge bg-gray-100 text-gray-600;
   }
+  .badge-default {
+    @apply badge bg-gray-100 text-gray-700;
+  }
+  .badge-success {
+    @apply badge bg-green-50 text-green-700;
+  }
+  .badge-info {
+    @apply badge bg-blue-50 text-blue-700;
+  }
+  .badge-warning {
+    @apply badge bg-yellow-50 text-yellow-700;
+  }
+  .badge-danger {
+    @apply badge bg-red-50 text-red-700;
+  }
   .table-container {
     @apply overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm;
   }

@@ -29,7 +29,7 @@ export class TenantsService {
   }
 
   async create(dto: Partial<Tenant>): Promise<Tenant> {
-    const slug = this.generateSlug(dto.name);
+    const slug = this.generateSlug(dto.name!);
     const tenant = this.tenantRepo.create({ ...dto, slug });
     return this.tenantRepo.save(tenant);
   }

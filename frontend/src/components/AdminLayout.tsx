@@ -1,5 +1,4 @@
-import { ReactNode } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate, Link, Outlet } from 'react-router-dom';
 import { LayoutDashboard, Building2, ArrowLeft, LogOut } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -8,7 +7,7 @@ const navItems = [
   { label: 'Tenants', path: '/admin/tenants', icon: Building2 },
 ];
 
-export default function AdminLayout({ children }: { children: ReactNode }) {
+export default function AdminLayout() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -130,7 +129,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         </nav>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6">
-          {children}
+          <Outlet />
         </main>
       </div>
     </div>

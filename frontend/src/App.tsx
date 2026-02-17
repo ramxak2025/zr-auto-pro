@@ -53,7 +53,8 @@ export default function App() {
         <>
           {/* Main app routes inside Layout */}
           <Route element={<Layout />}>
-            <Route path="/" element={<DashboardPage />} />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/checks" element={<ChecksPage />} />
             <Route path="/checks/new" element={<CheckCreatePage />} />
             <Route path="/checks/:id" element={<CheckDetailPage />} />
@@ -76,7 +77,8 @@ export default function App() {
           {/* Admin routes inside AdminLayout (superadmin only) */}
           {user.role === UserRole.SUPERADMIN && (
             <Route element={<AdminLayout />}>
-              <Route path="/admin" element={<AdminDashboardPage />} />
+              <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+              <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
               <Route path="/admin/tenants" element={<AdminTenantsPage />} />
               <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
             </Route>
