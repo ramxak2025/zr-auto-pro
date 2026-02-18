@@ -1,0 +1,356 @@
+package handlers
+
+import (
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"zr-auto-pro/internal/database"
+	"zr-auto-pro/internal/models"
+)
+
+func GetChecks(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	search := c.Query("search")
+	masterID := c.Query("masterId")
+	clientID := c.Query("clientId")
+	dateFrom := c.Query("dateFrom")
+	dateTo := c.Query("dateTo")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	if page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+
+	baseQ := " FROM checks ch LEFT JOIN users m ON m.id=ch.master_id LEFT JOIN clients cl ON cl.id=ch.client_id LEFT JOIN cars ca ON ca.id=ch.car_id WHERE ch.tenant_id=$1"
+	args := []interface{}{tenantID}
+	cArgs := []interface{}{tenantID}
+	idx := 2
+
+	if search != "" {
+		baseQ += " AND (cl.full_name ILIKE $" + strconv.Itoa(idx) + " OR cl.phone ILIKE $" + strconv.Itoa(idx) + " OR ca.plate_number ILIKE $" + strconv.Itoa(idx) + ")"
+		args = append(args, "%"+search+"%")
+		cArgs = append(cArgs, "%"+search+"%")
+		idx++
+	}
+	if masterID != "" {
+		baseQ += " AND ch.master_id=$" + strconv.Itoa(idx)
+		args = append(args, masterID)
+		cArgs = append(cArgs, masterID)
+		idx++
+	}
+	if clientID != "" {
+		baseQ += " AND ch.client_id=$" + strconv.Itoa(idx)
+		args = append(args, clientID)
+		cArgs = append(cArgs, clientID)
+		idx++
+	}
+	if dateFrom != "" {
+		baseQ += " AND ch.date >= $" + strconv.Itoa(idx)
+		args = append(args, dateFrom)
+		cArgs = append(cArgs, dateFrom)
+		idx++
+	}
+	if dateTo != "" {
+		baseQ += " AND ch.date <= $" + strconv.Itoa(idx) + "::date + interval '1 day'"
+		args = append(args, dateTo)
+		cArgs = append(cArgs, dateTo)
+		idx++
+	}
+
+	var total int
+	database.DB.QueryRow("SELECT COUNT(*) "+baseQ, cArgs...).Scan(&total)
+
+	query := `SELECT ch.id, ch.number, ch.date, ch.master_id, COALESCE(m.full_name,''), ch.client_id, COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
+		ch.car_id, COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''), ch.payment_method, ch.total_revenue, ch.is_deferred, ch.discount, ch.created_at` + baseQ +
+		" ORDER BY ch.date DESC, ch.number DESC LIMIT $" + strconv.Itoa(idx) + " OFFSET $" + strconv.Itoa(idx+1)
+	args = append(args, limit, offset)
+
+	rows, _ := database.DB.Query(query, args...)
+	checks := []models.Check{}
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var ch models.Check
+			var masterName, clientName, clientPhone, carPlate, carModel string
+			rows.Scan(&ch.ID, &ch.Number, &ch.Date, &ch.MasterID, &masterName, &ch.ClientID, &clientName, &clientPhone,
+				&ch.CarID, &carPlate, &carModel, &ch.PaymentMethod, &ch.TotalRevenue, &ch.IsDeferred, &ch.Discount, &ch.CreatedAt)
+			ch.Master = &models.User{ID: ch.MasterID, FullName: masterName}
+			ch.Client = &models.Client{ID: ch.ClientID, FullName: clientName, Phone: clientPhone}
+			ch.Car = &models.Car{ID: ch.CarID, PlateNumber: carPlate, MakeModel: carModel}
+			ch.Services = []models.CheckServiceLine{}
+			ch.Products = []models.CheckProductLine{}
+			checks = append(checks, ch)
+		}
+	}
+	c.JSON(http.StatusOK, models.PaginatedResponse{Data: checks, Total: total, Page: page, Limit: limit})
+}
+
+func GetCheck(c *gin.Context) {
+	id := c.Param("id")
+	tenantID := c.GetString("tenantID")
+
+	var ch models.Check
+	var masterName, clientName, clientPhone, carPlate, carModel string
+	var comment string
+	var mileage int
+	err := database.DB.QueryRow(`
+		SELECT ch.id, ch.number, ch.date, ch.master_id, COALESCE(m.full_name,''),
+			   ch.client_id, COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
+			   ch.car_id, COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''),
+			   COALESCE(ch.mileage,0), COALESCE(ch.comment,''), ch.discount, ch.is_deferred,
+			   ch.payment_method, ch.service_total, ch.product_total, ch.total_revenue,
+			   ch.product_cost_total, ch.service_salary_total, ch.total_cost, ch.profit, ch.created_at
+		FROM checks ch LEFT JOIN users m ON m.id=ch.master_id
+		LEFT JOIN clients cl ON cl.id=ch.client_id LEFT JOIN cars ca ON ca.id=ch.car_id
+		WHERE ch.id=$1 AND ch.tenant_id=$2
+	`, id, tenantID).Scan(
+		&ch.ID, &ch.Number, &ch.Date, &ch.MasterID, &masterName,
+		&ch.ClientID, &clientName, &clientPhone,
+		&ch.CarID, &carPlate, &carModel,
+		&mileage, &comment, &ch.Discount, &ch.IsDeferred,
+		&ch.PaymentMethod, &ch.ServiceTotal, &ch.ProductTotal, &ch.TotalRevenue,
+		&ch.ProductCostTotal, &ch.ServiceSalaryTotal, &ch.TotalCost, &ch.Profit, &ch.CreatedAt,
+	)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Заказ-наряд не найден"})
+		return
+	}
+	if mileage > 0 {
+		ch.Mileage = &mileage
+	}
+	if comment != "" {
+		ch.Comment = &comment
+	}
+	ch.Master = &models.User{ID: ch.MasterID, FullName: masterName}
+	ch.Client = &models.Client{ID: ch.ClientID, FullName: clientName, Phone: clientPhone}
+	ch.Car = &models.Car{ID: ch.CarID, PlateNumber: carPlate, MakeModel: carModel}
+
+	// Load service lines
+	ch.Services = []models.CheckServiceLine{}
+	sRows, _ := database.DB.Query(`
+		SELECT csl.id, csl.service_id, csl.master_id, COALESCE(m.full_name,''), csl.name, csl.price, csl.quantity, csl.total
+		FROM check_service_lines csl LEFT JOIN users m ON m.id=csl.master_id WHERE csl.check_id=$1
+	`, id)
+	if sRows != nil {
+		for sRows.Next() {
+			var sl models.CheckServiceLine
+			var sid, mid, mname string
+			sRows.Scan(&sl.ID, &sid, &mid, &mname, &sl.Name, &sl.Price, &sl.Quantity, &sl.Total)
+			if sid != "" {
+				sl.ServiceID = &sid
+			}
+			if mid != "" {
+				sl.MasterID = &mid
+				sl.Master = &models.User{ID: mid, FullName: mname}
+			}
+			ch.Services = append(ch.Services, sl)
+		}
+		sRows.Close()
+	}
+
+	// Load product lines
+	ch.Products = []models.CheckProductLine{}
+	pRows, _ := database.DB.Query(`
+		SELECT id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost
+		FROM check_product_lines WHERE check_id=$1
+	`, id)
+	if pRows != nil {
+		for pRows.Next() {
+			var pl models.CheckProductLine
+			var pid string
+			pRows.Scan(&pl.ID, &pid, &pl.Name, &pl.SellPrice, &pl.CostPrice, &pl.Quantity, &pl.TotalSell, &pl.TotalCost)
+			if pid != "" {
+				pl.ProductID = &pid
+			}
+			ch.Products = append(ch.Products, pl)
+		}
+		pRows.Close()
+	}
+
+	c.JSON(http.StatusOK, ch)
+}
+
+func CreateCheck(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	var req models.CreateCheckRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
+		return
+	}
+
+	// Calculate totals
+	var serviceTotal, productTotal, productCostTotal, serviceSalaryTotal float64
+
+	for _, s := range req.Services {
+		total := s.Price * float64(s.Quantity)
+		serviceTotal += total
+	}
+	for _, p := range req.Products {
+		productTotal += p.SellPrice * float64(p.Quantity)
+		productCostTotal += p.CostPrice * float64(p.Quantity)
+	}
+
+	// Get master salary percent
+	var salaryPercent float64
+	database.DB.QueryRow("SELECT COALESCE(salary_percent,0) FROM users WHERE id=$1", req.MasterID).Scan(&salaryPercent)
+	serviceSalaryTotal = serviceTotal * salaryPercent / 100
+
+	totalRevenue := serviceTotal + productTotal - req.Discount
+	totalCost := productCostTotal + serviceSalaryTotal
+	profit := totalRevenue - totalCost
+
+	date := time.Now()
+	if req.Date != "" {
+		if t, err := time.Parse(time.RFC3339, req.Date); err == nil {
+			date = t
+		} else if t, err := time.Parse("2006-01-02", req.Date); err == nil {
+			date = t
+		}
+	}
+
+	tx, _ := database.DB.Begin()
+
+	var checkID string
+	var checkNumber int
+	err := tx.QueryRow(`
+		INSERT INTO checks (date, master_id, client_id, car_id, mileage, comment, discount, is_deferred,
+			payment_method, service_total, product_total, total_revenue, product_cost_total,
+			service_salary_total, total_cost, profit, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		RETURNING id, number
+	`, date, req.MasterID, req.ClientID, req.CarID, req.Mileage, req.Comment, req.Discount,
+		req.IsDeferred, req.PaymentMethod, serviceTotal, productTotal, totalRevenue,
+		productCostTotal, serviceSalaryTotal, totalCost, profit, tenantID).Scan(&checkID, &checkNumber)
+	if err != nil {
+		tx.Rollback()
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Ошибка создания: " + err.Error()})
+		return
+	}
+
+	for _, s := range req.Services {
+		total := s.Price * float64(s.Quantity)
+		mid := req.MasterID
+		if s.MasterID != nil {
+			mid = *s.MasterID
+		}
+		tx.Exec(`
+			INSERT INTO check_service_lines (id, check_id, service_id, master_id, name, price, quantity, total)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		`, uuid.New().String(), checkID, s.ServiceID, mid, s.Name, s.Price, s.Quantity, total)
+	}
+
+	for _, p := range req.Products {
+		totalSell := p.SellPrice * float64(p.Quantity)
+		totalCost := p.CostPrice * float64(p.Quantity)
+		tx.Exec(`
+			INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		`, uuid.New().String(), checkID, p.ProductID, p.Name, p.SellPrice, p.CostPrice, p.Quantity, totalSell, totalCost)
+
+		// Decrease product stock
+		if p.ProductID != nil {
+			tx.Exec("UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id=$2", p.Quantity, *p.ProductID)
+		}
+	}
+
+	tx.Commit()
+
+	// Return the created check
+	c.Set("tenantID", tenantID) // ensure it's set for GetCheck
+	c.Params = gin.Params{{Key: "id", Value: checkID}}
+	GetCheck(c)
+}
+
+func UpdateCheck(c *gin.Context) {
+	id := c.Param("id")
+	tenantID := c.GetString("tenantID")
+	var body map[string]interface{}
+	c.ShouldBindJSON(&body)
+
+	// Simple field updates
+	if pm, ok := body["paymentMethod"].(string); ok {
+		database.DB.Exec("UPDATE checks SET payment_method=$1 WHERE id=$2 AND tenant_id=$3", pm, id, tenantID)
+	}
+	if d, ok := body["isDeferred"].(bool); ok {
+		database.DB.Exec("UPDATE checks SET is_deferred=$1 WHERE id=$2 AND tenant_id=$3", d, id, tenantID)
+	}
+	if comm, ok := body["comment"].(string); ok {
+		database.DB.Exec("UPDATE checks SET comment=$1 WHERE id=$2 AND tenant_id=$3", comm, id, tenantID)
+	}
+
+	c.Params = gin.Params{{Key: "id", Value: id}}
+	GetCheck(c)
+}
+
+func DeleteCheck(c *gin.Context) {
+	id := c.Param("id")
+	tenantID := c.GetString("tenantID")
+	database.DB.Exec("DELETE FROM checks WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	c.JSON(http.StatusOK, gin.H{"message": "Удалён"})
+}
+
+func GetDashboard(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	weekStart := todayStart.AddDate(0, 0, -int(now.Weekday()-1))
+	if now.Weekday() == 0 {
+		weekStart = todayStart.AddDate(0, 0, -6)
+	}
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+	var stats models.DashboardStats
+
+	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0), COUNT(*) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayRevenue, &stats.TodayChecks)
+	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, weekStart).Scan(&stats.WeekRevenue)
+	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthRevenue)
+	database.DB.QueryRow("SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayProfit)
+	database.DB.QueryRow("SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthProfit)
+
+	c.JSON(http.StatusOK, stats)
+}
+
+func GetRanking(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+	ranking := models.EmployeeRanking{Today: []models.EmployeeRankEntry{}, Month: []models.EmployeeRankEntry{}}
+
+	todayRows, _ := database.DB.Query(`
+		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
+		FROM checks ch JOIN users u ON u.id=ch.master_id
+		WHERE ch.tenant_id=$1 AND ch.date >= $2
+		GROUP BY ch.master_id, u.full_name ORDER BY SUM(ch.total_revenue) DESC
+	`, tenantID, todayStart)
+	if todayRows != nil {
+		for todayRows.Next() {
+			var e models.EmployeeRankEntry
+			todayRows.Scan(&e.MasterID, &e.MasterName, &e.Revenue, &e.CheckCount)
+			ranking.Today = append(ranking.Today, e)
+		}
+		todayRows.Close()
+	}
+
+	monthRows, _ := database.DB.Query(`
+		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
+		FROM checks ch JOIN users u ON u.id=ch.master_id
+		WHERE ch.tenant_id=$1 AND ch.date >= $2
+		GROUP BY ch.master_id, u.full_name ORDER BY SUM(ch.total_revenue) DESC
+	`, tenantID, monthStart)
+	if monthRows != nil {
+		for monthRows.Next() {
+			var e models.EmployeeRankEntry
+			monthRows.Scan(&e.MasterID, &e.MasterName, &e.Revenue, &e.CheckCount)
+			ranking.Month = append(ranking.Month, e)
+		}
+		monthRows.Close()
+	}
+
+	c.JSON(http.StatusOK, ranking)
+}

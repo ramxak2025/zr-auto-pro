@@ -169,6 +169,56 @@ export default function LoginPage() {
               )}
             </button>
           </form>
+
+          {/* Demo access buttons */}
+          <div className="mt-8">
+            <div className="relative mb-4">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-200" />
+              </div>
+              <div className="relative flex justify-center text-xs">
+                <span className="bg-white px-3 text-gray-400 uppercase tracking-wider">Демо-доступ</span>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  setSubmitting(true);
+                  try {
+                    await login('+7 (000) 000-00-01', 'demo123');
+                    navigate('/', { replace: true });
+                  } catch {
+                    toast.error('Ошибка демо-входа');
+                  } finally {
+                    setSubmitting(false);
+                  }
+                }}
+                className="flex-1 py-3 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-700 text-sm font-medium rounded-xl border border-emerald-200 transition-all duration-200 disabled:opacity-50"
+              >
+                Владелец
+              </button>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={async () => {
+                  setSubmitting(true);
+                  try {
+                    await login('+7 (000) 000-00-02', 'demo123');
+                    navigate('/', { replace: true });
+                  } catch {
+                    toast.error('Ошибка демо-входа');
+                  } finally {
+                    setSubmitting(false);
+                  }
+                }}
+                className="flex-1 py-3 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 text-blue-700 text-sm font-medium rounded-xl border border-blue-200 transition-all duration-200 disabled:opacity-50"
+              >
+                Мастер
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 

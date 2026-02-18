@@ -1,0 +1,340 @@
+package handlers
+
+import (
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"zr-auto-pro/internal/database"
+	"zr-auto-pro/internal/models"
+)
+
+func GetSuppliers(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	search := c.Query("search")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	if page < 1 {
+		page = 1
+	}
+	offset := (page - 1) * limit
+
+	countQ := "SELECT COUNT(*) FROM suppliers WHERE tenant_id=$1"
+	query := "SELECT id, name, COALESCE(phone,''), COALESCE(contact_person,''), COALESCE(comment,''), total_purchases, total_paid, current_debt, created_at FROM suppliers WHERE tenant_id=$1"
+	args := []interface{}{tenantID}
+	cArgs := []interface{}{tenantID}
+	idx := 2
+
+	if search != "" {
+		f := " AND (name ILIKE $" + strconv.Itoa(idx) + " OR phone ILIKE $" + strconv.Itoa(idx) + ")"
+		query += f
+		countQ += f
+		args = append(args, "%"+search+"%")
+		cArgs = append(cArgs, "%"+search+"%")
+		idx++
+	}
+
+	var total int
+	database.DB.QueryRow(countQ, cArgs...).Scan(&total)
+
+	query += " ORDER BY name LIMIT $" + strconv.Itoa(idx) + " OFFSET $" + strconv.Itoa(idx+1)
+	args = append(args, limit, offset)
+
+	rows, _ := database.DB.Query(query, args...)
+	suppliers := []models.Supplier{}
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var s models.Supplier
+			var phone, cp, comment string
+			rows.Scan(&s.ID, &s.Name, &phone, &cp, &comment, &s.TotalPurchases, &s.TotalPaid, &s.CurrentDebt, &s.CreatedAt)
+			if phone != "" {
+				s.Phone = &phone
+			}
+			if cp != "" {
+				s.ContactPerson = &cp
+			}
+			if comment != "" {
+				s.Comment = &comment
+			}
+			suppliers = append(suppliers, s)
+		}
+	}
+	c.JSON(http.StatusOK, models.PaginatedResponse{Data: suppliers, Total: total, Page: page, Limit: limit})
+}
+
+func GetSupplier(c *gin.Context) {
+	id := c.Param("id")
+	tenantID := c.GetString("tenantID")
+
+	var s models.Supplier
+	var phone, cp, comment string
+	err := database.DB.QueryRow(`
+		SELECT id, name, COALESCE(phone,''), COALESCE(contact_person,''), COALESCE(comment,''),
+			   total_purchases, total_paid, current_debt, created_at
+		FROM suppliers WHERE id=$1 AND tenant_id=$2
+	`, id, tenantID).Scan(&s.ID, &s.Name, &phone, &cp, &comment, &s.TotalPurchases, &s.TotalPaid, &s.CurrentDebt, &s.CreatedAt)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
+		return
+	}
+	if phone != "" {
+		s.Phone = &phone
+	}
+	if cp != "" {
+		s.ContactPerson = &cp
+	}
+	if comment != "" {
+		s.Comment = &comment
+	}
+	c.JSON(http.StatusOK, s)
+}
+
+func CreateSupplier(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	var body struct {
+		Name          string  `json:"name"`
+		Phone         *string `json:"phone"`
+		ContactPerson *string `json:"contactPerson"`
+		Comment       *string `json:"comment"`
+	}
+	c.ShouldBindJSON(&body)
+
+	var s models.Supplier
+	database.DB.QueryRow(`
+		INSERT INTO suppliers (name, phone, contact_person, comment, tenant_id) VALUES ($1,$2,$3,$4,$5)
+		RETURNING id, name, total_purchases, total_paid, current_debt, created_at
+	`, body.Name, body.Phone, body.ContactPerson, body.Comment, tenantID).Scan(
+		&s.ID, &s.Name, &s.TotalPurchases, &s.TotalPaid, &s.CurrentDebt, &s.CreatedAt,
+	)
+	s.Phone = body.Phone
+	s.ContactPerson = body.ContactPerson
+	s.Comment = body.Comment
+	c.JSON(http.StatusCreated, s)
+}
+
+func UpdateSupplier(c *gin.Context) {
+	id := c.Param("id")
+	tenantID := c.GetString("tenantID")
+	var body struct {
+		Name          *string `json:"name"`
+		Phone         *string `json:"phone"`
+		ContactPerson *string `json:"contactPerson"`
+		Comment       *string `json:"comment"`
+	}
+	c.ShouldBindJSON(&body)
+
+	database.DB.Exec(`
+		UPDATE suppliers SET name=COALESCE($1,name), phone=COALESCE($2,phone),
+		contact_person=COALESCE($3,contact_person), comment=COALESCE($4,comment)
+		WHERE id=$5 AND tenant_id=$6
+	`, body.Name, body.Phone, body.ContactPerson, body.Comment, id, tenantID)
+
+	c.Params = gin.Params{{Key: "id", Value: id}}
+	GetSupplier(c)
+}
+
+func DeleteSupplier(c *gin.Context) {
+	id := c.Param("id")
+	tenantID := c.GetString("tenantID")
+	database.DB.Exec("DELETE FROM suppliers WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	c.JSON(http.StatusOK, gin.H{"message": "Удалён"})
+}
+
+func GetDeliveries(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	supplierID := c.Query("supplierId")
+
+	query := `SELECT d.id, d.supplier_id, d.date, d.total_amount, d.payment_status, COALESCE(d.comment,'')
+		FROM deliveries d WHERE d.tenant_id=$1`
+	args := []interface{}{tenantID}
+	idx := 2
+	if supplierID != "" {
+		query += " AND d.supplier_id=$" + strconv.Itoa(idx)
+		args = append(args, supplierID)
+	}
+	query += " ORDER BY d.date DESC"
+
+	rows, _ := database.DB.Query(query, args...)
+	deliveries := []models.Delivery{}
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var d models.Delivery
+			var comment string
+			rows.Scan(&d.ID, &d.SupplierID, &d.Date, &d.TotalAmount, &d.PaymentStatus, &comment)
+			if comment != "" {
+				d.Comment = &comment
+			}
+			// Load items
+			d.Items = []models.DeliveryItem{}
+			iRows, _ := database.DB.Query(`
+				SELECT di.id, di.product_id, COALESCE(p.name,''), di.quantity, di.price, di.total
+				FROM delivery_items di LEFT JOIN products p ON p.id=di.product_id WHERE di.delivery_id=$1
+			`, d.ID)
+			if iRows != nil {
+				for iRows.Next() {
+					var item models.DeliveryItem
+					var pName string
+					iRows.Scan(&item.ID, &item.ProductID, &pName, &item.Quantity, &item.Price, &item.Total)
+					if pName != "" {
+						item.Product = &models.Product{Name: pName}
+					}
+					d.Items = append(d.Items, item)
+				}
+				iRows.Close()
+			}
+			deliveries = append(deliveries, d)
+		}
+	}
+	c.JSON(http.StatusOK, deliveries)
+}
+
+func GetDelivery(c *gin.Context) {
+	id := c.Param("id")
+	tenantID := c.GetString("tenantID")
+
+	var d models.Delivery
+	var comment string
+	err := database.DB.QueryRow(`
+		SELECT id, supplier_id, date, total_amount, payment_status, COALESCE(comment,'')
+		FROM deliveries WHERE id=$1 AND tenant_id=$2
+	`, id, tenantID).Scan(&d.ID, &d.SupplierID, &d.Date, &d.TotalAmount, &d.PaymentStatus, &comment)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Не найдена"})
+		return
+	}
+	if comment != "" {
+		d.Comment = &comment
+	}
+
+	d.Items = []models.DeliveryItem{}
+	iRows, _ := database.DB.Query(`
+		SELECT di.id, di.product_id, COALESCE(p.name,''), di.quantity, di.price, di.total
+		FROM delivery_items di LEFT JOIN products p ON p.id=di.product_id WHERE di.delivery_id=$1
+	`, d.ID)
+	if iRows != nil {
+		for iRows.Next() {
+			var item models.DeliveryItem
+			var pName string
+			iRows.Scan(&item.ID, &item.ProductID, &pName, &item.Quantity, &item.Price, &item.Total)
+			if pName != "" {
+				item.Product = &models.Product{Name: pName}
+			}
+			d.Items = append(d.Items, item)
+		}
+		iRows.Close()
+	}
+	c.JSON(http.StatusOK, d)
+}
+
+func CreateDelivery(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	var body struct {
+		SupplierID string `json:"supplierId"`
+		Date       string `json:"date"`
+		Comment    *string `json:"comment"`
+		Items      []struct {
+			ProductID string  `json:"productId"`
+			Quantity  int     `json:"quantity"`
+			Price     float64 `json:"price"`
+		} `json:"items"`
+	}
+	c.ShouldBindJSON(&body)
+
+	date := time.Now()
+	if body.Date != "" {
+		if t, err := time.Parse("2006-01-02", body.Date); err == nil {
+			date = t
+		}
+	}
+
+	var totalAmount float64
+	for _, item := range body.Items {
+		totalAmount += item.Price * float64(item.Quantity)
+	}
+
+	tx, _ := database.DB.Begin()
+
+	var deliveryID string
+	tx.QueryRow(`
+		INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id)
+		VALUES ($1,$2,$3,'unpaid',$4,$5) RETURNING id
+	`, body.SupplierID, date, totalAmount, body.Comment, tenantID).Scan(&deliveryID)
+
+	for _, item := range body.Items {
+		total := item.Price * float64(item.Quantity)
+		tx.Exec(`
+			INSERT INTO delivery_items (id, delivery_id, product_id, quantity, price, total)
+			VALUES ($1,$2,$3,$4,$5,$6)
+		`, uuid.New().String(), deliveryID, item.ProductID, item.Quantity, item.Price, total)
+
+		// Increase stock
+		tx.Exec("UPDATE products SET stock = stock + $1 WHERE id=$2", item.Quantity, item.ProductID)
+	}
+
+	// Update supplier totals
+	tx.Exec("UPDATE suppliers SET total_purchases = total_purchases + $1, current_debt = current_debt + $1 WHERE id=$2", totalAmount, body.SupplierID)
+
+	tx.Commit()
+	c.JSON(http.StatusCreated, gin.H{"id": deliveryID})
+}
+
+func GetPayments(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	supplierID := c.Query("supplierId")
+
+	query := "SELECT id, supplier_id, amount, date, COALESCE(comment,'') FROM supplier_payments WHERE tenant_id=$1"
+	args := []interface{}{tenantID}
+	if supplierID != "" {
+		query += " AND supplier_id=$2"
+		args = append(args, supplierID)
+	}
+	query += " ORDER BY date DESC"
+
+	rows, _ := database.DB.Query(query, args...)
+	payments := []models.SupplierPayment{}
+	if rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var p models.SupplierPayment
+			var comment string
+			rows.Scan(&p.ID, &p.SupplierID, &p.Amount, &p.Date, &comment)
+			if comment != "" {
+				p.Comment = &comment
+			}
+			payments = append(payments, p)
+		}
+	}
+	c.JSON(http.StatusOK, payments)
+}
+
+func CreatePayment(c *gin.Context) {
+	tenantID := c.GetString("tenantID")
+	var body struct {
+		SupplierID string  `json:"supplierId"`
+		Amount     float64 `json:"amount"`
+		Date       string  `json:"date"`
+		Comment    *string `json:"comment"`
+	}
+	c.ShouldBindJSON(&body)
+
+	date := time.Now()
+	if body.Date != "" {
+		if t, err := time.Parse("2006-01-02", body.Date); err == nil {
+			date = t
+		}
+	}
+
+	var id string
+	database.DB.QueryRow(`
+		INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id)
+		VALUES ($1,$2,$3,$4,$5) RETURNING id
+	`, body.SupplierID, body.Amount, date, body.Comment, tenantID).Scan(&id)
+
+	database.DB.Exec("UPDATE suppliers SET total_paid = total_paid + $1, current_debt = current_debt - $1 WHERE id=$2", body.Amount, body.SupplierID)
+
+	c.JSON(http.StatusCreated, gin.H{"id": id})
+}

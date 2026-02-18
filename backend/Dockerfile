@@ -1,18 +1,15 @@
-FROM node:20-alpine AS builder
+FROM golang:1.22-alpine AS builder
 WORKDIR /app
-COPY package*.json ./
-COPY prisma ./prisma/
-RUN npm ci
-RUN npx prisma generate
+COPY go.mod ./
+RUN go mod download 2>/dev/null || true
 COPY . .
-RUN npm run build
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
 
-FROM node:20-alpine
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./
-COPY --from=builder /app/prisma ./prisma/
+COPY --from=builder /app/server .
+COPY --from=builder /app/migrations ./migrations
 RUN mkdir -p uploads
 EXPOSE 3000
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
+CMD ["./server"]

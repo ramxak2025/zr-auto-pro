@@ -25,9 +25,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-postgres}@postgres:5432/zr_auto_pro?schema=public
+      DATABASE_URL: postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/zr_auto_pro?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
-      JWT_EXPIRES_IN: 7d
       PORT: 3000
     ports:
       - '3000:3000'
