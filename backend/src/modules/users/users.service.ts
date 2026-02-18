@@ -72,11 +72,11 @@ export class UsersService {
     const digits = phone.replace(/\D/g, '');
     if (!digits) return null;
 
-    const users = await this.usersRepo
-      .createQueryBuilder('user')
-      .where("regexp_replace(user.phone, '\\D', '', 'g') = :digits", { digits })
+    const user = await this.usersRepo
+      .createQueryBuilder('u')
+      .where("regexp_replace(u.phone, '[^0-9]', '', 'g') = :digits", { digits })
       .getOne();
-    return users;
+    return user;
   }
 
   async create(dto: Partial<User>): Promise<User> {
