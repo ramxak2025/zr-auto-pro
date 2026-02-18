@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Pencil, Trash2, Building2, Loader2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Building2, Loader2, UserPlus } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -23,6 +23,9 @@ interface TenantFormData {
   isActive: boolean;
   subscriptionEnd: string;
   subscriptionNote: string;
+  directorName: string;
+  directorPhone: string;
+  directorPassword: string;
 }
 
 const emptyForm: TenantFormData = {
@@ -35,7 +38,25 @@ const emptyForm: TenantFormData = {
   isActive: true,
   subscriptionEnd: '',
   subscriptionNote: '',
+  directorName: '',
+  directorPhone: '',
+  directorPassword: '',
 };
+
+function formatPhone(raw: string): string {
+  let digits = raw.replace(/\D/g, '');
+  if (digits.length > 0 && digits[0] === '8') {
+    digits = '7' + digits.slice(1);
+  }
+  if (digits.length === 0) return '';
+  if (digits.length <= 1) return `+${digits}`;
+  if (digits.length <= 4) return `+${digits.slice(0, 1)} (${digits.slice(1)}`;
+  if (digits.length <= 7)
+    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4)}`;
+  if (digits.length <= 9)
+    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
+  return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
+}
 
 export default function AdminTenantsPage() {
   const navigate = useNavigate();
@@ -112,6 +133,9 @@ export default function AdminTenantsPage() {
         ? tenant.subscriptionEnd.slice(0, 10)
         : '',
       subscriptionNote: tenant.subscriptionNote || '',
+      directorName: '',
+      directorPhone: '',
+      directorPassword: '',
     });
     setModalOpen(true);
   };
@@ -129,6 +153,17 @@ export default function AdminTenantsPage() {
       return;
     }
 
+    const isCreating = !editingTenant;
+
+    if (isCreating && !form.directorPhone.trim()) {
+      toast.error('Введите телефон директора');
+      return;
+    }
+    if (isCreating && !form.directorPassword.trim()) {
+      toast.error('Введите пароль директора');
+      return;
+    }
+
     const payload: any = {
       name: form.name,
       phone: form.phone || undefined,
@@ -140,6 +175,12 @@ export default function AdminTenantsPage() {
       subscriptionEnd: form.subscriptionEnd || null,
       subscriptionNote: form.subscriptionNote || null,
     };
+
+    if (isCreating) {
+      payload.directorName = form.directorName || undefined;
+      payload.directorPhone = form.directorPhone;
+      payload.directorPassword = form.directorPassword;
+    }
 
     if (editingTenant) {
       updateMutation.mutate({ id: editingTenant.id, data: payload });
@@ -264,7 +305,7 @@ export default function AdminTenantsPage() {
 
           {/* Phone */}
           <div>
-            <label className="label">Телефон</label>
+            <label className="label">Телефон организации</label>
             <input
               type="tel"
               className="input"
@@ -309,6 +350,55 @@ export default function AdminTenantsPage() {
               placeholder="Краткое описание"
             />
           </div>
+
+          {/* Director section — only for new tenants */}
+          {!editingTenant && (
+            <div className="bg-primary-50 rounded-xl p-4 space-y-3 border border-primary-100">
+              <div className="flex items-center gap-2 text-primary-700 font-medium text-sm">
+                <UserPlus className="w-4 h-4" />
+                Директор (владелец автосервиса)
+              </div>
+
+              <div>
+                <label className="label">ФИО директора</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={form.directorName}
+                  onChange={(e) => setForm({ ...form, directorName: e.target.value })}
+                  placeholder="Иванов Иван Иванович"
+                />
+              </div>
+
+              <div>
+                <label className="label">Телефон директора (для входа) *</label>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  className="input"
+                  value={form.directorPhone}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '');
+                    setForm({ ...form, directorPhone: formatPhone(digits) });
+                  }}
+                  placeholder="+7 (XXX) XXX-XX-XX"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="label">Пароль директора *</label>
+                <input
+                  type="text"
+                  className="input"
+                  value={form.directorPassword}
+                  onChange={(e) => setForm({ ...form, directorPassword: e.target.value })}
+                  placeholder="Минимум 4 символа"
+                  required
+                />
+              </div>
+            </div>
+          )}
 
           {/* Max Users */}
           <div>
