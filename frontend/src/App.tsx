@@ -45,7 +45,7 @@ export default function App() {
       {/* Public: Login */}
       <Route
         path="/login"
-        element={user ? <Navigate to="/" replace /> : <LoginPage />}
+        element={user ? <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace /> : <LoginPage />}
       />
 
       {/* Protected routes */}
@@ -53,7 +53,11 @@ export default function App() {
         <>
           {/* Main app routes inside Layout */}
           <Route element={<Layout />}>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={
+              user.role === UserRole.SUPERADMIN
+                ? <Navigate to="/admin/dashboard" replace />
+                : <Navigate to="/dashboard" replace />
+            } />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/checks" element={<ChecksPage />} />
             <Route path="/checks/new" element={<CheckCreatePage />} />
