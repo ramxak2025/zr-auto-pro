@@ -65,7 +65,7 @@ export class UsersService {
 
   /**
    * Find user by phone number (with password for auth).
-   * Normalizes digits for comparison if exact match fails.
+   * Normalizes digits for comparison.
    */
   async findByPhone(phone: string): Promise<User | null> {
     this.logger.debug(`findByPhone called with: "${phone}"`);
@@ -73,22 +73,25 @@ export class UsersService {
     // Normalize input: strip to digits
     const inputDigits = phone.replace(/\D/g, '');
 
-    // Try exact match first
-    const exact = await this.usersRepo.findOne({ where: { phone } });
+    // Try exact match first (with tenant)
+    const exact = await this.usersRepo.findOne({
+      where: { phone },
+      relations: ['tenant'],
+    });
     if (exact) {
       this.logger.debug(`findByPhone exact match found for "${phone}"`);
       return exact;
     }
 
-    // Fallback: load all and compare by digits
+    // Fallback: normalize and try digit-only comparison via DB
     if (inputDigits) {
-      const allUsers = await this.usersRepo.find();
-      this.logger.debug(`findByPhone fallback: ${allUsers.length} users, looking for digits "${inputDigits}"`);
+      this.logger.debug(`findByPhone fallback: looking for digits "${inputDigits}"`);
+      const allUsers = await this.usersRepo.find({ relations: ['tenant'] });
       for (const u of allUsers) {
         if (u.phone) {
           const uDigits = u.phone.replace(/\D/g, '');
-          this.logger.debug(`  comparing "${uDigits}" with "${inputDigits}"`);
           if (uDigits === inputDigits) {
+            this.logger.debug(`findByPhone digit match: "${u.phone}" -> "${inputDigits}"`);
             return u;
           }
         }

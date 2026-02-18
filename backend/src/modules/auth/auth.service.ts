@@ -22,12 +22,21 @@ export class AuthService {
       return null;
     }
 
-    this.logger.log(`validateUser: user found (id=${user.id}, role=${user.role}), hasPassword=${!!user.password}, hashPrefix=${user.password ? user.password.substring(0, 7) : 'N/A'}`);
+    this.logger.log(`validateUser: user found (id=${user.id}, role=${user.role}), hasPassword=${!!user.password}`);
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    this.logger.log(`validateUser: bcrypt.compare result = ${isPasswordValid}`);
+    if (!user.password) {
+      this.logger.warn(`validateUser: user has no password hash`);
+      return null;
+    }
 
-    if (!isPasswordValid) {
+    try {
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      this.logger.log(`validateUser: bcrypt.compare result = ${isPasswordValid}`);
+      if (!isPasswordValid) {
+        return null;
+      }
+    } catch (err) {
+      this.logger.error(`validateUser: bcrypt.compare threw: ${err.message}`);
       return null;
     }
 

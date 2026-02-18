@@ -9,6 +9,7 @@ import {
   Req,
   UseGuards,
   ForbiddenException,
+  BadRequestException,
   Logger,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -71,23 +72,31 @@ export class TenantsController {
           role: 'director',
           tenantId: tenant.id,
           permissions: {
-            manageUsers: true,
-            manageClients: true,
-            manageCars: true,
-            manageProducts: true,
-            manageServices: true,
-            manageChecks: true,
-            manageSuppliers: true,
-            manageSalary: true,
-            manageSchedule: true,
-            manageShifts: true,
-            viewReports: true,
+            checks_view: true,
+            checks_create: true,
+            checks_edit: true,
+            checks_delete: true,
+            profit_view: true,
+            clients_view: true,
+            clients_edit: true,
+            warehouse_access: true,
+            suppliers_access: true,
+            financial_reports: true,
+            export_data: true,
+            user_management: true,
           },
           isActive: true,
         } as any);
         this.logger.log(`Director created for tenant "${tenant.name}" with phone "${directorPhone}"`);
       } catch (error) {
         this.logger.error(`Failed to create director: ${error.message}`);
+        // Rollback: delete the tenant since director couldn't be created
+        try { await this.tenantsService.remove(tenant.id); } catch (_) { /* cleanup */ }
+        throw new BadRequestException(
+          error.message?.includes('duplicate')
+            ? 'Пользователь с таким номером телефона уже существует'
+            : `Не удалось создать директора: ${error.message}`,
+        );
       }
     }
 
