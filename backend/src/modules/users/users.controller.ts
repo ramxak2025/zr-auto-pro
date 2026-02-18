@@ -44,7 +44,10 @@ export class UsersController {
 
   @Post()
   async create(@Req() req: any, @Body() dto: Partial<User>) {
-    dto.tenantId = req.user.tenantId;
+    // Superadmin can create users for any tenant (tenantId comes from body)
+    if (req.user.role !== 'superadmin' || !dto.tenantId) {
+      dto.tenantId = req.user.tenantId;
+    }
     return this.usersService.create(dto);
   }
 

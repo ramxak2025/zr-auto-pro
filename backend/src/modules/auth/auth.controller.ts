@@ -6,6 +6,8 @@ import {
   Request,
   UseGuards,
   UnauthorizedException,
+  Logger,
+  InternalServerErrorException,
 } from '@nestjs/common';
 
 import { AuthService } from './auth.service';
@@ -13,15 +15,28 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
   async login(@Body() body: { phone: string; password: string }) {
-    const user = await this.authService.validateUser(body.phone, body.password);
-    if (!user) {
-      throw new UnauthorizedException('Неверный номер телефона или пароль');
+    this.logger.log(`Login attempt: phone="${body.phone}"`);
+    try {
+      const user = await this.authService.validateUser(body.phone, body.password);
+      if (!user) {
+        this.logger.warn(`Login failed: invalid credentials for "${body.phone}"`);
+        throw new UnauthorizedException('Неверный номер телефона или пароль');
+      }
+      this.logger.log(`Login success: phone="${body.phone}", role="${user.role}"`);
+      return this.authService.login(user);
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        throw error;
+      }
+      this.logger.error(`Login error for "${body.phone}": ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Ошибка сервера при входе');
     }
-    return this.authService.login(user);
   }
 
   @Post('register')

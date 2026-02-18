@@ -1,11 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { User } from './user.entity';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
@@ -61,19 +63,40 @@ export class UsersService {
     });
   }
 
+  /**
+   * Find user by phone number (with password for auth).
+   * Normalizes digits for comparison if exact match fails.
+   */
   async findByPhone(phone: string): Promise<User | null> {
-    // Try exact match first
-    const exact = await this.usersRepo.findOne({
-      where: { phone },
-    });
-    if (exact) return exact;
+    this.logger.debug(`findByPhone called with: "${phone}"`);
 
-    // Fallback: normalize to digits and search in memory
+    // Normalize input: strip to digits
     const inputDigits = phone.replace(/\D/g, '');
-    if (!inputDigits) return null;
 
-    const allUsers = await this.usersRepo.find();
-    return allUsers.find(u => u.phone && u.phone.replace(/\D/g, '') === inputDigits) || null;
+    // Try exact match first
+    const exact = await this.usersRepo.findOne({ where: { phone } });
+    if (exact) {
+      this.logger.debug(`findByPhone exact match found for "${phone}"`);
+      return exact;
+    }
+
+    // Fallback: load all and compare by digits
+    if (inputDigits) {
+      const allUsers = await this.usersRepo.find();
+      this.logger.debug(`findByPhone fallback: ${allUsers.length} users, looking for digits "${inputDigits}"`);
+      for (const u of allUsers) {
+        if (u.phone) {
+          const uDigits = u.phone.replace(/\D/g, '');
+          this.logger.debug(`  comparing "${uDigits}" with "${inputDigits}"`);
+          if (uDigits === inputDigits) {
+            return u;
+          }
+        }
+      }
+    }
+
+    this.logger.debug(`findByPhone: no user found`);
+    return null;
   }
 
   async create(dto: Partial<User>): Promise<User> {
@@ -83,7 +106,8 @@ export class UsersService {
     }
     const user = this.usersRepo.create(dto);
     const saved = await this.usersRepo.save(user);
-    const { password, ...result } = saved;
+    this.logger.log(`User created: phone="${saved.phone}", role="${saved.role}", hasPassword=${!!saved.password}`);
+    const { password: _pw, ...result } = saved;
     return result as User;
   }
 

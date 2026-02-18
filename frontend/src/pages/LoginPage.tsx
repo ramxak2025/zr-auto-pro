@@ -1,12 +1,11 @@
 import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogIn, Loader2, Phone } from 'lucide-react';
+import { Loader2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 
 function formatPhone(raw: string): string {
   let digits = raw.replace(/\D/g, '');
-  // Normalize: replace leading 8 with 7 for Russian numbers
   if (digits.length > 0 && digits[0] === '8') {
     digits = '7' + digits.slice(1);
   }
@@ -28,6 +27,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -65,72 +65,91 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-primary-600 to-primary-800 px-4">
-      <div className="w-full max-w-md animate-fade-in-up">
-        <div className="card p-8 sm:p-10">
+    <div className="min-h-screen flex flex-col bg-white">
+      {/* Main content */}
+      <div className="flex-1 flex flex-col items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
           {/* Logo */}
-          <div className="flex justify-center mb-4">
+          <div className="flex justify-center mb-3">
             <img
               src="/logo.png"
               alt="Autexa"
-              className="max-h-24 object-contain"
+              className="h-16 w-auto object-contain"
             />
           </div>
 
-          {/* Title */}
-          <div className="text-center mb-8">
-            <p className="text-sm text-gray-500">
-              Система управления сервисом
-            </p>
-          </div>
+          {/* Subtitle */}
+          <p className="text-center text-sm text-gray-400 mb-10 tracking-wide">
+            Система управления сервисом
+          </p>
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Phone */}
             <div>
-              <label htmlFor="phone" className="label">
-                Номер телефона
+              <label htmlFor="phone" className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                Телефон
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <Phone className="h-5 w-5 text-gray-400" />
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <Phone className="h-[18px] w-[18px] text-gray-400" />
                 </div>
                 <input
                   id="phone"
                   type="tel"
                   inputMode="numeric"
                   autoComplete="tel"
-                  placeholder="+7 (XXX) XXX-XX-XX"
+                  placeholder="+7 (___) ___-__-__"
                   value={phone}
                   onChange={handlePhoneChange}
-                  className={`input pl-10 ${phoneError ? 'input-error' : ''}`}
+                  className={`w-full pl-11 pr-4 py-3.5 text-[15px] bg-gray-50 border rounded-xl text-gray-900 placeholder-gray-400 transition-all focus:outline-none focus:bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 ${
+                    phoneError ? 'border-red-400 bg-red-50/50' : 'border-gray-200'
+                  }`}
                 />
               </div>
               {phoneError && (
-                <p className="mt-1 text-sm text-red-600">{phoneError}</p>
+                <p className="mt-1.5 text-xs text-red-500">{phoneError}</p>
               )}
             </div>
 
             {/* Password */}
             <div>
-              <label htmlFor="password" className="label">
+              <label htmlFor="password" className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
                 Пароль
               </label>
-              <input
-                id="password"
-                ref={passwordRef}
-                type="password"
-                autoComplete="current-password"
-                placeholder="Введите пароль"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  setPasswordError('');
-                }}
-                className={`input ${passwordError ? 'input-error' : ''}`}
-              />
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <Lock className="h-[18px] w-[18px] text-gray-400" />
+                </div>
+                <input
+                  id="password"
+                  ref={passwordRef}
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  placeholder="Введите пароль"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setPasswordError('');
+                  }}
+                  className={`w-full pl-11 pr-12 py-3.5 text-[15px] bg-gray-50 border rounded-xl text-gray-900 placeholder-gray-400 transition-all focus:outline-none focus:bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 ${
+                    passwordError ? 'border-red-400 bg-red-50/50' : 'border-gray-200'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-[18px] w-[18px]" />
+                  ) : (
+                    <Eye className="h-[18px] w-[18px]" />
+                  )}
+                </button>
+              </div>
               {passwordError && (
-                <p className="mt-1 text-sm text-red-600">{passwordError}</p>
+                <p className="mt-1.5 text-xs text-red-500">{passwordError}</p>
               )}
             </div>
 
@@ -138,28 +157,27 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={submitting}
-              className="btn-primary w-full btn-lg"
+              className="w-full py-3.5 bg-primary-600 hover:bg-primary-700 active:bg-primary-800 text-white text-[15px] font-semibold rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm hover:shadow-md flex items-center justify-center gap-2"
             >
               {submitting ? (
                 <>
                   <Loader2 className="h-5 w-5 animate-spin" />
-                  Вход...
+                  <span>Вход...</span>
                 </>
               ) : (
-                <>
-                  <LogIn className="h-5 w-5" />
-                  Войти
-                </>
+                <span>Войти</span>
               )}
             </button>
           </form>
         </div>
       </div>
 
-      {/* Copyright */}
-      <p className="mt-6 text-sm text-white/60">
-        Autexa &copy; 2026
-      </p>
+      {/* Copyright footer */}
+      <div className="pb-8 pt-4">
+        <p className="text-center text-xs text-gray-300">
+          Autexa &copy; 2026
+        </p>
+      </div>
     </div>
   );
 }
