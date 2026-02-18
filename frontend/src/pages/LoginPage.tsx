@@ -65,23 +65,22 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-600 to-primary-800 px-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-primary-600 to-primary-800 px-4">
       <div className="w-full max-w-md animate-fade-in-up">
         <div className="card p-8 sm:p-10">
           {/* Logo */}
-          <div className="flex justify-center mb-6">
+          <div className="flex justify-center mb-4">
             <img
               src="/logo.png"
               alt="Autexa"
-              className="max-h-20 object-contain"
+              className="max-h-24 object-contain"
             />
           </div>
 
           {/* Title */}
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">Autexa</h1>
-            <p className="mt-2 text-sm text-gray-500">
-              Система управления автосервисом
+            <p className="text-sm text-gray-500">
+              Система управления сервисом
             </p>
           </div>
 
@@ -156,6 +155,11 @@ export default function LoginPage() {
           </form>
         </div>
       </div>
+
+      {/* Copyright */}
+      <p className="mt-6 text-sm text-white/60">
+        Autexa &copy; 2026
+      </p>
     </div>
   );
 }
