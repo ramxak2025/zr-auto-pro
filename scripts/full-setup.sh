@@ -61,13 +61,6 @@ DB_PASSWORD=ZrAut0Pr0_Db_2024!
 # JWT (production secret)
 JWT_SECRET=zr-auto-pro-jwt-secret-k8s9d7f2h4j6m8n0p2r4t6v8x0z
 
-# S3 Storage (optional — leave empty for local uploads)
-S3_ENDPOINT=
-S3_REGION=ru-1
-S3_BUCKET=zr-auto-pro
-S3_ACCESS_KEY=
-S3_SECRET_KEY=
-
 # Frontend API URL (nginx proxies /api to backend)
 VITE_API_URL=/api
 ENVFILE

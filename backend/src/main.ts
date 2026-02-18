@@ -1,13 +1,12 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
-import { DataSource } from 'typeorm';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix('api');
-  app.enableCors({ origin: true, credentials: true });
+  app.enableCors({ origin: '*' });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -16,16 +15,8 @@ async function bootstrap() {
     }),
   );
 
-  // Run pending migrations on startup
-  try {
-    const ds = app.get(DataSource);
-    await ds.runMigrations();
-  } catch (e) {
-    console.log('No migrations to run');
-  }
-
   const port = process.env.PORT || 3000;
   await app.listen(port);
-  console.log(`Server running on port ${port}`);
+  console.log(`Backend running on port ${port}`);
 }
 bootstrap();

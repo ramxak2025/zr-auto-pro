@@ -7,7 +7,8 @@ echo "=== Updating zr-auto-pro ==="
 bash scripts/backup.sh
 
 # Pull latest
-git pull origin main
+BRANCH="${1:-claude/redesign-from-scratch-5xQJz}"
+git pull origin "$BRANCH"
 
 # Rebuild and restart
 docker compose build

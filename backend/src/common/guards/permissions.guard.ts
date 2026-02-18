@@ -1,22 +1,27 @@
 import { Injectable, CanActivate, ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const required = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
+    const requiredPermissions = this.reflector.get<string[]>(
+      'permissions',
       context.getHandler(),
-      context.getClass(),
-    ]);
-    if (!required || required.length === 0) return true;
+    );
+    if (!requiredPermissions) return true;
 
     const { user } = context.switchToHttp().getRequest();
     if (!user) return false;
+
+    // Superadmin and director bypass permission checks
     if (user.role === 'superadmin' || user.role === 'director') return true;
 
-    return required.every((perm) => user.permissions?.[perm] === true);
+    const perms = typeof user.permissions === 'string'
+      ? JSON.parse(user.permissions)
+      : user.permissions || {};
+
+    return requiredPermissions.every((p) => perms[p] === true);
   }
 }
