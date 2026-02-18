@@ -1,4 +1,4 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 
@@ -7,18 +7,26 @@ import { User } from '../users/user.entity';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
   ) {}
 
   async validateUser(phone: string, password: string): Promise<Omit<User, 'password'> | null> {
+    this.logger.log(`validateUser: phone="${phone}"`);
     const user = await this.usersService.findByPhone(phone);
     if (!user) {
+      this.logger.warn(`validateUser: user NOT found for phone="${phone}"`);
       return null;
     }
 
+    this.logger.log(`validateUser: user found (id=${user.id}, role=${user.role}), hasPassword=${!!user.password}, hashPrefix=${user.password ? user.password.substring(0, 7) : 'N/A'}`);
+
     const isPasswordValid = await bcrypt.compare(password, user.password);
+    this.logger.log(`validateUser: bcrypt.compare result = ${isPasswordValid}`);
+
     if (!isPasswordValid) {
       return null;
     }
