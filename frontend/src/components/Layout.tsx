@@ -1,153 +1,230 @@
-import { useLocation, useNavigate, Link, Outlet } from 'react-router-dom';
+import { NavLink, useLocation, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
-  ClipboardList,
   Users,
   Package,
   Wrench,
   Truck,
   Wallet,
   BarChart3,
-  Calendar,
-  UserCog,
+  Shield,
   LogOut,
+  ChevronRight,
   MoreHorizontal,
-  Home,
+  Receipt,
+  BookOpen,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { UserPermissions } from '../types';
+import type { UserPermissions } from '../types';
 
 interface NavItem {
   label: string;
   path: string;
-  icon: React.ElementType;
+  icon: typeof LayoutDashboard;
   permission?: keyof UserPermissions;
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-  { label: 'Checks', path: '/checks', icon: ClipboardList, permission: 'checks_view' },
-  { label: 'Clients', path: '/clients', icon: Users, permission: 'clients_view' },
-  { label: 'Products', path: '/products', icon: Package, permission: 'warehouse_access' },
-  { label: 'Services', path: '/services', icon: Wrench },
-  { label: 'Suppliers', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
-  { label: 'Salary', path: '/salary', icon: Wallet },
-  { label: 'Reports', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
-  { label: 'Schedule', path: '/schedule', icon: Calendar },
-  { label: 'Users', path: '/users', icon: UserCog, permission: 'user_management' },
+  { label: 'Главная', path: '/dashboard', icon: LayoutDashboard },
+  { label: 'Клиенты', path: '/clients', icon: Users, permission: 'clients_view' },
+  { label: 'Касса', path: '/checks', icon: Receipt, permission: 'checks_view' },
+  { label: 'Склад', path: '/products', icon: Package, permission: 'warehouse_access' },
+  { label: 'Услуги', path: '/services', icon: Wrench },
+  { label: 'Поставщики', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
+  { label: 'Движение денег', path: '/cashflow', icon: Wallet },
+  { label: 'Зарплата', path: '/salary', icon: Wallet },
+  { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
+  { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management' },
 ];
 
-interface MobileTab {
+interface TabItem {
   label: string;
   path: string;
-  icon: React.ElementType;
+  icon: typeof LayoutDashboard;
+  matchPaths?: string[];
 }
 
-const mobileTabs: MobileTab[] = [
-  { label: 'Home', path: '/dashboard', icon: Home },
-  { label: 'Checks', path: '/checks', icon: ClipboardList },
-  { label: 'Clients', path: '/clients', icon: Users },
-  { label: 'Products', path: '/products', icon: Package },
-  { label: 'More', path: '/more', icon: MoreHorizontal },
+const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
+  { label: 'Главная', path: '/dashboard', icon: LayoutDashboard, matchPaths: ['/dashboard'] },
+  { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
+  { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
+  { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
+  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow', '/schedule', '/tariff'] },
 ];
+
+const roleBadgeColors: Record<string, string> = {
+  superadmin: 'bg-red-50 text-red-700',
+  director: 'bg-purple-50 text-purple-700',
+  admin: 'bg-blue-50 text-blue-700',
+  master: 'bg-green-50 text-green-700',
+};
+
+const roleLabels: Record<string, string> = {
+  superadmin: 'Суперадмин',
+  director: 'Директор',
+  admin: 'Администратор',
+  master: 'Мастер',
+};
+
+function getPageTitle(pathname: string): string[] {
+  const segments = pathname.split('/').filter(Boolean);
+  if (segments.length === 0) return ['Dashboard'];
+  const titles: string[] = [];
+  const first = segments[0].charAt(0).toUpperCase() + segments[0].slice(1);
+  titles.push(first);
+  if (segments.length > 1) {
+    titles.push(segments[1] === 'new' ? 'Создание' : 'Детали');
+  }
+  return titles;
+}
+
+function isTabActive(tab: TabItem & { isCenter?: boolean }, pathname: string): boolean {
+  if (tab.path === '/checks/new') return pathname === '/checks/new';
+  if (tab.path === '/dashboard') return pathname === '/dashboard' || pathname === '/';
+  if (tab.path === '/checks') return pathname === '/checks' || (pathname.startsWith('/checks/') && pathname !== '/checks/new');
+  if (tab.matchPaths) return tab.matchPaths.some((p) => pathname === p || pathname.startsWith(p + '/'));
+  return pathname === tab.path;
+}
 
 export default function Layout() {
   const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
-  const navigate = useNavigate();
 
-  const visibleNavItems = navItems.filter(
-    (item) => !item.permission || hasPermission(item.permission)
-  );
-
-  const isActive = (path: string) => location.pathname.startsWith(path);
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
+  const breadcrumbs = getPageTitle(location.pathname);
+  const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Desktop Sidebar */}
-      <aside className="hidden md:flex md:flex-col w-64 bg-white border-r border-gray-200">
-        {/* Logo */}
-        <div className="flex items-center h-16 px-6 border-b border-gray-200">
-          <img src="/logo-horizontal.png" alt="Logo" className="h-8" />
+    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
+      {/* ─── Desktop sidebar ─── */}
+      <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
+        <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
+          <img src="/logo.png" alt="Autexa" className="h-9 w-auto object-contain" />
+          <div className="min-w-0">
+            <span className="text-lg font-bold text-gray-900 tracking-tight block">Autexa</span>
+            {user?.tenant && (
+              <span className="text-xs text-gray-500 truncate block">{user.tenant.name || ''}</span>
+            )}
+          </div>
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-4 px-3">
+        <nav className="flex-1 overflow-y-auto px-3 py-4">
           <ul className="space-y-1">
-            {visibleNavItems.map((item) => {
+            {navItems.map((item) => {
+              if (item.permission && !hasPermission(item.permission)) return null;
               const Icon = item.icon;
-              const active = isActive(item.path);
               return (
                 <li key={item.path}>
-                  <Link
+                  <NavLink
                     to={item.path}
-                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                      active
-                        ? 'bg-primary-50 text-primary-600'
-                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                    }`}
+                    end={item.path === '/dashboard'}
+                    className={({ isActive }) =>
+                      `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                        isActive
+                          ? 'bg-primary-50 text-primary-700'
+                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      }`
+                    }
                   >
-                    <Icon className="w-5 h-5 flex-shrink-0" />
-                    {item.label}
-                  </Link>
+                    <Icon className="h-5 w-5 flex-shrink-0" />
+                    <span>{item.label}</span>
+                  </NavLink>
                 </li>
               );
             })}
           </ul>
         </nav>
 
-        {/* User Info */}
-        <div className="border-t border-gray-200 p-4">
+        <div className="border-t border-gray-200 px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex-shrink-0 w-9 h-9 rounded-full bg-primary-100 text-primary-600 flex items-center justify-center text-sm font-semibold">
-              {user?.fullName?.charAt(0)?.toUpperCase() || 'U'}
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
+              {user?.fullName?.charAt(0) || 'U'}
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 truncate">
-                {user?.fullName}
-              </p>
-              <p className="text-xs text-gray-500 truncate">{user?.role}</p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-gray-900">{user?.fullName || 'User'}</p>
+              <p className="truncate text-xs text-gray-500">{roleLabel}</p>
             </div>
-            <button
-              onClick={handleLogout}
-              className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors"
-              title="Logout"
-            >
-              <LogOut className="w-4 h-4" />
+            <button onClick={logout} className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors" title="Выход">
+              <LogOut className="h-4 w-4" />
             </button>
           </div>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <div className="flex flex-1 flex-col min-w-0">
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 pb-20 md:pb-6">
+      {/* ─── Main area ─── */}
+      <div className="flex flex-1 flex-col md:pl-[260px]">
+        {/* Desktop top bar */}
+        <header className="hidden md:flex sticky top-0 z-20 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
+          <div className="flex items-center gap-1.5 text-sm">
+            {breadcrumbs.map((crumb, index) => (
+              <span key={index} className="flex items-center gap-1.5">
+                {index > 0 && <ChevronRight className="h-4 w-4 text-gray-400" />}
+                <span className={index === breadcrumbs.length - 1 ? 'font-semibold text-gray-900' : 'text-gray-500'}>{crumb}</span>
+              </span>
+            ))}
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2.5">
+              <span className="text-sm font-medium text-gray-700">{user?.fullName}</span>
+              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${roleBadgeColors[user?.role || ''] || 'bg-gray-100 text-gray-600'}`}>
+                {roleLabel}
+              </span>
+            </div>
+            <button onClick={logout} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700">
+              <LogOut className="h-4 w-4" />
+              <span className="hidden sm:inline">Выход</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Mobile top bar */}
+        <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+          <div className="flex items-center gap-2">
+            <img src="/logo.png" alt="Autexa" className="h-8 w-auto object-contain" />
+            <span className="text-base font-bold text-gray-900 tracking-tight">Autexa</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
+              {user?.fullName?.charAt(0) || 'U'}
+            </div>
+          </div>
+        </header>
+
+        {/* Page content */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">
           <Outlet />
         </main>
 
-        {/* Mobile Bottom Tab Bar */}
-        <nav className="md:hidden flex items-center justify-around bg-white border-t border-gray-200 py-1.5">
-          {mobileTabs.map((tab) => {
-            const Icon = tab.icon;
-            const active = isActive(tab.path);
-            return (
-              <Link
-                key={tab.path}
-                to={tab.path}
-                className={`flex flex-col items-center gap-0.5 px-3 py-1.5 text-xs font-medium transition-colors ${
-                  active ? 'text-primary-600' : 'text-gray-400'
-                }`}
-              >
-                <Icon className="w-5 h-5" />
-                {tab.label}
-              </Link>
-            );
-          })}
+        {/* ─── Mobile bottom tab bar ─── */}
+        <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+          <div className="flex items-center justify-around h-[68px] px-2">
+            {mobileTabItems.map((tab) => {
+              const Icon = tab.icon;
+              const active = isTabActive(tab, location.pathname);
+
+              if (tab.isCenter) {
+                return (
+                  <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center -mt-6">
+                    <div className="relative">
+                      <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
+                      <div className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95">
+                        <Icon className="h-6 w-6" strokeWidth={2.2} />
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold mt-1 text-primary-600">{tab.label}</span>
+                  </NavLink>
+                );
+              }
+
+              return (
+                <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors">
+                  <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
+                    <Icon className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
+                  </div>
+                  <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>{tab.label}</span>
+                </NavLink>
+              );
+            })}
+          </div>
         </nav>
       </div>
     </div>
