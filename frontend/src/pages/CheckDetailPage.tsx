@@ -248,6 +248,18 @@ export default function CheckDetailPage() {
             <span>{'\u0412\u044B\u0440\u0443\u0447\u043A\u0430:'}</span>
             <span className="text-primary-600">{formatCurrency(check.totalRevenue)}</span>
           </div>
+          {check.paymentMethod === 'cash_card' && (check.cashAmount > 0 || check.cardAmount > 0) && (
+            <>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">{'\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435:'}</span>
+                <span className="font-medium">{formatCurrency(check.cashAmount)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">{'\u041A\u0430\u0440\u0442\u0430:'}</span>
+                <span className="font-medium">{formatCurrency(check.cardAmount)}</span>
+              </div>
+            </>
+          )}
           {hasPermission('profit_view') && (
             <div className="flex justify-between text-sm border-t pt-2">
               <span className="text-gray-500">{'\u041F\u0440\u0438\u0431\u044B\u043B\u044C:'}</span>

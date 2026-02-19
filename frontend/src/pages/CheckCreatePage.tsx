@@ -11,6 +11,12 @@ import {
   ChevronLeft,
   Package,
   X,
+  Receipt,
+  CreditCard,
+  Banknote,
+  Calculator,
+  Minus,
+  UserIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -21,6 +27,7 @@ import {
   servicesApi,
   productsApi,
 } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import type {
   Client,
   Car,
@@ -29,8 +36,8 @@ import type {
   Product,
   CheckServiceLine,
   CheckProductLine,
-  PaymentMethod,
 } from '../types';
+import { UserRole } from '../types';
 
 const formatCurrency = (value: number): string => {
   return value.toLocaleString('ru-RU') + ' \u20BD';
@@ -73,19 +80,16 @@ function ProductPickerModal({
   const [currentCategory, setCurrentCategory] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
       setSearch('');
       setCurrentCategory(null);
-      // Focus search input after a short delay for animation
       setTimeout(() => {
         searchInputRef.current?.focus();
       }, 100);
     }
   }, [isOpen]);
 
-  // Gather unique categories
   const categories = useMemo(() => {
     const cats = new Set<string>();
     products.forEach((p) => {
@@ -94,16 +98,13 @@ function ProductPickerModal({
     return Array.from(cats).sort();
   }, [products]);
 
-  // Products without a category go into "Без категории"
   const uncategorizedCount = useMemo(
     () => products.filter((p) => !p.category).length,
     [products],
   );
 
-  // Filtered products based on search & current category
   const filteredProducts = useMemo(() => {
     let list = products;
-
     if (currentCategory !== null) {
       if (currentCategory === '__uncategorized__') {
         list = list.filter((p) => !p.category);
@@ -111,7 +112,6 @@ function ProductPickerModal({
         list = list.filter((p) => p.category === currentCategory);
       }
     }
-
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(
@@ -120,11 +120,9 @@ function ProductPickerModal({
           (p.category && p.category.toLowerCase().includes(q)),
       );
     }
-
     return list;
   }, [products, currentCategory, search]);
 
-  // Count products per category for badge
   const categoryProductCount = useCallback(
     (cat: string) => products.filter((p) => p.category === cat).length,
     [products],
@@ -139,7 +137,6 @@ function ProductPickerModal({
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white">
-      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white sticky top-0 z-10">
         <button
           type="button"
@@ -158,16 +155,11 @@ function ProductPickerModal({
             <X className="w-5 h-5" />
           )}
         </button>
-
         <div className="flex-1 min-w-0">
-          {/* Breadcrumbs */}
           <div className="flex items-center gap-1 text-sm text-gray-500 mb-0.5">
             <button
               type="button"
-              onClick={() => {
-                setCurrentCategory(null);
-                setSearch('');
-              }}
+              onClick={() => { setCurrentCategory(null); setSearch(''); }}
               className="hover:text-primary-600 truncate"
             >
               {'\u0422\u043E\u0432\u0430\u0440\u044B'}
@@ -176,9 +168,7 @@ function ProductPickerModal({
               <>
                 <span>/</span>
                 <span className="text-gray-900 font-medium truncate">
-                  {currentCategory === '__uncategorized__'
-                    ? '\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438'
-                    : currentCategory}
+                  {currentCategory === '__uncategorized__' ? '\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438' : currentCategory}
                 </span>
               </>
             )}
@@ -189,7 +179,6 @@ function ProductPickerModal({
         </div>
       </div>
 
-      {/* Search bar */}
       <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -213,9 +202,7 @@ function ProductPickerModal({
         </div>
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-y-auto">
-        {/* If searching, skip folder view and show flat product results */}
         {search.trim() ? (
           <div className="p-4">
             {filteredProducts.length === 0 ? (
@@ -226,17 +213,12 @@ function ProductPickerModal({
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                 {filteredProducts.map((product) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    onSelect={handleSelect}
-                  />
+                  <ProductCard key={product.id} product={product} onSelect={handleSelect} />
                 ))}
               </div>
             )}
           </div>
         ) : currentCategory === null ? (
-          /* Folder view */
           <div className="p-4 space-y-2">
             {categories.map((cat) => (
               <button
@@ -246,15 +228,12 @@ function ProductPickerModal({
                 className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
               >
                 <FolderOpen className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                <span className="flex-1 text-left font-medium text-gray-900 truncate">
-                  {cat}
-                </span>
+                <span className="flex-1 text-left font-medium text-gray-900 truncate">{cat}</span>
                 <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
                   {categoryProductCount(cat)}
                 </span>
               </button>
             ))}
-
             {uncategorizedCount > 0 && (
               <button
                 type="button"
@@ -270,7 +249,6 @@ function ProductPickerModal({
                 </span>
               </button>
             )}
-
             {categories.length === 0 && uncategorizedCount === 0 && (
               <div className="text-center py-12 text-gray-400">
                 <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
@@ -279,7 +257,6 @@ function ProductPickerModal({
             )}
           </div>
         ) : (
-          /* Product grid inside a category */
           <div className="p-4">
             {filteredProducts.length === 0 ? (
               <div className="text-center py-12 text-gray-400">
@@ -289,11 +266,7 @@ function ProductPickerModal({
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                 {filteredProducts.map((product) => (
-                  <ProductCard
-                    key={product.id}
-                    product={product}
-                    onSelect={handleSelect}
-                  />
+                  <ProductCard key={product.id} product={product} onSelect={handleSelect} />
                 ))}
               </div>
             )}
@@ -305,7 +278,7 @@ function ProductPickerModal({
 }
 
 // ---------------------------------------------------------------------------
-// Product Card (used inside the picker modal)
+// Product Card
 // ---------------------------------------------------------------------------
 
 interface ProductCardProps {
@@ -315,7 +288,6 @@ interface ProductCardProps {
 
 function ProductCard({ product, onSelect }: ProductCardProps) {
   const inStock = product.stock > 0;
-
   return (
     <button
       type="button"
@@ -324,32 +296,22 @@ function ProductCard({ product, onSelect }: ProductCardProps) {
         inStock ? 'border-gray-200' : 'border-red-200 opacity-60'
       }`}
     >
-      {/* Photo area */}
       <div className="w-full aspect-square bg-gray-100 relative overflow-hidden">
         {product.photo ? (
-          <img
-            src={product.photo}
-            alt={product.name}
-            className="w-full h-full object-cover"
-          />
+          <img src={product.photo} alt={product.name} className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <Package className="w-10 h-10 text-gray-300" />
           </div>
         )}
-        {/* Stock badge */}
         <div
           className={`absolute top-1.5 right-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-            inStock
-              ? 'bg-green-100 text-green-700'
-              : 'bg-red-100 text-red-700'
+            inStock ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
           }`}
         >
           {inStock ? `${product.stock} \u0448\u0442` : '\u041D\u0435\u0442'}
         </div>
       </div>
-
-      {/* Info */}
       <div className="p-2.5 flex flex-col gap-1">
         <span className="text-xs font-medium text-gray-900 line-clamp-2 leading-tight">
           {product.name}
@@ -369,12 +331,15 @@ function ProductCard({ product, onSelect }: ProductCardProps) {
 export default function CheckCreatePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user, isRole } = useAuth();
+  const canEditDate = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
-  // Client search state
-  const [clientSearch, setClientSearch] = useState('');
-  const [showClientDropdown, setShowClientDropdown] = useState(false);
+  // Plate number search state
+  const [plateSearch, setPlateSearch] = useState('');
+  const [showPlateDropdown, setShowPlateDropdown] = useState(false);
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [selectedCarId, setSelectedCarId] = useState('');
+  const plateInputRef = useRef<HTMLInputElement>(null);
 
   // Form fields
   const [masterId, setMasterId] = useState('');
@@ -385,6 +350,11 @@ export default function CheckCreatePage() {
   const [discount, setDiscount] = useState(0);
   const [isDeferred, setIsDeferred] = useState(false);
 
+  // Payment calculation
+  const [cashGiven, setCashGiven] = useState<number>(0);
+  const [cashAmount, setCashAmount] = useState<number>(0);
+  const [cardAmount, setCardAmount] = useState<number>(0);
+
   // Service lines
   const [serviceLines, setServiceLines] = useState<ServiceLineForm[]>([]);
 
@@ -394,15 +364,21 @@ export default function CheckCreatePage() {
   // Product picker modal
   const [showProductPicker, setShowProductPicker] = useState(false);
 
-  // -----------------------------------------------------------------------
-  // Prevent accidental swipe-back / page leave
-  // -----------------------------------------------------------------------
+  // Set default master to current user if they are a master
+  useEffect(() => {
+    if (user && !masterId) {
+      if (user.role === UserRole.MASTER || user.role === UserRole.ADMIN) {
+        setMasterId(user.id);
+      }
+    }
+  }, [user, masterId]);
+
+  // Prevent accidental page leave
   useEffect(() => {
     window.history.pushState({ checkGuard: true }, '');
-    const handler = (e: PopStateEvent) => {
+    const handler = () => {
       if (serviceLines.length > 0 || productLines.length > 0) {
         window.history.pushState({ checkGuard: true }, '');
-        // Could show a toast warning
       }
     };
     window.addEventListener('popstate', handler);
@@ -427,14 +403,14 @@ export default function CheckCreatePage() {
     },
   });
 
-  // Fetch clients for autocomplete
+  // Fetch clients by plate number search
   const { data: clientsData } = useQuery<Client[]>({
-    queryKey: ['clients', clientSearch],
+    queryKey: ['clients', plateSearch],
     queryFn: async () => {
-      const res = await clientsApi.getAll({ search: clientSearch, limit: 20 });
+      const res = await clientsApi.getAll({ search: plateSearch, limit: 20 });
       return res.data?.data ?? res.data;
     },
-    enabled: clientSearch.length >= 1,
+    enabled: plateSearch.length >= 1,
   });
 
   // Fetch all services
@@ -479,15 +455,60 @@ export default function CheckCreatePage() {
   }, [productLines]);
 
   const totalRevenue = useMemo(() => {
-    return serviceTotal + productTotal - discount;
+    return Math.max(serviceTotal + productTotal - discount, 0);
   }, [serviceTotal, productTotal, discount]);
 
-  // Client selection
-  const handleSelectClient = (client: Client) => {
+  // Change calculation for cash payment
+  const changeAmount = useMemo(() => {
+    if (paymentMethod === 'cash') {
+      return Math.max(cashGiven - totalRevenue, 0);
+    }
+    return 0;
+  }, [cashGiven, totalRevenue, paymentMethod]);
+
+  // Auto-sync cash/card amounts for mixed payment
+  useEffect(() => {
+    if (paymentMethod === 'cash') {
+      setCashAmount(totalRevenue);
+      setCardAmount(0);
+    } else if (paymentMethod === 'card') {
+      setCashAmount(0);
+      setCardAmount(totalRevenue);
+    }
+  }, [paymentMethod, totalRevenue]);
+
+  // Flatten cars from found clients for plate-based dropdown
+  const plateResults = useMemo(() => {
+    if (!clientsData) return [];
+    const results: { client: Client; car: Car }[] = [];
+    for (const client of clientsData) {
+      if (client.cars) {
+        for (const car of client.cars) {
+          if (plateSearch && car.plateNumber.toLowerCase().includes(plateSearch.toLowerCase())) {
+            results.push({ client, car });
+          }
+        }
+      }
+    }
+    // Also show all cars if the search matches the client name/phone
+    if (results.length === 0) {
+      for (const client of clientsData) {
+        if (client.cars) {
+          for (const car of client.cars) {
+            results.push({ client, car });
+          }
+        }
+      }
+    }
+    return results;
+  }, [clientsData, plateSearch]);
+
+  // Client/Car selection via plate number
+  const handleSelectPlateResult = (client: Client, car: Car) => {
     setSelectedClient(client);
-    setClientSearch(client.fullName);
-    setShowClientDropdown(false);
-    setSelectedCarId('');
+    setSelectedCarId(car.id);
+    setPlateSearch(car.plateNumber);
+    setShowPlateDropdown(false);
   };
 
   // Service line handlers
@@ -503,7 +524,6 @@ export default function CheckCreatePage() {
       prev.map((line, i) => {
         if (i !== index) return line;
         const updated = { ...line, [field]: value };
-        // Auto-fill from service selection
         if (field === 'serviceId' && allServices) {
           const svc = allServices.find((s) => s.id === value);
           if (svc) {
@@ -520,10 +540,9 @@ export default function CheckCreatePage() {
     setServiceLines((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Product line handlers -- now driven by the picker modal
+  // Product line handlers
   const handleProductSelected = useCallback((product: Product) => {
     setProductLines((prev) => {
-      // If product already in the list, just bump quantity
       const existing = prev.findIndex((l) => l.productId === product.id);
       if (existing !== -1) {
         return prev.map((line, i) =>
@@ -547,17 +566,7 @@ export default function CheckCreatePage() {
     setProductLines((prev) =>
       prev.map((line, i) => {
         if (i !== index) return line;
-        const updated = { ...line, [field]: value };
-        // Auto-fill from product selection (kept for manual edits if any)
-        if (field === 'productId' && allProducts) {
-          const prod = allProducts.find((p) => p.id === value);
-          if (prod) {
-            updated.name = prod.name;
-            updated.sellPrice = prod.sellPrice;
-            updated.costPrice = prod.costPrice;
-          }
-        }
-        return updated;
+        return { ...line, [field]: value };
       })
     );
   };
@@ -571,7 +580,7 @@ export default function CheckCreatePage() {
     e.preventDefault();
 
     if (!selectedClient) {
-      toast.error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043A\u043B\u0438\u0435\u043D\u0442\u0430');
+      toast.error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043A\u043B\u0438\u0435\u043D\u0442\u0430 \u043F\u043E \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440\u0443');
       return;
     }
     if (!selectedCarId) {
@@ -602,6 +611,17 @@ export default function CheckCreatePage() {
       totalCost: Number(l.costPrice) * Number(l.quantity),
     }));
 
+    let finalCash = 0;
+    let finalCard = 0;
+    if (paymentMethod === 'cash') {
+      finalCash = totalRevenue;
+    } else if (paymentMethod === 'card') {
+      finalCard = totalRevenue;
+    } else if (paymentMethod === 'cash_card') {
+      finalCash = cashAmount;
+      finalCard = Math.max(totalRevenue - cashAmount, 0);
+    }
+
     createMutation.mutate({
       clientId: selectedClient.id,
       carId: selectedCarId,
@@ -612,382 +632,559 @@ export default function CheckCreatePage() {
       products,
       discount,
       paymentMethod,
+      cashAmount: finalCash,
+      cardAmount: finalCard,
       comment: comment || undefined,
       isDeferred,
     });
   };
 
+  const itemCount = serviceLines.length + productLines.length;
+
   return (
-    <div className="space-y-6">
+    <div className="max-w-3xl mx-auto pb-8">
       {/* Header */}
-      <div className="page-header">
+      <div className="page-header mb-4">
         <div className="flex items-center gap-3">
           <button onClick={() => navigate(-1)} className="btn-ghost btn-sm">
             <ArrowLeft className="w-4 h-4" />
           </button>
-          <h1 className="page-title">{'\u041D\u043E\u0432\u044B\u0439 \u0447\u0435\u043A'}</h1>
+          <div className="flex items-center gap-2">
+            <Receipt className="w-5 h-5 text-primary-600" />
+            <h1 className="page-title">{'\u041D\u043E\u0432\u044B\u0439 \u0447\u0435\u043A'}</h1>
+          </div>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Client & Car */}
-        <div className="card card-body space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">
-            {'\u041A\u043B\u0438\u0435\u043D\u0442 \u0438 \u0430\u0432\u0442\u043E\u043C\u043E\u0431\u0438\u043B\u044C'}
-          </h2>
+      <form onSubmit={handleSubmit}>
+        {/* ===== Receipt-style container ===== */}
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
 
-          {/* Client search */}
-          <div className="relative">
-            <label className="label">{'\u041A\u043B\u0438\u0435\u043D\u0442'}</label>
+          {/* Receipt header */}
+          <div className="bg-gray-900 text-white px-5 py-4">
+            <div className="text-center">
+              <h2 className="text-lg font-bold tracking-wider">{'\u0417\u0410\u041A\u0410\u0417-\u041D\u0410\u0420\u042F\u0414'}</h2>
+              <p className="text-gray-400 text-xs mt-1">{format(new Date(), 'dd.MM.yyyy HH:mm')}</p>
+            </div>
+          </div>
+
+          {/* Search by plate number */}
+          <div className="px-5 pt-5 pb-3 border-b border-dashed border-gray-300">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2 block">
+              {'\u041F\u043E\u0438\u0441\u043A \u043F\u043E \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440\u0443'}
+            </label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
+                ref={plateInputRef}
                 type="text"
-                value={clientSearch}
+                value={plateSearch}
                 onChange={(e) => {
-                  setClientSearch(e.target.value);
-                  setShowClientDropdown(true);
-                  if (!e.target.value) {
+                  const val = e.target.value.toUpperCase();
+                  setPlateSearch(val);
+                  setShowPlateDropdown(true);
+                  if (!val) {
                     setSelectedClient(null);
+                    setSelectedCarId('');
                   }
                 }}
-                onFocus={() => setShowClientDropdown(true)}
-                placeholder={'\u041F\u043E\u0438\u0441\u043A \u043A\u043B\u0438\u0435\u043D\u0442\u0430 \u043F\u043E \u0438\u043C\u0435\u043D\u0438 \u0438\u043B\u0438 \u0442\u0435\u043B\u0435\u0444\u043E\u043D\u0443...'}
-                className="input pl-10"
+                onFocus={() => setShowPlateDropdown(true)}
+                placeholder="A123BC77"
+                className="input pl-10 text-lg font-mono tracking-widest uppercase"
+                autoComplete="off"
               />
+              {plateSearch && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlateSearch('');
+                    setSelectedClient(null);
+                    setSelectedCarId('');
+                  }}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
-            {showClientDropdown && clientsData && clientsData.length > 0 && !selectedClient && (
-              <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                {clientsData.map((client) => (
+
+            {/* Plate search dropdown */}
+            {showPlateDropdown && plateSearch && !selectedClient && plateResults.length > 0 && (
+              <div className="mt-2 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                {plateResults.map(({ client, car }) => (
                   <button
-                    key={client.id}
+                    key={car.id}
                     type="button"
-                    onClick={() => handleSelectClient(client)}
+                    onClick={() => handleSelectPlateResult(client, car)}
                     className="w-full text-left px-4 py-2.5 hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
                   >
-                    <div className="text-sm font-medium text-gray-900">{client.fullName}</div>
-                    <div className="text-xs text-gray-500">{client.phone}</div>
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono font-bold text-gray-900 bg-gray-100 px-2 py-0.5 rounded">
+                        {car.plateNumber}
+                      </span>
+                      <span className="text-sm text-gray-500">{car.makeModel}</span>
+                    </div>
+                    <div className="text-xs text-gray-400 mt-0.5">
+                      {client.fullName} {'\u2022'} {client.phone}
+                    </div>
                   </button>
                 ))}
               </div>
             )}
-          </div>
 
-          {/* Car select */}
-          {selectedClient && (
-            <div>
-              <label className="label">{'\u0410\u0432\u0442\u043E\u043C\u043E\u0431\u0438\u043B\u044C'}</label>
-              <select
-                value={selectedCarId}
-                onChange={(e) => setSelectedCarId(e.target.value)}
-                className="input"
-              >
-                <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0430\u0432\u0442\u043E\u043C\u043E\u0431\u0438\u043B\u044C'}</option>
-                {selectedClient.cars?.map((car) => (
-                  <option key={car.id} value={car.id}>
-                    {car.makeModel} {'\u2014'} {car.plateNumber}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
-
-        {/* Master, Date, Mileage */}
-        <div className="card card-body space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">
-            {'\u041E\u0441\u043D\u043E\u0432\u043D\u0430\u044F \u0438\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u044F'}
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="label">{'\u041C\u0430\u0441\u0442\u0435\u0440'}</label>
-              <select
-                value={masterId}
-                onChange={(e) => setMasterId(e.target.value)}
-                className="input"
-              >
-                <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u0430\u0441\u0442\u0435\u0440\u0430'}</option>
-                {masters?.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.fullName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label">{'\u0414\u0430\u0442\u0430'}</label>
-              <input
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="input"
-              />
-            </div>
-            <div>
-              <label className="label">{'\u041F\u0440\u043E\u0431\u0435\u0433 (\u043A\u043C)'}</label>
-              <input
-                type="number"
-                value={mileage}
-                onChange={(e) => setMileage(e.target.value)}
-                placeholder="0"
-                className="input"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Services */}
-        <div className="card card-body space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">{'\u0423\u0441\u043B\u0443\u0433\u0438'}</h2>
-            <button type="button" onClick={addServiceLine} className="btn-secondary btn-sm">
-              <Plus className="w-4 h-4" />
-              {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0443\u0441\u043B\u0443\u0433\u0443'}
-            </button>
-          </div>
-
-          {serviceLines.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-4">
-              {'\u041D\u0435\u0442 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u043D\u044B\u0445 \u0443\u0441\u043B\u0443\u0433'}
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {serviceLines.map((line, index) => (
-                <div key={index} className="flex flex-col sm:flex-row gap-3 p-3 bg-gray-50 rounded-lg">
-                  <div className="flex-1">
-                    <label className="label">{'\u0423\u0441\u043B\u0443\u0433\u0430'}</label>
-                    <select
-                      value={line.serviceId}
-                      onChange={(e) => updateServiceLine(index, 'serviceId', e.target.value)}
-                      className="input"
-                    >
-                      <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0443\u0441\u043B\u0443\u0433\u0443'}</option>
-                      {allServices?.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name} {'\u2014'} {formatCurrency(s.defaultPrice)}
-                        </option>
-                      ))}
-                    </select>
+            {/* Selected client/car info */}
+            {selectedClient && (
+              <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">{selectedClient.fullName}</div>
+                    <div className="text-xs text-gray-500">{selectedClient.phone}</div>
                   </div>
-                  <div className="w-full sm:w-40">
-                    <label className="label">{'\u041C\u0430\u0441\u0442\u0435\u0440'}</label>
-                    <select
-                      value={line.masterId}
-                      onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
-                      className="input"
-                    >
-                      <option value="">{'\u041C\u0430\u0441\u0442\u0435\u0440'}</option>
-                      {masters?.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.fullName}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="w-full sm:w-28">
-                    <label className="label">{'\u0426\u0435\u043D\u0430'}</label>
-                    <input
-                      type="number"
-                      value={line.price}
-                      onChange={(e) => updateServiceLine(index, 'price', Number(e.target.value))}
-                      className="input"
-                    />
-                  </div>
-                  <div className="w-full sm:w-20">
-                    <label className="label">{'\u041A\u043E\u043B-\u0432\u043E'}</label>
-                    <input
-                      type="number"
-                      value={line.quantity}
-                      min={1}
-                      onChange={(e) => updateServiceLine(index, 'quantity', Number(e.target.value))}
-                      className="input"
-                    />
-                  </div>
-                  <div className="w-full sm:w-28 flex flex-col">
-                    <label className="label">{'\u0418\u0442\u043E\u0433\u043E'}</label>
-                    <div className="input bg-gray-100 flex items-center font-semibold">
-                      {formatCurrency(line.price * line.quantity)}
-                    </div>
-                  </div>
-                  <div className="flex items-end">
-                    <button
-                      type="button"
-                      onClick={() => removeServiceLine(index)}
-                      className="btn-ghost btn-sm text-red-500 hover:text-red-700"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                  <div className="text-right">
+                    {selectedClient.cars?.find(c => c.id === selectedCarId) && (
+                      <>
+                        <div className="font-mono font-bold text-sm">
+                          {selectedClient.cars.find(c => c.id === selectedCarId)?.plateNumber}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {selectedClient.cars.find(c => c.id === selectedCarId)?.makeModel}
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
-
-          {serviceLines.length > 0 && (
-            <div className="text-right text-sm font-semibold text-gray-700">
-              {'\u0418\u0442\u043E\u0433\u043E \u0443\u0441\u043B\u0443\u0433\u0438: '}{formatCurrency(serviceTotal)}
-            </div>
-          )}
-        </div>
-
-        {/* Products */}
-        <div className="card card-body space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">{'\u0422\u043E\u0432\u0430\u0440\u044B'}</h2>
-            <button
-              type="button"
-              onClick={() => setShowProductPicker(true)}
-              className="btn-secondary btn-sm"
-            >
-              <Plus className="w-4 h-4" />
-              {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u0432\u0430\u0440'}
-            </button>
+                {/* Car selector if client has multiple cars */}
+                {selectedClient.cars && selectedClient.cars.length > 1 && (
+                  <div className="mt-2">
+                    <select
+                      value={selectedCarId}
+                      onChange={(e) => setSelectedCarId(e.target.value)}
+                      className="input text-sm"
+                    >
+                      {selectedClient.cars.map((car) => (
+                        <option key={car.id} value={car.id}>
+                          {car.plateNumber} {'\u2014'} {car.makeModel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {productLines.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-4">
-              {'\u041D\u0435\u0442 \u0434\u043E\u0431\u0430\u0432\u043B\u0435\u043D\u043D\u044B\u0445 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {productLines.map((line, index) => (
-                <div key={index} className="flex flex-col sm:flex-row gap-3 p-3 bg-gray-50 rounded-lg items-center">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-900 truncate">
-                      {line.name || '\u0422\u043E\u0432\u0430\u0440'}
+          {/* Master & Date & Mileage */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
+                  {'\u041C\u0430\u0441\u0442\u0435\u0440'}
+                </label>
+                <select
+                  value={masterId}
+                  onChange={(e) => setMasterId(e.target.value)}
+                  className="input text-sm"
+                >
+                  <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435'}</option>
+                  {masters?.map((m) => (
+                    <option key={m.id} value={m.id}>{m.fullName}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
+                  {'\u0414\u0430\u0442\u0430'}
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  disabled={!canEditDate}
+                  className={`input text-sm ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                />
+                {!canEditDate && (
+                  <p className="text-[10px] text-gray-400 mt-0.5">{'\u0422\u043E\u043B\u044C\u043A\u043E \u0441\u0435\u0433\u043E\u0434\u043D\u044F'}</p>
+                )}
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
+                  {'\u041F\u0440\u043E\u0431\u0435\u0433'}
+                </label>
+                <input
+                  type="number"
+                  value={mileage}
+                  onChange={(e) => setMileage(e.target.value)}
+                  placeholder="\u043A\u043C"
+                  className="input text-sm"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* ===== SERVICES SECTION ===== */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                {'\u0423\u0441\u043B\u0443\u0433\u0438'}
+              </h3>
+              <button type="button" onClick={addServiceLine} className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1">
+                <Plus className="w-3.5 h-3.5" />
+                {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C'}
+              </button>
+            </div>
+
+            {serviceLines.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-3 italic">
+                {'\u041D\u0435\u0442 \u0443\u0441\u043B\u0443\u0433'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {serviceLines.map((line, index) => (
+                  <div key={index} className="bg-gray-50 rounded-lg p-3 space-y-2">
+                    <div className="flex gap-2">
+                      <select
+                        value={line.serviceId}
+                        onChange={(e) => updateServiceLine(index, 'serviceId', e.target.value)}
+                        className="input text-sm flex-1"
+                      >
+                        <option value="">{'\u0423\u0441\u043B\u0443\u0433\u0430...'}</option>
+                        {allServices?.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} {'\u2014'} {formatCurrency(s.defaultPrice)}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => removeServiceLine(index)}
+                        className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <div className="text-xs text-gray-500">
-                      {formatCurrency(line.sellPrice)} {'\u0437\u0430 \u0448\u0442'}
+                    <div className="flex gap-2 items-center">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1">
+                          <UserIcon className="w-3 h-3 text-gray-400" />
+                          <select
+                            value={line.masterId}
+                            onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
+                            className="input text-xs py-1"
+                          >
+                            <option value="">{'\u041C\u0430\u0441\u0442\u0435\u0440'}</option>
+                            {masters?.map((m) => (
+                              <option key={m.id} value={m.id}>{m.fullName}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <input
+                        type="number"
+                        value={line.price}
+                        onChange={(e) => updateServiceLine(index, 'price', Number(e.target.value))}
+                        className="input text-sm w-24 text-right"
+                        placeholder={'\u0426\u0435\u043D\u0430'}
+                      />
+                      <span className="text-gray-400 text-xs">{'\u00D7'}</span>
+                      <input
+                        type="number"
+                        value={line.quantity}
+                        min={1}
+                        onChange={(e) => updateServiceLine(index, 'quantity', Number(e.target.value))}
+                        className="input text-sm w-14 text-center"
+                      />
+                      <span className="text-sm font-semibold text-gray-700 w-24 text-right">
+                        {formatCurrency(line.price * line.quantity)}
+                      </span>
                     </div>
                   </div>
-                  <div className="w-full sm:w-20">
-                    <label className="label">{'\u041A\u043E\u043B-\u0432\u043E'}</label>
-                    <input
-                      type="number"
-                      value={line.quantity}
-                      min={1}
-                      onChange={(e) => updateProductLine(index, 'quantity', Number(e.target.value))}
-                      className="input"
-                    />
-                  </div>
-                  <div className="w-full sm:w-28 flex flex-col">
-                    <label className="label">{'\u0418\u0442\u043E\u0433\u043E'}</label>
-                    <div className="input bg-gray-100 flex items-center font-semibold">
+                ))}
+              </div>
+            )}
+
+            {serviceLines.length > 0 && (
+              <div className="text-right text-sm font-semibold text-gray-600 mt-2 pr-1">
+                {'\u0418\u0442\u043E\u0433\u043E: '}{formatCurrency(serviceTotal)}
+              </div>
+            )}
+          </div>
+
+          {/* ===== PRODUCTS SECTION ===== */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                {'\u0422\u043E\u0432\u0430\u0440\u044B'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowProductPicker(true)}
+                className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C'}
+              </button>
+            </div>
+
+            {productLines.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-3 italic">
+                {'\u041D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {productLines.map((line, index) => (
+                  <div key={index} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-gray-900 truncate">
+                        {line.name}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {formatCurrency(line.sellPrice)} / {'\u0448\u0442'}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (line.quantity > 1) {
+                            updateProductLine(index, 'quantity', line.quantity - 1);
+                          }
+                        }}
+                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                      >
+                        <Minus className="w-3.5 h-3.5" />
+                      </button>
+                      <span className="w-8 text-center text-sm font-medium">{line.quantity}</span>
+                      <button
+                        type="button"
+                        onClick={() => updateProductLine(index, 'quantity', line.quantity + 1)}
+                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-700 w-24 text-right">
                       {formatCurrency(line.sellPrice * line.quantity)}
-                    </div>
-                  </div>
-                  <div className="flex items-end">
+                    </span>
                     <button
                       type="button"
                       onClick={() => removeProductLine(index)}
-                      className="btn-ghost btn-sm text-red-500 hover:text-red-700"
+                      className="p-1 text-red-400 hover:text-red-600"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
+                ))}
+              </div>
+            )}
+
+            {productLines.length > 0 && (
+              <div className="text-right text-sm font-semibold text-gray-600 mt-2 pr-1">
+                {'\u0418\u0442\u043E\u0433\u043E: '}{formatCurrency(productTotal)}
+              </div>
+            )}
+          </div>
+
+          {/* ===== RECEIPT SUMMARY ===== */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300 bg-gray-50">
+            <div className="space-y-1.5 font-mono text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">{'\u0423\u0441\u043B\u0443\u0433\u0438'} ({serviceLines.length})</span>
+                <span>{formatCurrency(serviceTotal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">{'\u0422\u043E\u0432\u0430\u0440\u044B'} ({productLines.length})</span>
+                <span>{formatCurrency(productTotal)}</span>
+              </div>
+              {discount > 0 && (
+                <div className="flex justify-between text-red-500">
+                  <span>{'\u0421\u043A\u0438\u0434\u043A\u0430'}</span>
+                  <span>-{formatCurrency(discount)}</span>
                 </div>
-              ))}
-            </div>
-          )}
-
-          {productLines.length > 0 && (
-            <div className="text-right text-sm font-semibold text-gray-700">
-              {'\u0418\u0442\u043E\u0433\u043E \u0442\u043E\u0432\u0430\u0440\u044B: '}{formatCurrency(productTotal)}
-            </div>
-          )}
-        </div>
-
-        {/* Summary, Payment, Comment */}
-        <div className="card card-body space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">{'\u0418\u0442\u043E\u0433\u043E'}</h2>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">{'\u0423\u0441\u043B\u0443\u0433\u0438:'}</span>
-                <span className="font-medium">{formatCurrency(serviceTotal)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">{'\u0422\u043E\u0432\u0430\u0440\u044B:'}</span>
-                <span className="font-medium">{formatCurrency(productTotal)}</span>
-              </div>
-              <div className="flex justify-between text-sm items-center gap-2">
-                <span className="text-gray-500">{'\u0421\u043A\u0438\u0434\u043A\u0430:'}</span>
-                <input
-                  type="number"
-                  value={discount}
-                  min={0}
-                  onChange={(e) => setDiscount(Number(e.target.value))}
-                  className="input w-32 text-right"
-                />
-              </div>
-              <div className="flex justify-between text-base font-bold border-t pt-2">
-                <span>{'\u0418\u0442\u043E\u0433\u043E \u043A \u043E\u043F\u043B\u0430\u0442\u0435:'}</span>
-                <span className="text-primary-600">{formatCurrency(totalRevenue)}</span>
+              )}
+              <div className="border-t border-gray-300 pt-1.5 mt-1.5">
+                <div className="flex justify-between text-lg font-bold text-gray-900">
+                  <span>{'\u0418\u0422\u041E\u0413\u041E'}</span>
+                  <span>{formatCurrency(totalRevenue)}</span>
+                </div>
               </div>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="label">{'\u041C\u0435\u0442\u043E\u0434 \u043E\u043F\u043B\u0430\u0442\u044B'}</label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="input"
-                >
-                  <option value="cash">{'\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435'}</option>
-                  <option value="card">{'\u041A\u0430\u0440\u0442\u0430'}</option>
-                  <option value="warranty">{'\u0413\u0430\u0440\u0430\u043D\u0442\u0438\u044F'}</option>
-                  <option value="cash_card">{'\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435 + \u041A\u0430\u0440\u0442\u0430'}</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="label">{'\u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439'}</label>
-                <textarea
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  rows={3}
-                  placeholder={'\u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A \u0447\u0435\u043A\u0443...'}
-                  className="input"
-                />
-              </div>
-
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isDeferred}
-                  onChange={(e) => setIsDeferred(e.target.checked)}
-                  className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                <span className="text-sm text-gray-700">{'\u041E\u0442\u043B\u043E\u0436\u0435\u043D\u043D\u0430\u044F \u043E\u043F\u043B\u0430\u0442\u0430'}</span>
-              </label>
+            {/* Discount input */}
+            <div className="mt-3 flex items-center gap-2">
+              <label className="text-xs text-gray-500 whitespace-nowrap">{'\u0421\u043A\u0438\u0434\u043A\u0430:'}</label>
+              <input
+                type="number"
+                value={discount || ''}
+                min={0}
+                onChange={(e) => setDiscount(Number(e.target.value))}
+                className="input text-sm w-28 text-right"
+                placeholder="0"
+              />
+              <span className="text-xs text-gray-400">{'\u20BD'}</span>
             </div>
           </div>
-        </div>
 
-        {/* Submit */}
-        <div className="flex justify-end gap-3">
-          <button type="button" onClick={() => navigate(-1)} className="btn-secondary">
-            {'\u041E\u0442\u043C\u0435\u043D\u0430'}
-          </button>
-          <button
-            type="submit"
-            disabled={createMutation.isPending}
-            className="btn-primary"
-          >
-            {createMutation.isPending ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {'\u0421\u043E\u0437\u0434\u0430\u043D\u0438\u0435...'}
-              </>
-            ) : (
-              <>
-                <Plus className="w-4 h-4" />
-                {'\u0421\u043E\u0437\u0434\u0430\u0442\u044C \u0447\u0435\u043A'}
-              </>
+          {/* ===== PAYMENT SECTION ===== */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+              {'\u041E\u043F\u043B\u0430\u0442\u0430'}
+            </h3>
+
+            {/* Payment method buttons */}
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('cash')}
+                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                  paymentMethod === 'cash'
+                    ? 'border-green-500 bg-green-50 text-green-700'
+                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}
+              >
+                <Banknote className="w-5 h-5" />
+                <span className="text-[10px] font-semibold">{'\u041D\u0430\u043B'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('card')}
+                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                  paymentMethod === 'card'
+                    ? 'border-blue-500 bg-blue-50 text-blue-700'
+                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}
+              >
+                <CreditCard className="w-5 h-5" />
+                <span className="text-[10px] font-semibold">{'\u041A\u0430\u0440\u0442\u0430'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('cash_card')}
+                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                  paymentMethod === 'cash_card'
+                    ? 'border-purple-500 bg-purple-50 text-purple-700'
+                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}
+              >
+                <Calculator className="w-5 h-5" />
+                <span className="text-[10px] font-semibold">{'\u0421\u043F\u043B\u0438\u0442'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('warranty')}
+                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                  paymentMethod === 'warranty'
+                    ? 'border-yellow-500 bg-yellow-50 text-yellow-700'
+                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                }`}
+              >
+                <Receipt className="w-5 h-5" />
+                <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
+              </button>
+            </div>
+
+            {/* Cash payment - change calculation */}
+            {paymentMethod === 'cash' && (
+              <div className="bg-green-50 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-gray-700">{'\u041A\u043B\u0438\u0435\u043D\u0442 \u0434\u0430\u043B:'}</label>
+                  <input
+                    type="number"
+                    value={cashGiven || ''}
+                    onChange={(e) => setCashGiven(Number(e.target.value))}
+                    className="input w-36 text-right text-lg font-bold"
+                    placeholder="0"
+                  />
+                </div>
+                {cashGiven > 0 && (
+                  <div className="flex items-center justify-between border-t border-green-200 pt-2">
+                    <span className="text-sm font-medium text-gray-700">{'\u0421\u0434\u0430\u0447\u0430:'}</span>
+                    <span className={`text-xl font-bold ${changeAmount > 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                      {formatCurrency(changeAmount)}
+                    </span>
+                  </div>
+                )}
+              </div>
             )}
-          </button>
+
+            {/* Mixed payment - cash/card split */}
+            {paymentMethod === 'cash_card' && (
+              <div className="bg-purple-50 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Banknote className="w-4 h-4 text-green-600" />
+                    <label className="text-sm font-medium text-gray-700">{'\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435:'}</label>
+                  </div>
+                  <input
+                    type="number"
+                    value={cashAmount || ''}
+                    onChange={(e) => setCashAmount(Number(e.target.value))}
+                    className="input w-36 text-right text-lg font-bold"
+                    placeholder="0"
+                    max={totalRevenue}
+                  />
+                </div>
+                <div className="flex items-center justify-between border-t border-purple-200 pt-2">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-blue-600" />
+                    <label className="text-sm font-medium text-gray-700">{'\u041A\u0430\u0440\u0442\u0430:'}</label>
+                  </div>
+                  <span className="text-lg font-bold text-blue-600">
+                    {formatCurrency(Math.max(totalRevenue - cashAmount, 0))}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* Deferred payment */}
+            <label className="flex items-center gap-2 cursor-pointer mt-3">
+              <input
+                type="checkbox"
+                checked={isDeferred}
+                onChange={(e) => setIsDeferred(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">{'\u041E\u0442\u043B\u043E\u0436\u0435\u043D\u043D\u0430\u044F \u043E\u043F\u043B\u0430\u0442\u0430'}</span>
+            </label>
+          </div>
+
+          {/* Comment */}
+          <div className="px-5 py-4 border-b border-gray-200">
+            <textarea
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              rows={2}
+              placeholder={'\u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A \u0447\u0435\u043A\u0443...'}
+              className="input text-sm w-full"
+            />
+          </div>
+
+          {/* Submit button */}
+          <div className="px-5 py-4 bg-gray-50">
+            <button
+              type="submit"
+              disabled={createMutation.isPending || itemCount === 0}
+              className="w-full btn-primary py-3.5 text-base font-bold rounded-xl disabled:opacity-50"
+            >
+              {createMutation.isPending ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  {'\u0421\u043E\u0437\u0434\u0430\u043D\u0438\u0435...'}
+                </span>
+              ) : (
+                <span className="flex items-center justify-center gap-2">
+                  <Receipt className="w-5 h-5" />
+                  {'\u041F\u0440\u043E\u0431\u0438\u0442\u044C \u0447\u0435\u043A'} {'\u2014'} {formatCurrency(totalRevenue)}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              className="w-full mt-2 btn-ghost py-2.5 text-sm text-gray-500"
+            >
+              {'\u041E\u0442\u043C\u0435\u043D\u0430'}
+            </button>
+          </div>
         </div>
       </form>
 

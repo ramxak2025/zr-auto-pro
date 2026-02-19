@@ -115,6 +115,8 @@ type Check struct {
 	Discount          float64            `json:"discount"`
 	IsDeferred        bool               `json:"isDeferred"`
 	PaymentMethod     string             `json:"paymentMethod"`
+	CashAmount        float64            `json:"cashAmount"`
+	CardAmount        float64            `json:"cardAmount"`
 	ServiceTotal      float64            `json:"serviceTotal"`
 	ProductTotal      float64            `json:"productTotal"`
 	TotalRevenue      float64            `json:"totalRevenue"`
@@ -366,6 +368,8 @@ type CreateCheckRequest struct {
 	Discount      float64                   `json:"discount"`
 	IsDeferred    bool                      `json:"isDeferred"`
 	PaymentMethod string                    `json:"paymentMethod"`
+	CashAmount    float64                   `json:"cashAmount"`
+	CardAmount    float64                   `json:"cardAmount"`
 	Services      []CreateCheckServiceLine  `json:"services"`
 	Products      []CreateCheckProductLine  `json:"products"`
 }

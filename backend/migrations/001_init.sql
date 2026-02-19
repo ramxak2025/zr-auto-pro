@@ -272,11 +272,16 @@ CREATE TABLE IF NOT EXISTS work_modes (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Add cash_amount and card_amount to checks for mixed payments
+DO $$ BEGIN ALTER TABLE checks ADD COLUMN cash_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE checks ADD COLUMN card_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
 CREATE INDEX IF NOT EXISTS idx_clients_tenant ON clients(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_cars_tenant ON cars(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_cars_plate ON cars(plate_number);
 CREATE INDEX IF NOT EXISTS idx_checks_tenant ON checks(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_checks_date ON checks(date);
 CREATE INDEX IF NOT EXISTS idx_checks_master ON checks(master_id);

@@ -204,6 +204,7 @@ func main() {
 	auth.GET("/schedule", handlers.GetSchedule)
 	auth.GET("/schedule/work-modes", handlers.GetWorkModes)
 	auth.GET("/schedule/today", handlers.GetTodaySchedule)
+	auth.GET("/schedule/my-stats", handlers.GetMyStats)
 	auth.POST("/schedule", handlers.CreateScheduleEntry)
 	auth.POST("/schedule/work-modes", handlers.CreateWorkMode)
 	auth.PATCH("/schedule/:id", handlers.UpdateScheduleEntry)

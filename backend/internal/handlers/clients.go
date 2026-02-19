@@ -22,19 +22,23 @@ func GetClients(c *gin.Context) {
 	var total int
 	if search != "" {
 		s := "%" + search + "%"
-		database.DB.QueryRow("SELECT COUNT(*) FROM clients WHERE tenant_id=$1 AND (full_name ILIKE $2 OR phone ILIKE $2)", tenantID, s).Scan(&total)
+		database.DB.QueryRow(`SELECT COUNT(DISTINCT c.id) FROM clients c
+			LEFT JOIN cars ca ON ca.client_id = c.id
+			WHERE c.tenant_id=$1 AND (c.full_name ILIKE $2 OR c.phone ILIKE $2 OR ca.plate_number ILIKE $2)`, tenantID, s).Scan(&total)
 	} else {
 		database.DB.QueryRow("SELECT COUNT(*) FROM clients WHERE tenant_id=$1", tenantID).Scan(&total)
 	}
 
-	query := `SELECT c.id, c.full_name, c.phone, COALESCE(c.comment,''), c.created_at FROM clients c WHERE c.tenant_id=$1`
+	query := `SELECT DISTINCT c.id, c.full_name, c.phone, COALESCE(c.comment,''), c.created_at FROM clients c`
 	args := []interface{}{tenantID}
 	argIdx := 2
 
 	if search != "" {
-		query += " AND (c.full_name ILIKE $" + strconv.Itoa(argIdx) + " OR c.phone ILIKE $" + strconv.Itoa(argIdx) + ")"
+		query += ` LEFT JOIN cars ca ON ca.client_id = c.id WHERE c.tenant_id=$1 AND (c.full_name ILIKE $` + strconv.Itoa(argIdx) + ` OR c.phone ILIKE $` + strconv.Itoa(argIdx) + ` OR ca.plate_number ILIKE $` + strconv.Itoa(argIdx) + `)`
 		args = append(args, "%"+search+"%")
 		argIdx++
+	} else {
+		query += ` WHERE c.tenant_id=$1`
 	}
 	query += " ORDER BY c.created_at DESC LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
 	args = append(args, limit, offset)

@@ -173,6 +173,8 @@ export interface Check {
   discount?: number;
   isDeferred?: boolean;
   paymentMethod: PaymentMethod;
+  cashAmount: number;
+  cardAmount: number;
   serviceTotal: number;
   productTotal: number;
   totalRevenue: number;

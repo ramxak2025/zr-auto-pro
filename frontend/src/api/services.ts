@@ -134,6 +134,7 @@ export const scheduleApi = {
   createWorkMode: (data: any) => api.post('/schedule/work-modes', data),
   updateWorkMode: (id: string, data: any) => api.patch(`/schedule/work-modes/${id}`, data),
   getToday: () => api.get('/schedule/today'),
+  getMyStats: () => api.get('/schedule/my-stats'),
 };
 
 // Uploads

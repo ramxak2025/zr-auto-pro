@@ -40,7 +40,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 
-type TabType = 'schedule' | 'today';
+type TabType = 'schedule' | 'today' | 'mystats';
 
 /** Employee color palette for dot badges in the calendar */
 const EMPLOYEE_COLORS = [
@@ -116,6 +116,22 @@ export default function SchedulePage() {
     queryFn: () => scheduleApi.getToday(),
     select: (res) => res.data as TodayEmployeeStatus[],
     enabled: tab === 'today',
+  });
+
+  const { data: myStatsData } = useQuery({
+    queryKey: ['my-schedule-stats'],
+    queryFn: () => scheduleApi.getMyStats(),
+    select: (res) => res.data as {
+      totalScheduled: number;
+      totalWorked: number;
+      totalLate: number;
+      totalLateMinor: number;
+      totalLateMajor: number;
+      totalOnTime: number;
+      totalDaysOff: number;
+      avgLateMinutes: number;
+    },
+    enabled: tab === 'mystats',
   });
 
   const { data: usersData } = useQuery({
@@ -453,28 +469,39 @@ export default function SchedulePage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-2xl p-1 mb-6 max-w-xs">
+      <div className="flex gap-1 bg-gray-100 rounded-2xl p-1 mb-6 max-w-md">
         <button
           onClick={() => setTab('schedule')}
-          className={`flex-1 py-2 px-4 text-sm font-medium rounded-xl transition-all duration-200 ${
+          className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
             tab === 'schedule'
               ? 'bg-white text-gray-900 shadow-sm'
               : 'text-gray-500 hover:text-gray-700'
           }`}
         >
-          <CalendarDays className="w-4 h-4 inline-block mr-1.5 -mt-0.5" />
-          Расписание
+          <CalendarDays className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+          График
         </button>
         <button
           onClick={() => setTab('today')}
-          className={`flex-1 py-2 px-4 text-sm font-medium rounded-xl transition-all duration-200 ${
+          className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
             tab === 'today'
               ? 'bg-white text-gray-900 shadow-sm'
               : 'text-gray-500 hover:text-gray-700'
           }`}
         >
-          <Clock className="w-4 h-4 inline-block mr-1.5 -mt-0.5" />
+          <Clock className="w-4 h-4 inline-block mr-1 -mt-0.5" />
           Сегодня
+        </button>
+        <button
+          onClick={() => setTab('mystats')}
+          className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+            tab === 'mystats'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <Users className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+          Мои смены
         </button>
       </div>
 
@@ -891,6 +918,57 @@ export default function SchedulePage() {
                 </div>
               ))}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* My Stats Tab */}
+      {tab === 'mystats' && (
+        <div>
+          {myStatsData ? (
+            <div className="space-y-4">
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Моя статистика за месяц</h2>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div className="bg-blue-50 rounded-xl p-4 text-center">
+                    <p className="text-2xl font-bold text-blue-700">{myStatsData.totalWorked}</p>
+                    <p className="text-xs text-blue-600 mt-1">Рабочих дней</p>
+                  </div>
+                  <div className="bg-green-50 rounded-xl p-4 text-center">
+                    <p className="text-2xl font-bold text-green-700">{myStatsData.totalOnTime}</p>
+                    <p className="text-xs text-green-600 mt-1">Вовремя</p>
+                  </div>
+                  <div className="bg-red-50 rounded-xl p-4 text-center">
+                    <p className="text-2xl font-bold text-red-700">{myStatsData.totalLate}</p>
+                    <p className="text-xs text-red-600 mt-1">Опоздания</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-xl p-4 text-center">
+                    <p className="text-2xl font-bold text-gray-700">{myStatsData.totalDaysOff}</p>
+                    <p className="text-xs text-gray-600 mt-1">Выходные</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">Детализация опозданий</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-500">Незначительные опоздания</span>
+                    <span className="text-sm font-semibold text-yellow-600">{myStatsData.totalLateMinor}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-500">Серьёзные опоздания</span>
+                    <span className="text-sm font-semibold text-red-600">{myStatsData.totalLateMajor}</span>
+                  </div>
+                  <div className="flex items-center justify-between border-t pt-2">
+                    <span className="text-sm text-gray-500">Среднее опоздание</span>
+                    <span className="text-sm font-semibold text-gray-900">{myStatsData.avgLateMinutes} мин.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <LoadingSpinner />
           )}
         </div>
       )}

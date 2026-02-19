@@ -241,7 +241,7 @@ export default function ServicesPage() {
                   {service.category && (
                     <span className="badge-default text-[11px]">{service.category}</span>
                   )}
-                  <span className="text-sm font-medium text-gray-900">{formatCurrency(service.defaultPrice)} сум</span>
+                  <span className="text-sm font-medium text-gray-900">{formatCurrency(service.defaultPrice)}</span>
                 </div>
               </div>
             ))}
@@ -277,7 +277,7 @@ export default function ServicesPage() {
                       )}
                     </td>
                     <td className="font-medium text-gray-900">
-                      {formatCurrency(service.defaultPrice)} сум
+                      {formatCurrency(service.defaultPrice)}
                     </td>
                     <td>
                       <div className="flex items-center gap-1">

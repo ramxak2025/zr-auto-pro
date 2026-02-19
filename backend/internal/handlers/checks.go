@@ -102,7 +102,8 @@ func GetCheck(c *gin.Context) {
 			   ch.client_id, COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
 			   ch.car_id, COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''),
 			   COALESCE(ch.mileage,0), COALESCE(ch.comment,''), ch.discount, ch.is_deferred,
-			   ch.payment_method, ch.service_total, ch.product_total, ch.total_revenue,
+			   ch.payment_method, COALESCE(ch.cash_amount,0), COALESCE(ch.card_amount,0),
+			   ch.service_total, ch.product_total, ch.total_revenue,
 			   ch.product_cost_total, ch.service_salary_total, ch.total_cost, ch.profit, ch.created_at
 		FROM checks ch LEFT JOIN users m ON m.id=ch.master_id
 		LEFT JOIN clients cl ON cl.id=ch.client_id LEFT JOIN cars ca ON ca.id=ch.car_id
@@ -112,7 +113,8 @@ func GetCheck(c *gin.Context) {
 		&ch.ClientID, &clientName, &clientPhone,
 		&ch.CarID, &carPlate, &carModel,
 		&mileage, &comment, &ch.Discount, &ch.IsDeferred,
-		&ch.PaymentMethod, &ch.ServiceTotal, &ch.ProductTotal, &ch.TotalRevenue,
+		&ch.PaymentMethod, &ch.CashAmount, &ch.CardAmount,
+		&ch.ServiceTotal, &ch.ProductTotal, &ch.TotalRevenue,
 		&ch.ProductCostTotal, &ch.ServiceSalaryTotal, &ch.TotalCost, &ch.Profit, &ch.CreatedAt,
 	)
 	if err != nil {
@@ -176,33 +178,14 @@ func GetCheck(c *gin.Context) {
 
 func CreateCheck(c *gin.Context) {
 	tenantID := c.GetString("tenantID")
+	role := c.GetString("role")
 	var req models.CreateCheckRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
 		return
 	}
 
-	// Calculate totals
-	var serviceTotal, productTotal, productCostTotal, serviceSalaryTotal float64
-
-	for _, s := range req.Services {
-		total := s.Price * float64(s.Quantity)
-		serviceTotal += total
-	}
-	for _, p := range req.Products {
-		productTotal += p.SellPrice * float64(p.Quantity)
-		productCostTotal += p.CostPrice * float64(p.Quantity)
-	}
-
-	// Get master salary percent
-	var salaryPercent float64
-	database.DB.QueryRow("SELECT COALESCE(salary_percent,0) FROM users WHERE id=$1", req.MasterID).Scan(&salaryPercent)
-	serviceSalaryTotal = serviceTotal * salaryPercent / 100
-
-	totalRevenue := serviceTotal + productTotal - req.Discount
-	totalCost := productCostTotal + serviceSalaryTotal
-	profit := totalRevenue - totalCost
-
+	// Role-based date restriction: masters can only create checks for today
 	date := time.Now()
 	if req.Date != "" {
 		if t, err := time.Parse(time.RFC3339, req.Date); err == nil {
@@ -212,18 +195,69 @@ func CreateCheck(c *gin.Context) {
 		}
 	}
 
+	if role == "master" {
+		now := time.Now()
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		tomorrowStart := todayStart.AddDate(0, 0, 1)
+		if date.Before(todayStart) || !date.Before(tomorrowStart) {
+			c.JSON(http.StatusForbidden, gin.H{"message": "Мастер может создавать чеки только за сегодняшний день"})
+			return
+		}
+	}
+
+	// Calculate totals
+	var serviceTotal, productTotal, productCostTotal float64
+
+	// Calculate service salary per master
+	type masterSalary struct {
+		total   float64
+		percent float64
+	}
+	masterSalaries := map[string]*masterSalary{}
+
+	for _, s := range req.Services {
+		total := s.Price * float64(s.Quantity)
+		serviceTotal += total
+
+		mid := req.MasterID
+		if s.MasterID != nil && *s.MasterID != "" {
+			mid = *s.MasterID
+		}
+		if _, exists := masterSalaries[mid]; !exists {
+			var pct float64
+			database.DB.QueryRow("SELECT COALESCE(salary_percent,0) FROM users WHERE id=$1", mid).Scan(&pct)
+			masterSalaries[mid] = &masterSalary{percent: pct}
+		}
+		masterSalaries[mid].total += total
+	}
+
+	var serviceSalaryTotal float64
+	for _, ms := range masterSalaries {
+		serviceSalaryTotal += ms.total * ms.percent / 100
+	}
+
+	for _, p := range req.Products {
+		productTotal += p.SellPrice * float64(p.Quantity)
+		productCostTotal += p.CostPrice * float64(p.Quantity)
+	}
+
+	totalRevenue := serviceTotal + productTotal - req.Discount
+	totalCost := productCostTotal + serviceSalaryTotal
+	profit := totalRevenue - totalCost
+
 	tx, _ := database.DB.Begin()
 
 	var checkID string
 	var checkNumber int
 	err := tx.QueryRow(`
 		INSERT INTO checks (date, master_id, client_id, car_id, mileage, comment, discount, is_deferred,
-			payment_method, service_total, product_total, total_revenue, product_cost_total,
+			payment_method, cash_amount, card_amount, service_total, product_total, total_revenue, product_cost_total,
 			service_salary_total, total_cost, profit, tenant_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		RETURNING id, number
 	`, date, req.MasterID, req.ClientID, req.CarID, req.Mileage, req.Comment, req.Discount,
-		req.IsDeferred, req.PaymentMethod, serviceTotal, productTotal, totalRevenue,
+		req.IsDeferred, req.PaymentMethod, req.CashAmount, req.CardAmount,
+		serviceTotal, productTotal, totalRevenue,
 		productCostTotal, serviceSalaryTotal, totalCost, profit, tenantID).Scan(&checkID, &checkNumber)
 	if err != nil {
 		tx.Rollback()
@@ -234,7 +268,7 @@ func CreateCheck(c *gin.Context) {
 	for _, s := range req.Services {
 		total := s.Price * float64(s.Quantity)
 		mid := req.MasterID
-		if s.MasterID != nil {
+		if s.MasterID != nil && *s.MasterID != "" {
 			mid = *s.MasterID
 		}
 		tx.Exec(`
@@ -268,8 +302,19 @@ func CreateCheck(c *gin.Context) {
 func UpdateCheck(c *gin.Context) {
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
+	role := c.GetString("role")
 	var body map[string]interface{}
 	c.ShouldBindJSON(&body)
+
+	// Only director/admin can edit date
+	if dateStr, ok := body["date"].(string); ok {
+		if role == "director" || role == "admin" || role == "superadmin" {
+			database.DB.Exec("UPDATE checks SET date=$1 WHERE id=$2 AND tenant_id=$3", dateStr, id, tenantID)
+		} else {
+			c.JSON(http.StatusForbidden, gin.H{"message": "Только директор может изменять дату чека"})
+			return
+		}
+	}
 
 	// Simple field updates
 	if pm, ok := body["paymentMethod"].(string); ok {
@@ -280,6 +325,12 @@ func UpdateCheck(c *gin.Context) {
 	}
 	if comm, ok := body["comment"].(string); ok {
 		database.DB.Exec("UPDATE checks SET comment=$1 WHERE id=$2 AND tenant_id=$3", comm, id, tenantID)
+	}
+	if ca, ok := body["cashAmount"].(float64); ok {
+		database.DB.Exec("UPDATE checks SET cash_amount=$1 WHERE id=$2 AND tenant_id=$3", ca, id, tenantID)
+	}
+	if ca, ok := body["cardAmount"].(float64); ok {
+		database.DB.Exec("UPDATE checks SET card_amount=$1 WHERE id=$2 AND tenant_id=$3", ca, id, tenantID)
 	}
 
 	c.Params = gin.Params{{Key: "id", Value: id}}

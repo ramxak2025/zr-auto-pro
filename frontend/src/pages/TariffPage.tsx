@@ -153,14 +153,23 @@ export default function TariffPage() {
                         <span className="text-gray-500 ml-1">₽/мес</span>
                       </div>
 
-                      <ul className="space-y-2">
-                        {features.map((f, i) => (
-                          <li key={i} className="flex items-start gap-2 text-sm">
-                            <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                            <span className="text-gray-700">{f}</span>
-                          </li>
-                        ))}
-                      </ul>
+                      <div className="flex items-center gap-2 p-3 bg-primary-50 rounded-lg">
+                        <Users className="w-5 h-5 text-primary-600 flex-shrink-0" />
+                        <span className="text-sm font-semibold text-primary-700">
+                          До {plan.maxUsers} сотрудников
+                        </span>
+                      </div>
+
+                      {features.length > 0 && (
+                        <ul className="space-y-2">
+                          {features.map((f, i) => (
+                            <li key={i} className="flex items-start gap-2 text-sm">
+                              <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                              <span className="text-gray-700">{f}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
 
                       {!isCurrent && (
                         <a

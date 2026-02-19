@@ -208,3 +208,44 @@ func GetTodaySchedule(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, statuses)
 }
+
+// GetMyStats returns schedule statistics for the current user
+func GetMyStats(c *gin.Context) {
+	userID := c.GetString("userID")
+	tenantID := c.GetString("tenantID")
+
+	now := time.Now()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+
+	type MyStats struct {
+		TotalScheduled int `json:"totalScheduled"`
+		TotalWorked    int `json:"totalWorked"`
+		TotalLate      int `json:"totalLate"`
+		TotalLateMinor int `json:"totalLateMinor"`
+		TotalLateMajor int `json:"totalLateMajor"`
+		TotalOnTime    int `json:"totalOnTime"`
+		TotalDaysOff   int `json:"totalDaysOff"`
+		AvgLateMinutes int `json:"avgLateMinutes"`
+	}
+	var stats MyStats
+
+	database.DB.QueryRow(`
+		SELECT
+			COUNT(*),
+			COUNT(*) FILTER (WHERE NOT is_day_off),
+			COUNT(*) FILTER (WHERE late_minutes > 0 AND NOT is_day_off),
+			COUNT(*) FILTER (WHERE late_status = 'late_minor'),
+			COUNT(*) FILTER (WHERE late_status = 'late_major'),
+			COUNT(*) FILTER (WHERE late_status = 'on_time' OR (late_minutes = 0 AND NOT is_day_off AND actual_arrival IS NOT NULL)),
+			COUNT(*) FILTER (WHERE is_day_off),
+			COALESCE(AVG(late_minutes) FILTER (WHERE late_minutes > 0 AND NOT is_day_off), 0)
+		FROM schedule_entries
+		WHERE user_id=$1 AND tenant_id=$2 AND date >= $3 AND date <= $4
+	`, userID, tenantID, monthStart.Format("2006-01-02"), now.Format("2006-01-02")).Scan(
+		&stats.TotalScheduled, &stats.TotalWorked, &stats.TotalLate,
+		&stats.TotalLateMinor, &stats.TotalLateMajor, &stats.TotalOnTime,
+		&stats.TotalDaysOff, &stats.AvgLateMinutes,
+	)
+
+	c.JSON(http.StatusOK, stats)
+}
