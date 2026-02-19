@@ -1,10 +1,11 @@
 import { useLocation, useNavigate, Link, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Building2, ArrowLeft, LogOut } from 'lucide-react';
+import { LayoutDashboard, Building2, CreditCard, ArrowLeft, LogOut } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const navItems = [
-  { label: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
-  { label: 'Tenants', path: '/admin/tenants', icon: Building2 },
+  { label: 'Панель', path: '/admin/dashboard', icon: LayoutDashboard },
+  { label: 'Клиенты', path: '/admin/tenants', icon: Building2 },
+  { label: 'Тарифы', path: '/admin/plans', icon: CreditCard },
 ];
 
 export default function AdminLayout() {
@@ -25,7 +26,7 @@ export default function AdminLayout() {
       <aside className="hidden md:flex md:flex-col w-64 bg-white border-r border-gray-200">
         {/* Logo */}
         <div className="flex items-center h-16 px-6 border-b border-gray-200">
-          <span className="text-lg font-bold text-gray-900">Admin Panel</span>
+          <span className="text-lg font-bold text-gray-900">ZR Auto Pro</span>
         </div>
 
         {/* Navigation */}
@@ -51,16 +52,6 @@ export default function AdminLayout() {
               );
             })}
           </ul>
-
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <Link
-              to="/dashboard"
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5 flex-shrink-0" />
-              Back to App
-            </Link>
-          </div>
         </nav>
 
         {/* User Info */}
@@ -73,12 +64,12 @@ export default function AdminLayout() {
               <p className="text-sm font-medium text-gray-900 truncate">
                 {user?.fullName}
               </p>
-              <p className="text-xs text-gray-500 truncate">Superadmin</p>
+              <p className="text-xs text-gray-500 truncate">Владелец платформы</p>
             </div>
             <button
               onClick={handleLogout}
               className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors"
-              title="Logout"
+              title="Выйти"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -89,14 +80,8 @@ export default function AdminLayout() {
       {/* Mobile Header for Admin */}
       <div className="flex flex-1 flex-col min-w-0">
         <header className="md:hidden flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200">
-          <span className="text-lg font-bold text-gray-900">Admin</span>
+          <span className="text-lg font-bold text-gray-900">ZR Auto Pro</span>
           <div className="flex items-center gap-2">
-            <Link
-              to="/dashboard"
-              className="p-2 text-gray-500 hover:text-gray-700"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </Link>
             <button
               onClick={handleLogout}
               className="p-2 text-gray-500 hover:text-red-500"

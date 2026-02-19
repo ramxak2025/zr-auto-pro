@@ -1,4 +1,18 @@
 -- Enums as text checks
+
+-- Plans / Tariffs
+CREATE TABLE IF NOT EXISTS plans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    monthly_price NUMERIC(10,2) NOT NULL DEFAULT 0,
+    description TEXT,
+    features JSONB DEFAULT '[]',
+    max_users INT DEFAULT 5,
+    is_active BOOLEAN DEFAULT true,
+    sort_order INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS tenants (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
@@ -10,11 +24,23 @@ CREATE TABLE IF NOT EXISTS tenants (
     logo TEXT,
     is_active BOOLEAN DEFAULT true,
     max_users INT DEFAULT 10,
+    plan_id UUID REFERENCES plans(id) ON DELETE SET NULL,
+    monthly_price NUMERIC(10,2) DEFAULT 0,
     subscription_end TIMESTAMPTZ,
     subscription_note TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Add plan columns to existing tenants table (safe migration)
+DO $$ BEGIN
+    ALTER TABLE tenants ADD COLUMN plan_id UUID REFERENCES plans(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE tenants ADD COLUMN monthly_price NUMERIC(10,2) DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

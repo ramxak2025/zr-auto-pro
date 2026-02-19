@@ -27,6 +27,19 @@ export const tenantsApi = {
   remove: (id: string) => api.delete(`/tenants/${id}`),
 };
 
+// Plans
+export const plansApi = {
+  getAll: () => api.get('/plans'),
+  create: (data: any) => api.post('/plans', data),
+  update: (id: string, data: any) => api.patch(`/plans/${id}`, data),
+  remove: (id: string) => api.delete(`/plans/${id}`),
+};
+
+// Subscription
+export const subscriptionApi = {
+  get: () => api.get('/subscription'),
+};
+
 // Clients
 export const clientsApi = {
   getAll: (params?: any) => api.get('/clients', { params }),

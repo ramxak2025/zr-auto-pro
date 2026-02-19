@@ -80,11 +80,11 @@ export default function AdminTenantsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-      toast.success('Организация создана');
+      toast.success('Автосервис создан');
       closeModal();
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка создания организации');
+      toast.error(err?.response?.data?.message || 'Ошибка создания');
     },
   });
 
@@ -93,7 +93,7 @@ export default function AdminTenantsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-      toast.success('Организация обновлена');
+      toast.success('Автосервис обновлён');
       closeModal();
     },
     onError: (err: any) => {
@@ -106,7 +106,7 @@ export default function AdminTenantsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-      toast.success('Организация удалена');
+      toast.success('Автосервис удалён');
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message || 'Ошибка удаления');
@@ -149,7 +149,7 @@ export default function AdminTenantsPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim()) {
-      toast.error('Введите название организации');
+      toast.error('Введите название автосервиса');
       return;
     }
 
@@ -197,10 +197,10 @@ export default function AdminTenantsPage() {
     <div>
       {/* Header */}
       <div className="page-header">
-        <h1 className="page-title">Организации</h1>
+        <h1 className="page-title">Автосервисы</h1>
         <button onClick={openCreate} className="btn-primary">
           <Plus className="w-4 h-4" />
-          Новая организация
+          Новый автосервис
         </button>
       </div>
 
@@ -208,8 +208,8 @@ export default function AdminTenantsPage() {
       {tenants.length === 0 ? (
         <EmptyState
           icon={Building2}
-          title="Нет организаций"
-          description="Создайте первую организацию"
+          title="Нет автосервисов"
+          description="Создайте первую автосервис"
           action={{ label: 'Создать', onClick: openCreate }}
         />
       ) : (
@@ -286,7 +286,7 @@ export default function AdminTenantsPage() {
       <Modal
         isOpen={modalOpen}
         onClose={closeModal}
-        title={editingTenant ? 'Редактировать организацию' : 'Новая организация'}
+        title={editingTenant ? 'Редактировать автосервис' : 'Новый автосервис'}
         size="lg"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -305,7 +305,7 @@ export default function AdminTenantsPage() {
 
           {/* Phone */}
           <div>
-            <label className="label">Телефон организации</label>
+            <label className="label">Телефон автосервиса</label>
             <input
               type="tel"
               className="input"
@@ -480,8 +480,8 @@ export default function AdminTenantsPage() {
           if (deleteId) deleteMutation.mutate(deleteId);
           setDeleteId(null);
         }}
-        title="Удалить организацию"
-        message="Вы уверены, что хотите удалить эту организацию? Все данные будут потеряны. Это действие нельзя отменить."
+        title="Удалить автосервис"
+        message="Вы уверены, что хотите удалить этот автосервис? Все данные будут потеряны. Это действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
       />

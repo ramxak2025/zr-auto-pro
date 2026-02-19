@@ -127,7 +127,7 @@ export default function AdminTenantDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['tenant', id] });
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-      toast.success('Организация обновлена');
+      toast.success('Автосервис обновлён');
       setTenantModalOpen(false);
     },
     onError: (err: any) => {
@@ -269,7 +269,7 @@ export default function AdminTenantDetailPage() {
     return (
       <EmptyState
         icon={Building2}
-        title="Организация не найдена"
+        title="Автосервис не найден"
         action={{ label: 'Назад', onClick: () => navigate('/admin/tenants') }}
       />
     );
@@ -289,7 +289,7 @@ export default function AdminTenantDetailPage() {
           className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3"
         >
           <ArrowLeft className="w-4 h-4" />
-          Назад к организациям
+          Назад к автосервисам
         </button>
         <div className="flex items-center justify-between">
           <h1 className="page-title">{tenant.name}</h1>
@@ -384,7 +384,7 @@ export default function AdminTenantDetailPage() {
         <EmptyState
           icon={Users}
           title="Нет пользователей"
-          description="Создайте первого пользователя для этой организации"
+          description="Создайте первого сотрудника"
           action={{ label: 'Создать', onClick: openCreateUser }}
         />
       ) : (
@@ -447,7 +447,7 @@ export default function AdminTenantDetailPage() {
       <Modal
         isOpen={tenantModalOpen}
         onClose={() => setTenantModalOpen(false)}
-        title="Редактировать организацию"
+        title="Редактировать автосервис"
         size="lg"
       >
         <form onSubmit={handleTenantSubmit} className="space-y-4">

@@ -140,6 +140,15 @@ func main() {
 	auth.PATCH("/tenants/:id", handlers.UpdateTenant)
 	auth.DELETE("/tenants/:id", handlers.DeleteTenant)
 
+	// Plans (admin CRUD + public read)
+	auth.GET("/plans", handlers.GetPlans)
+	auth.POST("/plans", handlers.CreatePlan)
+	auth.PATCH("/plans/:id", handlers.UpdatePlan)
+	auth.DELETE("/plans/:id", handlers.DeletePlan)
+
+	// Subscription (tenant users)
+	auth.GET("/subscription", handlers.GetSubscription)
+
 	// Uploads
 	auth.POST("/uploads", handlers.UploadFile)
 

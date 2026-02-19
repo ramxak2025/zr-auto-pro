@@ -5,6 +5,18 @@ import (
 	"time"
 )
 
+type Plan struct {
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	MonthlyPrice float64         `json:"monthlyPrice"`
+	Description  *string         `json:"description,omitempty"`
+	Features     json.RawMessage `json:"features"`
+	MaxUsers     int             `json:"maxUsers"`
+	IsActive     bool            `json:"isActive"`
+	SortOrder    int             `json:"sortOrder"`
+	CreatedAt    time.Time       `json:"createdAt"`
+}
+
 type Tenant struct {
 	ID               string     `json:"id"`
 	Name             string     `json:"name"`
@@ -16,6 +28,9 @@ type Tenant struct {
 	Logo             *string    `json:"logo,omitempty"`
 	IsActive         bool       `json:"isActive"`
 	MaxUsers         int        `json:"maxUsers"`
+	PlanID           *string    `json:"planId,omitempty"`
+	Plan             *Plan      `json:"plan,omitempty"`
+	MonthlyPrice     float64    `json:"monthlyPrice"`
 	SubscriptionEnd  *time.Time `json:"subscriptionEnd"`
 	SubscriptionNote *string    `json:"subscriptionNote"`
 	Users            []User     `json:"users,omitempty"`

@@ -32,6 +32,7 @@ import TariffPage from './pages/TariffPage';
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
 import AdminTenantsPage from './pages/admin/AdminTenantsPage';
 import AdminTenantDetailPage from './pages/admin/AdminTenantDetailPage';
+import AdminPlansPage from './pages/admin/AdminPlansPage';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -85,6 +86,7 @@ export default function App() {
               <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
               <Route path="/admin/tenants" element={<AdminTenantsPage />} />
               <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
+              <Route path="/admin/plans" element={<AdminPlansPage />} />
             </Route>
           )}
 

@@ -62,87 +62,145 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	allPerms := `{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}`
 	masterPerms := `{"checks_view":true,"checks_create":true,"checks_edit":false,"checks_delete":false,"profit_view":false,"clients_view":true,"clients_edit":false,"warehouse_access":false,"suppliers_access":false,"financial_reports":false,"export_data":false,"user_management":false}`
 
-	// Ensure tenant exists (upsert by slug)
+	// ── 1. Seed default plans ──
+	seedPlans()
+
+	// ── 2. Platform owner (superadmin) — NO tenant ──
+	// This user manages the entire platform
+	_, err := DB.Exec(`
+		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
+		VALUES ('+79884444436', $1, 'Администратор платформы', 'superadmin', true, NULL, $2, 0)
+		ON CONFLICT (phone) DO UPDATE SET
+			password = EXCLUDED.password,
+			full_name = EXCLUDED.full_name,
+			role = EXCLUDED.role,
+			is_active = true,
+			tenant_id = NULL,
+			permissions = EXCLUDED.permissions
+	`, adminHash, allPerms)
+	if err != nil {
+		log.Printf("Seed superadmin upsert error: %v", err)
+	}
+
+	// ── 3. Demo tenant (separate auto service) ──
 	var tenantID string
-	err := DB.QueryRow(`
+	err = DB.QueryRow(`
 		INSERT INTO tenants (name, slug, phone, is_active, max_users)
-		VALUES ('ZR Auto Pro', 'zr-auto', '+7 (988) 444-44-36', true, 50)
+		VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)
 		ON CONFLICT DO NOTHING
 		RETURNING id
 	`).Scan(&tenantID)
 	if err != nil {
-		// Tenant might already exist — fetch its ID
-		err2 := DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'zr-auto' LIMIT 1`).Scan(&tenantID)
+		// Already exists — fetch
+		err2 := DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'demo' LIMIT 1`).Scan(&tenantID)
 		if err2 != nil {
-			// No slug match, try first tenant
-			err3 := DB.QueryRow(`SELECT id FROM tenants LIMIT 1`).Scan(&tenantID)
+			// Try old slug
+			err3 := DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'zr-auto' LIMIT 1`).Scan(&tenantID)
 			if err3 != nil {
-				// Create fresh without ON CONFLICT
-				_ = DB.QueryRow(`
-					INSERT INTO tenants (name, slug, phone, is_active, max_users)
-					VALUES ('ZR Auto Pro', 'zr-auto', '+7 (988) 444-44-36', true, 50)
-					RETURNING id
-				`).Scan(&tenantID)
+				// Get any tenant
+				err4 := DB.QueryRow(`SELECT id FROM tenants LIMIT 1`).Scan(&tenantID)
+				if err4 != nil {
+					_ = DB.QueryRow(`
+						INSERT INTO tenants (name, slug, phone, is_active, max_users)
+						VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)
+						RETURNING id
+					`).Scan(&tenantID)
+				}
 			}
 		}
 	}
 
 	if tenantID == "" {
-		log.Println("Seed: could not get or create tenant, skipping")
+		log.Println("Seed: could not get or create demo tenant, skipping demo users")
+	} else {
+		// Demo owner (director of the demo auto service)
+		_, err = DB.Exec(`
+			INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
+			VALUES ('+70000000001', $1, 'Владелец (демо)', 'director', true, $2, $3, 0)
+			ON CONFLICT (phone) DO UPDATE SET
+				password = EXCLUDED.password,
+				full_name = EXCLUDED.full_name,
+				role = EXCLUDED.role,
+				is_active = true,
+				tenant_id = EXCLUDED.tenant_id,
+				permissions = EXCLUDED.permissions
+		`, demoOwnerHash, tenantID, allPerms)
+		if err != nil {
+			log.Printf("Seed demo owner upsert error: %v", err)
+		}
+
+		// Demo master
+		_, err = DB.Exec(`
+			INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
+			VALUES ('+70000000002', $1, 'Мастер (демо)', 'master', true, $2, $3, 40)
+			ON CONFLICT (phone) DO UPDATE SET
+				password = EXCLUDED.password,
+				full_name = EXCLUDED.full_name,
+				role = EXCLUDED.role,
+				is_active = true,
+				tenant_id = EXCLUDED.tenant_id,
+				permissions = EXCLUDED.permissions,
+				salary_percent = 40
+		`, demoMasterHash, tenantID, masterPerms)
+		if err != nil {
+			log.Printf("Seed demo master upsert error: %v", err)
+		}
+	}
+
+	fmt.Println("Seed completed (upsert): superadmin (no tenant) + demo tenant + demo users")
+	fmt.Println("Platform admin: +79884444436 / admin123")
+	fmt.Println("Demo owner:     +70000000001 / demo123")
+	fmt.Println("Demo master:    +70000000002 / demo123")
+}
+
+func seedPlans() {
+	// Insert default plans if none exist
+	var count int
+	DB.QueryRow("SELECT COUNT(*) FROM plans").Scan(&count)
+	if count > 0 {
 		return
 	}
 
-	// Upsert superadmin: +79884444436 / admin123
-	_, err = DB.Exec(`
-		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
-		VALUES ('+79884444436', $1, 'Администратор', 'superadmin', true, $2, $3, 0)
-		ON CONFLICT (phone) DO UPDATE SET
-			password = EXCLUDED.password,
-			full_name = EXCLUDED.full_name,
-			role = EXCLUDED.role,
-			is_active = true,
-			tenant_id = EXCLUDED.tenant_id,
-			permissions = EXCLUDED.permissions
-	`, adminHash, tenantID, allPerms)
-	if err != nil {
-		log.Printf("Seed admin upsert error: %v", err)
+	plans := []struct {
+		name     string
+		price    float64
+		desc     string
+		features string
+		maxUsers int
+		sort     int
+	}{
+		{
+			"Старт",
+			1500,
+			"Для небольших автосервисов",
+			`["До 3 сотрудников","Заказ-наряды","Клиенты и авто","Базовая отчётность"]`,
+			3,
+			1,
+		},
+		{
+			"Бизнес",
+			3000,
+			"Оптимальный для растущего бизнеса",
+			`["До 10 сотрудников","Заказ-наряды","Клиенты и авто","Склад и поставщики","Финансовые отчёты","Графики работы"]`,
+			10,
+			2,
+		},
+		{
+			"Премиум",
+			5000,
+			"Для крупных автосервисов",
+			`["Безлимит сотрудников","Все функции Бизнес","Экспорт данных","Приоритетная поддержка"]`,
+			50,
+			3,
+		},
 	}
 
-	// Upsert demo owner: +70000000001 / demo123
-	_, err = DB.Exec(`
-		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
-		VALUES ('+70000000001', $1, 'Владелец (демо)', 'director', true, $2, $3, 0)
-		ON CONFLICT (phone) DO UPDATE SET
-			password = EXCLUDED.password,
-			full_name = EXCLUDED.full_name,
-			role = EXCLUDED.role,
-			is_active = true,
-			tenant_id = EXCLUDED.tenant_id,
-			permissions = EXCLUDED.permissions
-	`, demoOwnerHash, tenantID, allPerms)
-	if err != nil {
-		log.Printf("Seed demo owner upsert error: %v", err)
+	for _, p := range plans {
+		DB.Exec(`
+			INSERT INTO plans (name, monthly_price, description, features, max_users, is_active, sort_order)
+			VALUES ($1, $2, $3, $4, $5, true, $6)
+		`, p.name, p.price, p.desc, p.features, p.maxUsers, p.sort)
 	}
 
-	// Upsert demo master: +70000000002 / demo123
-	_, err = DB.Exec(`
-		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
-		VALUES ('+70000000002', $1, 'Мастер (демо)', 'master', true, $2, $3, 40)
-		ON CONFLICT (phone) DO UPDATE SET
-			password = EXCLUDED.password,
-			full_name = EXCLUDED.full_name,
-			role = EXCLUDED.role,
-			is_active = true,
-			tenant_id = EXCLUDED.tenant_id,
-			permissions = EXCLUDED.permissions,
-			salary_percent = 40
-	`, demoMasterHash, tenantID, masterPerms)
-	if err != nil {
-		log.Printf("Seed demo master upsert error: %v", err)
-	}
-
-	fmt.Println("Seed completed (upsert): tenant + superadmin + demo users ensured")
-	fmt.Println("Superadmin: +79884444436 / admin123")
-	fmt.Println("Demo owner: +70000000001 / demo123")
-	fmt.Println("Demo master: +70000000002 / demo123")
+	log.Println("Default plans seeded")
 }

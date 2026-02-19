@@ -1,3 +1,15 @@
+export interface Plan {
+  id: string;
+  name: string;
+  monthlyPrice: number;
+  description?: string;
+  features: string[];
+  maxUsers: number;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
 export interface Tenant {
   id: string;
   name: string;
@@ -9,12 +21,26 @@ export interface Tenant {
   logo?: string;
   isActive: boolean;
   maxUsers: number;
+  planId?: string;
+  plan?: Plan;
+  monthlyPrice: number;
   subscriptionEnd?: string | null;
   subscriptionNote?: string | null;
   users?: User[];
   userCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SubscriptionInfo {
+  tenantName: string;
+  planName?: string | null;
+  monthlyPrice: number;
+  subscriptionEnd?: string | null;
+  subscriptionNote?: string | null;
+  maxUsers: number;
+  currentUsers: number;
+  plans: Plan[];
 }
 
 export interface PlatformStats {

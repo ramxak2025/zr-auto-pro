@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Building2, Users, ArrowRight, Activity } from 'lucide-react';
+import { Building2, Users, ArrowRight, Activity, CreditCard } from 'lucide-react';
 
 import { tenantsApi } from '../../api/services';
 import { PlatformStats } from '../../types';
@@ -17,9 +17,8 @@ export default function AdminDashboardPage() {
 
   return (
     <div>
-      {/* Header */}
       <div className="page-header">
-        <h1 className="page-title">Панель администратора</h1>
+        <h1 className="page-title">Панель управления</h1>
       </div>
 
       {/* Stats */}
@@ -30,7 +29,7 @@ export default function AdminDashboardPage() {
               <Building2 className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <p className="stat-label">Всего организаций</p>
+              <p className="stat-label">Всего клиентов</p>
               <p className="stat-value">{stats?.totalTenants ?? 0}</p>
             </div>
           </div>
@@ -74,9 +73,27 @@ export default function AdminDashboardPage() {
               <Building2 className="w-5 h-5 text-primary-600" />
             </div>
             <div>
-              <p className="font-medium text-gray-900">Управление организациями</p>
+              <p className="font-medium text-gray-900">Управление клиентами</p>
               <p className="text-sm text-gray-500">
-                Просмотр, создание и редактирование организаций
+                Просмотр, создание и редактирование автосервисов
+              </p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-gray-400" />
+        </Link>
+
+        <Link
+          to="/admin/plans"
+          className="card card-body flex items-center justify-between hover:shadow-md transition-shadow"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-green-50 rounded-lg">
+              <CreditCard className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Управление тарифами</p>
+              <p className="text-sm text-gray-500">
+                Настройка тарифных планов и цен
               </p>
             </div>
           </div>
