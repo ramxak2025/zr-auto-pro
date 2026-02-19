@@ -98,9 +98,11 @@ func Login(c *gin.Context) {
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(password), []byte(req.Password)); err != nil {
+		log.Printf("Login password mismatch for phone=%q (password length=%d)", phone, len(req.Password))
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "Неверный телефон или пароль"})
 		return
 	}
+	log.Printf("Login OK for phone=%q role=%s", phone, user.Role)
 
 	token, err := generateToken(user.ID)
 	if err != nil {
