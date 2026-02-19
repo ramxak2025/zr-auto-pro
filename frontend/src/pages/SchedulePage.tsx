@@ -345,11 +345,11 @@ export default function SchedulePage() {
     openEdit(entry);
   };
 
-  // Entry status helpers
+  // Entry status helpers — green=shift, black=dayoff, grey=sick
   const getEntryDotColor = (entry: ScheduleEntry): string => {
     const isSick = (entry.note || '').toLowerCase().includes('больнич');
-    if (isSick) return 'bg-red-500';
-    if (entry.isDayOff) return 'bg-gray-400';
+    if (isSick) return 'bg-gray-400';
+    if (entry.isDayOff) return 'bg-gray-900';
     return 'bg-green-500';
   };
 
@@ -364,14 +364,14 @@ export default function SchedulePage() {
     const isSick = (entry.note || '').toLowerCase().includes('больнич');
     if (isSick) {
       return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-red-100 text-red-700">
+        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-gray-200 text-gray-600">
           Б/Л
         </span>
       );
     }
     if (entry.isDayOff) {
       return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-gray-100 text-gray-600">
+        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-gray-900 text-white">
           Вых
         </span>
       );
@@ -383,19 +383,20 @@ export default function SchedulePage() {
     );
   };
 
-  // Today tab helpers
+  // Today tab helpers — green=shift, yellow=late<1h, orange=late>1h, red=absent, black=dayoff, grey=sick
   const getStatusColor = (status: TodayEmployeeStatus) => {
-    if (status.isDayOff) return 'text-gray-500';
-    if (status.lateStatus === 'late_major') return 'text-red-600';
+    if (status.isDayOff) return 'text-gray-900';
+    if (status.lateStatus === 'late_major') return 'text-orange-600';
     if (status.lateStatus === 'late_minor') return 'text-yellow-600';
     if (status.isWorking) return 'text-green-600';
+    if (status.hasSchedule) return 'text-red-600';
     return 'text-gray-500';
   };
 
   const getStatusBadge = (status: TodayEmployeeStatus) => {
     if (status.isDayOff)
       return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600">
+        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-900 text-white">
           Выходной
         </span>
       );
@@ -407,13 +408,13 @@ export default function SchedulePage() {
       );
     if (status.lateStatus === 'late_major')
       return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">
+        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">
           Опоздание &gt;1ч
         </span>
       );
     if (status.lateStatus === 'late_minor')
       return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">
+        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">
           Опоздание &lt;1ч
         </span>
       );
@@ -424,17 +425,18 @@ export default function SchedulePage() {
         </span>
       );
     return (
-      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-600">
-        Не пришёл
+      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700">
+        Прогул
       </span>
     );
   };
 
   const getStatusIcon = (status: TodayEmployeeStatus) => {
-    if (status.isDayOff) return <XCircle className="w-5 h-5 text-gray-400" />;
-    if (status.lateStatus === 'late_major') return <AlertTriangle className="w-5 h-5 text-red-500" />;
+    if (status.isDayOff) return <XCircle className="w-5 h-5 text-gray-900" />;
+    if (status.lateStatus === 'late_major') return <AlertTriangle className="w-5 h-5 text-orange-500" />;
     if (status.lateStatus === 'late_minor') return <AlertTriangle className="w-5 h-5 text-yellow-500" />;
     if (status.isWorking) return <CheckCircle2 className="w-5 h-5 text-green-500" />;
+    if (status.hasSchedule) return <XCircle className="w-5 h-5 text-red-500" />;
     return <Clock className="w-5 h-5 text-gray-400" />;
   };
 
@@ -543,19 +545,27 @@ export default function SchedulePage() {
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block" />
-                  Работает
+                  Смена
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-gray-400 inline-block" />
-                  Выходной
+                  <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 inline-block" />
+                  Опоздание &lt;1ч
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block" />
+                  Опоздание &gt;1ч
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
-                  Больничный
+                  Прогул
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full border-2 border-dashed border-gray-300 inline-block" />
-                  Нет записи
+                  <span className="w-2.5 h-2.5 rounded-full bg-gray-900 inline-block" />
+                  Выходной
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-gray-400 inline-block" />
+                  Больничный
                 </span>
               </div>
             </div>

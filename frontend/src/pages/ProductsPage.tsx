@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
 import type { Product, PaginatedResponse } from '../types';
+import { UserRole } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -599,6 +601,8 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
 
 export default function ProductsPage() {
   const queryClient = useQueryClient();
+  const { isRole } = useAuth();
+  const canManageWarehouse = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
   const [searchText, setSearchText] = useState('');
   const [activePath, setActivePath] = useState<string[]>([]);
@@ -869,14 +873,16 @@ export default function ProductsPage() {
           <h1 className="text-xl font-bold text-gray-900">Склад</h1>
           <p className="text-xs text-gray-400 mt-0.5">{allProducts.length} товаров</p>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all flex-shrink-0"
-        >
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Добавить</span>
-        </button>
+        {canManageWarehouse && (
+          <button
+            type="button"
+            onClick={openCreate}
+            className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all flex-shrink-0"
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Добавить</span>
+          </button>
+        )}
       </div>
 
       {/* Search */}
@@ -988,23 +994,25 @@ export default function ProductsPage() {
                 />
               ))}
               {/* New folder tile */}
-              <div
-                role="button"
-                tabIndex={0}
-                onClick={() => setShowFolderModal(true)}
-                onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
-                className="rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer bg-gray-50/50"
-              >
-                <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center">
-                  <FolderPlus className="h-6 w-6 text-gray-400" />
+              {canManageWarehouse && (
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setShowFolderModal(true)}
+                  onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
+                  className="rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer bg-gray-50/50"
+                >
+                  <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center">
+                    <FolderPlus className="h-6 w-6 text-gray-400" />
+                  </div>
+                  <p className="text-[11px] font-medium text-gray-400 text-center">Новая папка</p>
                 </div>
-                <p className="text-[11px] font-medium text-gray-400 text-center">Новая папка</p>
-              </div>
+              )}
             </div>
           )}
 
           {/* New folder button when no subfolders exist */}
-          {(showingRoot || showingFolderContents) && subfolders.length === 0 && (
+          {canManageWarehouse && (showingRoot || showingFolderContents) && subfolders.length === 0 && (
             <div
               role="button"
               tabIndex={0}

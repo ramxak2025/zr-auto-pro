@@ -341,8 +341,7 @@ export default function CheckCreatePage() {
   const [selectedCarId, setSelectedCarId] = useState('');
   const plateInputRef = useRef<HTMLInputElement>(null);
 
-  // Form fields
-  const [masterId, setMasterId] = useState('');
+  // Form fields (no top-level master — current user is the default)
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [mileage, setMileage] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<string>('cash');
@@ -363,15 +362,6 @@ export default function CheckCreatePage() {
 
   // Product picker modal
   const [showProductPicker, setShowProductPicker] = useState(false);
-
-  // Set default master to current user if they are a master
-  useEffect(() => {
-    if (user && !masterId) {
-      if (user.role === UserRole.MASTER || user.role === UserRole.ADMIN) {
-        setMasterId(user.id);
-      }
-    }
-  }, [user, masterId]);
 
   // Prevent accidental page leave
   useEffect(() => {
@@ -490,7 +480,6 @@ export default function CheckCreatePage() {
         }
       }
     }
-    // Also show all cars if the search matches the client name/phone
     if (results.length === 0) {
       for (const client of clientsData) {
         if (client.cars) {
@@ -511,11 +500,11 @@ export default function CheckCreatePage() {
     setShowPlateDropdown(false);
   };
 
-  // Service line handlers
+  // Service line handlers — default masterId = current user
   const addServiceLine = () => {
     setServiceLines((prev) => [
       ...prev,
-      { serviceId: '', masterId: masterId, name: '', price: 0, quantity: 1 },
+      { serviceId: '', masterId: user?.id || '', name: '', price: 0, quantity: 1 },
     ]);
   };
 
@@ -587,10 +576,6 @@ export default function CheckCreatePage() {
       toast.error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0430\u0432\u0442\u043E\u043C\u043E\u0431\u0438\u043B\u044C');
       return;
     }
-    if (!masterId) {
-      toast.error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043C\u0430\u0441\u0442\u0435\u0440\u0430');
-      return;
-    }
 
     const services: CheckServiceLine[] = serviceLines.map((l) => ({
       serviceId: l.serviceId || undefined,
@@ -625,7 +610,7 @@ export default function CheckCreatePage() {
     createMutation.mutate({
       clientId: selectedClient.id,
       carId: selectedCarId,
-      masterId,
+      masterId: user?.id || '',
       date,
       mileage: mileage ? Number(mileage) : undefined,
       services,
@@ -753,7 +738,6 @@ export default function CheckCreatePage() {
                     )}
                   </div>
                 </div>
-                {/* Car selector if client has multiple cars */}
                 {selectedClient.cars && selectedClient.cars.length > 1 && (
                   <div className="mt-2">
                     <select
@@ -773,24 +757,9 @@ export default function CheckCreatePage() {
             )}
           </div>
 
-          {/* Master & Date & Mileage */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
-                  {'\u041C\u0430\u0441\u0442\u0435\u0440'}
-                </label>
-                <select
-                  value={masterId}
-                  onChange={(e) => setMasterId(e.target.value)}
-                  className="input text-sm"
-                >
-                  <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435'}</option>
-                  {masters?.map((m) => (
-                    <option key={m.id} value={m.id}>{m.fullName}</option>
-                  ))}
-                </select>
-              </div>
+          {/* Date & Mileage (no master selector — master is per service) */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300">
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
                   {'\u0414\u0430\u0442\u0430'}
@@ -810,13 +779,18 @@ export default function CheckCreatePage() {
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
                   {'\u041F\u0440\u043E\u0431\u0435\u0433'}
                 </label>
-                <input
-                  type="number"
-                  value={mileage}
-                  onChange={(e) => setMileage(e.target.value)}
-                  placeholder="\u043A\u043C"
-                  className="input text-sm"
-                />
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={mileage}
+                    onChange={(e) => setMileage(e.target.value)}
+                    placeholder="0"
+                    className="input text-sm pr-10"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">
+                    {'\u043A\u043C'}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -838,14 +812,15 @@ export default function CheckCreatePage() {
                 {'\u041D\u0435\u0442 \u0443\u0441\u043B\u0443\u0433'}
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {serviceLines.map((line, index) => (
-                  <div key={index} className="bg-gray-50 rounded-lg p-3 space-y-2">
+                  <div key={index} className="bg-gray-50 rounded-xl p-3 space-y-2">
+                    {/* Row 1: Service select + delete */}
                     <div className="flex gap-2">
                       <select
                         value={line.serviceId}
                         onChange={(e) => updateServiceLine(index, 'serviceId', e.target.value)}
-                        className="input text-sm flex-1"
+                        className="input text-sm flex-1 min-w-0"
                       >
                         <option value="">{'\u0423\u0441\u043B\u0443\u0433\u0430...'}</option>
                         {allServices?.map((s) => (
@@ -857,44 +832,46 @@ export default function CheckCreatePage() {
                       <button
                         type="button"
                         onClick={() => removeServiceLine(index)}
-                        className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50"
+                        className="p-2 text-red-400 hover:text-red-600 rounded-lg hover:bg-red-50 flex-shrink-0"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                    <div className="flex gap-2 items-center">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-1">
-                          <UserIcon className="w-3 h-3 text-gray-400" />
-                          <select
-                            value={line.masterId}
-                            onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
-                            className="input text-xs py-1"
-                          >
-                            <option value="">{'\u041C\u0430\u0441\u0442\u0435\u0440'}</option>
-                            {masters?.map((m) => (
-                              <option key={m.id} value={m.id}>{m.fullName}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
+
+                    {/* Row 2: Master selector (per service) */}
+                    <div className="flex items-center gap-2">
+                      <UserIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                      <select
+                        value={line.masterId}
+                        onChange={(e) => updateServiceLine(index, 'masterId', e.target.value)}
+                        className="input text-xs py-1.5 flex-1 min-w-0"
+                      >
+                        <option value="">{'\u041C\u0430\u0441\u0442\u0435\u0440...'}</option>
+                        {masters?.map((m) => (
+                          <option key={m.id} value={m.id}>{m.fullName}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* Row 3: Price x Qty = Total */}
+                    <div className="flex items-center gap-2">
                       <input
                         type="number"
                         value={line.price}
                         onChange={(e) => updateServiceLine(index, 'price', Number(e.target.value))}
-                        className="input text-sm w-24 text-right"
+                        className="input text-sm flex-1 min-w-0 text-right"
                         placeholder={'\u0426\u0435\u043D\u0430'}
                       />
-                      <span className="text-gray-400 text-xs">{'\u00D7'}</span>
+                      <span className="text-gray-400 text-xs flex-shrink-0">{'\u00D7'}</span>
                       <input
                         type="number"
                         value={line.quantity}
                         min={1}
                         onChange={(e) => updateServiceLine(index, 'quantity', Number(e.target.value))}
-                        className="input text-sm w-14 text-center"
+                        className="input text-sm w-14 text-center flex-shrink-0"
                       />
-                      <span className="text-sm font-semibold text-gray-700 w-24 text-right">
-                        {formatCurrency(line.price * line.quantity)}
+                      <span className="text-sm font-bold text-gray-700 flex-shrink-0 whitespace-nowrap">
+                        = {formatCurrency(line.price * line.quantity)}
                       </span>
                     </div>
                   </div>
@@ -941,7 +918,7 @@ export default function CheckCreatePage() {
                         {formatCurrency(line.sellPrice)} / {'\u0448\u0442'}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 flex-shrink-0">
                       <button
                         type="button"
                         onClick={() => {
@@ -962,13 +939,13 @@ export default function CheckCreatePage() {
                         <Plus className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                    <span className="text-sm font-semibold text-gray-700 w-24 text-right">
+                    <span className="text-sm font-semibold text-gray-700 flex-shrink-0 whitespace-nowrap">
                       {formatCurrency(line.sellPrice * line.quantity)}
                     </span>
                     <button
                       type="button"
                       onClick={() => removeProductLine(index)}
-                      className="p-1 text-red-400 hover:text-red-600"
+                      className="p-1 text-red-400 hover:text-red-600 flex-shrink-0"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -1030,7 +1007,6 @@ export default function CheckCreatePage() {
               {'\u041E\u043F\u043B\u0430\u0442\u0430'}
             </h3>
 
-            {/* Payment method buttons */}
             <div className="grid grid-cols-4 gap-2 mb-4">
               <button
                 type="button"
@@ -1082,7 +1058,6 @@ export default function CheckCreatePage() {
               </button>
             </div>
 
-            {/* Cash payment - change calculation */}
             {paymentMethod === 'cash' && (
               <div className="bg-green-50 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
@@ -1106,7 +1081,6 @@ export default function CheckCreatePage() {
               </div>
             )}
 
-            {/* Mixed payment - cash/card split */}
             {paymentMethod === 'cash_card' && (
               <div className="bg-purple-50 rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
@@ -1135,7 +1109,6 @@ export default function CheckCreatePage() {
               </div>
             )}
 
-            {/* Deferred payment */}
             <label className="flex items-center gap-2 cursor-pointer mt-3">
               <input
                 type="checkbox"
