@@ -18,12 +18,7 @@ import EmptyState from '../components/EmptyState';
 import { UserRole, MasterSalary, SalarySummary } from '../types';
 
 function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('ru-RU', {
-    style: 'currency',
-    currency: 'UZS',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
+  return value.toLocaleString('ru-RU') + ' \u20BD';
 }
 
 function MasterSalaryView() {

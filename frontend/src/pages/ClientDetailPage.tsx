@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, useRef, FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -12,6 +12,11 @@ import {
   Car,
   Calendar,
   FileText,
+  ChevronDown,
+  ChevronUp,
+  Search,
+  UserCheck,
+  Loader2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { clientsApi, carsApi, checksApi } from '../api/services';
@@ -22,6 +27,242 @@ import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { Client, Car as CarType, Check } from '../types';
 
+// ---- Car Checks Expandable Panel ----
+function CarChecksPanel({ carId }: { carId: string }) {
+  const navigate = useNavigate();
+
+  const { data: checksData, isLoading } = useQuery<{ data: Check[] }>({
+    queryKey: ['checks', { carId }],
+    queryFn: async () => {
+      const res = await checksApi.getAll({ carId });
+      return res.data;
+    },
+    enabled: !!carId,
+  });
+
+  const checks: Check[] = checksData?.data || [];
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  };
+
+  const formatCurrency = (amount: number) => {
+    return amount.toLocaleString('ru-RU') + ' \u20BD';
+  };
+
+  const paymentLabel = (method: string) => {
+    switch (method) {
+      case 'cash':
+        return 'Наличные';
+      case 'card':
+        return 'Карта';
+      case 'warranty':
+        return 'Гарантия';
+      case 'cash_card':
+        return 'Нал + Карта';
+      default:
+        return method;
+    }
+  };
+
+  const paymentBadge = (method: string) => {
+    switch (method) {
+      case 'cash':
+        return 'badge-success';
+      case 'card':
+        return 'badge-info';
+      case 'warranty':
+        return 'badge-warning';
+      default:
+        return 'badge-default';
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-6">
+        <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+        <span className="ml-2 text-sm text-gray-500">Загрузка чеков...</span>
+      </div>
+    );
+  }
+
+  if (checks.length === 0) {
+    return (
+      <div className="py-4 text-center text-sm text-gray-400">
+        Нет чеков для этого автомобиля
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-gray-100">
+      {checks.map((check) => (
+        <div
+          key={check.id}
+          onClick={() => navigate(`/checks/${check.id}`)}
+          className="flex items-center justify-between py-3 px-2 cursor-pointer hover:bg-gray-50 rounded-lg transition-colors"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="p-1.5 bg-white rounded-lg border border-gray-200">
+              <FileText className="w-4 h-4 text-gray-500" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-900">
+                #{check.number}
+              </p>
+              <p className="text-xs text-gray-500">
+                {formatDate(check.date || check.createdAt)}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <span className="text-sm font-semibold text-gray-900">
+              {formatCurrency(check.totalRevenue)}
+            </span>
+            <span className={paymentBadge(check.paymentMethod)}>
+              {paymentLabel(check.paymentMethod)}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---- Client Search Autocomplete for owner change ----
+function ClientSearchAutocomplete({
+  selectedClient,
+  onSelect,
+  excludeClientId,
+}: {
+  selectedClient: Client | null;
+  onSelect: (client: Client | null) => void;
+  excludeClientId?: string;
+}) {
+  const [search, setSearch] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const { data: clientsData, isLoading } = useQuery<{ data: Client[] }>({
+    queryKey: ['clients', { search, limit: 10 }],
+    queryFn: async () => {
+      const res = await clientsApi.getAll({ search, limit: 10 });
+      return res.data;
+    },
+    enabled: search.length >= 1,
+  });
+
+  const clients: Client[] = (clientsData?.data || []).filter(
+    (c) => c.id !== excludeClientId
+  );
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSelect = (client: Client) => {
+    onSelect(client);
+    setSearch('');
+    setIsOpen(false);
+  };
+
+  const handleClear = () => {
+    onSelect(null);
+    setSearch('');
+  };
+
+  if (selectedClient) {
+    return (
+      <div className="flex items-center gap-3 p-3 bg-primary-50 rounded-xl border border-primary-200">
+        <div className="p-1.5 bg-white rounded-lg">
+          <UserCheck className="w-4 h-4 text-primary-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-900">{selectedClient.fullName}</p>
+          <p className="text-xs text-gray-500">{selectedClient.phone}</p>
+        </div>
+        <button
+          type="button"
+          onClick={handleClear}
+          className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
+        >
+          Сбросить
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={search}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => {
+            if (search.length >= 1) setIsOpen(true);
+          }}
+          className="input pl-9"
+          placeholder="Поиск клиента по имени или телефону..."
+        />
+      </div>
+
+      {isOpen && search.length >= 1 && (
+        <div className="absolute z-50 w-full mt-1 bg-white rounded-xl shadow-lg border border-gray-200 max-h-60 overflow-y-auto">
+          {isLoading ? (
+            <div className="flex items-center justify-center py-4">
+              <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
+              <span className="ml-2 text-sm text-gray-500">Поиск...</span>
+            </div>
+          ) : clients.length === 0 ? (
+            <div className="py-4 text-center text-sm text-gray-400">
+              Клиенты не найдены
+            </div>
+          ) : (
+            clients.map((client) => (
+              <button
+                key={client.id}
+                type="button"
+                onClick={() => handleSelect(client)}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors first:rounded-t-xl last:rounded-b-xl"
+              >
+                <div className="p-1.5 bg-gray-100 rounded-lg">
+                  <User className="w-4 h-4 text-gray-500" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">
+                    {client.fullName}
+                  </p>
+                  <p className="text-xs text-gray-500">{client.phone}</p>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Main Page Component ----
 export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -39,10 +280,14 @@ export default function ClientDetailPage() {
   const [plateNumber, setPlateNumber] = useState('');
   const [makeModel, setMakeModel] = useState('');
   const [carComment, setCarComment] = useState('');
+  const [newOwner, setNewOwner] = useState<Client | null>(null);
 
   // Delete car confirm
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Expanded car (to show checks)
+  const [expandedCarId, setExpandedCarId] = useState<string | null>(null);
 
   // Fetch client
   const {
@@ -99,10 +344,11 @@ export default function ClientDetailPage() {
   });
 
   const updateCarMutation = useMutation({
-    mutationFn: ({ carId, data }: { carId: string; data: { plateNumber: string; makeModel: string; comment?: string } }) =>
+    mutationFn: ({ carId, data }: { carId: string; data: { plateNumber: string; makeModel: string; comment?: string; clientId?: string } }) =>
       carsApi.update(carId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients', id] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       toast.success('Автомобиль обновлён');
       closeCarModal();
@@ -148,6 +394,7 @@ export default function ClientDetailPage() {
     setPlateNumber('');
     setMakeModel('');
     setCarComment('');
+    setNewOwner(null);
     setCarModalOpen(true);
   };
 
@@ -156,22 +403,28 @@ export default function ClientDetailPage() {
     setPlateNumber(car.plateNumber);
     setMakeModel(car.makeModel);
     setCarComment(car.comment || '');
+    setNewOwner(null);
     setCarModalOpen(true);
   };
 
   const closeCarModal = () => {
     setCarModalOpen(false);
     setEditingCar(null);
+    setNewOwner(null);
   };
 
   const handleCarSubmit = (e: FormEvent) => {
     e.preventDefault();
-    const payload = {
+    const payload: { plateNumber: string; makeModel: string; comment?: string; clientId?: string } = {
       plateNumber,
       makeModel,
       comment: carComment || undefined,
     };
     if (editingCar) {
+      // Include clientId only if owner was changed
+      if (newOwner) {
+        payload.clientId = newOwner.id;
+      }
       updateCarMutation.mutate({ carId: editingCar.id, data: payload });
     } else {
       createCarMutation.mutate({ ...payload, clientId: id! });
@@ -190,6 +443,10 @@ export default function ClientDetailPage() {
     }
   };
 
+  const toggleCarExpand = (carId: string) => {
+    setExpandedCarId((prev) => (prev === carId ? null : carId));
+  };
+
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('ru-RU', {
       day: '2-digit',
@@ -199,7 +456,7 @@ export default function ClientDetailPage() {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ru-RU').format(amount);
+    return amount.toLocaleString('ru-RU') + ' \u20BD';
   };
 
   if (isLoading) return <LoadingSpinner />;
@@ -309,38 +566,68 @@ export default function ClientDetailPage() {
             {client.cars.map((car) => (
               <div
                 key={car.id}
-                className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-100"
+                className="bg-gray-50 rounded-xl border border-gray-100 overflow-hidden transition-shadow hover:shadow-sm"
               >
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white rounded-lg border border-gray-200">
-                    <Car className="w-5 h-5 text-gray-600" />
+                {/* Car header row */}
+                <div className="flex items-center justify-between p-4">
+                  <button
+                    type="button"
+                    onClick={() => toggleCarExpand(car.id)}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                  >
+                    <div className="p-2 bg-white rounded-xl border border-gray-200">
+                      <Car className="w-5 h-5 text-gray-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-900">
+                        {car.plateNumber}
+                      </p>
+                      <p className="text-sm text-gray-500">{car.makeModel}</p>
+                      {car.comment && (
+                        <p className="text-xs text-gray-400 mt-0.5">{car.comment}</p>
+                      )}
+                    </div>
+                    <div className="ml-auto mr-2">
+                      {expandedCarId === car.id ? (
+                        <ChevronUp className="w-4 h-4 text-gray-400" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4 text-gray-400" />
+                      )}
+                    </div>
+                  </button>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openEditCarModal(car);
+                      }}
+                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-white transition-colors"
+                      title="Редактировать"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteCar(car.id);
+                      }}
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                      title="Удалить"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
-                  <div>
-                    <p className="font-semibold text-gray-900">
-                      {car.plateNumber}
+                </div>
+
+                {/* Expanded checks panel */}
+                {expandedCarId === car.id && (
+                  <div className="border-t border-gray-200 bg-white px-4 py-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 pt-2">
+                      Чеки по автомобилю
                     </p>
-                    <p className="text-sm text-gray-500">{car.makeModel}</p>
-                    {car.comment && (
-                      <p className="text-xs text-gray-400 mt-0.5">{car.comment}</p>
-                    )}
+                    <CarChecksPanel carId={car.id} />
                   </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => openEditCarModal(car)}
-                    className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-white transition-colors"
-                    title="Редактировать"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteCar(car.id)}
-                    className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                    title="Удалить"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+                )}
               </div>
             ))}
           </div>
@@ -390,7 +677,7 @@ export default function ClientDetailPage() {
                       {check.car?.plateNumber || '—'}
                     </td>
                     <td className="font-medium text-gray-900">
-                      {formatCurrency(check.totalRevenue)} сум
+                      {formatCurrency(check.totalRevenue)}
                     </td>
                     <td>
                       <span
@@ -521,6 +808,27 @@ export default function ClientDetailPage() {
               placeholder="Комментарий (необязательно)"
             />
           </div>
+
+          {/* Owner change - only shown when editing */}
+          {editingCar && (
+            <div>
+              <label className="label">Сменить владельца</label>
+              <p className="text-xs text-gray-500 mb-2">
+                Текущий владелец: <span className="font-medium text-gray-700">{client.fullName}</span>
+              </p>
+              <ClientSearchAutocomplete
+                selectedClient={newOwner}
+                onSelect={setNewOwner}
+                excludeClientId={id}
+              />
+              {newOwner && (
+                <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                  <UserCheck className="w-3 h-3" />
+                  Автомобиль будет перенесён к клиенту: {newOwner.fullName}
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
             <button type="button" onClick={closeCarModal} className="btn-secondary">

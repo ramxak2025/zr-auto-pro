@@ -35,7 +35,7 @@ const paymentMethodBadge: Record<string, string> = {
 };
 
 const formatCurrency = (value: number): string => {
-  return value.toLocaleString('ru-RU') + ' \u20B8';
+  return value.toLocaleString('ru-RU') + ' \u20BD';
 };
 
 export default function CheckDetailPage() {

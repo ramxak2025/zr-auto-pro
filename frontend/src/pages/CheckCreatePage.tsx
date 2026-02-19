@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -7,6 +7,10 @@ import {
   Trash2,
   Loader2,
   Search,
+  FolderOpen,
+  ChevronLeft,
+  Package,
+  X,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -29,7 +33,7 @@ import type {
 } from '../types';
 
 const formatCurrency = (value: number): string => {
-  return value.toLocaleString('ru-RU') + ' \u20B8';
+  return value.toLocaleString('ru-RU') + ' \u20BD';
 };
 
 interface ServiceLineForm {
@@ -47,6 +51,320 @@ interface ProductLineForm {
   costPrice: number;
   quantity: number;
 }
+
+// ---------------------------------------------------------------------------
+// Product Picker Modal
+// ---------------------------------------------------------------------------
+
+interface ProductPickerModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  products: Product[];
+  onSelectProduct: (product: Product) => void;
+}
+
+function ProductPickerModal({
+  isOpen,
+  onClose,
+  products,
+  onSelectProduct,
+}: ProductPickerModalProps) {
+  const [search, setSearch] = useState('');
+  const [currentCategory, setCurrentCategory] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Reset state when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setSearch('');
+      setCurrentCategory(null);
+      // Focus search input after a short delay for animation
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 100);
+    }
+  }, [isOpen]);
+
+  // Gather unique categories
+  const categories = useMemo(() => {
+    const cats = new Set<string>();
+    products.forEach((p) => {
+      if (p.category) cats.add(p.category);
+    });
+    return Array.from(cats).sort();
+  }, [products]);
+
+  // Products without a category go into "Без категории"
+  const uncategorizedCount = useMemo(
+    () => products.filter((p) => !p.category).length,
+    [products],
+  );
+
+  // Filtered products based on search & current category
+  const filteredProducts = useMemo(() => {
+    let list = products;
+
+    if (currentCategory !== null) {
+      if (currentCategory === '__uncategorized__') {
+        list = list.filter((p) => !p.category);
+      } else {
+        list = list.filter((p) => p.category === currentCategory);
+      }
+    }
+
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.category && p.category.toLowerCase().includes(q)),
+      );
+    }
+
+    return list;
+  }, [products, currentCategory, search]);
+
+  // Count products per category for badge
+  const categoryProductCount = useCallback(
+    (cat: string) => products.filter((p) => p.category === cat).length,
+    [products],
+  );
+
+  const handleSelect = (product: Product) => {
+    onSelectProduct(product);
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white sticky top-0 z-10">
+        <button
+          type="button"
+          onClick={() => {
+            if (currentCategory !== null && !search.trim()) {
+              setCurrentCategory(null);
+            } else {
+              onClose();
+            }
+          }}
+          className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600"
+        >
+          {currentCategory !== null && !search.trim() ? (
+            <ChevronLeft className="w-5 h-5" />
+          ) : (
+            <X className="w-5 h-5" />
+          )}
+        </button>
+
+        <div className="flex-1 min-w-0">
+          {/* Breadcrumbs */}
+          <div className="flex items-center gap-1 text-sm text-gray-500 mb-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentCategory(null);
+                setSearch('');
+              }}
+              className="hover:text-primary-600 truncate"
+            >
+              {'\u0422\u043E\u0432\u0430\u0440\u044B'}
+            </button>
+            {currentCategory !== null && (
+              <>
+                <span>/</span>
+                <span className="text-gray-900 font-medium truncate">
+                  {currentCategory === '__uncategorized__'
+                    ? '\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438'
+                    : currentCategory}
+                </span>
+              </>
+            )}
+          </div>
+          <h2 className="text-lg font-semibold text-gray-900 leading-tight">
+            {'\u0412\u044B\u0431\u043E\u0440 \u0442\u043E\u0432\u0430\u0440\u0430'}
+          </h2>
+        </div>
+      </div>
+
+      {/* Search bar */}
+      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={'\u041F\u043E\u0438\u0441\u043A \u0442\u043E\u0432\u0430\u0440\u0430...'}
+            className="input pl-10 w-full"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto">
+        {/* If searching, skip folder view and show flat product results */}
+        {search.trim() ? (
+          <div className="p-4">
+            {filteredProducts.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">{'\u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E'}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                {filteredProducts.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    onSelect={handleSelect}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        ) : currentCategory === null ? (
+          /* Folder view */
+          <div className="p-4 space-y-2">
+            {categories.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setCurrentCategory(cat)}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                <FolderOpen className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                <span className="flex-1 text-left font-medium text-gray-900 truncate">
+                  {cat}
+                </span>
+                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                  {categoryProductCount(cat)}
+                </span>
+              </button>
+            ))}
+
+            {uncategorizedCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setCurrentCategory('__uncategorized__')}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+              >
+                <Package className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                <span className="flex-1 text-left font-medium text-gray-500 truncate">
+                  {'\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438'}
+                </span>
+                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                  {uncategorizedCount}
+                </span>
+              </button>
+            )}
+
+            {categories.length === 0 && uncategorizedCount === 0 && (
+              <div className="text-center py-12 text-gray-400">
+                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">{'\u041D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}</p>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* Product grid inside a category */
+          <div className="p-4">
+            {filteredProducts.length === 0 ? (
+              <div className="text-center py-12 text-gray-400">
+                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">{'\u0412 \u044D\u0442\u043E\u0439 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438 \u043D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                {filteredProducts.map((product) => (
+                  <ProductCard
+                    key={product.id}
+                    product={product}
+                    onSelect={handleSelect}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Product Card (used inside the picker modal)
+// ---------------------------------------------------------------------------
+
+interface ProductCardProps {
+  product: Product;
+  onSelect: (product: Product) => void;
+}
+
+function ProductCard({ product, onSelect }: ProductCardProps) {
+  const inStock = product.stock > 0;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(product)}
+      className={`flex flex-col bg-white border rounded-xl overflow-hidden text-left transition-shadow hover:shadow-md ${
+        inStock ? 'border-gray-200' : 'border-red-200 opacity-60'
+      }`}
+    >
+      {/* Photo area */}
+      <div className="w-full aspect-square bg-gray-100 relative overflow-hidden">
+        {product.photo ? (
+          <img
+            src={product.photo}
+            alt={product.name}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <Package className="w-10 h-10 text-gray-300" />
+          </div>
+        )}
+        {/* Stock badge */}
+        <div
+          className={`absolute top-1.5 right-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+            inStock
+              ? 'bg-green-100 text-green-700'
+              : 'bg-red-100 text-red-700'
+          }`}
+        >
+          {inStock ? `${product.stock} \u0448\u0442` : '\u041D\u0435\u0442'}
+        </div>
+      </div>
+
+      {/* Info */}
+      <div className="p-2.5 flex flex-col gap-1">
+        <span className="text-xs font-medium text-gray-900 line-clamp-2 leading-tight">
+          {product.name}
+        </span>
+        <span className="text-sm font-bold text-primary-600">
+          {formatCurrency(product.sellPrice)}
+        </span>
+      </div>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main Page Component
+// ---------------------------------------------------------------------------
 
 export default function CheckCreatePage() {
   const navigate = useNavigate();
@@ -72,6 +390,33 @@ export default function CheckCreatePage() {
 
   // Product lines
   const [productLines, setProductLines] = useState<ProductLineForm[]>([]);
+
+  // Product picker modal
+  const [showProductPicker, setShowProductPicker] = useState(false);
+
+  // -----------------------------------------------------------------------
+  // Prevent accidental swipe-back / page leave
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    window.history.pushState({ checkGuard: true }, '');
+    const handler = (e: PopStateEvent) => {
+      if (serviceLines.length > 0 || productLines.length > 0) {
+        window.history.pushState({ checkGuard: true }, '');
+        // Could show a toast warning
+      }
+    };
+    window.addEventListener('popstate', handler);
+    const beforeUnload = (e: BeforeUnloadEvent) => {
+      if (serviceLines.length > 0 || productLines.length > 0) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => {
+      window.removeEventListener('popstate', handler);
+      window.removeEventListener('beforeunload', beforeUnload);
+    };
+  }, [serviceLines.length, productLines.length]);
 
   // Fetch masters
   const { data: masters } = useQuery<User[]>({
@@ -175,20 +520,35 @@ export default function CheckCreatePage() {
     setServiceLines((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Product line handlers
-  const addProductLine = () => {
-    setProductLines((prev) => [
-      ...prev,
-      { productId: '', name: '', sellPrice: 0, costPrice: 0, quantity: 1 },
-    ]);
-  };
+  // Product line handlers -- now driven by the picker modal
+  const handleProductSelected = useCallback((product: Product) => {
+    setProductLines((prev) => {
+      // If product already in the list, just bump quantity
+      const existing = prev.findIndex((l) => l.productId === product.id);
+      if (existing !== -1) {
+        return prev.map((line, i) =>
+          i === existing ? { ...line, quantity: line.quantity + 1 } : line,
+        );
+      }
+      return [
+        ...prev,
+        {
+          productId: product.id,
+          name: product.name,
+          sellPrice: product.sellPrice,
+          costPrice: product.costPrice,
+          quantity: 1,
+        },
+      ];
+    });
+  }, []);
 
   const updateProductLine = (index: number, field: keyof ProductLineForm, value: any) => {
     setProductLines((prev) =>
       prev.map((line, i) => {
         if (i !== index) return line;
         const updated = { ...line, [field]: value };
-        // Auto-fill from product selection
+        // Auto-fill from product selection (kept for manual edits if any)
         if (field === 'productId' && allProducts) {
           const prod = allProducts.find((p) => p.id === value);
           if (prod) {
@@ -325,7 +685,7 @@ export default function CheckCreatePage() {
                 <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0430\u0432\u0442\u043E\u043C\u043E\u0431\u0438\u043B\u044C'}</option>
                 {selectedClient.cars?.map((car) => (
                   <option key={car.id} value={car.id}>
-                    {car.makeModel} \u2014 {car.plateNumber}
+                    {car.makeModel} {'\u2014'} {car.plateNumber}
                   </option>
                 ))}
               </select>
@@ -404,7 +764,7 @@ export default function CheckCreatePage() {
                       <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0443\u0441\u043B\u0443\u0433\u0443'}</option>
                       {allServices?.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {s.name} \u2014 {formatCurrency(s.defaultPrice)}
+                          {s.name} {'\u2014'} {formatCurrency(s.defaultPrice)}
                         </option>
                       ))}
                     </select>
@@ -474,7 +834,11 @@ export default function CheckCreatePage() {
         <div className="card card-body space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-900">{'\u0422\u043E\u0432\u0430\u0440\u044B'}</h2>
-            <button type="button" onClick={addProductLine} className="btn-secondary btn-sm">
+            <button
+              type="button"
+              onClick={() => setShowProductPicker(true)}
+              className="btn-secondary btn-sm"
+            >
               <Plus className="w-4 h-4" />
               {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0442\u043E\u0432\u0430\u0440'}
             </button>
@@ -487,21 +851,14 @@ export default function CheckCreatePage() {
           ) : (
             <div className="space-y-3">
               {productLines.map((line, index) => (
-                <div key={index} className="flex flex-col sm:flex-row gap-3 p-3 bg-gray-50 rounded-lg">
-                  <div className="flex-1">
-                    <label className="label">{'\u0422\u043E\u0432\u0430\u0440'}</label>
-                    <select
-                      value={line.productId}
-                      onChange={(e) => updateProductLine(index, 'productId', e.target.value)}
-                      className="input"
-                    >
-                      <option value="">{'\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u043E\u0432\u0430\u0440'}</option>
-                      {allProducts?.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} \u2014 {formatCurrency(p.sellPrice)} (\u0441\u043A\u043B\u0430\u0434: {p.stock})
-                        </option>
-                      ))}
-                    </select>
+                <div key={index} className="flex flex-col sm:flex-row gap-3 p-3 bg-gray-50 rounded-lg items-center">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">
+                      {line.name || '\u0422\u043E\u0432\u0430\u0440'}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {formatCurrency(line.sellPrice)} {'\u0437\u0430 \u0448\u0442'}
+                    </div>
                   </div>
                   <div className="w-full sm:w-20">
                     <label className="label">{'\u041A\u043E\u043B-\u0432\u043E'}</label>
@@ -633,6 +990,14 @@ export default function CheckCreatePage() {
           </button>
         </div>
       </form>
+
+      {/* Product Picker Modal */}
+      <ProductPickerModal
+        isOpen={showProductPicker}
+        onClose={() => setShowProductPicker(false)}
+        products={allProducts ?? []}
+        onSelectProduct={handleProductSelected}
+      />
     </div>
   );
 }
