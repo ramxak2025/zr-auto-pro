@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -28,7 +29,7 @@ func Connect() {
 		if err == nil {
 			break
 		}
-		log.Printf("Waiting for database... attempt %d/30", i+1)
+		log.Printf("Waiting for database... attempt %d/30: %v", i+1, err)
 		time.Sleep(2 * time.Second)
 	}
 	if err != nil {
@@ -38,8 +39,33 @@ func Connect() {
 	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(5)
 	DB.SetConnMaxLifetime(5 * time.Minute)
+	DB.SetConnMaxIdleTime(2 * time.Minute)
 
 	log.Println("Database connected")
+}
+
+func Close() {
+	if DB != nil {
+		if err := DB.Close(); err != nil {
+			log.Printf("Error closing database: %v", err)
+		} else {
+			log.Println("Database connection closed")
+		}
+	}
+}
+
+// QueryContext executes a query with a default timeout context
+func QueryContext(query string, args ...interface{}) (*sql.Rows, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return DB.QueryContext(ctx, query, args...)
+}
+
+// QueryRowContext executes a query row with a default timeout context
+func QueryRowContext(query string, args ...interface{}) *sql.Row {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_ = cancel // cancel will be called when row is scanned or GC'd
+	return DB.QueryRowContext(ctx, query, args...)
 }
 
 func RunMigrations() {
@@ -52,16 +78,11 @@ func RunMigrations() {
 	if err != nil {
 		log.Printf("Migration batch warning: %v", err)
 		log.Println("Retrying migration statements individually...")
-		// If the batch fails, try each statement separately so partial failures
-		// don't block creation of subsequent tables
 		runMigrationStatements(string(migration))
 	}
 	log.Println("Migrations applied")
 }
 
-// runMigrationStatements splits SQL into top-level statements and executes each independently.
-// This ensures that a failure in one statement (e.g., a duplicate index) doesn't prevent
-// creation of subsequent tables.
 func runMigrationStatements(sql string) {
 	stmts := splitSQL(sql)
 	for i, stmt := range stmts {
@@ -75,7 +96,6 @@ func runMigrationStatements(sql string) {
 	}
 }
 
-// splitSQL splits a SQL string into top-level statements, respecting DO $$ ... $$ blocks.
 func splitSQL(sql string) []string {
 	var stmts []string
 	var current []byte
@@ -138,7 +158,6 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	`, adminHash, allPerms)
 	if err != nil {
 		log.Printf("Seed superadmin FAILED: %v", err)
-		// Try simpler insert without permissions column as fallback
 		_, err2 := DB.Exec(`
 			INSERT INTO users (phone, password, full_name, role, is_active, tenant_id)
 			VALUES ('+79884444436', $1, 'Администратор платформы', 'superadmin', true, NULL)
@@ -156,11 +175,9 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	}
 
 	// ── 3. Demo tenant (separate auto service) ──
-	// NEVER rename or modify existing tenants — only create demo if missing
 	var tenantID string
 	err = DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'demo' LIMIT 1`).Scan(&tenantID)
 	if err != nil {
-		// Demo tenant not found — create a new one (only if slug 'demo' doesn't exist)
 		err = DB.QueryRow(`
 			INSERT INTO tenants (name, slug, phone, is_active, max_users)
 			VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)
@@ -174,7 +191,6 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	if tenantID == "" {
 		log.Println("Seed: could not get or create demo tenant, skipping demo users")
 	} else {
-		// Demo owner (director of the demo auto service)
 		_, err = DB.Exec(`
 			INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
 			VALUES ('+70000000001', $1, 'Владелец (демо)', 'director', true, $2, $3, 0)
@@ -190,7 +206,6 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 			log.Printf("Seed demo owner upsert error: %v", err)
 		}
 
-		// Demo master
 		_, err = DB.Exec(`
 			INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
 			VALUES ('+70000000002', $1, 'Мастер (демо)', 'master', true, $2, $3, 40)
@@ -215,9 +230,11 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 }
 
 func seedPlans() {
-	// Insert default plans if none exist
 	var count int
-	DB.QueryRow("SELECT COUNT(*) FROM plans").Scan(&count)
+	if err := DB.QueryRow("SELECT COUNT(*) FROM plans").Scan(&count); err != nil {
+		log.Printf("Seed plans count check error: %v", err)
+		return
+	}
 	if count > 0 {
 		return
 	}
@@ -257,10 +274,13 @@ func seedPlans() {
 	}
 
 	for _, p := range plans {
-		DB.Exec(`
+		_, err := DB.Exec(`
 			INSERT INTO plans (name, monthly_price, description, features, max_users, is_active, sort_order)
 			VALUES ($1, $2, $3, $4, $5, true, $6)
 		`, p.name, p.price, p.desc, p.features, p.maxUsers, p.sort)
+		if err != nil {
+			log.Printf("Seed plan %q error: %v", p.name, err)
+		}
 	}
 
 	log.Println("Default plans seeded")

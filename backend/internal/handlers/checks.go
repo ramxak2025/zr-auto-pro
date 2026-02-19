@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -22,6 +23,9 @@ func GetChecks(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	if page < 1 {
 		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
 	}
 	offset := (page - 1) * limit
 
@@ -62,29 +66,36 @@ func GetChecks(c *gin.Context) {
 	}
 
 	var total int
-	database.DB.QueryRow("SELECT COUNT(*) "+baseQ, cArgs...).Scan(&total)
+	if err := database.DB.QueryRow("SELECT COUNT(*) "+baseQ, cArgs...).Scan(&total); err != nil {
+		log.Printf("GetChecks count error: %v", err)
+	}
 
 	query := `SELECT ch.id, ch.number, ch.date, ch.master_id, COALESCE(m.full_name,''), ch.client_id, COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
 		ch.car_id, COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''), ch.payment_method, ch.total_revenue, ch.is_deferred, ch.discount, ch.created_at` + baseQ +
 		" ORDER BY ch.date DESC, ch.number DESC LIMIT $" + strconv.Itoa(idx) + " OFFSET $" + strconv.Itoa(idx+1)
 	args = append(args, limit, offset)
 
-	rows, _ := database.DB.Query(query, args...)
+	rows, err := database.DB.Query(query, args...)
 	checks := []models.Check{}
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var ch models.Check
-			var masterName, clientName, clientPhone, carPlate, carModel string
-			rows.Scan(&ch.ID, &ch.Number, &ch.Date, &ch.MasterID, &masterName, &ch.ClientID, &clientName, &clientPhone,
-				&ch.CarID, &carPlate, &carModel, &ch.PaymentMethod, &ch.TotalRevenue, &ch.IsDeferred, &ch.Discount, &ch.CreatedAt)
-			ch.Master = &models.User{ID: ch.MasterID, FullName: masterName}
-			ch.Client = &models.Client{ID: ch.ClientID, FullName: clientName, Phone: clientPhone}
-			ch.Car = &models.Car{ID: ch.CarID, PlateNumber: carPlate, MakeModel: carModel}
-			ch.Services = []models.CheckServiceLine{}
-			ch.Products = []models.CheckProductLine{}
-			checks = append(checks, ch)
+	if err != nil {
+		serverError(c, "GetChecks query", err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ch models.Check
+		var masterName, clientName, clientPhone, carPlate, carModel string
+		if scanErr := rows.Scan(&ch.ID, &ch.Number, &ch.Date, &ch.MasterID, &masterName, &ch.ClientID, &clientName, &clientPhone,
+			&ch.CarID, &carPlate, &carModel, &ch.PaymentMethod, &ch.TotalRevenue, &ch.IsDeferred, &ch.Discount, &ch.CreatedAt); scanErr != nil {
+			log.Printf("GetChecks scan error: %v", scanErr)
+			continue
 		}
+		ch.Master = &models.User{ID: ch.MasterID, FullName: masterName}
+		ch.Client = &models.Client{ID: ch.ClientID, FullName: clientName, Phone: clientPhone}
+		ch.Car = &models.Car{ID: ch.CarID, PlateNumber: carPlate, MakeModel: carModel}
+		ch.Services = []models.CheckServiceLine{}
+		ch.Products = []models.CheckProductLine{}
+		checks = append(checks, ch)
 	}
 	c.JSON(http.StatusOK, models.PaginatedResponse{Data: checks, Total: total, Page: page, Limit: limit})
 }
@@ -133,15 +144,18 @@ func GetCheck(c *gin.Context) {
 
 	// Load service lines
 	ch.Services = []models.CheckServiceLine{}
-	sRows, _ := database.DB.Query(`
+	sRows, err := database.DB.Query(`
 		SELECT csl.id, csl.service_id, csl.master_id, COALESCE(m.full_name,''), csl.name, csl.price, csl.quantity, csl.total
 		FROM check_service_lines csl LEFT JOIN users m ON m.id=csl.master_id WHERE csl.check_id=$1
 	`, id)
-	if sRows != nil {
+	if err == nil {
+		defer sRows.Close()
 		for sRows.Next() {
 			var sl models.CheckServiceLine
 			var sid, mid, mname string
-			sRows.Scan(&sl.ID, &sid, &mid, &mname, &sl.Name, &sl.Price, &sl.Quantity, &sl.Total)
+			if scanErr := sRows.Scan(&sl.ID, &sid, &mid, &mname, &sl.Name, &sl.Price, &sl.Quantity, &sl.Total); scanErr != nil {
+				continue
+			}
 			if sid != "" {
 				sl.ServiceID = &sid
 			}
@@ -151,26 +165,27 @@ func GetCheck(c *gin.Context) {
 			}
 			ch.Services = append(ch.Services, sl)
 		}
-		sRows.Close()
 	}
 
 	// Load product lines
 	ch.Products = []models.CheckProductLine{}
-	pRows, _ := database.DB.Query(`
+	pRows, err := database.DB.Query(`
 		SELECT id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost
 		FROM check_product_lines WHERE check_id=$1
 	`, id)
-	if pRows != nil {
+	if err == nil {
+		defer pRows.Close()
 		for pRows.Next() {
 			var pl models.CheckProductLine
 			var pid string
-			pRows.Scan(&pl.ID, &pid, &pl.Name, &pl.SellPrice, &pl.CostPrice, &pl.Quantity, &pl.TotalSell, &pl.TotalCost)
+			if scanErr := pRows.Scan(&pl.ID, &pid, &pl.Name, &pl.SellPrice, &pl.CostPrice, &pl.Quantity, &pl.TotalSell, &pl.TotalCost); scanErr != nil {
+				continue
+			}
 			if pid != "" {
 				pl.ProductID = &pid
 			}
 			ch.Products = append(ch.Products, pl)
 		}
-		pRows.Close()
 	}
 
 	c.JSON(http.StatusOK, ch)
@@ -185,7 +200,11 @@ func CreateCheck(c *gin.Context) {
 		return
 	}
 
-	// Role-based date restriction: masters can only create checks for today
+	if req.MasterID == "" || req.ClientID == "" || req.CarID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Мастер, клиент и авто обязательны"})
+		return
+	}
+
 	date := time.Now()
 	if req.Date != "" {
 		if t, err := time.Parse(time.RFC3339, req.Date); err == nil {
@@ -205,15 +224,13 @@ func CreateCheck(c *gin.Context) {
 		}
 	}
 
-	// Calculate totals
 	var serviceTotal, productTotal, productCostTotal float64
 
-	// Calculate service salary per master
-	type masterSalary struct {
+	type masterSalaryCalc struct {
 		total   float64
 		percent float64
 	}
-	masterSalaries := map[string]*masterSalary{}
+	masterSalaries := map[string]*masterSalaryCalc{}
 
 	for _, s := range req.Services {
 		total := s.Price * float64(s.Quantity)
@@ -226,7 +243,7 @@ func CreateCheck(c *gin.Context) {
 		if _, exists := masterSalaries[mid]; !exists {
 			var pct float64
 			database.DB.QueryRow("SELECT COALESCE(salary_percent,0) FROM users WHERE id=$1", mid).Scan(&pct)
-			masterSalaries[mid] = &masterSalary{percent: pct}
+			masterSalaries[mid] = &masterSalaryCalc{percent: pct}
 		}
 		masterSalaries[mid].total += total
 	}
@@ -245,11 +262,16 @@ func CreateCheck(c *gin.Context) {
 	totalCost := productCostTotal + serviceSalaryTotal
 	profit := totalRevenue - totalCost
 
-	tx, _ := database.DB.Begin()
+	tx, err := database.DB.Begin()
+	if err != nil {
+		serverError(c, "CreateCheck tx begin", err)
+		return
+	}
+	defer tx.Rollback()
 
 	var checkID string
 	var checkNumber int
-	err := tx.QueryRow(`
+	err = tx.QueryRow(`
 		INSERT INTO checks (date, master_id, client_id, car_id, mileage, comment, discount, is_deferred,
 			payment_method, cash_amount, card_amount, service_total, product_total, total_revenue, product_cost_total,
 			service_salary_total, total_cost, profit, tenant_id)
@@ -260,8 +282,7 @@ func CreateCheck(c *gin.Context) {
 		serviceTotal, productTotal, totalRevenue,
 		productCostTotal, serviceSalaryTotal, totalCost, profit, tenantID).Scan(&checkID, &checkNumber)
 	if err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Ошибка создания: " + err.Error()})
+		serverError(c, "CreateCheck insert", err)
 		return
 	}
 
@@ -271,30 +292,36 @@ func CreateCheck(c *gin.Context) {
 		if s.MasterID != nil && *s.MasterID != "" {
 			mid = *s.MasterID
 		}
-		tx.Exec(`
+		if _, err := tx.Exec(`
 			INSERT INTO check_service_lines (id, check_id, service_id, master_id, name, price, quantity, total)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-		`, uuid.New().String(), checkID, s.ServiceID, mid, s.Name, s.Price, s.Quantity, total)
+		`, uuid.New().String(), checkID, s.ServiceID, mid, s.Name, s.Price, s.Quantity, total); err != nil {
+			serverError(c, "CreateCheck service line", err)
+			return
+		}
 	}
 
 	for _, p := range req.Products {
 		totalSell := p.SellPrice * float64(p.Quantity)
-		totalCost := p.CostPrice * float64(p.Quantity)
-		tx.Exec(`
+		totalCostLine := p.CostPrice * float64(p.Quantity)
+		if _, err := tx.Exec(`
 			INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		`, uuid.New().String(), checkID, p.ProductID, p.Name, p.SellPrice, p.CostPrice, p.Quantity, totalSell, totalCost)
-
-		// Decrease product stock
+		`, uuid.New().String(), checkID, p.ProductID, p.Name, p.SellPrice, p.CostPrice, p.Quantity, totalSell, totalCostLine); err != nil {
+			serverError(c, "CreateCheck product line", err)
+			return
+		}
 		if p.ProductID != nil {
 			tx.Exec("UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id=$2", p.Quantity, *p.ProductID)
 		}
 	}
 
-	tx.Commit()
+	if err := tx.Commit(); err != nil {
+		serverError(c, "CreateCheck tx commit", err)
+		return
+	}
 
-	// Return the created check
-	c.Set("tenantID", tenantID) // ensure it's set for GetCheck
+	c.Set("tenantID", tenantID)
 	c.Params = gin.Params{{Key: "id", Value: checkID}}
 	GetCheck(c)
 }
@@ -304,9 +331,11 @@ func UpdateCheck(c *gin.Context) {
 	tenantID := c.GetString("tenantID")
 	role := c.GetString("role")
 	var body map[string]interface{}
-	c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
+		return
+	}
 
-	// Only director/admin can edit date
 	if dateStr, ok := body["date"].(string); ok {
 		if role == "director" || role == "admin" || role == "superadmin" {
 			database.DB.Exec("UPDATE checks SET date=$1 WHERE id=$2 AND tenant_id=$3", dateStr, id, tenantID)
@@ -316,7 +345,6 @@ func UpdateCheck(c *gin.Context) {
 		}
 	}
 
-	// Simple field updates
 	if pm, ok := body["paymentMethod"].(string); ok {
 		database.DB.Exec("UPDATE checks SET payment_method=$1 WHERE id=$2 AND tenant_id=$3", pm, id, tenantID)
 	}
@@ -340,7 +368,15 @@ func UpdateCheck(c *gin.Context) {
 func DeleteCheck(c *gin.Context) {
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
-	database.DB.Exec("DELETE FROM checks WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	result, err := database.DB.Exec("DELETE FROM checks WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	if err != nil {
+		serverError(c, "DeleteCheck", err)
+		return
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "Удалён"})
 }
 
@@ -355,7 +391,6 @@ func GetDashboard(c *gin.Context) {
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 	var stats models.DashboardStats
-
 	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0), COUNT(*) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayRevenue, &stats.TodayChecks)
 	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, weekStart).Scan(&stats.WeekRevenue)
 	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthRevenue)
@@ -373,34 +408,36 @@ func GetRanking(c *gin.Context) {
 
 	ranking := models.EmployeeRanking{Today: []models.EmployeeRankEntry{}, Month: []models.EmployeeRankEntry{}}
 
-	todayRows, _ := database.DB.Query(`
+	todayRows, err := database.DB.Query(`
 		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
 		FROM checks ch JOIN users u ON u.id=ch.master_id
 		WHERE ch.tenant_id=$1 AND ch.date >= $2
 		GROUP BY ch.master_id, u.full_name ORDER BY SUM(ch.total_revenue) DESC
 	`, tenantID, todayStart)
-	if todayRows != nil {
+	if err == nil {
+		defer todayRows.Close()
 		for todayRows.Next() {
 			var e models.EmployeeRankEntry
-			todayRows.Scan(&e.MasterID, &e.MasterName, &e.Revenue, &e.CheckCount)
-			ranking.Today = append(ranking.Today, e)
+			if scanErr := todayRows.Scan(&e.MasterID, &e.MasterName, &e.Revenue, &e.CheckCount); scanErr == nil {
+				ranking.Today = append(ranking.Today, e)
+			}
 		}
-		todayRows.Close()
 	}
 
-	monthRows, _ := database.DB.Query(`
+	monthRows, err := database.DB.Query(`
 		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
 		FROM checks ch JOIN users u ON u.id=ch.master_id
 		WHERE ch.tenant_id=$1 AND ch.date >= $2
 		GROUP BY ch.master_id, u.full_name ORDER BY SUM(ch.total_revenue) DESC
 	`, tenantID, monthStart)
-	if monthRows != nil {
+	if err == nil {
+		defer monthRows.Close()
 		for monthRows.Next() {
 			var e models.EmployeeRankEntry
-			monthRows.Scan(&e.MasterID, &e.MasterName, &e.Revenue, &e.CheckCount)
-			ranking.Month = append(ranking.Month, e)
+			if scanErr := monthRows.Scan(&e.MasterID, &e.MasterName, &e.Revenue, &e.CheckCount); scanErr == nil {
+				ranking.Month = append(ranking.Month, e)
+			}
 		}
-		monthRows.Close()
 	}
 
 	c.JSON(http.StatusOK, ranking)

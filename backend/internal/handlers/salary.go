@@ -14,7 +14,7 @@ func GetSalaries(c *gin.Context) {
 	dateFrom := c.DefaultQuery("dateFrom", time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Now().Location()).Format("2006-01-02"))
 	dateTo := c.DefaultQuery("dateTo", time.Now().Format("2006-01-02"))
 
-	rows, _ := database.DB.Query(`
+	rows, err := database.DB.Query(`
 		SELECT u.id, u.full_name, u.salary_percent,
 			   COALESCE(SUM(ch.service_salary_total),0),
 			   COALESCE(SUM(ch.total_revenue),0),
@@ -25,15 +25,20 @@ func GetSalaries(c *gin.Context) {
 		GROUP BY u.id, u.full_name, u.salary_percent
 		ORDER BY SUM(ch.total_revenue) DESC NULLS LAST
 	`, tenantID, dateFrom, dateTo)
+	if err != nil {
+		serverError(c, "salaries query", err)
+		return
+	}
+	defer rows.Close()
 
 	salaries := []models.MasterSalary{}
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var s models.MasterSalary
-			rows.Scan(&s.MasterID, &s.MasterName, &s.SalaryPercent, &s.TotalEarnings, &s.TotalRevenue, &s.CheckCount)
-			salaries = append(salaries, s)
+	for rows.Next() {
+		var s models.MasterSalary
+		if err := rows.Scan(&s.MasterID, &s.MasterName, &s.SalaryPercent, &s.TotalEarnings, &s.TotalRevenue, &s.CheckCount); err != nil {
+			serverError(c, "salaries row scan", err)
+			return
 		}
+		salaries = append(salaries, s)
 	}
 	c.JSON(http.StatusOK, salaries)
 }
@@ -50,17 +55,41 @@ func GetMySalary(c *gin.Context) {
 
 	var summary models.SalarySummary
 
-	database.DB.QueryRow("SELECT full_name, salary_percent FROM users WHERE id=$1", userID).Scan(&summary.MasterName, &summary.SalaryPercent)
+	if err := database.DB.QueryRow("SELECT full_name, salary_percent FROM users WHERE id=$1", userID).Scan(&summary.MasterName, &summary.SalaryPercent); err != nil {
+		serverError(c, "my salary user query", err)
+		return
+	}
 
-	database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2", userID, todayStart).Scan(&summary.Today, &summary.TodayChecks)
-	database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1 AND date >= $2", userID, weekStart).Scan(&summary.Week)
-	database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2", userID, monthStart).Scan(&summary.Month, &summary.MonthChecks)
-	database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1", userID).Scan(&summary.Total)
+	if err := database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2", userID, todayStart).Scan(&summary.Today, &summary.TodayChecks); err != nil {
+		serverError(c, "my salary today query", err)
+		return
+	}
+	if err := database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1 AND date >= $2", userID, weekStart).Scan(&summary.Week); err != nil {
+		serverError(c, "my salary week query", err)
+		return
+	}
+	if err := database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2", userID, monthStart).Scan(&summary.Month, &summary.MonthChecks); err != nil {
+		serverError(c, "my salary month query", err)
+		return
+	}
+	if err := database.DB.QueryRow("SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1", userID).Scan(&summary.Total); err != nil {
+		serverError(c, "my salary total query", err)
+		return
+	}
 
 	// Today payment methods
-	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='cash'", userID, todayStart).Scan(&summary.TodayCash)
-	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='card'", userID, todayStart).Scan(&summary.TodayCard)
-	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='warranty'", userID, todayStart).Scan(&summary.TodayWarranty)
+	if err := database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='cash'", userID, todayStart).Scan(&summary.TodayCash); err != nil {
+		serverError(c, "my salary today cash query", err)
+		return
+	}
+	if err := database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='card'", userID, todayStart).Scan(&summary.TodayCard); err != nil {
+		serverError(c, "my salary today card query", err)
+		return
+	}
+	if err := database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='warranty'", userID, todayStart).Scan(&summary.TodayWarranty); err != nil {
+		serverError(c, "my salary today warranty query", err)
+		return
+	}
 
 	c.JSON(http.StatusOK, summary)
 }

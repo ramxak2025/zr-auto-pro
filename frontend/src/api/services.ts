@@ -1,147 +1,434 @@
 import api from './axios';
+import type {
+  User,
+  Tenant,
+  Plan,
+  Client,
+  Car,
+  Product,
+  Service,
+  Check,
+  Supplier,
+  Delivery,
+  SupplierPayment,
+  MasterSalary,
+  SalarySummary,
+  FinancialReport,
+  DashboardStats,
+  EmployeeRanking,
+  Shift,
+  ScheduleEntry,
+  WorkMode,
+  StockMovement,
+  PaginatedResponse,
+  SubscriptionInfo,
+  PlatformStats,
+  TodayEmployeeStatus,
+} from '../types';
 
-// Auth
+// --- Request types ---
+
+interface LoginRequest {
+  phone: string;
+  password: string;
+}
+
+interface LoginResponse {
+  token: string;
+  user: User;
+}
+
+interface RegisterRequest {
+  phone: string;
+  password: string;
+  fullName: string;
+  tenantName?: string;
+}
+
+interface PaginationParams {
+  page?: number;
+  limit?: number;
+  search?: string;
+}
+
+interface ChecksParams extends PaginationParams {
+  masterId?: string;
+  clientId?: string;
+  carId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+interface DateRangeParams {
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+interface CreateUserRequest {
+  phone: string;
+  password: string;
+  fullName: string;
+  role: string;
+  salaryPercent?: number;
+  permissions?: Record<string, boolean>;
+}
+
+interface UpdateUserRequest {
+  phone?: string;
+  password?: string;
+  fullName?: string;
+  role?: string;
+  salaryPercent?: number;
+  permissions?: Record<string, boolean>;
+  isActive?: boolean;
+}
+
+interface CreateClientRequest {
+  fullName: string;
+  phone: string;
+  comment?: string;
+}
+
+interface UpdateClientRequest {
+  fullName?: string;
+  phone?: string;
+  comment?: string;
+}
+
+interface CreateCarRequest {
+  plateNumber: string;
+  makeModel: string;
+  comment?: string;
+  clientId: string;
+}
+
+interface UpdateCarRequest {
+  plateNumber?: string;
+  makeModel?: string;
+  comment?: string;
+  clientId?: string;
+}
+
+interface CreateProductRequest {
+  name: string;
+  category?: string;
+  photo?: string;
+  costPrice: number;
+  sellPrice: number;
+  stock: number;
+  minStock: number;
+}
+
+interface UpdateProductRequest {
+  name?: string;
+  category?: string;
+  photo?: string;
+  costPrice?: number;
+  sellPrice?: number;
+  stock?: number;
+  minStock?: number;
+}
+
+interface StockUpdateRequest {
+  type: 'income' | 'expense' | 'writeoff' | 'inventory';
+  quantity: number;
+  reason?: string;
+}
+
+interface CreateServiceRequest {
+  name: string;
+  category?: string;
+  defaultPrice: number;
+}
+
+interface UpdateServiceRequest {
+  name?: string;
+  category?: string;
+  defaultPrice?: number;
+}
+
+interface CreateCheckRequest {
+  date?: string;
+  masterId: string;
+  clientId: string;
+  carId: string;
+  mileage?: number;
+  comment?: string;
+  discount?: number;
+  isDeferred?: boolean;
+  paymentMethod: string;
+  cashAmount?: number;
+  cardAmount?: number;
+  services: Array<{
+    serviceId?: string;
+    masterId?: string;
+    name: string;
+    price: number;
+    quantity: number;
+  }>;
+  products: Array<{
+    productId?: string;
+    name: string;
+    sellPrice: number;
+    costPrice: number;
+    quantity: number;
+  }>;
+}
+
+interface UpdateCheckRequest {
+  date?: string;
+  paymentMethod?: string;
+  isDeferred?: boolean;
+  comment?: string;
+  cashAmount?: number;
+  cardAmount?: number;
+}
+
+interface CreateSupplierRequest {
+  name: string;
+  phone?: string;
+  contactPerson?: string;
+  comment?: string;
+}
+
+interface UpdateSupplierRequest {
+  name?: string;
+  phone?: string;
+  contactPerson?: string;
+  comment?: string;
+}
+
+interface CreateDeliveryRequest {
+  supplierId: string;
+  date?: string;
+  comment?: string;
+  items: Array<{
+    productId: string;
+    quantity: number;
+    price: number;
+  }>;
+}
+
+interface CreatePaymentRequest {
+  supplierId: string;
+  amount: number;
+  date?: string;
+  comment?: string;
+}
+
+interface CreateScheduleRequest {
+  userId: string;
+  date: string;
+  shiftStart?: string;
+  shiftEnd?: string;
+  isDayOff?: boolean;
+  note?: string;
+}
+
+interface UpdateScheduleRequest {
+  shiftStart?: string;
+  shiftEnd?: string;
+  isDayOff?: boolean;
+  note?: string;
+}
+
+interface CreateWorkModeRequest {
+  name: string;
+  type: 'rotating' | 'weekly';
+  workDays: number;
+  offDays: number;
+  weekDays?: number[];
+  shiftStart: string;
+  shiftEnd: string;
+}
+
+interface UpdateWorkModeRequest {
+  name?: string;
+  type?: string;
+  shiftStart?: string;
+  shiftEnd?: string;
+}
+
+interface CreateTenantRequest {
+  name: string;
+  phone?: string;
+  address?: string;
+  email?: string;
+  description?: string;
+  maxUsers?: number;
+  isActive?: boolean;
+  planId?: string;
+  monthlyPrice?: number;
+  subscriptionEnd?: string;
+  subscriptionNote?: string;
+  directorName?: string;
+  directorPhone?: string;
+  directorPassword?: string;
+}
+
+interface UpdateTenantRequest {
+  name?: string;
+  phone?: string;
+  address?: string;
+  email?: string;
+  description?: string;
+  isActive?: boolean;
+  maxUsers?: number;
+  planId?: string;
+  monthlyPrice?: number;
+  subscriptionEnd?: string;
+  subscriptionNote?: string;
+}
+
+interface CreatePlanRequest {
+  name: string;
+  monthlyPrice: number;
+  description?: string;
+  features?: string[];
+  maxUsers?: number;
+  sortOrder?: number;
+}
+
+interface UpdatePlanRequest {
+  name?: string;
+  monthlyPrice?: number;
+  description?: string;
+  features?: string[];
+  maxUsers?: number;
+  isActive?: boolean;
+  sortOrder?: number;
+}
+
+// --- API modules ---
+
 export const authApi = {
-  login: (data: { phone: string; password: string }) => api.post('/auth/login', data),
-  register: (data: any) => api.post('/auth/register', data),
-  me: () => api.get('/auth/me'),
+  login: (data: LoginRequest) => api.post<LoginResponse>('/auth/login', data),
+  register: (data: RegisterRequest) => api.post<LoginResponse>('/auth/register', data),
+  me: () => api.get<User>('/auth/me'),
 };
 
-// Users
 export const usersApi = {
-  getAll: (params?: any) => api.get('/users', { params }),
-  getMasters: (params?: any) => api.get('/users/masters', { params }),
-  getById: (id: string) => api.get(`/users/${id}`),
-  create: (data: any) => api.post('/users', data),
-  update: (id: string, data: any) => api.patch(`/users/${id}`, data),
+  getAll: (params?: PaginationParams) => api.get<User[]>('/users', { params }),
+  getMasters: (params?: PaginationParams) => api.get<User[]>('/users/masters', { params }),
+  getById: (id: string) => api.get<User>(`/users/${id}`),
+  create: (data: CreateUserRequest) => api.post<User>('/users', data),
+  update: (id: string, data: UpdateUserRequest) => api.patch<User>(`/users/${id}`, data),
   remove: (id: string) => api.delete(`/users/${id}`),
 };
 
-// Tenants
 export const tenantsApi = {
-  getAll: () => api.get('/tenants'),
-  getStats: () => api.get('/tenants/stats'),
-  getById: (id: string) => api.get(`/tenants/${id}`),
-  create: (data: any) => api.post('/tenants', data),
-  update: (id: string, data: any) => api.patch(`/tenants/${id}`, data),
+  getAll: () => api.get<Tenant[]>('/tenants'),
+  getStats: () => api.get<PlatformStats>('/tenants/stats'),
+  getById: (id: string) => api.get<Tenant>(`/tenants/${id}`),
+  create: (data: CreateTenantRequest) => api.post<Tenant>('/tenants', data),
+  update: (id: string, data: UpdateTenantRequest) => api.patch<Tenant>(`/tenants/${id}`, data),
   remove: (id: string) => api.delete(`/tenants/${id}`),
 };
 
-// Plans
 export const plansApi = {
-  getAll: () => api.get('/plans'),
-  create: (data: any) => api.post('/plans', data),
-  update: (id: string, data: any) => api.patch(`/plans/${id}`, data),
+  getAll: () => api.get<Plan[]>('/plans'),
+  create: (data: CreatePlanRequest) => api.post<Plan>('/plans', data),
+  update: (id: string, data: UpdatePlanRequest) => api.patch<Plan>(`/plans/${id}`, data),
   remove: (id: string) => api.delete(`/plans/${id}`),
 };
 
-// Subscription
 export const subscriptionApi = {
-  get: () => api.get('/subscription'),
+  get: () => api.get<SubscriptionInfo>('/subscription'),
 };
 
-// Clients
 export const clientsApi = {
-  getAll: (params?: any) => api.get('/clients', { params }),
-  getById: (id: string) => api.get(`/clients/${id}`),
-  create: (data: any) => api.post('/clients', data),
-  update: (id: string, data: any) => api.patch(`/clients/${id}`, data),
+  getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Client>>('/clients', { params }),
+  getById: (id: string) => api.get<Client>(`/clients/${id}`),
+  create: (data: CreateClientRequest) => api.post<Client>('/clients', data),
+  update: (id: string, data: UpdateClientRequest) => api.patch<Client>(`/clients/${id}`, data),
   remove: (id: string) => api.delete(`/clients/${id}`),
 };
 
-// Cars
 export const carsApi = {
-  getAll: (params?: any) => api.get('/cars', { params }),
-  getById: (id: string) => api.get(`/cars/${id}`),
-  create: (data: any) => api.post('/cars', data),
-  update: (id: string, data: any) => api.patch(`/cars/${id}`, data),
+  getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Car>>('/cars', { params }),
+  getById: (id: string) => api.get<Car>(`/cars/${id}`),
+  create: (data: CreateCarRequest) => api.post<Car>('/cars', data),
+  update: (id: string, data: UpdateCarRequest) => api.patch<Car>(`/cars/${id}`, data),
   remove: (id: string) => api.delete(`/cars/${id}`),
 };
 
-// Products
 export const productsApi = {
-  getAll: (params?: any) => api.get('/products', { params }),
-  getLowStock: () => api.get('/products/low-stock'),
-  getMovements: (params?: any) => api.get('/products/movements', { params }),
-  getById: (id: string) => api.get(`/products/${id}`),
-  create: (data: any) => api.post('/products', data),
-  update: (id: string, data: any) => api.patch(`/products/${id}`, data),
+  getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Product>>('/products', { params }),
+  getLowStock: () => api.get<Product[]>('/products/low-stock'),
+  getMovements: (params?: PaginationParams) => api.get<StockMovement[]>('/products/movements', { params }),
+  getById: (id: string) => api.get<Product>(`/products/${id}`),
+  create: (data: CreateProductRequest) => api.post<Product>('/products', data),
+  update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
   remove: (id: string) => api.delete(`/products/${id}`),
-  updateStock: (id: string, data: any) => api.post(`/products/${id}/stock`, data),
+  updateStock: (id: string, data: StockUpdateRequest) => api.post<{ stock: number }>(`/products/${id}/stock`, data),
 };
 
-// Services
 export const servicesApi = {
-  getAll: (params?: any) => api.get('/services', { params }),
-  getById: (id: string) => api.get(`/services/${id}`),
-  create: (data: any) => api.post('/services', data),
-  update: (id: string, data: any) => api.patch(`/services/${id}`, data),
+  getAll: (params?: PaginationParams & { category?: string }) => api.get<PaginatedResponse<Service>>('/services', { params }),
+  getById: (id: string) => api.get<Service>(`/services/${id}`),
+  create: (data: CreateServiceRequest) => api.post<Service>('/services', data),
+  update: (id: string, data: UpdateServiceRequest) => api.patch<Service>(`/services/${id}`, data),
   remove: (id: string) => api.delete(`/services/${id}`),
 };
 
-// Checks
 export const checksApi = {
-  getAll: (params?: any) => api.get('/checks', { params }),
-  getDashboard: () => api.get('/checks/dashboard'),
-  getRanking: () => api.get('/checks/ranking'),
-  getById: (id: string) => api.get(`/checks/${id}`),
-  create: (data: any) => api.post('/checks', data),
-  update: (id: string, data: any) => api.patch(`/checks/${id}`, data),
+  getAll: (params?: ChecksParams) => api.get<PaginatedResponse<Check>>('/checks', { params }),
+  getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
+  getRanking: () => api.get<EmployeeRanking>('/checks/ranking'),
+  getById: (id: string) => api.get<Check>(`/checks/${id}`),
+  create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
+  update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),
   remove: (id: string) => api.delete(`/checks/${id}`),
 };
 
-// Suppliers
 export const suppliersApi = {
-  getAll: (params?: any) => api.get('/suppliers', { params }),
-  getById: (id: string) => api.get(`/suppliers/${id}`),
-  create: (data: any) => api.post('/suppliers', data),
-  update: (id: string, data: any) => api.patch(`/suppliers/${id}`, data),
+  getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Supplier>>('/suppliers', { params }),
+  getById: (id: string) => api.get<Supplier>(`/suppliers/${id}`),
+  create: (data: CreateSupplierRequest) => api.post<Supplier>('/suppliers', data),
+  update: (id: string, data: UpdateSupplierRequest) => api.patch<Supplier>(`/suppliers/${id}`, data),
   remove: (id: string) => api.delete(`/suppliers/${id}`),
-  getDeliveries: (params?: any) => api.get('/suppliers/deliveries', { params }),
-  createDelivery: (data: any) => api.post('/suppliers/deliveries', data),
-  getDeliveryById: (id: string) => api.get(`/suppliers/deliveries/${id}`),
-  getPayments: (params?: any) => api.get('/suppliers/payments', { params }),
-  createPayment: (data: any) => api.post('/suppliers/payments', data),
+  getDeliveries: (params?: { supplierId?: string }) => api.get<Delivery[]>('/suppliers/deliveries', { params }),
+  createDelivery: (data: CreateDeliveryRequest) => api.post<{ id: string }>('/suppliers/deliveries', data),
+  getDeliveryById: (id: string) => api.get<Delivery>(`/suppliers/deliveries/${id}`),
+  getPayments: (params?: { supplierId?: string }) => api.get<SupplierPayment[]>('/suppliers/payments', { params }),
+  createPayment: (data: CreatePaymentRequest) => api.post<{ id: string }>('/suppliers/payments', data),
 };
 
-// Salary
 export const salaryApi = {
-  getAll: (params?: any) => api.get('/salary', { params }),
-  getMy: () => api.get('/salary/my'),
+  getAll: (params?: DateRangeParams) => api.get<MasterSalary[]>('/salary', { params }),
+  getMy: () => api.get<SalarySummary>('/salary/my'),
 };
 
-// Reports
 export const reportsApi = {
-  getFinancial: (params: any) => api.get('/reports/financial', { params }),
-  getCashFlow: (params: any) => api.get('/reports/cashflow', { params }),
+  getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
+  getCashFlow: (params: DateRangeParams) => api.get<{ days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>; totals: { cash: number; card: number; warranty: number; total: number } }>('/reports/cashflow', { params }),
 };
 
-// Shifts
 export const shiftsApi = {
-  getAll: (params?: any) => api.get('/shifts', { params }),
-  getMy: () => api.get('/shifts/my'),
-  open: (data?: any) => api.post('/shifts/open', data),
-  close: (id: string) => api.post(`/shifts/${id}/close`),
+  getAll: (params?: PaginationParams) => api.get<Shift[]>('/shifts', { params }),
+  getMy: () => api.get<Shift[]>('/shifts/my'),
+  open: (data?: Record<string, unknown>) => api.post<Shift>('/shifts/open', data),
+  close: (id: string) => api.post<Shift>(`/shifts/${id}/close`),
 };
 
-// Schedule
 export const scheduleApi = {
-  getAll: (params: any) => api.get('/schedule', { params }),
-  create: (data: any) => api.post('/schedule', data),
-  update: (id: string, data: any) => api.patch(`/schedule/${id}`, data),
+  getAll: (params: DateRangeParams) => api.get<ScheduleEntry[]>('/schedule', { params }),
+  create: (data: CreateScheduleRequest) => api.post<ScheduleEntry>('/schedule', data),
+  update: (id: string, data: UpdateScheduleRequest) => api.patch('/schedule/' + id, data),
   remove: (id: string) => api.delete(`/schedule/${id}`),
-  getWorkModes: () => api.get('/schedule/work-modes'),
-  createWorkMode: (data: any) => api.post('/schedule/work-modes', data),
-  updateWorkMode: (id: string, data: any) => api.patch(`/schedule/work-modes/${id}`, data),
-  getToday: () => api.get('/schedule/today'),
-  getMyStats: () => api.get('/schedule/my-stats'),
+  getWorkModes: () => api.get<WorkMode[]>('/schedule/work-modes'),
+  createWorkMode: (data: CreateWorkModeRequest) => api.post<WorkMode>('/schedule/work-modes', data),
+  updateWorkMode: (id: string, data: UpdateWorkModeRequest) => api.patch(`/schedule/work-modes/${id}`, data),
+  getToday: () => api.get<TodayEmployeeStatus[]>('/schedule/today'),
+  getMyStats: () => api.get<{ totalScheduled: number; totalWorked: number; totalLate: number; totalLateMinor: number; totalLateMajor: number; totalOnTime: number; totalDaysOff: number; avgLateMinutes: number }>('/schedule/my-stats'),
 };
 
-// Uploads
 export const uploadsApi = {
   upload: (file: File) => {
     const fd = new FormData();
     fd.append('file', file);
-    return api.post('/uploads', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+    return api.post<{ url: string; filename: string; originalname: string; size: number }>('/uploads', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
   },
 };

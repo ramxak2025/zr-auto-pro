@@ -18,7 +18,7 @@ func GetUsers(c *gin.Context) {
 		FROM users WHERE tenant_id=$1 ORDER BY created_at DESC
 	`, tenantID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		serverError(c, "users list query", err)
 		return
 	}
 	defer rows.Close()
@@ -27,7 +27,10 @@ func GetUsers(c *gin.Context) {
 	for rows.Next() {
 		var u models.User
 		var username string
-		rows.Scan(&u.ID, &u.Phone, &u.FullName, &username, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt)
+		if err := rows.Scan(&u.ID, &u.Phone, &u.FullName, &username, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt); err != nil {
+			serverError(c, "users row scan", err)
+			return
+		}
 		if username != "" {
 			u.Username = &username
 		}
@@ -43,7 +46,7 @@ func GetMasters(c *gin.Context) {
 		FROM users WHERE tenant_id=$1 AND role IN ('master','admin') AND is_active=true ORDER BY full_name
 	`, tenantID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		serverError(c, "masters list query", err)
 		return
 	}
 	defer rows.Close()
@@ -51,7 +54,10 @@ func GetMasters(c *gin.Context) {
 	users := []models.User{}
 	for rows.Next() {
 		var u models.User
-		rows.Scan(&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt)
+		if err := rows.Scan(&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt); err != nil {
+			serverError(c, "masters row scan", err)
+			return
+		}
 		users = append(users, u)
 	}
 	c.JSON(http.StatusOK, users)
@@ -89,14 +95,18 @@ func CreateUser(c *gin.Context) {
 	}
 
 	phone := normalizePhone(body.Phone)
-	hash, _ := bcrypt.GenerateFromPassword([]byte(body.Password), 10)
+	hash, err := bcrypt.GenerateFromPassword([]byte(body.Password), 10)
+	if err != nil {
+		serverError(c, "create user password hash", err)
+		return
+	}
 	perms := body.Permissions
 	if perms == nil {
 		perms = json.RawMessage(`{}`)
 	}
 
 	var u models.User
-	err := database.DB.QueryRow(`
+	err = database.DB.QueryRow(`
 		INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,true,$7)
 		RETURNING id, phone, full_name, role, salary_percent, permissions, is_active, created_at
@@ -104,7 +114,7 @@ func CreateUser(c *gin.Context) {
 		&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt,
 	)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "Ошибка создания: " + err.Error()})
+		serverError(c, "create user insert", err)
 		return
 	}
 	c.JSON(http.StatusCreated, u)
@@ -115,14 +125,21 @@ func UpdateUser(c *gin.Context) {
 	tenantID := c.GetString("tenantID")
 
 	var body map[string]interface{}
-	c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
+		return
+	}
 
 	if phone, ok := body["phone"].(string); ok {
 		body["phone"] = normalizePhone(phone)
 	}
 
 	if pw, ok := body["password"].(string); ok && pw != "" {
-		hash, _ := bcrypt.GenerateFromPassword([]byte(pw), 10)
+		hash, err := bcrypt.GenerateFromPassword([]byte(pw), 10)
+		if err != nil {
+			serverError(c, "update user password hash", err)
+			return
+		}
 		body["password"] = string(hash)
 	} else {
 		delete(body, "password")
@@ -165,16 +182,19 @@ func UpdateUser(c *gin.Context) {
 
 	_, err := database.DB.Exec(query, args...)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": err.Error()})
+		serverError(c, "update user exec", err)
 		return
 	}
 
 	// Return updated user
 	var u models.User
-	database.DB.QueryRow(`
+	if err := database.DB.QueryRow(`
 		SELECT id, phone, full_name, role, salary_percent, permissions, is_active, created_at
 		FROM users WHERE id=$1
-	`, id).Scan(&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt)
+	`, id).Scan(&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt); err != nil {
+		serverError(c, "update user re-read", err)
+		return
+	}
 
 	c.JSON(http.StatusOK, u)
 }
@@ -191,14 +211,26 @@ func DeleteUser(c *gin.Context) {
 	}
 
 	var role string
-	database.DB.QueryRow("SELECT role FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&role)
+	if err := database.DB.QueryRow("SELECT role FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&role); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
+		return
+	}
 	if role == "superadmin" || role == "director" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "Нельзя удалить владельца"})
 		return
 	}
 
-	result, _ := database.DB.Exec("DELETE FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID)
-	if n, _ := result.RowsAffected(); n == 0 {
+	result, err := database.DB.Exec("DELETE FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	if err != nil {
+		serverError(c, "delete user", err)
+		return
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		serverError(c, "delete user rows affected", err)
+		return
+	}
+	if n == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
 		return
 	}

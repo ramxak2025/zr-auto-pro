@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -20,23 +25,49 @@ func main() {
 	database.RunMigrations()
 
 	// Seed with hashed passwords
-	adminHash, _ := bcrypt.GenerateFromPassword([]byte("admin123"), 10)
-	demoHash, _ := bcrypt.GenerateFromPassword([]byte("demo123"), 10)
+	adminHash, err := bcrypt.GenerateFromPassword([]byte("admin123"), 10)
+	if err != nil {
+		log.Printf("WARN: failed to hash admin password: %v", err)
+	}
+	demoHash, err := bcrypt.GenerateFromPassword([]byte("demo123"), 10)
+	if err != nil {
+		log.Printf("WARN: failed to hash demo password: %v", err)
+	}
 	database.SeedWithPasswords(string(adminHash), string(demoHash), string(demoHash))
 
 	gin.SetMode(gin.ReleaseMode)
-	r := gin.Default()
+	r := gin.New()
+
+	// Recovery middleware — prevents panics from crashing the server
+	r.Use(gin.Recovery())
+
+	// Structured logging middleware
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{"/api/health"},
+	}))
 
 	r.Use(cors.New(cors.Config{
-		AllowAllOrigins:  true,
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
+		AllowAllOrigins: true,
+		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:    []string{"Origin", "Content-Type", "Authorization"},
 	}))
 
 	// Static files for uploads
 	r.Static("/api/uploads", "./uploads")
 
 	api := r.Group("/api")
+
+	// Health check — lightweight, for Docker and load balancers
+	api.GET("/health", func(c *gin.Context) {
+		if err := database.DB.Ping(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "unhealthy",
+				"error":  "database unreachable",
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
 
 	// Diagnostic endpoint — shows DB state for debugging login issues
 	api.GET("/health/db", func(c *gin.Context) {
@@ -65,35 +96,37 @@ func main() {
 		result["tables"] = tblStatus
 
 		// 3. Users table columns
-		colRows, _ := database.DB.Query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name='users' ORDER BY ordinal_position")
+		colRows, err := database.DB.Query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name='users' ORDER BY ordinal_position")
 		cols := []string{}
-		if colRows != nil {
+		if err == nil && colRows != nil {
 			defer colRows.Close()
 			for colRows.Next() {
 				var name, dtype string
-				colRows.Scan(&name, &dtype)
-				cols = append(cols, name+"("+dtype+")")
+				if scanErr := colRows.Scan(&name, &dtype); scanErr == nil {
+					cols = append(cols, name+"("+dtype+")")
+				}
 			}
 		}
 		result["users_columns"] = cols
 
 		// 4. All users
-		userRows, _ := database.DB.Query("SELECT phone, role, is_active FROM users ORDER BY created_at")
+		userRows, err := database.DB.Query("SELECT phone, role, is_active FROM users ORDER BY created_at")
 		users := []gin.H{}
-		if userRows != nil {
+		if err == nil && userRows != nil {
 			defer userRows.Close()
 			for userRows.Next() {
 				var phone, role string
 				var active bool
-				userRows.Scan(&phone, &role, &active)
-				users = append(users, gin.H{"phone": phone, "role": role, "active": active})
+				if scanErr := userRows.Scan(&phone, &role, &active); scanErr == nil {
+					users = append(users, gin.H{"phone": phone, "role": role, "active": active})
+				}
 			}
 		}
 		result["users"] = users
 
 		// 5. Admin password check
 		var storedHash string
-		err := database.DB.QueryRow("SELECT password FROM users WHERE phone='+79884444436'").Scan(&storedHash)
+		err = database.DB.QueryRow("SELECT password FROM users WHERE phone='+79884444436'").Scan(&storedHash)
 		if err != nil {
 			result["admin_check"] = fmt.Sprintf("NOT FOUND: %v", err)
 		} else if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte("admin123")) == nil {
@@ -236,6 +269,35 @@ func main() {
 		port = "3000"
 	}
 
-	log.Printf("Server running on :%s", port)
-	r.Run(":" + port)
+	// Graceful shutdown
+	srv := &http.Server{
+		Addr:         ":" + port,
+		Handler:      r,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Server running on :%s", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	database.Close()
+	log.Println("Server stopped")
 }
