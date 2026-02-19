@@ -10,8 +10,9 @@ import (
 )
 
 func GetShifts(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT s.id, s.user_id, u.full_name, s.date, s.opened_at, s.closed_at, s.is_auto_closed, COALESCE(s.note,'')
 		FROM shifts s LEFT JOIN users u ON u.id=s.user_id
 		WHERE s.tenant_id=$1 ORDER BY s.opened_at DESC LIMIT 100
@@ -41,9 +42,10 @@ func GetShifts(c *gin.Context) {
 }
 
 func GetMyShifts(c *gin.Context) {
+	ctx := c.Request.Context()
 	userID := c.GetString("userID")
 	tenantID := c.GetString("tenantID")
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT id, user_id, date, opened_at, closed_at, is_auto_closed, COALESCE(note,'')
 		FROM shifts WHERE user_id=$1 AND tenant_id=$2 ORDER BY opened_at DESC LIMIT 30
 	`, userID, tenantID)
@@ -71,12 +73,13 @@ func GetMyShifts(c *gin.Context) {
 }
 
 func OpenShift(c *gin.Context) {
+	ctx := c.Request.Context()
 	userID := c.GetString("userID")
 	tenantID := c.GetString("tenantID")
 
 	// Check if already open
 	var openCount int
-	if err := database.DB.QueryRow("SELECT COUNT(*) FROM shifts WHERE user_id=$1 AND tenant_id=$2 AND closed_at IS NULL", userID, tenantID).Scan(&openCount); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM shifts WHERE user_id=$1 AND tenant_id=$2 AND closed_at IS NULL", userID, tenantID).Scan(&openCount); err != nil {
 		serverError(c, "open shift count query", err)
 		return
 	}
@@ -87,7 +90,7 @@ func OpenShift(c *gin.Context) {
 
 	var s models.Shift
 	now := time.Now()
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO shifts (user_id, date, opened_at, tenant_id) VALUES ($1,$2,$3,$4) RETURNING id, user_id, date, opened_at
 	`, userID, now.Format("2006-01-02"), now, tenantID).Scan(&s.ID, &s.UserID, &s.Date, &s.OpenedAt)
 	if err != nil {
@@ -99,17 +102,18 @@ func OpenShift(c *gin.Context) {
 }
 
 func CloseShift(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
 	now := time.Now()
-	if _, err := database.DB.Exec("UPDATE shifts SET closed_at=$1 WHERE id=$2 AND tenant_id=$3", now, id, tenantID); err != nil {
+	if _, err := database.Pool.Exec(ctx, "UPDATE shifts SET closed_at=$1 WHERE id=$2 AND tenant_id=$3", now, id, tenantID); err != nil {
 		serverError(c, "close shift update", err)
 		return
 	}
 
 	var s models.Shift
-	if err := database.DB.QueryRow("SELECT id, user_id, date, opened_at, closed_at, is_auto_closed FROM shifts WHERE id=$1", id).Scan(
+	if err := database.Pool.QueryRow(ctx, "SELECT id, user_id, date, opened_at, closed_at, is_auto_closed FROM shifts WHERE id=$1", id).Scan(
 		&s.ID, &s.UserID, &s.Date, &s.OpenedAt, &s.ClosedAt, &s.IsAutoClosed,
 	); err != nil {
 		serverError(c, "close shift re-read", err)

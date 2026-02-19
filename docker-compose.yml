@@ -2,14 +2,12 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    entrypoint: /ensure-password.sh
     environment:
       POSTGRES_DB: zr_auto_pro
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./postgres/ensure-password.sh:/ensure-password.sh:ro
     ports:
       - '5432:5432'
     healthcheck:

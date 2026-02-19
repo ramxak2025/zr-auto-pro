@@ -1,8 +1,8 @@
 package handlers
 
 import (
-	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 	"zr-auto-pro/internal/database"
 	"zr-auto-pro/internal/models"
@@ -55,6 +56,8 @@ func serverError(c *gin.Context, msg string, err error) {
 }
 
 func Login(c *gin.Context) {
+	ctx := c.Request.Context()
+
 	var req models.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат запроса"})
@@ -69,10 +72,10 @@ func Login(c *gin.Context) {
 	phone := normalizePhone(req.Phone)
 
 	var user models.User
-	var tenantJSON sql.NullString
+	var tenantJSON *string
 	var password string
 
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT u.id, u.phone, u.password, u.full_name, u.role,
 			   COALESCE(u.salary_percent, 0),
 			   COALESCE(u.permissions, '{}'),
@@ -94,7 +97,7 @@ func Login(c *gin.Context) {
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "Неверный телефон или пароль"})
 		} else {
 			serverError(c, "login query", err)
@@ -119,9 +122,9 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	if tenantJSON.Valid {
+	if tenantJSON != nil {
 		var tenant models.Tenant
-		if unmarshalErr := json.Unmarshal([]byte(tenantJSON.String), &tenant); unmarshalErr == nil {
+		if unmarshalErr := json.Unmarshal([]byte(*tenantJSON), &tenant); unmarshalErr == nil {
 			user.Tenant = &tenant
 		}
 	}
@@ -130,6 +133,8 @@ func Login(c *gin.Context) {
 }
 
 func Register(c *gin.Context) {
+	ctx := c.Request.Context()
+
 	var req models.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат запроса"})
@@ -149,7 +154,7 @@ func Register(c *gin.Context) {
 	phone := normalizePhone(req.Phone)
 
 	var exists bool
-	if err := database.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE phone=$1)", phone).Scan(&exists); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users WHERE phone=$1)", phone).Scan(&exists); err != nil {
 		serverError(c, "register exists check", err)
 		return
 	}
@@ -169,15 +174,15 @@ func Register(c *gin.Context) {
 		tenantName = "Мой автосервис"
 	}
 
-	tx, err := database.DB.Begin()
+	tx, err := database.Pool.Begin(ctx)
 	if err != nil {
 		serverError(c, "tx begin", err)
 		return
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
 	var tenantID string
-	if err := tx.QueryRow(`INSERT INTO tenants (name, is_active, max_users) VALUES ($1, true, 10) RETURNING id`, tenantName).Scan(&tenantID); err != nil {
+	if err := tx.QueryRow(ctx, `INSERT INTO tenants (name, is_active, max_users) VALUES ($1, true, 10) RETURNING id`, tenantName).Scan(&tenantID); err != nil {
 		serverError(c, "tenant creation", err)
 		return
 	}
@@ -185,7 +190,7 @@ func Register(c *gin.Context) {
 	allPerms := `{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}`
 
 	var user models.User
-	if err := tx.QueryRow(`
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions)
 		VALUES ($1, $2, $3, 'director', true, $4, $5)
 		RETURNING id, phone, full_name, role, salary_percent, permissions, is_active, tenant_id, created_at
@@ -198,7 +203,7 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		serverError(c, "tx commit", err)
 		return
 	}
@@ -213,12 +218,13 @@ func Register(c *gin.Context) {
 }
 
 func Me(c *gin.Context) {
+	ctx := c.Request.Context()
 	userID := c.GetString("userID")
 
 	var user models.User
-	var tenantJSON sql.NullString
+	var tenantJSON *string
 
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT u.id, u.phone, u.full_name, u.role,
 			   COALESCE(u.salary_percent, 0),
 			   COALESCE(u.permissions, '{}'),
@@ -238,7 +244,7 @@ func Me(c *gin.Context) {
 		&user.TenantID, &user.CreatedAt, &tenantJSON,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "Пользователь не найден"})
 		} else {
 			serverError(c, "me query", err)
@@ -246,9 +252,9 @@ func Me(c *gin.Context) {
 		return
 	}
 
-	if tenantJSON.Valid {
+	if tenantJSON != nil {
 		var tenant models.Tenant
-		if unmarshalErr := json.Unmarshal([]byte(tenantJSON.String), &tenant); unmarshalErr == nil {
+		if unmarshalErr := json.Unmarshal([]byte(*tenantJSON), &tenant); unmarshalErr == nil {
 			user.Tenant = &tenant
 		}
 	}

@@ -11,13 +11,14 @@ import (
 )
 
 func GetTenants(c *gin.Context) {
+	ctx := c.Request.Context()
 	role := c.GetString("role")
 	if role != "superadmin" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "Нет доступа"})
 		return
 	}
 
-	rows, _ := database.DB.Query(`
+	rows, _ := database.Pool.Query(ctx, `
 		SELECT t.id, t.name, COALESCE(t.slug,''), COALESCE(t.phone,''), COALESCE(t.address,''),
 			   COALESCE(t.email,''), t.is_active, t.max_users,
 			   COALESCE(t.plan_id::text,''), COALESCE(t.monthly_price,0),
@@ -60,6 +61,7 @@ func GetTenants(c *gin.Context) {
 }
 
 func GetTenantStats(c *gin.Context) {
+	ctx := c.Request.Context()
 	role := c.GetString("role")
 	if role != "superadmin" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "Нет доступа"})
@@ -67,13 +69,14 @@ func GetTenantStats(c *gin.Context) {
 	}
 
 	var stats models.TenantStats
-	database.DB.QueryRow("SELECT COUNT(*) FROM tenants").Scan(&stats.TotalTenants)
-	database.DB.QueryRow("SELECT COUNT(*) FROM tenants WHERE is_active=true").Scan(&stats.ActiveTenants)
-	database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE tenant_id IS NOT NULL").Scan(&stats.TotalUsers)
+	database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM tenants").Scan(&stats.TotalTenants)
+	database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM tenants WHERE is_active=true").Scan(&stats.ActiveTenants)
+	database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM users WHERE tenant_id IS NOT NULL").Scan(&stats.TotalUsers)
 	c.JSON(http.StatusOK, stats)
 }
 
 func GetTenant(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	role := c.GetString("role")
 	if role != "superadmin" {
@@ -83,7 +86,7 @@ func GetTenant(c *gin.Context) {
 
 	var t models.Tenant
 	var slug, phone, address, email, planID string
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT id, name, COALESCE(slug,''), COALESCE(phone,''), COALESCE(address,''),
 			   COALESCE(email,''), is_active, max_users,
 			   COALESCE(plan_id::text,''), COALESCE(monthly_price,0),
@@ -114,7 +117,7 @@ func GetTenant(c *gin.Context) {
 	}
 
 	// Load users
-	uRows, _ := database.DB.Query("SELECT id, phone, full_name, role, is_active, created_at FROM users WHERE tenant_id=$1", id)
+	uRows, _ := database.Pool.Query(ctx, "SELECT id, phone, full_name, role, is_active, created_at FROM users WHERE tenant_id=$1", id)
 	t.Users = []models.User{}
 	if uRows != nil {
 		for uRows.Next() {
@@ -131,6 +134,7 @@ func GetTenant(c *gin.Context) {
 }
 
 func CreateTenant(c *gin.Context) {
+	ctx := c.Request.Context()
 	role := c.GetString("role")
 	if role != "superadmin" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "Нет доступа"})
@@ -165,7 +169,7 @@ func CreateTenant(c *gin.Context) {
 		body.MaxUsers = 10
 	}
 
-	tx, err := database.DB.Begin()
+	tx, err := database.Pool.Begin(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Ошибка базы данных"})
 		return
@@ -177,14 +181,14 @@ func CreateTenant(c *gin.Context) {
 	}
 
 	var tenantID string
-	err = tx.QueryRow(`
+	err = tx.QueryRow(ctx, `
 		INSERT INTO tenants (name, phone, address, email, description, max_users, is_active, plan_id, monthly_price, subscription_end, subscription_note)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id
 	`, body.Name, body.Phone, body.Address, body.Email, body.Description,
 		body.MaxUsers, isActive, body.PlanID, body.MonthlyPrice,
 		body.SubscriptionEnd, body.SubscriptionNote).Scan(&tenantID)
 	if err != nil {
-		tx.Rollback()
+		tx.Rollback(ctx)
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Ошибка создания организации: " + err.Error()})
 		return
 	}
@@ -199,19 +203,19 @@ func CreateTenant(c *gin.Context) {
 		hash, _ := bcrypt.GenerateFromPassword([]byte(body.DirectorPassword), 10)
 		allPerms := `{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}`
 
-		_, err = tx.Exec(`
+		_, err = tx.Exec(ctx, `
 			INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
 			VALUES ($1, $2, $3, 'director', true, $4, $5, 0)
 			ON CONFLICT (phone) DO UPDATE SET tenant_id = EXCLUDED.tenant_id, role = 'director', is_active = true
 		`, dirPhone, string(hash), dirName, tenantID, allPerms)
 		if err != nil {
-			tx.Rollback()
+			tx.Rollback(ctx)
 			c.JSON(http.StatusBadRequest, gin.H{"message": "Ошибка создания директора: " + err.Error()})
 			return
 		}
 	}
 
-	if err = tx.Commit(); err != nil {
+	if err = tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Ошибка сохранения"})
 		return
 	}
@@ -222,6 +226,7 @@ func CreateTenant(c *gin.Context) {
 }
 
 func UpdateTenant(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	role := c.GetString("role")
 	if role != "superadmin" {
@@ -244,7 +249,7 @@ func UpdateTenant(c *gin.Context) {
 	}
 	c.ShouldBindJSON(&body)
 
-	database.DB.Exec(`
+	database.Pool.Exec(ctx, `
 		UPDATE tenants SET
 			name=COALESCE($1,name), phone=COALESCE($2,phone), address=COALESCE($3,address),
 			email=COALESCE($4,email), description=COALESCE($5,description),
@@ -256,22 +261,22 @@ func UpdateTenant(c *gin.Context) {
 
 	if body.SubscriptionEnd != nil {
 		if *body.SubscriptionEnd == "" {
-			database.DB.Exec("UPDATE tenants SET subscription_end=NULL WHERE id=$1", id)
+			database.Pool.Exec(ctx, "UPDATE tenants SET subscription_end=NULL WHERE id=$1", id)
 		} else {
-			database.DB.Exec("UPDATE tenants SET subscription_end=$1 WHERE id=$2", *body.SubscriptionEnd, id)
+			database.Pool.Exec(ctx, "UPDATE tenants SET subscription_end=$1 WHERE id=$2", *body.SubscriptionEnd, id)
 		}
 	}
 
 	if body.PlanID != nil {
 		if *body.PlanID == "" {
-			database.DB.Exec("UPDATE tenants SET plan_id=NULL WHERE id=$1", id)
+			database.Pool.Exec(ctx, "UPDATE tenants SET plan_id=NULL WHERE id=$1", id)
 		} else {
-			database.DB.Exec("UPDATE tenants SET plan_id=$1 WHERE id=$2", *body.PlanID, id)
+			database.Pool.Exec(ctx, "UPDATE tenants SET plan_id=$1 WHERE id=$2", *body.PlanID, id)
 		}
 	}
 
 	if body.MonthlyPrice != nil {
-		database.DB.Exec("UPDATE tenants SET monthly_price=$1 WHERE id=$2", *body.MonthlyPrice, id)
+		database.Pool.Exec(ctx, "UPDATE tenants SET monthly_price=$1 WHERE id=$2", *body.MonthlyPrice, id)
 	}
 
 	c.Params = gin.Params{{Key: "id", Value: id}}
@@ -279,6 +284,7 @@ func UpdateTenant(c *gin.Context) {
 }
 
 func DeleteTenant(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	role := c.GetString("role")
 	if role != "superadmin" {
@@ -287,12 +293,13 @@ func DeleteTenant(c *gin.Context) {
 	}
 	// Soft-delete: deactivate tenant instead of permanent deletion
 	// This preserves all client data (users, checks, clients, cars, etc.)
-	database.DB.Exec("UPDATE tenants SET is_active=false, updated_at=now() WHERE id=$1", id)
+	database.Pool.Exec(ctx, "UPDATE tenants SET is_active=false, updated_at=now() WHERE id=$1", id)
 	c.JSON(http.StatusOK, gin.H{"message": "Организация деактивирована"})
 }
 
 // --- Subscription info (for tenant users) ---
 func GetSubscription(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	if tenantID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Нет организации"})
@@ -313,7 +320,7 @@ func GetSubscription(c *gin.Context) {
 	var info SubscriptionInfo
 	var planName, subEnd, subNote *string
 
-	database.DB.QueryRow(`
+	database.Pool.QueryRow(ctx, `
 		SELECT t.name, p.name, COALESCE(t.monthly_price,0), t.subscription_end::text, t.subscription_note, t.max_users
 		FROM tenants t LEFT JOIN plans p ON p.id = t.plan_id
 		WHERE t.id=$1
@@ -323,10 +330,10 @@ func GetSubscription(c *gin.Context) {
 	info.SubscriptionEnd = subEnd
 	info.SubscriptionNote = subNote
 
-	database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE tenant_id=$1", tenantID).Scan(&info.CurrentUsers)
+	database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM users WHERE tenant_id=$1", tenantID).Scan(&info.CurrentUsers)
 
 	// Available plans
-	rows, _ := database.DB.Query("SELECT id, name, monthly_price, COALESCE(description,''), features, max_users, sort_order, created_at FROM plans WHERE is_active=true ORDER BY sort_order")
+	rows, _ := database.Pool.Query(ctx, "SELECT id, name, monthly_price, COALESCE(description,''), features, max_users, sort_order, created_at FROM plans WHERE is_active=true ORDER BY sort_order")
 	info.Plans = []models.Plan{}
 	if rows != nil {
 		defer rows.Close()
@@ -348,7 +355,8 @@ func GetSubscription(c *gin.Context) {
 // --- Plans CRUD (superadmin only) ---
 
 func GetPlans(c *gin.Context) {
-	rows, _ := database.DB.Query("SELECT id, name, monthly_price, COALESCE(description,''), features, max_users, is_active, sort_order, created_at FROM plans ORDER BY sort_order")
+	ctx := c.Request.Context()
+	rows, _ := database.Pool.Query(ctx, "SELECT id, name, monthly_price, COALESCE(description,''), features, max_users, is_active, sort_order, created_at FROM plans ORDER BY sort_order")
 	plans := []models.Plan{}
 	if rows != nil {
 		defer rows.Close()
@@ -366,6 +374,7 @@ func GetPlans(c *gin.Context) {
 }
 
 func CreatePlan(c *gin.Context) {
+	ctx := c.Request.Context()
 	role := c.GetString("role")
 	if role != "superadmin" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "Нет доступа"})
@@ -390,7 +399,7 @@ func CreatePlan(c *gin.Context) {
 
 	var p models.Plan
 	var desc string
-	database.DB.QueryRow(`
+	database.Pool.QueryRow(ctx, `
 		INSERT INTO plans (name, monthly_price, description, features, max_users, sort_order)
 		VALUES ($1,$2,$3,$4,$5,$6)
 		RETURNING id, name, monthly_price, COALESCE(description,''), features, max_users, is_active, sort_order, created_at
@@ -403,6 +412,7 @@ func CreatePlan(c *gin.Context) {
 }
 
 func UpdatePlan(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	role := c.GetString("role")
 	if role != "superadmin" {
@@ -421,7 +431,7 @@ func UpdatePlan(c *gin.Context) {
 	}
 	c.ShouldBindJSON(&body)
 
-	database.DB.Exec(`
+	database.Pool.Exec(ctx, `
 		UPDATE plans SET
 			name=COALESCE($1,name), monthly_price=COALESCE($2,monthly_price),
 			description=COALESCE($3,description), max_users=COALESCE($4,max_users),
@@ -430,12 +440,12 @@ func UpdatePlan(c *gin.Context) {
 	`, body.Name, body.MonthlyPrice, body.Description, body.MaxUsers, body.IsActive, body.SortOrder, id)
 
 	if body.Features != nil {
-		database.DB.Exec("UPDATE plans SET features=$1 WHERE id=$2", string(*body.Features), id)
+		database.Pool.Exec(ctx, "UPDATE plans SET features=$1 WHERE id=$2", string(*body.Features), id)
 	}
 
 	var p models.Plan
 	var desc string
-	database.DB.QueryRow(`
+	database.Pool.QueryRow(ctx, `
 		SELECT id, name, monthly_price, COALESCE(description,''), features, max_users, is_active, sort_order, created_at
 		FROM plans WHERE id=$1
 	`, id).Scan(&p.ID, &p.Name, &p.MonthlyPrice, &desc, &p.Features, &p.MaxUsers, &p.IsActive, &p.SortOrder, &p.CreatedAt)
@@ -446,12 +456,13 @@ func UpdatePlan(c *gin.Context) {
 }
 
 func DeletePlan(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	role := c.GetString("role")
 	if role != "superadmin" {
 		c.JSON(http.StatusForbidden, gin.H{"message": "Нет доступа"})
 		return
 	}
-	database.DB.Exec("DELETE FROM plans WHERE id=$1", id)
+	database.Pool.Exec(ctx, "DELETE FROM plans WHERE id=$1", id)
 	c.JSON(http.StatusOK, gin.H{"message": "Удалён"})
 }

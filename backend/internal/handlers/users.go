@@ -12,8 +12,9 @@ import (
 )
 
 func GetUsers(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT id, phone, full_name, COALESCE(username,''), role, salary_percent, permissions, is_active, created_at
 		FROM users WHERE tenant_id=$1 ORDER BY created_at DESC
 	`, tenantID)
@@ -40,8 +41,9 @@ func GetUsers(c *gin.Context) {
 }
 
 func GetMasters(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT id, phone, full_name, role, salary_percent, permissions, is_active, created_at
 		FROM users WHERE tenant_id=$1 AND role IN ('master','admin') AND is_active=true ORDER BY full_name
 	`, tenantID)
@@ -64,11 +66,12 @@ func GetMasters(c *gin.Context) {
 }
 
 func GetUser(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
 	var u models.User
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT id, phone, full_name, role, salary_percent, permissions, is_active, created_at
 		FROM users WHERE id=$1 AND tenant_id=$2
 	`, id, tenantID).Scan(&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt)
@@ -80,6 +83,7 @@ func GetUser(c *gin.Context) {
 }
 
 func CreateUser(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		Phone         string          `json:"phone"`
@@ -106,7 +110,7 @@ func CreateUser(c *gin.Context) {
 	}
 
 	var u models.User
-	err = database.DB.QueryRow(`
+	err = database.Pool.QueryRow(ctx, `
 		INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,true,$7)
 		RETURNING id, phone, full_name, role, salary_percent, permissions, is_active, created_at
@@ -121,6 +125,7 @@ func CreateUser(c *gin.Context) {
 }
 
 func UpdateUser(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
@@ -180,7 +185,7 @@ func UpdateUser(c *gin.Context) {
 	query := "UPDATE users SET " + setClauses + " WHERE id=$" + itoa(i) + " AND tenant_id=$" + itoa(i+1)
 	args = append(args, id, tenantID)
 
-	_, err := database.DB.Exec(query, args...)
+	_, err := database.Pool.Exec(ctx, query, args...)
 	if err != nil {
 		serverError(c, "update user exec", err)
 		return
@@ -188,7 +193,7 @@ func UpdateUser(c *gin.Context) {
 
 	// Return updated user
 	var u models.User
-	if err := database.DB.QueryRow(`
+	if err := database.Pool.QueryRow(ctx, `
 		SELECT id, phone, full_name, role, salary_percent, permissions, is_active, created_at
 		FROM users WHERE id=$1
 	`, id).Scan(&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt); err != nil {
@@ -200,6 +205,7 @@ func UpdateUser(c *gin.Context) {
 }
 
 func DeleteUser(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	currentUserID := c.GetString("userID")
@@ -211,7 +217,7 @@ func DeleteUser(c *gin.Context) {
 	}
 
 	var role string
-	if err := database.DB.QueryRow("SELECT role FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&role); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT role FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&role); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
 		return
 	}
@@ -220,17 +226,12 @@ func DeleteUser(c *gin.Context) {
 		return
 	}
 
-	result, err := database.DB.Exec("DELETE FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	tag, err := database.Pool.Exec(ctx, "DELETE FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID)
 	if err != nil {
 		serverError(c, "delete user", err)
 		return
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		serverError(c, "delete user rows affected", err)
-		return
-	}
-	if n == 0 {
+	if tag.RowsAffected() == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
 		return
 	}

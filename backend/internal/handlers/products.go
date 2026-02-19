@@ -10,6 +10,7 @@ import (
 )
 
 func GetProducts(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	search := c.Query("search")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -39,7 +40,7 @@ func GetProducts(c *gin.Context) {
 	}
 
 	var total int
-	if err := database.DB.QueryRow(countQ, cArgs...).Scan(&total); err != nil {
+	if err := database.Pool.QueryRow(ctx, countQ, cArgs...).Scan(&total); err != nil {
 		serverError(c, "products count query", err)
 		return
 	}
@@ -47,7 +48,7 @@ func GetProducts(c *gin.Context) {
 	query += " ORDER BY name LIMIT $" + strconv.Itoa(idx) + " OFFSET $" + strconv.Itoa(idx+1)
 	args = append(args, limit, offset)
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Pool.Query(ctx, query, args...)
 	if err != nil {
 		serverError(c, "products list query", err)
 		return
@@ -74,8 +75,9 @@ func GetProducts(c *gin.Context) {
 }
 
 func GetProductsLowStock(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT id, name, COALESCE(category,''), cost_price, sell_price, stock, min_stock, created_at
 		FROM products WHERE tenant_id=$1 AND stock <= min_stock AND min_stock > 0 ORDER BY stock
 	`, tenantID)
@@ -102,8 +104,9 @@ func GetProductsLowStock(c *gin.Context) {
 }
 
 func GetStockMovements(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT sm.id, sm.product_id, sm.type, sm.quantity, sm.stock_before, sm.stock_after,
 			   COALESCE(sm.reason,''), sm.created_at, COALESCE(p.name,'')
 		FROM stock_movements sm LEFT JOIN products p ON p.id = sm.product_id
@@ -135,11 +138,12 @@ func GetStockMovements(c *gin.Context) {
 }
 
 func GetProduct(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var p models.Product
 	var cat, photo string
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, created_at
 		FROM products WHERE id=$1 AND tenant_id=$2
 	`, id, tenantID).Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.CreatedAt)
@@ -157,6 +161,7 @@ func GetProduct(c *gin.Context) {
 }
 
 func CreateProduct(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		Name      string  `json:"name"`
@@ -173,7 +178,7 @@ func CreateProduct(c *gin.Context) {
 	}
 
 	var p models.Product
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, name, cost_price, sell_price, stock, min_stock, created_at
 	`, body.Name, body.Category, body.Photo, body.CostPrice, body.SellPrice, body.Stock, body.MinStock, tenantID).Scan(
@@ -189,6 +194,7 @@ func CreateProduct(c *gin.Context) {
 }
 
 func UpdateProduct(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
@@ -205,7 +211,7 @@ func UpdateProduct(c *gin.Context) {
 		return
 	}
 
-	_, err := database.DB.Exec(`
+	_, err := database.Pool.Exec(ctx, `
 		UPDATE products SET
 			name = COALESCE($1, name), category = COALESCE($2, category), photo = COALESCE($3, photo),
 			cost_price = COALESCE($4, cost_price), sell_price = COALESCE($5, sell_price),
@@ -219,7 +225,7 @@ func UpdateProduct(c *gin.Context) {
 
 	var p models.Product
 	var cat, photo string
-	if err := database.DB.QueryRow(`
+	if err := database.Pool.QueryRow(ctx, `
 		SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, created_at
 		FROM products WHERE id=$1
 	`, id).Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.CreatedAt); err != nil {
@@ -236,19 +242,15 @@ func UpdateProduct(c *gin.Context) {
 }
 
 func DeleteProduct(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
-	result, err := database.DB.Exec("DELETE FROM products WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	tag, err := database.Pool.Exec(ctx, "DELETE FROM products WHERE id=$1 AND tenant_id=$2", id, tenantID)
 	if err != nil {
 		serverError(c, "delete product", err)
 		return
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		serverError(c, "delete product rows affected", err)
-		return
-	}
-	if n == 0 {
+	if tag.RowsAffected() == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
 		return
 	}
@@ -256,6 +258,7 @@ func DeleteProduct(c *gin.Context) {
 }
 
 func UpdateStock(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
@@ -269,7 +272,7 @@ func UpdateStock(c *gin.Context) {
 	}
 
 	var currentStock int
-	if err := database.DB.QueryRow("SELECT stock FROM products WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&currentStock); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT stock FROM products WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&currentStock); err != nil {
 		serverError(c, "update stock read current", err)
 		return
 	}
@@ -287,13 +290,13 @@ func UpdateStock(c *gin.Context) {
 		newStock = body.Quantity
 	}
 
-	if _, err := database.DB.Exec("UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3", newStock, id, tenantID); err != nil {
+	if _, err := database.Pool.Exec(ctx, "UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3", newStock, id, tenantID); err != nil {
 		serverError(c, "update stock exec", err)
 		return
 	}
 
 	reason := body.Reason
-	if _, err := database.DB.Exec(`
+	if _, err := database.Pool.Exec(ctx, `
 		INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7)
 	`, id, body.Type, body.Quantity, currentStock, newStock, reason, tenantID); err != nil {

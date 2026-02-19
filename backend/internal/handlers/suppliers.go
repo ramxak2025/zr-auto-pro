@@ -12,6 +12,7 @@ import (
 )
 
 func GetSuppliers(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	search := c.Query("search")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -37,7 +38,7 @@ func GetSuppliers(c *gin.Context) {
 	}
 
 	var total int
-	if err := database.DB.QueryRow(countQ, cArgs...).Scan(&total); err != nil {
+	if err := database.Pool.QueryRow(ctx, countQ, cArgs...).Scan(&total); err != nil {
 		serverError(c, "suppliers count", err)
 		return
 	}
@@ -45,7 +46,7 @@ func GetSuppliers(c *gin.Context) {
 	query += " ORDER BY name LIMIT $" + strconv.Itoa(idx) + " OFFSET $" + strconv.Itoa(idx+1)
 	args = append(args, limit, offset)
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Pool.Query(ctx, query, args...)
 	if err != nil {
 		serverError(c, "suppliers list query", err)
 		return
@@ -79,12 +80,13 @@ func GetSuppliers(c *gin.Context) {
 }
 
 func GetSupplier(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
 	var s models.Supplier
 	var phone, cp, comment string
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT id, name, COALESCE(phone,''), COALESCE(contact_person,''), COALESCE(comment,''),
 			   total_purchases, total_paid, current_debt, created_at
 		FROM suppliers WHERE id=$1 AND tenant_id=$2
@@ -106,6 +108,7 @@ func GetSupplier(c *gin.Context) {
 }
 
 func CreateSupplier(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		Name          string  `json:"name"`
@@ -119,7 +122,7 @@ func CreateSupplier(c *gin.Context) {
 	}
 
 	var s models.Supplier
-	if err := database.DB.QueryRow(`
+	if err := database.Pool.QueryRow(ctx, `
 		INSERT INTO suppliers (name, phone, contact_person, comment, tenant_id) VALUES ($1,$2,$3,$4,$5)
 		RETURNING id, name, total_purchases, total_paid, current_debt, created_at
 	`, body.Name, body.Phone, body.ContactPerson, body.Comment, tenantID).Scan(
@@ -135,6 +138,7 @@ func CreateSupplier(c *gin.Context) {
 }
 
 func UpdateSupplier(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
@@ -148,7 +152,7 @@ func UpdateSupplier(c *gin.Context) {
 		return
 	}
 
-	if _, err := database.DB.Exec(`
+	if _, err := database.Pool.Exec(ctx, `
 		UPDATE suppliers SET name=COALESCE($1,name), phone=COALESCE($2,phone),
 		contact_person=COALESCE($3,contact_person), comment=COALESCE($4,comment)
 		WHERE id=$5 AND tenant_id=$6
@@ -162,9 +166,10 @@ func UpdateSupplier(c *gin.Context) {
 }
 
 func DeleteSupplier(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
-	if _, err := database.DB.Exec("DELETE FROM suppliers WHERE id=$1 AND tenant_id=$2", id, tenantID); err != nil {
+	if _, err := database.Pool.Exec(ctx, "DELETE FROM suppliers WHERE id=$1 AND tenant_id=$2", id, tenantID); err != nil {
 		serverError(c, "delete supplier", err)
 		return
 	}
@@ -172,6 +177,7 @@ func DeleteSupplier(c *gin.Context) {
 }
 
 func GetDeliveries(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	supplierID := c.Query("supplierId")
 
@@ -185,7 +191,7 @@ func GetDeliveries(c *gin.Context) {
 	}
 	query += " ORDER BY d.date DESC"
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Pool.Query(ctx, query, args...)
 	if err != nil {
 		serverError(c, "deliveries list query", err)
 		return
@@ -205,7 +211,7 @@ func GetDeliveries(c *gin.Context) {
 		}
 		// Load items
 		d.Items = []models.DeliveryItem{}
-		iRows, err := database.DB.Query(`
+		iRows, err := database.Pool.Query(ctx, `
 			SELECT di.id, di.product_id, COALESCE(p.name,''), di.quantity, di.price, di.total
 			FROM delivery_items di LEFT JOIN products p ON p.id=di.product_id WHERE di.delivery_id=$1
 		`, d.ID)
@@ -242,12 +248,13 @@ func GetDeliveries(c *gin.Context) {
 }
 
 func GetDelivery(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
 	var d models.Delivery
 	var comment string
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT id, supplier_id, date, total_amount, payment_status, COALESCE(comment,'')
 		FROM deliveries WHERE id=$1 AND tenant_id=$2
 	`, id, tenantID).Scan(&d.ID, &d.SupplierID, &d.Date, &d.TotalAmount, &d.PaymentStatus, &comment)
@@ -260,7 +267,7 @@ func GetDelivery(c *gin.Context) {
 	}
 
 	d.Items = []models.DeliveryItem{}
-	iRows, err := database.DB.Query(`
+	iRows, err := database.Pool.Query(ctx, `
 		SELECT di.id, di.product_id, COALESCE(p.name,''), di.quantity, di.price, di.total
 		FROM delivery_items di LEFT JOIN products p ON p.id=di.product_id WHERE di.delivery_id=$1
 	`, d.ID)
@@ -290,6 +297,7 @@ func GetDelivery(c *gin.Context) {
 }
 
 func CreateDelivery(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		SupplierID string  `json:"supplierId"`
@@ -318,15 +326,15 @@ func CreateDelivery(c *gin.Context) {
 		totalAmount += item.Price * float64(item.Quantity)
 	}
 
-	tx, err := database.DB.Begin()
+	tx, err := database.Pool.Begin(ctx)
 	if err != nil {
 		serverError(c, "delivery tx begin", err)
 		return
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
 	var deliveryID string
-	if err := tx.QueryRow(`
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id)
 		VALUES ($1,$2,$3,'unpaid',$4,$5) RETURNING id
 	`, body.SupplierID, date, totalAmount, body.Comment, tenantID).Scan(&deliveryID); err != nil {
@@ -336,7 +344,7 @@ func CreateDelivery(c *gin.Context) {
 
 	for _, item := range body.Items {
 		total := item.Price * float64(item.Quantity)
-		if _, err := tx.Exec(`
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO delivery_items (id, delivery_id, product_id, quantity, price, total)
 			VALUES ($1,$2,$3,$4,$5,$6)
 		`, uuid.New().String(), deliveryID, item.ProductID, item.Quantity, item.Price, total); err != nil {
@@ -345,19 +353,19 @@ func CreateDelivery(c *gin.Context) {
 		}
 
 		// Increase stock
-		if _, err := tx.Exec("UPDATE products SET stock = stock + $1 WHERE id=$2", item.Quantity, item.ProductID); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE products SET stock = stock + $1 WHERE id=$2", item.Quantity, item.ProductID); err != nil {
 			serverError(c, "update product stock", err)
 			return
 		}
 	}
 
 	// Update supplier totals
-	if _, err := tx.Exec("UPDATE suppliers SET total_purchases = total_purchases + $1, current_debt = current_debt + $1 WHERE id=$2", totalAmount, body.SupplierID); err != nil {
+	if _, err := tx.Exec(ctx, "UPDATE suppliers SET total_purchases = total_purchases + $1, current_debt = current_debt + $1 WHERE id=$2", totalAmount, body.SupplierID); err != nil {
 		serverError(c, "update supplier totals", err)
 		return
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		serverError(c, "delivery tx commit", err)
 		return
 	}
@@ -365,6 +373,7 @@ func CreateDelivery(c *gin.Context) {
 }
 
 func GetPayments(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	supplierID := c.Query("supplierId")
 
@@ -376,7 +385,7 @@ func GetPayments(c *gin.Context) {
 	}
 	query += " ORDER BY date DESC"
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Pool.Query(ctx, query, args...)
 	if err != nil {
 		serverError(c, "payments list query", err)
 		return
@@ -404,6 +413,7 @@ func GetPayments(c *gin.Context) {
 }
 
 func CreatePayment(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		SupplierID string  `json:"supplierId"`
@@ -424,7 +434,7 @@ func CreatePayment(c *gin.Context) {
 	}
 
 	var id string
-	if err := database.DB.QueryRow(`
+	if err := database.Pool.QueryRow(ctx, `
 		INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id)
 		VALUES ($1,$2,$3,$4,$5) RETURNING id
 	`, body.SupplierID, body.Amount, date, body.Comment, tenantID).Scan(&id); err != nil {
@@ -432,7 +442,7 @@ func CreatePayment(c *gin.Context) {
 		return
 	}
 
-	if _, err := database.DB.Exec("UPDATE suppliers SET total_paid = total_paid + $1, current_debt = current_debt - $1 WHERE id=$2", body.Amount, body.SupplierID); err != nil {
+	if _, err := database.Pool.Exec(ctx, "UPDATE suppliers SET total_paid = total_paid + $1, current_debt = current_debt - $1 WHERE id=$2", body.Amount, body.SupplierID); err != nil {
 		serverError(c, "update supplier after payment", err)
 		return
 	}

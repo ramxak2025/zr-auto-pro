@@ -10,6 +10,7 @@ import (
 )
 
 func GetCars(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	search := c.Query("search")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -27,12 +28,12 @@ func GetCars(c *gin.Context) {
 	var total int
 	if search != "" {
 		s := "%" + search + "%"
-		if err := database.DB.QueryRow("SELECT COUNT(*) FROM cars WHERE tenant_id=$1 AND (plate_number ILIKE $2 OR make_model ILIKE $2)", tenantID, s).Scan(&total); err != nil {
+		if err := database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM cars WHERE tenant_id=$1 AND (plate_number ILIKE $2 OR make_model ILIKE $2)", tenantID, s).Scan(&total); err != nil {
 			serverError(c, "cars count query (search)", err)
 			return
 		}
 	} else {
-		if err := database.DB.QueryRow("SELECT COUNT(*) FROM cars WHERE tenant_id=$1", tenantID).Scan(&total); err != nil {
+		if err := database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM cars WHERE tenant_id=$1", tenantID).Scan(&total); err != nil {
 			serverError(c, "cars count query", err)
 			return
 		}
@@ -53,7 +54,7 @@ func GetCars(c *gin.Context) {
 	query += " ORDER BY c.created_at DESC LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
 	args = append(args, limit, offset)
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Pool.Query(ctx, query, args...)
 	if err != nil {
 		serverError(c, "cars list query", err)
 		return
@@ -85,12 +86,13 @@ func GetCars(c *gin.Context) {
 }
 
 func GetCar(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
 	var car models.Car
 	var comment string
-	err := database.DB.QueryRow("SELECT id, plate_number, make_model, COALESCE(comment,''), client_id, created_at FROM cars WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(
+	err := database.Pool.QueryRow(ctx, "SELECT id, plate_number, make_model, COALESCE(comment,''), client_id, created_at FROM cars WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(
 		&car.ID, &car.PlateNumber, &car.MakeModel, &comment, &car.ClientID, &car.CreatedAt,
 	)
 	if err != nil {
@@ -104,6 +106,7 @@ func GetCar(c *gin.Context) {
 }
 
 func CreateCar(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		PlateNumber string  `json:"plateNumber"`
@@ -117,7 +120,7 @@ func CreateCar(c *gin.Context) {
 	}
 
 	var car models.Car
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id)
 		VALUES ($1,$2,$3,$4,$5) RETURNING id, plate_number, make_model, client_id, created_at
 	`, body.PlateNumber, body.MakeModel, body.Comment, body.ClientID, tenantID).Scan(
@@ -132,6 +135,7 @@ func CreateCar(c *gin.Context) {
 }
 
 func UpdateCar(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
@@ -145,7 +149,7 @@ func UpdateCar(c *gin.Context) {
 		return
 	}
 
-	if _, err := database.DB.Exec(`
+	if _, err := database.Pool.Exec(ctx, `
 		UPDATE cars SET
 			plate_number = COALESCE($1, plate_number),
 			make_model = COALESCE($2, make_model),
@@ -159,7 +163,7 @@ func UpdateCar(c *gin.Context) {
 
 	var car models.Car
 	var comment string
-	if err := database.DB.QueryRow("SELECT id, plate_number, make_model, COALESCE(comment,''), client_id, created_at FROM cars WHERE id=$1", id).Scan(
+	if err := database.Pool.QueryRow(ctx, "SELECT id, plate_number, make_model, COALESCE(comment,''), client_id, created_at FROM cars WHERE id=$1", id).Scan(
 		&car.ID, &car.PlateNumber, &car.MakeModel, &comment, &car.ClientID, &car.CreatedAt,
 	); err != nil {
 		serverError(c, "update car re-read", err)
@@ -172,19 +176,15 @@ func UpdateCar(c *gin.Context) {
 }
 
 func DeleteCar(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
-	result, err := database.DB.Exec("DELETE FROM cars WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	tag, err := database.Pool.Exec(ctx, "DELETE FROM cars WHERE id=$1 AND tenant_id=$2", id, tenantID)
 	if err != nil {
 		serverError(c, "delete car", err)
 		return
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		serverError(c, "delete car rows affected", err)
-		return
-	}
-	if n == 0 {
+	if tag.RowsAffected() == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
 		return
 	}

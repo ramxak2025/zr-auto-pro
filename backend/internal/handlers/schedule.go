@@ -11,11 +11,12 @@ import (
 )
 
 func GetSchedule(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	dateFrom := c.DefaultQuery("dateFrom", time.Now().AddDate(0, 0, -7).Format("2006-01-02"))
 	dateTo := c.DefaultQuery("dateTo", time.Now().AddDate(0, 0, 30).Format("2006-01-02"))
 
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT se.id, se.user_id, u.full_name, se.date, COALESCE(se.shift_start,''), COALESCE(se.shift_end,''),
 			   se.is_day_off, se.actual_arrival, se.late_minutes, se.late_status, COALESCE(se.note,''), se.is_manual_override
 		FROM schedule_entries se LEFT JOIN users u ON u.id=se.user_id
@@ -56,6 +57,7 @@ func GetSchedule(c *gin.Context) {
 }
 
 func CreateScheduleEntry(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		UserID     string  `json:"userId"`
@@ -71,7 +73,7 @@ func CreateScheduleEntry(c *gin.Context) {
 	}
 
 	var e models.ScheduleEntry
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, user_id, date
 	`, body.UserID, body.Date, body.ShiftStart, body.ShiftEnd, body.IsDayOff, body.Note, tenantID).Scan(
@@ -90,6 +92,7 @@ func CreateScheduleEntry(c *gin.Context) {
 }
 
 func UpdateScheduleEntry(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
@@ -103,7 +106,7 @@ func UpdateScheduleEntry(c *gin.Context) {
 		return
 	}
 
-	if _, err := database.DB.Exec(`
+	if _, err := database.Pool.Exec(ctx, `
 		UPDATE schedule_entries SET
 			shift_start=COALESCE($1,shift_start), shift_end=COALESCE($2,shift_end),
 			is_day_off=COALESCE($3,is_day_off), note=COALESCE($4,note), is_manual_override=true
@@ -117,19 +120,15 @@ func UpdateScheduleEntry(c *gin.Context) {
 }
 
 func DeleteScheduleEntry(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
-	result, err := database.DB.Exec("DELETE FROM schedule_entries WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	tag, err := database.Pool.Exec(ctx, "DELETE FROM schedule_entries WHERE id=$1 AND tenant_id=$2", id, tenantID)
 	if err != nil {
 		serverError(c, "delete schedule entry", err)
 		return
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		serverError(c, "delete schedule entry rows affected", err)
-		return
-	}
-	if n == 0 {
+	if tag.RowsAffected() == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найдено"})
 		return
 	}
@@ -137,8 +136,9 @@ func DeleteScheduleEntry(c *gin.Context) {
 }
 
 func GetWorkModes(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT id, name, type, work_days, off_days, COALESCE(week_days,'[]'), shift_start, shift_end
 		FROM work_modes WHERE tenant_id=$1 ORDER BY name
 	`, tenantID)
@@ -162,6 +162,7 @@ func GetWorkModes(c *gin.Context) {
 }
 
 func CreateWorkMode(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		Name       string          `json:"name"`
@@ -183,7 +184,7 @@ func CreateWorkMode(c *gin.Context) {
 	}
 
 	var m models.WorkMode
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO work_modes (name, type, work_days, off_days, week_days, shift_start, shift_end, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, name, type, work_days, off_days, shift_start, shift_end
 	`, body.Name, body.Type, body.WorkDays, body.OffDays, string(wd), body.ShiftStart, body.ShiftEnd, tenantID).Scan(
@@ -199,6 +200,7 @@ func CreateWorkMode(c *gin.Context) {
 }
 
 func UpdateWorkMode(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body map[string]interface{}
@@ -208,25 +210,25 @@ func UpdateWorkMode(c *gin.Context) {
 	}
 
 	if name, ok := body["name"].(string); ok {
-		if _, err := database.DB.Exec("UPDATE work_modes SET name=$1 WHERE id=$2 AND tenant_id=$3", name, id, tenantID); err != nil {
+		if _, err := database.Pool.Exec(ctx, "UPDATE work_modes SET name=$1 WHERE id=$2 AND tenant_id=$3", name, id, tenantID); err != nil {
 			serverError(c, "update work mode name", err)
 			return
 		}
 	}
 	if t, ok := body["type"].(string); ok {
-		if _, err := database.DB.Exec("UPDATE work_modes SET type=$1 WHERE id=$2 AND tenant_id=$3", t, id, tenantID); err != nil {
+		if _, err := database.Pool.Exec(ctx, "UPDATE work_modes SET type=$1 WHERE id=$2 AND tenant_id=$3", t, id, tenantID); err != nil {
 			serverError(c, "update work mode type", err)
 			return
 		}
 	}
 	if ss, ok := body["shiftStart"].(string); ok {
-		if _, err := database.DB.Exec("UPDATE work_modes SET shift_start=$1 WHERE id=$2 AND tenant_id=$3", ss, id, tenantID); err != nil {
+		if _, err := database.Pool.Exec(ctx, "UPDATE work_modes SET shift_start=$1 WHERE id=$2 AND tenant_id=$3", ss, id, tenantID); err != nil {
 			serverError(c, "update work mode shift_start", err)
 			return
 		}
 	}
 	if se, ok := body["shiftEnd"].(string); ok {
-		if _, err := database.DB.Exec("UPDATE work_modes SET shift_end=$1 WHERE id=$2 AND tenant_id=$3", se, id, tenantID); err != nil {
+		if _, err := database.Pool.Exec(ctx, "UPDATE work_modes SET shift_end=$1 WHERE id=$2 AND tenant_id=$3", se, id, tenantID); err != nil {
 			serverError(c, "update work mode shift_end", err)
 			return
 		}
@@ -236,10 +238,11 @@ func UpdateWorkMode(c *gin.Context) {
 }
 
 func GetTodaySchedule(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	today := time.Now().Format("2006-01-02")
 
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT u.id, u.full_name, u.role,
 			   COALESCE(se.is_day_off, false),
 			   se.shift_start, se.shift_end,
@@ -274,6 +277,7 @@ func GetTodaySchedule(c *gin.Context) {
 
 // GetMyStats returns schedule statistics for the current user
 func GetMyStats(c *gin.Context) {
+	ctx := c.Request.Context()
 	userID := c.GetString("userID")
 	tenantID := c.GetString("tenantID")
 
@@ -292,7 +296,7 @@ func GetMyStats(c *gin.Context) {
 	}
 	var stats MyStats
 
-	if err := database.DB.QueryRow(`
+	if err := database.Pool.QueryRow(ctx, `
 		SELECT
 			COUNT(*),
 			COUNT(*) FILTER (WHERE NOT is_day_off),

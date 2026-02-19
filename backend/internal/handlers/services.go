@@ -10,6 +10,7 @@ import (
 )
 
 func GetServices(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	search := c.Query("search")
 	category := c.Query("category")
@@ -47,7 +48,7 @@ func GetServices(c *gin.Context) {
 	}
 
 	var total int
-	if err := database.DB.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+	if err := database.Pool.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
 		serverError(c, "services count query", err)
 		return
 	}
@@ -55,7 +56,7 @@ func GetServices(c *gin.Context) {
 	query += " ORDER BY name LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
 	args = append(args, limit, offset)
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Pool.Query(ctx, query, args...)
 	if err != nil {
 		serverError(c, "services list query", err)
 		return
@@ -79,11 +80,12 @@ func GetServices(c *gin.Context) {
 }
 
 func GetService(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var s models.Service
 	var cat string
-	err := database.DB.QueryRow("SELECT id, name, COALESCE(category,''), default_price, created_at FROM services WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(
+	err := database.Pool.QueryRow(ctx, "SELECT id, name, COALESCE(category,''), default_price, created_at FROM services WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(
 		&s.ID, &s.Name, &cat, &s.DefaultPrice, &s.CreatedAt,
 	)
 	if err != nil {
@@ -97,6 +99,7 @@ func GetService(c *gin.Context) {
 }
 
 func CreateService(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
 		Name         string  `json:"name"`
@@ -109,7 +112,7 @@ func CreateService(c *gin.Context) {
 	}
 
 	var s models.Service
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO services (name, category, default_price, tenant_id) VALUES ($1,$2,$3,$4)
 		RETURNING id, name, COALESCE(category,''), default_price, created_at
 	`, body.Name, body.Category, body.DefaultPrice, tenantID).Scan(&s.ID, &s.Name, new(string), &s.DefaultPrice, &s.CreatedAt)
@@ -122,6 +125,7 @@ func CreateService(c *gin.Context) {
 }
 
 func UpdateService(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
@@ -134,7 +138,7 @@ func UpdateService(c *gin.Context) {
 		return
 	}
 
-	if _, err := database.DB.Exec(`
+	if _, err := database.Pool.Exec(ctx, `
 		UPDATE services SET
 			name = COALESCE($1, name),
 			category = COALESCE($2, category),
@@ -147,7 +151,7 @@ func UpdateService(c *gin.Context) {
 
 	var s models.Service
 	var cat string
-	if err := database.DB.QueryRow("SELECT id, name, COALESCE(category,''), default_price, created_at FROM services WHERE id=$1", id).Scan(
+	if err := database.Pool.QueryRow(ctx, "SELECT id, name, COALESCE(category,''), default_price, created_at FROM services WHERE id=$1", id).Scan(
 		&s.ID, &s.Name, &cat, &s.DefaultPrice, &s.CreatedAt,
 	); err != nil {
 		serverError(c, "update service re-read", err)
@@ -160,19 +164,15 @@ func UpdateService(c *gin.Context) {
 }
 
 func DeleteService(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
-	result, err := database.DB.Exec("DELETE FROM services WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	tag, err := database.Pool.Exec(ctx, "DELETE FROM services WHERE id=$1 AND tenant_id=$2", id, tenantID)
 	if err != nil {
 		serverError(c, "delete service", err)
 		return
 	}
-	n, err := result.RowsAffected()
-	if err != nil {
-		serverError(c, "delete service rows affected", err)
-		return
-	}
-	if n == 0 {
+	if tag.RowsAffected() == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найдена"})
 		return
 	}

@@ -51,10 +51,11 @@ func JWTAuth() gin.HandlerFunc {
 			return
 		}
 
-		// Check user exists and is active
+		ctx := c.Request.Context()
+
 		var isActive bool
 		var tenantID, role string
-		err = database.DB.QueryRow(
+		err = database.Pool.QueryRow(ctx,
 			"SELECT is_active, COALESCE(tenant_id::text, ''), role FROM users WHERE id=$1",
 			userID,
 		).Scan(&isActive, &tenantID, &role)

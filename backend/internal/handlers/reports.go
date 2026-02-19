@@ -10,6 +10,7 @@ import (
 )
 
 func GetFinancialReport(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	dateFrom := c.DefaultQuery("dateFrom", time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Now().Location()).Format("2006-01-02"))
 	dateTo := c.DefaultQuery("dateTo", time.Now().Format("2006-01-02"))
@@ -18,7 +19,7 @@ func GetFinancialReport(c *gin.Context) {
 	report.DateFrom = dateFrom
 	report.DateTo = dateTo
 
-	if err := database.DB.QueryRow(`
+	if err := database.Pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(total_revenue),0), COALESCE(SUM(product_cost_total),0),
 			   COALESCE(SUM(service_salary_total),0), COALESCE(SUM(profit),0), COUNT(*)
 		FROM checks WHERE tenant_id=$1 AND date >= $2 AND date <= $3::date + interval '1 day'
@@ -35,11 +36,12 @@ func GetFinancialReport(c *gin.Context) {
 }
 
 func GetCashFlow(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	dateFrom := c.DefaultQuery("dateFrom", time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Now().Location()).Format("2006-01-02"))
 	dateTo := c.DefaultQuery("dateTo", time.Now().Format("2006-01-02"))
 
-	rows, err := database.DB.Query(`
+	rows, err := database.Pool.Query(ctx, `
 		SELECT date::date,
 			   COALESCE(SUM(CASE WHEN payment_method='cash' THEN total_revenue ELSE 0 END),0),
 			   COALESCE(SUM(CASE WHEN payment_method='card' THEN total_revenue ELSE 0 END),0),

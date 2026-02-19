@@ -13,6 +13,7 @@ import (
 )
 
 func GetChecks(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	search := c.Query("search")
 	masterID := c.Query("masterId")
@@ -66,7 +67,7 @@ func GetChecks(c *gin.Context) {
 	}
 
 	var total int
-	if err := database.DB.QueryRow("SELECT COUNT(*) "+baseQ, cArgs...).Scan(&total); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COUNT(*) "+baseQ, cArgs...).Scan(&total); err != nil {
 		log.Printf("GetChecks count error: %v", err)
 	}
 
@@ -75,7 +76,7 @@ func GetChecks(c *gin.Context) {
 		" ORDER BY ch.date DESC, ch.number DESC LIMIT $" + strconv.Itoa(idx) + " OFFSET $" + strconv.Itoa(idx+1)
 	args = append(args, limit, offset)
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Pool.Query(ctx, query, args...)
 	checks := []models.Check{}
 	if err != nil {
 		serverError(c, "GetChecks query", err)
@@ -101,6 +102,7 @@ func GetChecks(c *gin.Context) {
 }
 
 func GetCheck(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
@@ -108,7 +110,7 @@ func GetCheck(c *gin.Context) {
 	var masterName, clientName, clientPhone, carPlate, carModel string
 	var comment string
 	var mileage int
-	err := database.DB.QueryRow(`
+	err := database.Pool.QueryRow(ctx, `
 		SELECT ch.id, ch.number, ch.date, ch.master_id, COALESCE(m.full_name,''),
 			   ch.client_id, COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
 			   ch.car_id, COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''),
@@ -144,7 +146,7 @@ func GetCheck(c *gin.Context) {
 
 	// Load service lines
 	ch.Services = []models.CheckServiceLine{}
-	sRows, err := database.DB.Query(`
+	sRows, err := database.Pool.Query(ctx, `
 		SELECT csl.id, csl.service_id, csl.master_id, COALESCE(m.full_name,''), csl.name, csl.price, csl.quantity, csl.total
 		FROM check_service_lines csl LEFT JOIN users m ON m.id=csl.master_id WHERE csl.check_id=$1
 	`, id)
@@ -169,7 +171,7 @@ func GetCheck(c *gin.Context) {
 
 	// Load product lines
 	ch.Products = []models.CheckProductLine{}
-	pRows, err := database.DB.Query(`
+	pRows, err := database.Pool.Query(ctx, `
 		SELECT id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost
 		FROM check_product_lines WHERE check_id=$1
 	`, id)
@@ -192,6 +194,7 @@ func GetCheck(c *gin.Context) {
 }
 
 func CreateCheck(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	role := c.GetString("role")
 	var req models.CreateCheckRequest
@@ -242,7 +245,7 @@ func CreateCheck(c *gin.Context) {
 		}
 		if _, exists := masterSalaries[mid]; !exists {
 			var pct float64
-			database.DB.QueryRow("SELECT COALESCE(salary_percent,0) FROM users WHERE id=$1", mid).Scan(&pct)
+			database.Pool.QueryRow(ctx, "SELECT COALESCE(salary_percent,0) FROM users WHERE id=$1", mid).Scan(&pct)
 			masterSalaries[mid] = &masterSalaryCalc{percent: pct}
 		}
 		masterSalaries[mid].total += total
@@ -262,16 +265,16 @@ func CreateCheck(c *gin.Context) {
 	totalCost := productCostTotal + serviceSalaryTotal
 	profit := totalRevenue - totalCost
 
-	tx, err := database.DB.Begin()
+	tx, err := database.Pool.Begin(ctx)
 	if err != nil {
 		serverError(c, "CreateCheck tx begin", err)
 		return
 	}
-	defer tx.Rollback()
+	defer tx.Rollback(ctx)
 
 	var checkID string
 	var checkNumber int
-	err = tx.QueryRow(`
+	err = tx.QueryRow(ctx, `
 		INSERT INTO checks (date, master_id, client_id, car_id, mileage, comment, discount, is_deferred,
 			payment_method, cash_amount, card_amount, service_total, product_total, total_revenue, product_cost_total,
 			service_salary_total, total_cost, profit, tenant_id)
@@ -292,7 +295,7 @@ func CreateCheck(c *gin.Context) {
 		if s.MasterID != nil && *s.MasterID != "" {
 			mid = *s.MasterID
 		}
-		if _, err := tx.Exec(`
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO check_service_lines (id, check_id, service_id, master_id, name, price, quantity, total)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		`, uuid.New().String(), checkID, s.ServiceID, mid, s.Name, s.Price, s.Quantity, total); err != nil {
@@ -304,7 +307,7 @@ func CreateCheck(c *gin.Context) {
 	for _, p := range req.Products {
 		totalSell := p.SellPrice * float64(p.Quantity)
 		totalCostLine := p.CostPrice * float64(p.Quantity)
-		if _, err := tx.Exec(`
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
 		`, uuid.New().String(), checkID, p.ProductID, p.Name, p.SellPrice, p.CostPrice, p.Quantity, totalSell, totalCostLine); err != nil {
@@ -312,11 +315,11 @@ func CreateCheck(c *gin.Context) {
 			return
 		}
 		if p.ProductID != nil {
-			tx.Exec("UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id=$2", p.Quantity, *p.ProductID)
+			tx.Exec(ctx, "UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id=$2", p.Quantity, *p.ProductID)
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		serverError(c, "CreateCheck tx commit", err)
 		return
 	}
@@ -327,6 +330,7 @@ func CreateCheck(c *gin.Context) {
 }
 
 func UpdateCheck(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	role := c.GetString("role")
@@ -338,7 +342,7 @@ func UpdateCheck(c *gin.Context) {
 
 	if dateStr, ok := body["date"].(string); ok {
 		if role == "director" || role == "admin" || role == "superadmin" {
-			database.DB.Exec("UPDATE checks SET date=$1 WHERE id=$2 AND tenant_id=$3", dateStr, id, tenantID)
+			database.Pool.Exec(ctx, "UPDATE checks SET date=$1 WHERE id=$2 AND tenant_id=$3", dateStr, id, tenantID)
 		} else {
 			c.JSON(http.StatusForbidden, gin.H{"message": "Только директор может изменять дату чека"})
 			return
@@ -346,19 +350,19 @@ func UpdateCheck(c *gin.Context) {
 	}
 
 	if pm, ok := body["paymentMethod"].(string); ok {
-		database.DB.Exec("UPDATE checks SET payment_method=$1 WHERE id=$2 AND tenant_id=$3", pm, id, tenantID)
+		database.Pool.Exec(ctx, "UPDATE checks SET payment_method=$1 WHERE id=$2 AND tenant_id=$3", pm, id, tenantID)
 	}
 	if d, ok := body["isDeferred"].(bool); ok {
-		database.DB.Exec("UPDATE checks SET is_deferred=$1 WHERE id=$2 AND tenant_id=$3", d, id, tenantID)
+		database.Pool.Exec(ctx, "UPDATE checks SET is_deferred=$1 WHERE id=$2 AND tenant_id=$3", d, id, tenantID)
 	}
 	if comm, ok := body["comment"].(string); ok {
-		database.DB.Exec("UPDATE checks SET comment=$1 WHERE id=$2 AND tenant_id=$3", comm, id, tenantID)
+		database.Pool.Exec(ctx, "UPDATE checks SET comment=$1 WHERE id=$2 AND tenant_id=$3", comm, id, tenantID)
 	}
 	if ca, ok := body["cashAmount"].(float64); ok {
-		database.DB.Exec("UPDATE checks SET cash_amount=$1 WHERE id=$2 AND tenant_id=$3", ca, id, tenantID)
+		database.Pool.Exec(ctx, "UPDATE checks SET cash_amount=$1 WHERE id=$2 AND tenant_id=$3", ca, id, tenantID)
 	}
 	if ca, ok := body["cardAmount"].(float64); ok {
-		database.DB.Exec("UPDATE checks SET card_amount=$1 WHERE id=$2 AND tenant_id=$3", ca, id, tenantID)
+		database.Pool.Exec(ctx, "UPDATE checks SET card_amount=$1 WHERE id=$2 AND tenant_id=$3", ca, id, tenantID)
 	}
 
 	c.Params = gin.Params{{Key: "id", Value: id}}
@@ -366,14 +370,15 @@ func UpdateCheck(c *gin.Context) {
 }
 
 func DeleteCheck(c *gin.Context) {
+	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
-	result, err := database.DB.Exec("DELETE FROM checks WHERE id=$1 AND tenant_id=$2", id, tenantID)
+	tag, err := database.Pool.Exec(ctx, "DELETE FROM checks WHERE id=$1 AND tenant_id=$2", id, tenantID)
 	if err != nil {
 		serverError(c, "DeleteCheck", err)
 		return
 	}
-	if n, _ := result.RowsAffected(); n == 0 {
+	if tag.RowsAffected() == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
 		return
 	}
@@ -381,6 +386,7 @@ func DeleteCheck(c *gin.Context) {
 }
 
 func GetDashboard(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	now := time.Now()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -391,16 +397,17 @@ func GetDashboard(c *gin.Context) {
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 	var stats models.DashboardStats
-	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0), COUNT(*) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayRevenue, &stats.TodayChecks)
-	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, weekStart).Scan(&stats.WeekRevenue)
-	database.DB.QueryRow("SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthRevenue)
-	database.DB.QueryRow("SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayProfit)
-	database.DB.QueryRow("SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthProfit)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0), COUNT(*) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayRevenue, &stats.TodayChecks)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, weekStart).Scan(&stats.WeekRevenue)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthRevenue)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayProfit)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthProfit)
 
 	c.JSON(http.StatusOK, stats)
 }
 
 func GetRanking(c *gin.Context) {
+	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	now := time.Now()
 	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -408,7 +415,7 @@ func GetRanking(c *gin.Context) {
 
 	ranking := models.EmployeeRanking{Today: []models.EmployeeRankEntry{}, Month: []models.EmployeeRankEntry{}}
 
-	todayRows, err := database.DB.Query(`
+	todayRows, err := database.Pool.Query(ctx, `
 		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
 		FROM checks ch JOIN users u ON u.id=ch.master_id
 		WHERE ch.tenant_id=$1 AND ch.date >= $2
@@ -424,7 +431,7 @@ func GetRanking(c *gin.Context) {
 		}
 	}
 
-	monthRows, err := database.DB.Query(`
+	monthRows, err := database.Pool.Query(ctx, `
 		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
 		FROM checks ch JOIN users u ON u.id=ch.master_id
 		WHERE ch.tenant_id=$1 AND ch.date >= $2
