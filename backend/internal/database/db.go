@@ -116,7 +116,7 @@ func Seed() {
 	// no-op — called from main with hashed passwords
 }
 
-func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
+func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash, ownerHash string) {
 	allPerms := `{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}`
 	masterPerms := `{"checks_view":true,"checks_create":true,"checks_edit":false,"checks_delete":false,"profit_view":false,"clients_view":true,"clients_edit":false,"warehouse_access":false,"suppliers_access":false,"financial_reports":false,"export_data":false,"user_management":false}`
 
@@ -153,6 +153,25 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 		}
 	} else {
 		log.Println("Seed superadmin OK")
+	}
+
+	// ── 2b. Owner phone (superadmin) — additional superadmin for owner's personal phone ──
+	log.Println("Seed: creating owner superadmin +79884444485...")
+	_, err = DB.Exec(`
+		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
+		VALUES ('+79884444485', $1, 'Владелец платформы', 'superadmin', true, NULL, $2, 0)
+		ON CONFLICT (phone) DO UPDATE SET
+			password = EXCLUDED.password,
+			full_name = EXCLUDED.full_name,
+			role = EXCLUDED.role,
+			is_active = true,
+			tenant_id = NULL,
+			permissions = EXCLUDED.permissions
+	`, ownerHash, allPerms)
+	if err != nil {
+		log.Printf("Seed owner superadmin FAILED: %v", err)
+	} else {
+		log.Println("Seed owner superadmin OK")
 	}
 
 	// ── 3. Demo tenant (separate auto service) ──
@@ -208,10 +227,11 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 		}
 	}
 
-	fmt.Println("Seed completed (upsert): superadmin (no tenant) + demo tenant + demo users")
-	fmt.Println("Platform admin: +79884444436 / admin123")
-	fmt.Println("Demo owner:     +70000000001 / demo123")
-	fmt.Println("Demo master:    +70000000002 / demo123")
+	fmt.Println("Seed completed (upsert): superadmins + demo tenant + demo users")
+	fmt.Println("Platform admin:  +79884444436 / admin123")
+	fmt.Println("Owner admin:     +79884444485 / admin123")
+	fmt.Println("Demo owner:      +70000000001 / demo123")
+	fmt.Println("Demo master:     +70000000002 / demo123")
 }
 
 func seedPlans() {

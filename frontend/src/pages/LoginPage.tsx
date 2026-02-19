@@ -1,8 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Phone, Lock, Eye, EyeOff, Wifi, WifiOff, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import api from '../api/axios';
 
 function formatPhone(raw: string): string {
   let digits = raw.replace(/\D/g, '');
@@ -19,6 +20,8 @@ function formatPhone(raw: string): string {
   return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
 }
 
+type ApiStatus = 'checking' | 'ok' | 'error' | 'db_error';
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const { login } = useAuth();
@@ -28,7 +31,43 @@ export default function LoginPage() {
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [apiStatus, setApiStatus] = useState<ApiStatus>('checking');
+  const [apiDetails, setApiDetails] = useState('');
   const passwordRef = useRef<HTMLInputElement>(null);
+
+  // Проверяем доступность API при загрузке страницы
+  useEffect(() => {
+    const checkApi = async () => {
+      try {
+        const res = await api.get('/health/db');
+        const data = res.data;
+        if (data.db === 'OK' && data.users?.length > 0) {
+          const adminOk = data.admin_check?.includes('OK');
+          if (adminOk) {
+            setApiStatus('ok');
+            setApiDetails(`Сервер работает. Пользователей: ${data.users.length}`);
+          } else {
+            setApiStatus('db_error');
+            setApiDetails(`Сервер работает, но проблема с паролями. Подробности: ${data.admin_check || 'нет данных'}`);
+          }
+        } else if (data.db === 'OK') {
+          setApiStatus('db_error');
+          setApiDetails('Сервер работает, но в базе нет пользователей. Seed не выполнился.');
+        } else {
+          setApiStatus('db_error');
+          setApiDetails(`Проблема с базой данных: ${data.db}`);
+        }
+      } catch (err: any) {
+        setApiStatus('error');
+        if (err.code === 'ERR_NETWORK' || !err.response) {
+          setApiDetails('Сервер недоступен. Бэкенд не запущен или nginx не проксирует /api.');
+        } else {
+          setApiDetails(`Ошибка API: ${err.response?.status} ${err.response?.statusText || ''}`);
+        }
+      }
+    };
+    checkApi();
+  }, []);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
@@ -56,9 +95,13 @@ export default function LoginPage() {
       await login(phone, password);
       navigate('/', { replace: true });
     } catch (error: any) {
-      const message =
-        error?.response?.data?.message || 'Неверный номер телефона или пароль';
-      toast.error(message);
+      if (error.code === 'ERR_NETWORK' || !error.response) {
+        toast.error('Сервер недоступен! Проверьте подключение.');
+      } else if (error.response?.status === 401) {
+        toast.error(error.response?.data?.message || 'Неверный телефон или пароль');
+      } else {
+        toast.error(`Ошибка сервера: ${error.response?.status}. Попробуйте позже.`);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -82,6 +125,24 @@ export default function LoginPage() {
           <p className="text-center text-sm text-gray-400 mb-10 tracking-wide">
             Система управления сервисом
           </p>
+
+          {/* API Status indicator */}
+          {apiStatus !== 'ok' && (
+            <div className={`mb-4 p-3 rounded-xl text-sm flex items-start gap-2 ${
+              apiStatus === 'checking' ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+              apiStatus === 'error' ? 'bg-red-50 text-red-700 border border-red-200' :
+              'bg-yellow-50 text-yellow-700 border border-yellow-200'
+            }`}>
+              {apiStatus === 'checking' ? (
+                <Loader2 className="h-4 w-4 mt-0.5 animate-spin flex-shrink-0" />
+              ) : apiStatus === 'error' ? (
+                <WifiOff className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+              )}
+              <span>{apiStatus === 'checking' ? 'Проверяю сервер...' : apiDetails}</span>
+            </div>
+          )}
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -189,8 +250,12 @@ export default function LoginPage() {
                   try {
                     await login('+7 (000) 000-00-01', 'demo123');
                     navigate('/', { replace: true });
-                  } catch {
-                    toast.error('Ошибка демо-входа');
+                  } catch (err: any) {
+                    if (err.code === 'ERR_NETWORK' || !err.response) {
+                      toast.error('Сервер недоступен!');
+                    } else {
+                      toast.error(`Ошибка демо-входа: ${err.response?.data?.message || err.response?.status}`);
+                    }
                   } finally {
                     setSubmitting(false);
                   }
@@ -207,8 +272,12 @@ export default function LoginPage() {
                   try {
                     await login('+7 (000) 000-00-02', 'demo123');
                     navigate('/', { replace: true });
-                  } catch {
-                    toast.error('Ошибка демо-входа');
+                  } catch (err: any) {
+                    if (err.code === 'ERR_NETWORK' || !err.response) {
+                      toast.error('Сервер недоступен!');
+                    } else {
+                      toast.error(`Ошибка демо-входа: ${err.response?.data?.message || err.response?.status}`);
+                    }
                   } finally {
                     setSubmitting(false);
                   }

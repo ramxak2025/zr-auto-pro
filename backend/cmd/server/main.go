@@ -22,7 +22,8 @@ func main() {
 	// Seed with hashed passwords
 	adminHash, _ := bcrypt.GenerateFromPassword([]byte("admin123"), 10)
 	demoHash, _ := bcrypt.GenerateFromPassword([]byte("demo123"), 10)
-	database.SeedWithPasswords(string(adminHash), string(demoHash), string(demoHash))
+	ownerHash, _ := bcrypt.GenerateFromPassword([]byte("admin123"), 10)
+	database.SeedWithPasswords(string(adminHash), string(demoHash), string(demoHash), string(ownerHash))
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.Default()
@@ -100,6 +101,17 @@ func main() {
 			result["admin_check"] = "OK (password=admin123 matches)"
 		} else {
 			result["admin_check"] = "FAIL (password mismatch)"
+		}
+
+		// 5b. Owner password check
+		var ownerHash string
+		err = database.DB.QueryRow("SELECT password FROM users WHERE phone='+79884444485'").Scan(&ownerHash)
+		if err != nil {
+			result["owner_check"] = fmt.Sprintf("NOT FOUND: %v", err)
+		} else if bcrypt.CompareHashAndPassword([]byte(ownerHash), []byte("admin123")) == nil {
+			result["owner_check"] = "OK (password=admin123 matches)"
+		} else {
+			result["owner_check"] = "FAIL (password mismatch)"
 		}
 
 		// 6. Role constraint
