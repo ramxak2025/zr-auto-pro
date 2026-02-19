@@ -182,6 +182,13 @@ func UpdateUser(c *gin.Context) {
 func DeleteUser(c *gin.Context) {
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
+	currentUserID := c.GetString("userID")
+
+	// Нельзя удалить самого себя
+	if id == currentUserID {
+		c.JSON(http.StatusForbidden, gin.H{"message": "Нельзя удалить свой аккаунт"})
+		return
+	}
 
 	var role string
 	database.DB.QueryRow("SELECT role FROM users WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&role)

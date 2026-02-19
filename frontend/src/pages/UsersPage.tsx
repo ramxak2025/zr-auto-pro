@@ -75,7 +75,7 @@ const emptyForm: UserFormData = {
 };
 
 export default function UsersPage() {
-  const { hasPermission } = useAuth();
+  const { hasPermission, user: currentUser } = useAuth();
   const queryClient = useQueryClient();
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -250,12 +250,14 @@ export default function UsersPage() {
                     >
                       <Pencil className="w-3.5 h-3.5" />
                     </button>
-                    <button
-                      onClick={() => setDeleteId(user.id)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director' && (
+                      <button
+                        onClick={() => setDeleteId(user.id)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-sm text-gray-500">
@@ -313,13 +315,15 @@ export default function UsersPage() {
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
-                        <button
-                          onClick={() => setDeleteId(user.id)}
-                          className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                          title="Удалить"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director' && (
+                          <button
+                            onClick={() => setDeleteId(user.id)}
+                            className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                            title="Удалить"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
