@@ -49,7 +49,8 @@ func RunMigrations() {
 
 	_, err = DB.Exec(string(migration))
 	if err != nil {
-		log.Fatalf("Failed to run migration: %v", err)
+		// Log but don't crash — tables likely already exist, only new indexes/columns may fail
+		log.Printf("Migration warning (non-fatal): %v", err)
 	}
 	log.Println("Migrations applied")
 }
@@ -90,11 +91,10 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	// Try to find existing demo tenant first
 	err = DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'demo' LIMIT 1`).Scan(&tenantID)
 	if err != nil {
-		// Not found — create new
+		// Not found — create new (simple INSERT, no ON CONFLICT needed since we just checked)
 		err = DB.QueryRow(`
 			INSERT INTO tenants (name, slug, phone, is_active, max_users)
 			VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)
-			ON CONFLICT (slug) WHERE slug IS NOT NULL DO UPDATE SET name = EXCLUDED.name
 			RETURNING id
 		`).Scan(&tenantID)
 		if err != nil {

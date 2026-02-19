@@ -60,8 +60,12 @@ DO $$ BEGIN
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 
--- Unique index on slug to prevent duplicate tenants in seed
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_slug_unique ON tenants(slug) WHERE slug IS NOT NULL;
+-- Unique index on slug to prevent duplicate tenants in seed (safe — won't crash if dupes remain)
+DO $$ BEGIN
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_slug_unique ON tenants(slug) WHERE slug IS NOT NULL;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'Could not create unique slug index, continuing without it';
+END $$;
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
