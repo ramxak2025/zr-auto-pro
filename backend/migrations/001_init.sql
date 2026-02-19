@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Add plan columns to existing tenants table (safe migration)
+-- Add new columns to existing tenants table (safe migration)
 DO $$ BEGIN
     ALTER TABLE tenants ADD COLUMN plan_id UUID REFERENCES plans(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_column THEN NULL;
@@ -41,6 +41,27 @@ DO $$ BEGIN
     ALTER TABLE tenants ADD COLUMN monthly_price NUMERIC(10,2) DEFAULT 0;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+DO $$ BEGIN
+    ALTER TABLE tenants ADD COLUMN subscription_end TIMESTAMPTZ;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE tenants ADD COLUMN subscription_note TEXT;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
+-- Clean up duplicate slugs before creating unique index (keep oldest tenant for each slug)
+DO $$ BEGIN
+    UPDATE tenants SET slug = NULL
+    WHERE slug IS NOT NULL
+      AND id NOT IN (
+        SELECT DISTINCT ON (slug) id FROM tenants WHERE slug IS NOT NULL ORDER BY slug, created_at ASC
+      );
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+-- Unique index on slug to prevent duplicate tenants in seed
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_slug_unique ON tenants(slug) WHERE slug IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -83,30 +83,22 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	}
 
 	// ── 3. Demo tenant (separate auto service) ──
+	// First, rename old 'zr-auto' slug to 'demo' if it exists
+	DB.Exec(`UPDATE tenants SET slug = 'demo', name = 'Демо Автосервис' WHERE slug = 'zr-auto'`)
+
 	var tenantID string
-	err = DB.QueryRow(`
-		INSERT INTO tenants (name, slug, phone, is_active, max_users)
-		VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)
-		ON CONFLICT DO NOTHING
-		RETURNING id
-	`).Scan(&tenantID)
+	// Try to find existing demo tenant first
+	err = DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'demo' LIMIT 1`).Scan(&tenantID)
 	if err != nil {
-		// Already exists — fetch
-		err2 := DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'demo' LIMIT 1`).Scan(&tenantID)
-		if err2 != nil {
-			// Try old slug
-			err3 := DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'zr-auto' LIMIT 1`).Scan(&tenantID)
-			if err3 != nil {
-				// Get any tenant
-				err4 := DB.QueryRow(`SELECT id FROM tenants LIMIT 1`).Scan(&tenantID)
-				if err4 != nil {
-					_ = DB.QueryRow(`
-						INSERT INTO tenants (name, slug, phone, is_active, max_users)
-						VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)
-						RETURNING id
-					`).Scan(&tenantID)
-				}
-			}
+		// Not found — create new
+		err = DB.QueryRow(`
+			INSERT INTO tenants (name, slug, phone, is_active, max_users)
+			VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)
+			ON CONFLICT (slug) WHERE slug IS NOT NULL DO UPDATE SET name = EXCLUDED.name
+			RETURNING id
+		`).Scan(&tenantID)
+		if err != nil {
+			log.Printf("Seed: failed to create demo tenant: %v", err)
 		}
 	}
 

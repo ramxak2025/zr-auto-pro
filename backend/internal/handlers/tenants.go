@@ -20,7 +20,7 @@ func GetTenants(c *gin.Context) {
 	rows, _ := database.DB.Query(`
 		SELECT t.id, t.name, COALESCE(t.slug,''), COALESCE(t.phone,''), COALESCE(t.address,''),
 			   COALESCE(t.email,''), t.is_active, t.max_users,
-			   COALESCE(t.plan_id::text,''), t.monthly_price,
+			   COALESCE(t.plan_id::text,''), COALESCE(t.monthly_price,0),
 			   t.subscription_end, t.subscription_note,
 			   t.created_at, t.updated_at, COUNT(u.id)
 		FROM tenants t LEFT JOIN users u ON u.tenant_id=t.id
@@ -86,7 +86,7 @@ func GetTenant(c *gin.Context) {
 	err := database.DB.QueryRow(`
 		SELECT id, name, COALESCE(slug,''), COALESCE(phone,''), COALESCE(address,''),
 			   COALESCE(email,''), is_active, max_users,
-			   COALESCE(plan_id::text,''), monthly_price,
+			   COALESCE(plan_id::text,''), COALESCE(monthly_price,0),
 			   subscription_end, subscription_note,
 			   created_at, updated_at
 		FROM tenants WHERE id=$1
@@ -312,7 +312,7 @@ func GetSubscription(c *gin.Context) {
 	var planName, subEnd, subNote *string
 
 	database.DB.QueryRow(`
-		SELECT t.name, p.name, t.monthly_price, t.subscription_end::text, t.subscription_note, t.max_users
+		SELECT t.name, p.name, COALESCE(t.monthly_price,0), t.subscription_end::text, t.subscription_note, t.max_users
 		FROM tenants t LEFT JOIN plans p ON p.id = t.plan_id
 		WHERE t.id=$1
 	`, tenantID).Scan(&info.TenantName, &planName, &info.MonthlyPrice, &subEnd, &subNote, &info.MaxUsers)
