@@ -55,92 +55,93 @@ func RunMigrations() {
 }
 
 func Seed() {
-	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='superadmin'").Scan(&count)
-	if err != nil {
-		log.Printf("Seed check error: %v", err)
-		return
-	}
-	if count > 0 {
-		log.Println("Superadmin exists, skipping seed")
-		return
-	}
-
-	// Import bcrypt here
-	// We hash in the seed function of main to avoid circular deps
-	log.Println("Seed: creating superadmin + demo users...")
-
-	// This will be called from main with the hashed passwords
+	// no-op — called from main with hashed passwords
 }
 
 func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
-	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM users WHERE role='superadmin'").Scan(&count)
-	if err != nil {
-		log.Printf("Seed check error: %v", err)
-		return
-	}
-	if count > 0 {
-		log.Println("Superadmin exists, skipping seed")
-		return
-	}
+	allPerms := `{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}`
+	masterPerms := `{"checks_view":true,"checks_create":true,"checks_edit":false,"checks_delete":false,"profit_view":false,"clients_view":true,"clients_edit":false,"warehouse_access":false,"suppliers_access":false,"financial_reports":false,"export_data":false,"user_management":false}`
 
-	tx, err := DB.Begin()
-	if err != nil {
-		log.Fatalf("Seed tx error: %v", err)
-	}
-
-	// Create main tenant
+	// Ensure tenant exists (upsert by slug)
 	var tenantID string
-	err = tx.QueryRow(`
+	err := DB.QueryRow(`
 		INSERT INTO tenants (name, slug, phone, is_active, max_users)
 		VALUES ('ZR Auto Pro', 'zr-auto', '+7 (988) 444-44-36', true, 50)
+		ON CONFLICT DO NOTHING
 		RETURNING id
 	`).Scan(&tenantID)
 	if err != nil {
-		tx.Rollback()
-		log.Fatalf("Seed tenant error: %v", err)
+		// Tenant might already exist — fetch its ID
+		err2 := DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'zr-auto' LIMIT 1`).Scan(&tenantID)
+		if err2 != nil {
+			// No slug match, try first tenant
+			err3 := DB.QueryRow(`SELECT id FROM tenants LIMIT 1`).Scan(&tenantID)
+			if err3 != nil {
+				// Create fresh without ON CONFLICT
+				_ = DB.QueryRow(`
+					INSERT INTO tenants (name, slug, phone, is_active, max_users)
+					VALUES ('ZR Auto Pro', 'zr-auto', '+7 (988) 444-44-36', true, 50)
+					RETURNING id
+				`).Scan(&tenantID)
+			}
+		}
 	}
 
-	allPerms := `{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}`
+	if tenantID == "" {
+		log.Println("Seed: could not get or create tenant, skipping")
+		return
+	}
 
-	// Superadmin
-	_, err = tx.Exec(`
+	// Upsert superadmin: +79884444436 / admin123
+	_, err = DB.Exec(`
 		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
-		VALUES ($1, $2, 'Администратор', 'superadmin', true, $3, $4, 0)
-	`, "+79884444436", adminHash, tenantID, allPerms)
+		VALUES ('+79884444436', $1, 'Администратор', 'superadmin', true, $2, $3, 0)
+		ON CONFLICT (phone) DO UPDATE SET
+			password = EXCLUDED.password,
+			full_name = EXCLUDED.full_name,
+			role = EXCLUDED.role,
+			is_active = true,
+			tenant_id = EXCLUDED.tenant_id,
+			permissions = EXCLUDED.permissions
+	`, adminHash, tenantID, allPerms)
 	if err != nil {
-		tx.Rollback()
-		log.Fatalf("Seed admin error: %v", err)
+		log.Printf("Seed admin upsert error: %v", err)
 	}
 
-	// Demo owner (director)
-	_, err = tx.Exec(`
+	// Upsert demo owner: +70000000001 / demo123
+	_, err = DB.Exec(`
 		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
-		VALUES ($1, $2, 'Владелец (демо)', 'director', true, $3, $4, 0)
-	`, "+70000000001", demoOwnerHash, tenantID, allPerms)
+		VALUES ('+70000000001', $1, 'Владелец (демо)', 'director', true, $2, $3, 0)
+		ON CONFLICT (phone) DO UPDATE SET
+			password = EXCLUDED.password,
+			full_name = EXCLUDED.full_name,
+			role = EXCLUDED.role,
+			is_active = true,
+			tenant_id = EXCLUDED.tenant_id,
+			permissions = EXCLUDED.permissions
+	`, demoOwnerHash, tenantID, allPerms)
 	if err != nil {
-		tx.Rollback()
-		log.Fatalf("Seed demo owner error: %v", err)
+		log.Printf("Seed demo owner upsert error: %v", err)
 	}
 
-	// Demo master
-	masterPerms := `{"checks_view":true,"checks_create":true,"checks_edit":false,"checks_delete":false,"profit_view":false,"clients_view":true,"clients_edit":false,"warehouse_access":false,"suppliers_access":false,"financial_reports":false,"export_data":false,"user_management":false}`
-	_, err = tx.Exec(`
+	// Upsert demo master: +70000000002 / demo123
+	_, err = DB.Exec(`
 		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
-		VALUES ($1, $2, 'Мастер (демо)', 'master', true, $3, $4, 40)
-	`, "+70000000002", demoMasterHash, tenantID, masterPerms)
+		VALUES ('+70000000002', $1, 'Мастер (демо)', 'master', true, $2, $3, 40)
+		ON CONFLICT (phone) DO UPDATE SET
+			password = EXCLUDED.password,
+			full_name = EXCLUDED.full_name,
+			role = EXCLUDED.role,
+			is_active = true,
+			tenant_id = EXCLUDED.tenant_id,
+			permissions = EXCLUDED.permissions,
+			salary_percent = 40
+	`, demoMasterHash, tenantID, masterPerms)
 	if err != nil {
-		tx.Rollback()
-		log.Fatalf("Seed demo master error: %v", err)
+		log.Printf("Seed demo master upsert error: %v", err)
 	}
 
-	err = tx.Commit()
-	if err != nil {
-		log.Fatalf("Seed commit error: %v", err)
-	}
-
-	fmt.Println("Seed completed: tenant + superadmin + demo users created")
+	fmt.Println("Seed completed (upsert): tenant + superadmin + demo users ensured")
 	fmt.Println("Superadmin: +79884444436 / admin123")
 	fmt.Println("Demo owner: +70000000001 / demo123")
 	fmt.Println("Demo master: +70000000002 / demo123")
