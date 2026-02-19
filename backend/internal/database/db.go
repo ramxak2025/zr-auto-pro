@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -44,15 +45,71 @@ func Connect() {
 func RunMigrations() {
 	migration, err := os.ReadFile("migrations/001_init.sql")
 	if err != nil {
-		log.Fatalf("Failed to read migration: %v", err)
+		log.Fatalf("Failed to read migration file: %v", err)
 	}
 
 	_, err = DB.Exec(string(migration))
 	if err != nil {
-		// Log but don't crash — tables likely already exist, only new indexes/columns may fail
-		log.Printf("Migration warning (non-fatal): %v", err)
+		log.Printf("Migration batch warning: %v", err)
+		log.Println("Retrying migration statements individually...")
+		// If the batch fails, try each statement separately so partial failures
+		// don't block creation of subsequent tables
+		runMigrationStatements(string(migration))
 	}
 	log.Println("Migrations applied")
+}
+
+// runMigrationStatements splits SQL into top-level statements and executes each independently.
+// This ensures that a failure in one statement (e.g., a duplicate index) doesn't prevent
+// creation of subsequent tables.
+func runMigrationStatements(sql string) {
+	stmts := splitSQL(sql)
+	for i, stmt := range stmts {
+		if stmt == "" {
+			continue
+		}
+		_, err := DB.Exec(stmt)
+		if err != nil {
+			log.Printf("  statement %d warning: %v", i+1, err)
+		}
+	}
+}
+
+// splitSQL splits a SQL string into top-level statements, respecting DO $$ ... $$ blocks.
+func splitSQL(sql string) []string {
+	var stmts []string
+	var current []byte
+	inDollar := false
+	i := 0
+	for i < len(sql) {
+		if !inDollar && sql[i] == '$' && i+1 < len(sql) && sql[i+1] == '$' {
+			current = append(current, '$', '$')
+			i += 2
+			inDollar = true
+			continue
+		}
+		if inDollar && sql[i] == '$' && i+1 < len(sql) && sql[i+1] == '$' {
+			current = append(current, '$', '$')
+			i += 2
+			inDollar = false
+			continue
+		}
+		if !inDollar && sql[i] == ';' {
+			stmt := strings.TrimSpace(string(current))
+			if stmt != "" {
+				stmts = append(stmts, stmt)
+			}
+			current = current[:0]
+			i++
+			continue
+		}
+		current = append(current, sql[i])
+		i++
+	}
+	if stmt := strings.TrimSpace(string(current)); stmt != "" {
+		stmts = append(stmts, stmt)
+	}
+	return stmts
 }
 
 func Seed() {
@@ -67,7 +124,7 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	seedPlans()
 
 	// ── 2. Platform owner (superadmin) — NO tenant ──
-	// This user manages the entire platform
+	log.Println("Seed: creating superadmin +79884444436...")
 	_, err := DB.Exec(`
 		INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, salary_percent)
 		VALUES ('+79884444436', $1, 'Администратор платформы', 'superadmin', true, NULL, $2, 0)
@@ -80,7 +137,22 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 			permissions = EXCLUDED.permissions
 	`, adminHash, allPerms)
 	if err != nil {
-		log.Printf("Seed superadmin upsert error: %v", err)
+		log.Printf("Seed superadmin FAILED: %v", err)
+		// Try simpler insert without permissions column as fallback
+		_, err2 := DB.Exec(`
+			INSERT INTO users (phone, password, full_name, role, is_active, tenant_id)
+			VALUES ('+79884444436', $1, 'Администратор платформы', 'superadmin', true, NULL)
+			ON CONFLICT (phone) DO UPDATE SET
+				password = EXCLUDED.password, full_name = EXCLUDED.full_name,
+				role = EXCLUDED.role, is_active = true, tenant_id = NULL
+		`, adminHash)
+		if err2 != nil {
+			log.Printf("Seed superadmin fallback also FAILED: %v", err2)
+		} else {
+			log.Println("Seed superadmin created (fallback without permissions)")
+		}
+	} else {
+		log.Println("Seed superadmin OK")
 	}
 
 	// ── 3. Demo tenant (separate auto service) ──

@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -65,11 +66,14 @@ func Login(c *gin.Context) {
 
 	// Search by normalized phone OR raw phone (backward compat with old formatted entries)
 	err := database.DB.QueryRow(`
-		SELECT u.id, u.phone, u.password, u.full_name, u.role, u.salary_percent,
-			   u.permissions, u.is_active, u.tenant_id, u.created_at,
+		SELECT u.id, u.phone, u.password, u.full_name, u.role,
+			   COALESCE(u.salary_percent, 0),
+			   COALESCE(u.permissions, '{}'),
+			   u.is_active, u.tenant_id, u.created_at,
 			   CASE WHEN t.id IS NOT NULL THEN
-				   json_build_object('id',t.id,'name',t.name,'slug',t.slug,'phone',t.phone,
-					   'address',t.address,'email',t.email,'isActive',t.is_active,
+				   json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
+					   'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
+					   'email',COALESCE(t.email,''),'isActive',t.is_active,
 					   'maxUsers',t.max_users,'createdAt',t.created_at,'updatedAt',t.updated_at)::text
 			   ELSE NULL END
 		FROM users u
@@ -83,6 +87,7 @@ func Login(c *gin.Context) {
 	)
 
 	if err != nil {
+		log.Printf("Login query error for phone=%q normalized=%q: %v", req.Phone, phone, err)
 		c.JSON(http.StatusUnauthorized, gin.H{"message": "Неверный телефон или пароль"})
 		return
 	}
@@ -179,11 +184,14 @@ func Me(c *gin.Context) {
 	var tenantJSON sql.NullString
 
 	err := database.DB.QueryRow(`
-		SELECT u.id, u.phone, u.full_name, u.role, u.salary_percent,
-			   u.permissions, u.is_active, u.tenant_id, u.created_at,
+		SELECT u.id, u.phone, u.full_name, u.role,
+			   COALESCE(u.salary_percent, 0),
+			   COALESCE(u.permissions, '{}'),
+			   u.is_active, u.tenant_id, u.created_at,
 			   CASE WHEN t.id IS NOT NULL THEN
-				   json_build_object('id',t.id,'name',t.name,'slug',t.slug,'phone',t.phone,
-					   'address',t.address,'email',t.email,'isActive',t.is_active,
+				   json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
+					   'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
+					   'email',COALESCE(t.email,''),'isActive',t.is_active,
 					   'maxUsers',t.max_users,'createdAt',t.created_at,'updatedAt',t.updated_at)::text
 			   ELSE NULL END
 		FROM users u
