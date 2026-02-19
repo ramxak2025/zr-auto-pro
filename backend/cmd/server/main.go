@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 
@@ -36,6 +37,83 @@ func main() {
 	r.Static("/api/uploads", "./uploads")
 
 	api := r.Group("/api")
+
+	// Diagnostic endpoint — shows DB state for debugging login issues
+	api.GET("/health/db", func(c *gin.Context) {
+		result := gin.H{}
+
+		// 1. DB connection
+		if err := database.DB.Ping(); err != nil {
+			result["db"] = fmt.Sprintf("FAIL: %v", err)
+			c.JSON(200, result)
+			return
+		}
+		result["db"] = "OK"
+
+		// 2. Tables
+		tables := []string{"plans", "tenants", "users", "clients", "checks", "services", "products"}
+		tblStatus := map[string]string{}
+		for _, t := range tables {
+			var exists bool
+			database.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name=$1)", t).Scan(&exists)
+			if exists {
+				tblStatus[t] = "exists"
+			} else {
+				tblStatus[t] = "MISSING"
+			}
+		}
+		result["tables"] = tblStatus
+
+		// 3. Users table columns
+		colRows, _ := database.DB.Query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name='users' ORDER BY ordinal_position")
+		cols := []string{}
+		if colRows != nil {
+			defer colRows.Close()
+			for colRows.Next() {
+				var name, dtype string
+				colRows.Scan(&name, &dtype)
+				cols = append(cols, name+"("+dtype+")")
+			}
+		}
+		result["users_columns"] = cols
+
+		// 4. All users
+		userRows, _ := database.DB.Query("SELECT phone, role, is_active FROM users ORDER BY created_at")
+		users := []gin.H{}
+		if userRows != nil {
+			defer userRows.Close()
+			for userRows.Next() {
+				var phone, role string
+				var active bool
+				userRows.Scan(&phone, &role, &active)
+				users = append(users, gin.H{"phone": phone, "role": role, "active": active})
+			}
+		}
+		result["users"] = users
+
+		// 5. Admin password check
+		var storedHash string
+		err := database.DB.QueryRow("SELECT password FROM users WHERE phone='+79884444436'").Scan(&storedHash)
+		if err != nil {
+			result["admin_check"] = fmt.Sprintf("NOT FOUND: %v", err)
+		} else if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte("admin123")) == nil {
+			result["admin_check"] = "OK (password=admin123 matches)"
+		} else {
+			result["admin_check"] = "FAIL (password mismatch)"
+		}
+
+		// 6. Role constraint
+		var constraintDef string
+		database.DB.QueryRow(`
+			SELECT pg_get_constraintdef(oid) FROM pg_constraint
+			WHERE conrelid = 'users'::regclass AND contype = 'c' AND conname LIKE '%role%'
+		`).Scan(&constraintDef)
+		if constraintDef != "" {
+			result["role_constraint"] = constraintDef
+		}
+
+		c.JSON(200, result)
+	})
 
 	// Auth (public)
 	api.POST("/auth/login", handlers.Login)
