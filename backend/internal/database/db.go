@@ -156,14 +156,11 @@ func SeedWithPasswords(adminHash, demoOwnerHash, demoMasterHash string) {
 	}
 
 	// ── 3. Demo tenant (separate auto service) ──
-	// First, rename old 'zr-auto' slug to 'demo' if it exists
-	DB.Exec(`UPDATE tenants SET slug = 'demo', name = 'Демо Автосервис' WHERE slug = 'zr-auto'`)
-
+	// NEVER rename or modify existing tenants — only create demo if missing
 	var tenantID string
-	// Try to find existing demo tenant first
 	err = DB.QueryRow(`SELECT id FROM tenants WHERE slug = 'demo' LIMIT 1`).Scan(&tenantID)
 	if err != nil {
-		// Not found — create new (simple INSERT, no ON CONFLICT needed since we just checked)
+		// Demo tenant not found — create a new one (only if slug 'demo' doesn't exist)
 		err = DB.QueryRow(`
 			INSERT INTO tenants (name, slug, phone, is_active, max_users)
 			VALUES ('Демо Автосервис', 'demo', '+7 (000) 000-00-01', true, 10)

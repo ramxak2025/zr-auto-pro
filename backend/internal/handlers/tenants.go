@@ -285,8 +285,10 @@ func DeleteTenant(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"message": "Нет доступа"})
 		return
 	}
-	database.DB.Exec("DELETE FROM tenants WHERE id=$1", id)
-	c.JSON(http.StatusOK, gin.H{"message": "Удалён"})
+	// Soft-delete: deactivate tenant instead of permanent deletion
+	// This preserves all client data (users, checks, clients, cars, etc.)
+	database.DB.Exec("UPDATE tenants SET is_active=false, updated_at=now() WHERE id=$1", id)
+	c.JSON(http.StatusOK, gin.H{"message": "Организация деактивирована"})
 }
 
 // --- Subscription info (for tenant users) ---

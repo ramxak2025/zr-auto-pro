@@ -50,17 +50,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
--- Clean up duplicate slugs before creating unique index (keep oldest tenant for each slug)
-DO $$ BEGIN
-    UPDATE tenants SET slug = NULL
-    WHERE slug IS NOT NULL
-      AND id NOT IN (
-        SELECT DISTINCT ON (slug) id FROM tenants WHERE slug IS NOT NULL ORDER BY slug, created_at ASC
-      );
-EXCEPTION WHEN OTHERS THEN NULL;
-END $$;
-
--- Unique index on slug to prevent duplicate tenants in seed (safe — won't crash if dupes remain)
+-- Unique index on slug (safe — wrapped in exception handler)
 DO $$ BEGIN
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_slug_unique ON tenants(slug) WHERE slug IS NOT NULL;
 EXCEPTION WHEN OTHERS THEN
