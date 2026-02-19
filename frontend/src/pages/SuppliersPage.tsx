@@ -150,7 +150,33 @@ export default function SuppliersPage() {
         />
       ) : (
         <>
-          <div className="table-container">
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-3">
+            {suppliers.map((supplier) => (
+              <div
+                key={supplier.id}
+                onClick={() => navigate(`/suppliers/${supplier.id}`)}
+                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-gray-900 text-sm">{supplier.name}</span>
+                  {supplier.currentDebt > 0 && (
+                    <span className="text-xs font-medium text-red-600">{formatCurrency(supplier.currentDebt)}</span>
+                  )}
+                </div>
+                {supplier.contactPerson && (
+                  <p className="text-xs text-gray-500 mb-1">{supplier.contactPerson}</p>
+                )}
+                <div className="flex items-center gap-4 text-xs text-gray-500">
+                  <span>Закупки: <span className="font-medium text-gray-700">{formatCurrency(supplier.totalPurchases)}</span></span>
+                  <span>Оплачено: <span className="font-medium text-gray-700">{formatCurrency(supplier.totalPaid)}</span></span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container">
             <table className="table">
               <thead>
                 <tr>

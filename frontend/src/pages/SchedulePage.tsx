@@ -44,6 +44,7 @@ export default function SchedulePage() {
     shiftStart: '09:00',
     shiftEnd: '18:00',
     isDayOff: false,
+    isSickDay: false,
     note: '',
   });
 
@@ -164,6 +165,7 @@ export default function SchedulePage() {
       shiftStart: '09:00',
       shiftEnd: '18:00',
       isDayOff: false,
+      isSickDay: false,
       note: '',
     });
   };
@@ -176,6 +178,7 @@ export default function SchedulePage() {
       shiftStart: '09:00',
       shiftEnd: '18:00',
       isDayOff: false,
+      isSickDay: false,
       note: '',
     });
     setModalOpen(true);
@@ -183,12 +186,14 @@ export default function SchedulePage() {
 
   const openEdit = (entry: ScheduleEntry) => {
     setEditingEntry(entry);
+    const isSick = (entry.note || '').toLowerCase().includes('больнич');
     setEntryForm({
       userId: entry.userId,
       date: entry.date.slice(0, 10),
-      shiftStart: entry.shiftStart,
-      shiftEnd: entry.shiftEnd,
-      isDayOff: entry.isDayOff,
+      shiftStart: entry.shiftStart || '09:00',
+      shiftEnd: entry.shiftEnd || '18:00',
+      isDayOff: entry.isDayOff && !isSick,
+      isSickDay: isSick,
       note: entry.note || '',
     });
     setModalOpen(true);
@@ -200,13 +205,15 @@ export default function SchedulePage() {
       toast.error('Выберите сотрудника');
       return;
     }
+    const isDayOff = entryForm.isDayOff || entryForm.isSickDay;
+    const note = entryForm.isSickDay ? 'Больничный' : (entryForm.note || undefined);
     const payload = {
       userId: entryForm.userId,
       date: entryForm.date,
-      shiftStart: entryForm.shiftStart,
-      shiftEnd: entryForm.shiftEnd,
-      isDayOff: entryForm.isDayOff,
-      note: entryForm.note || undefined,
+      shiftStart: isDayOff ? null : entryForm.shiftStart,
+      shiftEnd: isDayOff ? null : entryForm.shiftEnd,
+      isDayOff,
+      note,
     };
     if (editingEntry) {
       updateMutation.mutate({ id: editingEntry.id, data: payload });
@@ -226,12 +233,12 @@ export default function SchedulePage() {
   };
 
   const getStatusBadge = (status: TodayEmployeeStatus) => {
-    if (status.isDayOff) return <span className="badge-gray">Выходной</span>;
-    if (!status.hasSchedule) return <span className="badge-gray">Нет расписания</span>;
-    if (status.lateStatus === 'late_major') return <span className="badge-red">Опоздание</span>;
-    if (status.lateStatus === 'late_minor') return <span className="badge-yellow">Небольшое опоздание</span>;
-    if (status.isWorking) return <span className="badge-green">На работе</span>;
-    return <span className="badge-gray">Не на смене</span>;
+    if (status.isDayOff) return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600">Выходной</span>;
+    if (!status.hasSchedule) return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500">Нет расписания</span>;
+    if (status.lateStatus === 'late_major') return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">Опоздание &gt;1ч</span>;
+    if (status.lateStatus === 'late_minor') return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">Опоздание &lt;1ч</span>;
+    if (status.isWorking) return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700">На смене</span>;
+    return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-600">Не пришёл</span>;
   };
 
   const getStatusIcon = (status: TodayEmployeeStatus) => {
@@ -281,32 +288,14 @@ export default function SchedulePage() {
       {tab === 'schedule' && (
         <div>
           {/* Date Range */}
-          <div className="flex flex-wrap items-end gap-3 mb-6">
-            <div>
-              <label className="label">С</label>
-              <input
-                type="date"
-                className="input"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="label">По</label>
-              <input
-                type="date"
-                className="input"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-              />
-            </div>
-            <div className="flex items-center gap-2">
+          <div className="mb-6">
+            <div className="flex gap-2 mb-3">
               <button
                 onClick={() => {
                   setDateFrom(format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd'));
                   setDateTo(format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd'));
                 }}
-                className="btn-secondary btn-sm"
+                className="btn-secondary btn-sm flex-1 md:flex-none"
               >
                 Эта неделя
               </button>
@@ -316,10 +305,30 @@ export default function SchedulePage() {
                   setDateFrom(format(startOfWeek(next, { weekStartsOn: 1 }), 'yyyy-MM-dd'));
                   setDateTo(format(endOfWeek(next, { weekStartsOn: 1 }), 'yyyy-MM-dd'));
                 }}
-                className="btn-secondary btn-sm"
+                className="btn-secondary btn-sm flex-1 md:flex-none"
               >
                 След. неделя
               </button>
+            </div>
+            <div className="flex items-end gap-3">
+              <div className="flex-1 md:flex-none">
+                <label className="label">С</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                />
+              </div>
+              <div className="flex-1 md:flex-none">
+                <label className="label">По</label>
+                <input
+                  type="date"
+                  className="input"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                />
+              </div>
             </div>
           </div>
 
@@ -328,64 +337,113 @@ export default function SchedulePage() {
           ) : daysInRange.length === 0 ? (
             <EmptyState icon={CalendarDays} title="Выберите период" />
           ) : (
-            <div className="table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th className="sticky left-0 bg-gray-50 z-10">Сотрудник</th>
-                    {daysInRange.map((day) => (
-                      <th key={day.toISOString()} className="text-center whitespace-nowrap">
-                        <div>{format(day, 'EEE', { locale: ru })}</div>
-                        <div className="text-[10px] font-normal">{format(day, 'd MMM', { locale: ru })}</div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {scheduleUsers.map((user) => (
-                    <tr key={user.id}>
-                      <td className="sticky left-0 bg-white z-10 font-medium text-gray-900 whitespace-nowrap">
-                        {user.fullName}
-                      </td>
-                      {daysInRange.map((day) => {
+            <>
+              {/* Mobile: cards per employee */}
+              <div className="md:hidden space-y-4">
+                {scheduleUsers.map((user) => (
+                  <div key={user.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                    <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
+                      <span className="font-semibold text-gray-900 text-sm">{user.fullName}</span>
+                    </div>
+                    <div className="grid grid-cols-7 divide-x divide-gray-100">
+                      {daysInRange.slice(0, 7).map((day) => {
                         const dateStr = format(day, 'yyyy-MM-dd');
                         const entry = entryMap[user.id]?.[dateStr];
+                        const isSick = entry && (entry.note || '').toLowerCase().includes('больнич');
                         return (
-                          <td
+                          <button
                             key={dateStr}
-                            className="text-center cursor-pointer hover:bg-primary-50 transition-colors"
-                            onClick={() => {
-                              if (entry) {
-                                openEdit(entry);
-                              } else {
-                                openCreate(user.id, dateStr);
-                              }
-                            }}
+                            type="button"
+                            onClick={() => entry ? openEdit(entry) : openCreate(user.id, dateStr)}
+                            className="flex flex-col items-center py-2.5 px-1 hover:bg-primary-50 transition-colors"
                           >
+                            <span className="text-[10px] text-gray-400 uppercase">{format(day, 'EE', { locale: ru })}</span>
+                            <span className="text-[10px] text-gray-500 mb-1">{format(day, 'd')}</span>
                             {entry ? (
-                              entry.isDayOff ? (
-                                <span className="text-xs text-gray-400">Выходной</span>
+                              isSick ? (
+                                <span className="text-[9px] font-medium text-red-500">Б/Л</span>
+                              ) : entry.isDayOff ? (
+                                <span className="text-[9px] font-medium text-gray-400">Вых</span>
                               ) : (
-                                <div className="text-xs">
-                                  <div className="text-green-700 font-medium">
-                                    {entry.shiftStart?.slice(0, 5)}
-                                  </div>
-                                  <div className="text-gray-500">
-                                    {entry.shiftEnd?.slice(0, 5)}
-                                  </div>
+                                <div className="text-center">
+                                  <span className="text-[10px] font-medium text-green-600 block">{entry.shiftStart?.slice(0, 5)}</span>
+                                  <span className="text-[9px] text-gray-400">{entry.shiftEnd?.slice(0, 5)}</span>
                                 </div>
                               )
                             ) : (
-                              <span className="text-xs text-gray-300">-</span>
+                              <span className="text-[10px] text-gray-200">—</span>
                             )}
-                          </td>
+                          </button>
                         );
                       })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop: table */}
+              <div className="hidden md:block table-container">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th className="sticky left-0 bg-gray-50 z-10">Сотрудник</th>
+                      {daysInRange.map((day) => (
+                        <th key={day.toISOString()} className="text-center whitespace-nowrap">
+                          <div>{format(day, 'EEE', { locale: ru })}</div>
+                          <div className="text-[10px] font-normal">{format(day, 'd MMM', { locale: ru })}</div>
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {scheduleUsers.map((user) => (
+                      <tr key={user.id}>
+                        <td className="sticky left-0 bg-white z-10 font-medium text-gray-900 whitespace-nowrap">
+                          {user.fullName}
+                        </td>
+                        {daysInRange.map((day) => {
+                          const dateStr = format(day, 'yyyy-MM-dd');
+                          const entry = entryMap[user.id]?.[dateStr];
+                          const isSick = entry && (entry.note || '').toLowerCase().includes('больнич');
+                          return (
+                            <td
+                              key={dateStr}
+                              className="text-center cursor-pointer hover:bg-primary-50 transition-colors"
+                              onClick={() => {
+                                if (entry) {
+                                  openEdit(entry);
+                                } else {
+                                  openCreate(user.id, dateStr);
+                                }
+                              }}
+                            >
+                              {entry ? (
+                                isSick ? (
+                                  <span className="text-xs text-red-500 font-medium">Больнич.</span>
+                                ) : entry.isDayOff ? (
+                                  <span className="text-xs text-gray-400">Выходной</span>
+                                ) : (
+                                  <div className="text-xs">
+                                    <div className="text-green-700 font-medium">
+                                      {entry.shiftStart?.slice(0, 5)}
+                                    </div>
+                                    <div className="text-gray-500">
+                                      {entry.shiftEnd?.slice(0, 5)}
+                                    </div>
+                                  </div>
+                                )
+                              ) : (
+                                <span className="text-xs text-gray-300">-</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       )}
@@ -481,22 +539,48 @@ export default function SchedulePage() {
             />
           </div>
 
-          {/* Day Off toggle */}
-          <div className="flex items-center gap-3">
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={entryForm.isDayOff}
-                onChange={(e) => setEntryForm({ ...entryForm, isDayOff: e.target.checked })}
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
-            </label>
-            <span className="text-sm font-medium text-gray-700">Выходной</span>
+          {/* Type selector: Work / Day Off / Sick Day */}
+          <div>
+            <label className="label">Тип</label>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: false })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${
+                  !entryForm.isDayOff && !entryForm.isSickDay
+                    ? 'border-green-500 bg-green-50 text-green-700'
+                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Смена
+              </button>
+              <button
+                type="button"
+                onClick={() => setEntryForm({ ...entryForm, isDayOff: true, isSickDay: false })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${
+                  entryForm.isDayOff && !entryForm.isSickDay
+                    ? 'border-gray-500 bg-gray-100 text-gray-700'
+                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Выходной
+              </button>
+              <button
+                type="button"
+                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: true })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${
+                  entryForm.isSickDay
+                    ? 'border-red-400 bg-red-50 text-red-700'
+                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Больничный
+              </button>
+            </div>
           </div>
 
-          {/* Shift Times (hidden when day off) */}
-          {!entryForm.isDayOff && (
+          {/* Shift Times (hidden when day off or sick day) */}
+          {!entryForm.isDayOff && !entryForm.isSickDay && (
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Начало смены</label>

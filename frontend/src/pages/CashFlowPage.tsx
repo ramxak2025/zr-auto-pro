@@ -122,57 +122,79 @@ export default function CashFlowPage() {
           description="За выбранный период нет движения денежных средств"
         />
       ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Дата</th>
-                <th className="text-right">Наличные</th>
-                <th className="text-right">Карта</th>
-                <th className="text-right">Гарантия</th>
-                <th className="text-right">Итого</th>
-              </tr>
-            </thead>
-            <tbody>
-              {days.map((day) => (
-                <tr key={day.date}>
-                  <td className="font-medium text-gray-900">
+        <>
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-3">
+            {days.map((day) => (
+              <div key={day.date} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-gray-900 text-sm">
                     {format(new Date(day.date), 'dd MMM yyyy', { locale: ru })}
+                  </span>
+                  <span className="font-bold text-gray-900 text-sm">{formatCurrency(day.total)}</span>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  {day.cash > 0 && <span className="text-green-600"><Banknote className="w-3 h-3 inline mr-0.5" />{formatCurrency(day.cash)}</span>}
+                  {day.card > 0 && <span className="text-blue-600"><CreditCard className="w-3 h-3 inline mr-0.5" />{formatCurrency(day.card)}</span>}
+                  {day.warranty > 0 && <span className="text-orange-600"><Shield className="w-3 h-3 inline mr-0.5" />{formatCurrency(day.warranty)}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th className="text-right">Наличные</th>
+                  <th className="text-right">Карта</th>
+                  <th className="text-right">Гарантия</th>
+                  <th className="text-right">Итого</th>
+                </tr>
+              </thead>
+              <tbody>
+                {days.map((day) => (
+                  <tr key={day.date}>
+                    <td className="font-medium text-gray-900">
+                      {format(new Date(day.date), 'dd MMM yyyy', { locale: ru })}
+                    </td>
+                    <td className="text-right text-green-600">
+                      {day.cash > 0 ? formatCurrency(day.cash) : '\u2014'}
+                    </td>
+                    <td className="text-right text-blue-600">
+                      {day.card > 0 ? formatCurrency(day.card) : '\u2014'}
+                    </td>
+                    <td className="text-right text-orange-600">
+                      {day.warranty > 0 ? formatCurrency(day.warranty) : '\u2014'}
+                    </td>
+                    <td className="text-right font-semibold text-gray-900">
+                      {formatCurrency(day.total)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-300 bg-gray-50">
+                  <td className="font-bold text-gray-900">Итого</td>
+                  <td className="text-right font-bold text-green-600">
+                    {formatCurrency(totals.cash)}
                   </td>
-                  <td className="text-right text-green-600">
-                    {day.cash > 0 ? formatCurrency(day.cash) : '\u2014'}
+                  <td className="text-right font-bold text-blue-600">
+                    {formatCurrency(totals.card)}
                   </td>
-                  <td className="text-right text-blue-600">
-                    {day.card > 0 ? formatCurrency(day.card) : '\u2014'}
+                  <td className="text-right font-bold text-orange-600">
+                    {formatCurrency(totals.warranty)}
                   </td>
-                  <td className="text-right text-orange-600">
-                    {day.warranty > 0 ? formatCurrency(day.warranty) : '\u2014'}
-                  </td>
-                  <td className="text-right font-semibold text-gray-900">
-                    {formatCurrency(day.total)}
+                  <td className="text-right font-bold text-gray-900">
+                    {formatCurrency(totals.total)}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-gray-300 bg-gray-50">
-                <td className="font-bold text-gray-900">Итого</td>
-                <td className="text-right font-bold text-green-600">
-                  {formatCurrency(totals.cash)}
-                </td>
-                <td className="text-right font-bold text-blue-600">
-                  {formatCurrency(totals.card)}
-                </td>
-                <td className="text-right font-bold text-orange-600">
-                  {formatCurrency(totals.warranty)}
-                </td>
-                <td className="text-right font-bold text-gray-900">
-                  {formatCurrency(totals.total)}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+              </tfoot>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );

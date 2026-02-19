@@ -186,55 +186,93 @@ function AdminSalaryView() {
           description="За выбранный период нет данных по зарплатам"
         />
       ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Мастер</th>
-                <th className="text-right">% ставка</th>
-                <th className="text-right">Выручка</th>
-                <th className="text-right">Заработок</th>
-                <th className="text-right">Чеков</th>
-              </tr>
-            </thead>
-            <tbody>
-              {masters.map((master) => (
-                <tr key={master.masterId}>
-                  <td className="font-medium text-gray-900">
-                    {master.masterName}
+        <>
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-3">
+            {masters.map((master) => (
+              <div key={master.masterId} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-gray-900 text-sm">{master.masterName}</span>
+                  <span className="text-xs text-gray-400">{master.salaryPercent}%</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] text-gray-400 uppercase">Выручка</p>
+                    <p className="text-sm font-medium text-gray-900">{formatCurrency(master.totalRevenue)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] text-gray-400 uppercase">Заработок</p>
+                    <p className="text-sm font-bold text-green-600">{formatCurrency(master.totalEarnings)}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[10px] text-gray-400 uppercase">Чеков</p>
+                    <p className="text-sm font-medium text-gray-600">{master.checkCount}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+            <div className="bg-gray-50 rounded-xl border border-gray-200 p-4">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-gray-900 text-sm">Итого</span>
+                <div className="flex items-center gap-4 text-sm">
+                  <span className="font-semibold text-gray-900">{formatCurrency(totalRevenue)}</span>
+                  <span className="font-bold text-green-600">{formatCurrency(totalEarnings)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Мастер</th>
+                  <th className="text-right">% ставка</th>
+                  <th className="text-right">Выручка</th>
+                  <th className="text-right">Заработок</th>
+                  <th className="text-right">Чеков</th>
+                </tr>
+              </thead>
+              <tbody>
+                {masters.map((master) => (
+                  <tr key={master.masterId}>
+                    <td className="font-medium text-gray-900">
+                      {master.masterName}
+                    </td>
+                    <td className="text-right text-gray-600">
+                      {master.salaryPercent}%
+                    </td>
+                    <td className="text-right text-gray-900">
+                      {formatCurrency(master.totalRevenue)}
+                    </td>
+                    <td className="text-right font-medium text-green-600">
+                      {formatCurrency(master.totalEarnings)}
+                    </td>
+                    <td className="text-right text-gray-600">
+                      {master.checkCount}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-300">
+                  <td className="font-semibold text-gray-900">Итого</td>
+                  <td></td>
+                  <td className="text-right font-semibold text-gray-900">
+                    {formatCurrency(totalRevenue)}
                   </td>
-                  <td className="text-right text-gray-600">
-                    {master.salaryPercent}%
+                  <td className="text-right font-semibold text-green-600">
+                    {formatCurrency(totalEarnings)}
                   </td>
-                  <td className="text-right text-gray-900">
-                    {formatCurrency(master.totalRevenue)}
-                  </td>
-                  <td className="text-right font-medium text-green-600">
-                    {formatCurrency(master.totalEarnings)}
-                  </td>
-                  <td className="text-right text-gray-600">
-                    {master.checkCount}
+                  <td className="text-right font-semibold text-gray-600">
+                    {totalChecks}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-gray-300">
-                <td className="font-semibold text-gray-900">Итого</td>
-                <td></td>
-                <td className="text-right font-semibold text-gray-900">
-                  {formatCurrency(totalRevenue)}
-                </td>
-                <td className="text-right font-semibold text-green-600">
-                  {formatCurrency(totalEarnings)}
-                </td>
-                <td className="text-right font-semibold text-gray-600">
-                  {totalChecks}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+              </tfoot>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );

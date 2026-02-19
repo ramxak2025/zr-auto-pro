@@ -63,6 +63,7 @@ func Login(c *gin.Context) {
 	var tenantJSON sql.NullString
 	var password string
 
+	// Search by normalized phone OR raw phone (backward compat with old formatted entries)
 	err := database.DB.QueryRow(`
 		SELECT u.id, u.phone, u.password, u.full_name, u.role, u.salary_percent,
 			   u.permissions, u.is_active, u.tenant_id, u.created_at,
@@ -73,8 +74,9 @@ func Login(c *gin.Context) {
 			   ELSE NULL END
 		FROM users u
 		LEFT JOIN tenants t ON t.id = u.tenant_id
-		WHERE u.phone = $1
-	`, phone).Scan(
+		WHERE u.phone = $1 OR u.phone = $2
+		LIMIT 1
+	`, phone, req.Phone).Scan(
 		&user.ID, &user.Phone, &password, &user.FullName, &user.Role,
 		&user.SalaryPercent, &user.Permissions, &user.IsActive,
 		&user.TenantID, &user.CreatedAt, &tenantJSON,

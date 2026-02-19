@@ -69,7 +69,31 @@ export default function CarsPage() {
         />
       ) : (
         <>
-          <div className="table-container">
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-3">
+            {cars.map((car) => (
+              <div
+                key={car.id}
+                onClick={() => car.clientId && navigate(`/clients/${car.clientId}`)}
+                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Car className="w-4 h-4 text-gray-400" />
+                    <span className="font-bold text-gray-900 text-sm">{car.plateNumber}</span>
+                  </div>
+                  <span className="text-xs text-gray-400">{formatDate(car.createdAt)}</span>
+                </div>
+                <p className="text-sm text-gray-700 ml-6">{car.makeModel}</p>
+                {car.client && (
+                  <p className="text-xs text-gray-500 ml-6 mt-0.5">{car.client.fullName}</p>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container">
             <table className="table">
               <thead>
                 <tr>

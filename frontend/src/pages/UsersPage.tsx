@@ -231,59 +231,103 @@ export default function UsersPage() {
           action={{ label: 'Добавить', onClick: openCreate }}
         />
       ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Имя</th>
-                <th>Телефон</th>
-                <th>Роль</th>
-                <th>% ставка</th>
-                <th>Статус</th>
-                <th>Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td className="font-medium text-gray-900">{user.fullName}</td>
-                  <td>{user.phone}</td>
-                  <td>
-                    <span className={roleBadgeMap[user.role] || 'badge-gray'}>
+        <>
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-3">
+            {users.map((user) => (
+              <div key={user.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-semibold text-gray-900 text-sm truncate">{user.fullName}</span>
+                    <span className={`flex-shrink-0 ${roleBadgeMap[user.role] || 'badge-gray'}`}>
                       {roleLabels[user.role] || user.role}
                     </span>
-                  </td>
-                  <td>{user.salaryPercent}%</td>
-                  <td>
-                    {user.isActive ? (
-                      <span className="badge-green">Активен</span>
-                    ) : (
-                      <span className="badge-red">Неактивен</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openEdit(user)}
-                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                        title="Редактировать"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeleteId(user.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                        title="Удалить"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={() => openEdit(user)}
+                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => setDeleteId(user.id)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 text-sm text-gray-500">
+                  <span>{user.phone}</span>
+                  <span className="text-gray-300">|</span>
+                  <span>{user.salaryPercent}%</span>
+                  <span className="text-gray-300">|</span>
+                  {user.isActive ? (
+                    <span className="text-green-600 text-xs font-medium">Активен</span>
+                  ) : (
+                    <span className="text-red-500 text-xs font-medium">Неактивен</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Имя</th>
+                  <th>Телефон</th>
+                  <th>Роль</th>
+                  <th>% ставка</th>
+                  <th>Статус</th>
+                  <th>Действия</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id}>
+                    <td className="font-medium text-gray-900">{user.fullName}</td>
+                    <td>{user.phone}</td>
+                    <td>
+                      <span className={roleBadgeMap[user.role] || 'badge-gray'}>
+                        {roleLabels[user.role] || user.role}
+                      </span>
+                    </td>
+                    <td>{user.salaryPercent}%</td>
+                    <td>
+                      {user.isActive ? (
+                        <span className="badge-green">Активен</span>
+                      ) : (
+                        <span className="badge-red">Неактивен</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openEdit(user)}
+                          className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
+                          title="Редактировать"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setDeleteId(user.id)}
+                          className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                          title="Удалить"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {/* Create / Edit Modal */}

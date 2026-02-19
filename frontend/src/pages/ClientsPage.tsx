@@ -176,7 +176,44 @@ export default function ClientsPage() {
         />
       ) : (
         <>
-          <div className="table-container">
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-3">
+            {clients.map((client) => (
+              <div
+                key={client.id}
+                onClick={() => navigate(`/clients/${client.id}`)}
+                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold text-gray-900 text-sm">{client.fullName}</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={(e) => openEditModal(client, e)}
+                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => handleDelete(client.id, e)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 text-sm text-gray-500">
+                  <span className="flex items-center gap-1">
+                    <Phone className="w-3.5 h-3.5" />
+                    {client.phone}
+                  </span>
+                  <span className="badge-info text-[11px]">{client.cars?.length || 0} авто</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container">
             <table className="table">
               <thead>
                 <tr>

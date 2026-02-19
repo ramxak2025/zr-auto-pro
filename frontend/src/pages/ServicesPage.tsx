@@ -216,7 +216,39 @@ export default function ServicesPage() {
         />
       ) : (
         <>
-          <div className="table-container">
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-3">
+            {services.map((service) => (
+              <div key={service.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-semibold text-gray-900 text-sm">{service.name}</span>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={(e) => openEditModal(service, e)}
+                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => handleDelete(service.id, e)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {service.category && (
+                    <span className="badge-default text-[11px]">{service.category}</span>
+                  )}
+                  <span className="text-sm font-medium text-gray-900">{formatCurrency(service.defaultPrice)} сум</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container">
             <table className="table">
               <thead>
                 <tr>

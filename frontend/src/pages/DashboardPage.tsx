@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   FileText,
@@ -16,10 +16,15 @@ import {
   ClipboardList,
   Star,
   Trophy,
+  Play,
+  Square,
+  Clock,
+  Loader2,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { checksApi, salaryApi } from '../api/services';
-import type { DashboardStats, SalarySummary, UserRole, EmployeeRanking } from '../types';
+import { checksApi, salaryApi, shiftsApi, scheduleApi } from '../api/services';
+import type { DashboardStats, SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -160,6 +165,130 @@ function ErrorBanner({ message }: { message: string }) {
 // Dashboard stats section (admin / owner / other non-master roles)
 // ---------------------------------------------------------------------------
 
+function StaffStatusCircles() {
+  const { data: todayData } = useQuery<TodayEmployeeStatus[]>({
+    queryKey: ['schedule-today'],
+    queryFn: async () => { const res = await scheduleApi.getToday(); return res.data; },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+
+  const statuses = todayData ?? [];
+  if (statuses.length === 0) return null;
+
+  const getCircleColor = (s: TodayEmployeeStatus) => {
+    if (s.isDayOff) return 'bg-gray-200 ring-gray-300';
+    if (s.lateStatus === 'late_major') return 'bg-orange-400 ring-orange-300';
+    if (s.lateStatus === 'late_minor') return 'bg-yellow-400 ring-yellow-300';
+    if (s.isWorking) return 'bg-green-400 ring-green-300';
+    return 'bg-red-300 ring-red-200';
+  };
+
+  const getTooltip = (s: TodayEmployeeStatus) => {
+    if (s.isDayOff) return 'Выходной';
+    if (s.lateStatus === 'late_major') return `Опоздание ${s.lateMinutes} мин`;
+    if (s.lateStatus === 'late_minor') return `Опоздание ${s.lateMinutes} мин`;
+    if (s.isWorking) return 'На смене';
+    return 'Не пришёл';
+  };
+
+  const working = statuses.filter(s => s.isWorking && !s.isDayOff).length;
+  const dayOff = statuses.filter(s => s.isDayOff).length;
+  const absent = statuses.filter(s => !s.isWorking && !s.isDayOff).length;
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-bold text-gray-900">Сотрудники сегодня</h3>
+        <div className="flex items-center gap-3 text-[11px] text-gray-400">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-400" /> {working}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-300" /> {absent}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-200" /> {dayOff}</span>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-3">
+        {statuses.map((s) => (
+          <div key={s.userId} className="flex flex-col items-center gap-1" title={getTooltip(s)}>
+            <div className={`w-10 h-10 rounded-full ring-2 flex items-center justify-center text-xs font-bold text-white ${getCircleColor(s)}`}>
+              {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2)}
+            </div>
+            <span className="text-[10px] text-gray-500 max-w-[60px] truncate text-center">{s.fullName.split(' ')[0]}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ShiftControl() {
+  const queryClient = useQueryClient();
+  const { data: myShifts } = useQuery<Shift[]>({
+    queryKey: ['shifts', 'my'],
+    queryFn: async () => { const res = await shiftsApi.getMy(); return res.data; },
+    staleTime: 10_000,
+  });
+
+  const openShift = useMutation({
+    mutationFn: () => shiftsApi.open(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      toast.success('Смена открыта');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message || 'Ошибка'),
+  });
+
+  const closeShift = useMutation({
+    mutationFn: (id: string) => shiftsApi.close(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shifts'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      toast.success('Смена закрыта');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message || 'Ошибка'),
+  });
+
+  const currentShift = myShifts?.find(s => !s.closedAt);
+  const isLoading = openShift.isPending || closeShift.isPending;
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${currentShift ? 'bg-green-100' : 'bg-gray-100'}`}>
+            <Clock className={`h-5 w-5 ${currentShift ? 'text-green-600' : 'text-gray-400'}`} />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-gray-900">{currentShift ? 'Смена открыта' : 'Смена закрыта'}</p>
+            {currentShift && (
+              <p className="text-xs text-gray-400">с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</p>
+            )}
+          </div>
+        </div>
+        {currentShift ? (
+          <button
+            onClick={() => closeShift.mutate(currentShift.id)}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 text-sm font-medium rounded-xl hover:bg-red-100 transition-colors disabled:opacity-50"
+          >
+            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+            Закрыть
+          </button>
+        ) : (
+          <button
+            onClick={() => openShift.mutate()}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-4 py-2.5 bg-green-50 text-green-600 text-sm font-medium rounded-xl hover:bg-green-100 transition-colors disabled:opacity-50"
+          >
+            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            Открыть смену
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AdminDashboard() {
   const { user } = useAuth();
   const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
@@ -223,6 +352,9 @@ function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Staff status circles */}
+      {isOwner && <StaffStatusCircles />}
 
       {/* Employee ranking for owner */}
       {isOwner && ranking && (
@@ -414,6 +546,9 @@ export default function DashboardPage() {
           </p>
         </div>
       )}
+
+      {/* Shift control */}
+      <ShiftControl />
 
       {/* Stats */}
       {isMaster ? <MasterDashboard /> : <AdminDashboard />}
