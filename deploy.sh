@@ -55,8 +55,9 @@ git log --oneline -1 2>&1
 # STEP 2: Rebuild ONLY backend + frontend (NOT postgres!)
 # Volume pgdata is NEVER touched — data is safe.
 # ═══════════════════════════════════════════════════════
-log "Rebuilding backend and frontend containers..."
-docker compose up -d --build --no-deps backend frontend 2>&1
+log "Rebuilding backend and frontend containers (no cache)..."
+docker compose build --no-cache backend frontend 2>&1
+docker compose up -d --no-deps --force-recreate backend frontend 2>&1
 
 # Wait for health check
 log "Waiting for services to start..."
