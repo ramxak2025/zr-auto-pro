@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: ./postgres
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       POSTGRES_DB: zr_auto_pro
@@ -8,8 +10,6 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - '5432:5432'
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s
