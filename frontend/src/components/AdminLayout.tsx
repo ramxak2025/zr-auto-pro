@@ -2,8 +2,6 @@ import { useLocation, useNavigate, Link, Outlet } from 'react-router-dom';
 import { LayoutDashboard, Building2, CreditCard, ArrowLeft, LogOut } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
-const APP_VERSION = '1.2';
-
 const navItems = [
   { label: 'Панель', path: '/admin/dashboard', icon: LayoutDashboard },
   { label: 'Клиенты', path: '/admin/tenants', icon: Building2 },
@@ -66,7 +64,7 @@ export default function AdminLayout() {
               <p className="text-sm font-medium text-gray-900 truncate">
                 {user?.fullName}
               </p>
-              <p className="text-xs text-gray-500 truncate">Владелец платформы · v{APP_VERSION}</p>
+              <p className="text-xs text-gray-500 truncate">Владелец платформы</p>
             </div>
             <button
               onClick={handleLogout}
@@ -84,7 +82,6 @@ export default function AdminLayout() {
         <header className="md:hidden flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200">
           <div className="flex items-center gap-2">
             <span className="text-lg font-bold text-gray-900">ZR Auto Pro</span>
-            <span className="text-[10px] text-gray-300">v{APP_VERSION}</span>
           </div>
           <div className="flex items-center gap-2">
             <button

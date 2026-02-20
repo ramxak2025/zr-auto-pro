@@ -220,7 +220,7 @@ function ProductFormModal({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/webp,image/gif"
+              accept="image/*"
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];

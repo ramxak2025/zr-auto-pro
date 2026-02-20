@@ -18,7 +18,6 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import type { UserPermissions } from '../types';
 
-const APP_VERSION = '1.2';
 
 interface NavItem {
   label: string;
@@ -154,7 +153,6 @@ export default function Layout() {
               <LogOut className="h-4 w-4" />
             </button>
           </div>
-          <p className="text-[10px] text-gray-300 text-center mt-2">v{APP_VERSION}</p>
         </div>
       </aside>
 
@@ -190,7 +188,6 @@ export default function Layout() {
             <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-gray-300 mr-1">v{APP_VERSION}</span>
             {user?.avatar ? (
               <img src={user.avatar} alt="" className="h-7 w-7 rounded-full object-cover" />
             ) : (

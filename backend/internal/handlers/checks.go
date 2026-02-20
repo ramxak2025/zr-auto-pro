@@ -211,12 +211,19 @@ func CreateCheck(c *gin.Context) {
 	role := c.GetString("role")
 	var req models.CreateCheckRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
+		log.Printf("CreateCheck JSON bind error: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат данных"})
 		return
 	}
 
 	if req.MasterID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Мастер обязателен"})
+		return
+	}
+
+	// Deferred checks don't require services/products
+	if !req.IsDeferred && len(req.Services) == 0 && len(req.Products) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Добавьте хотя бы одну услугу или товар"})
 		return
 	}
 

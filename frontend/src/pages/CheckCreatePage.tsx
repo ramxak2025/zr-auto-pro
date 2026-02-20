@@ -435,11 +435,22 @@ export default function CheckCreatePage() {
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      toast.success('\u0427\u0435\u043A \u0443\u0441\u043F\u0435\u0448\u043D\u043E \u0441\u043E\u0437\u0434\u0430\u043D');
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-ranking'] });
+      queryClient.invalidateQueries({ queryKey: ['products-all'] });
+      toast.success('Чек успешно создан');
       navigate(`/checks/${res.data.id}`);
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message ?? '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0438 \u0447\u0435\u043A\u0430');
+      const msg = err?.response?.data?.message;
+      if (err?.code === 'ERR_NETWORK' || !err?.response) {
+        toast.error('Сервер недоступен. Проверьте подключение.');
+      } else if (err?.response?.status === 403) {
+        toast.error(msg || 'Нет прав для создания чека');
+      } else {
+        toast.error(msg || 'Ошибка при создании чека');
+      }
     },
   });
 
@@ -799,43 +810,45 @@ export default function CheckCreatePage() {
             )}
           </div>
 
-          {/* Date & Mileage — separate rows with icons */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300 space-y-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 flex-shrink-0">
-                <CalendarDays className="h-5 w-5 text-blue-500" />
+          {/* Date & Mileage */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 flex-shrink-0">
+                  <CalendarDays className="h-5 w-5 text-blue-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Дата</label>
+                  {canEditDate ? (
+                    <input
+                      type="date"
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                      className="w-full text-sm h-9 px-2.5 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                    />
+                  ) : (
+                    <p className="text-sm font-medium text-gray-900 h-9 flex items-center">
+                      {format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}
+                    </p>
+                  )}
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Дата</label>
-                {canEditDate ? (
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    className="text-sm py-1.5 px-2 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                  />
-                ) : (
-                  <p className="text-sm font-medium text-gray-900 py-1.5">
-                    {format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}
-                  </p>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 flex-shrink-0">
-                <Gauge className="h-5 w-5 text-orange-500" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Пробег</label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={mileage}
-                    onChange={(e) => setMileage(e.target.value)}
-                    placeholder="0"
-                    className="input text-sm py-2 w-full pr-10"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">км</span>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 flex-shrink-0">
+                  <Gauge className="h-5 w-5 text-orange-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Пробег</label>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      value={mileage}
+                      onChange={(e) => setMileage(e.target.value)}
+                      placeholder="0"
+                      className="w-full text-sm h-9 px-2.5 pr-10 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">км</span>
+                  </div>
                 </div>
               </div>
             </div>

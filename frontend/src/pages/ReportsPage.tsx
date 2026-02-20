@@ -3,11 +3,13 @@ import { useQuery } from '@tanstack/react-query';
 import {
   TrendingUp,
   TrendingDown,
-  DollarSign,
-  ShoppingCart,
+  Package,
   Users,
   Receipt,
   Lock,
+  ArrowUpRight,
+  ArrowDownRight,
+  BarChart3,
 } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 
@@ -17,8 +19,10 @@ import DatePeriodPicker from '../components/DatePeriodPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { FinancialReport } from '../types';
 
-function formatCurrency(value: number): string {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
+function formatMoney(value: number): string {
+  const abs = Math.abs(Math.round(value));
+  const formatted = abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  return `${value < 0 ? '-' : ''}${formatted} \u20BD`;
 }
 
 export default function ReportsPage() {
@@ -56,10 +60,23 @@ export default function ReportsPage() {
     );
   }
 
+  // Calculate margin percentage
+  const marginPct = report && report.revenue > 0
+    ? ((report.netProfit / report.revenue) * 100).toFixed(1)
+    : '0';
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Header */}
-      <h1 className="text-2xl font-bold text-gray-900">Финансовые отчеты</h1>
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-100">
+          <BarChart3 className="h-5 w-5 text-primary-600" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">Финансовые отчёты</h1>
+          <p className="text-xs text-gray-400">Анализ прибыли и расходов</p>
+        </div>
+      </div>
 
       {/* Date picker */}
       <DatePeriodPicker
@@ -78,106 +95,125 @@ export default function ReportsPage() {
           Не удалось загрузить данные
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Revenue */}
-          <div className="stat-card border-l-4 border-blue-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="stat-label">Выручка</div>
-                <div className="stat-value text-blue-600">
-                  {formatCurrency(report.revenue)}
-                </div>
-              </div>
-              <div className="p-3 bg-blue-50 rounded-xl">
-                <TrendingUp className="w-6 h-6 text-blue-500" />
-              </div>
-            </div>
-          </div>
-
-          {/* Product cost */}
-          <div className="stat-card border-l-4 border-red-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="stat-label">Себестоимость товаров</div>
-                <div className="stat-value text-red-600">
-                  {formatCurrency(report.productCost)}
-                </div>
-              </div>
-              <div className="p-3 bg-red-50 rounded-xl">
-                <ShoppingCart className="w-6 h-6 text-red-500" />
-              </div>
-            </div>
-          </div>
-
-          {/* Salaries */}
-          <div className="stat-card border-l-4 border-red-400">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="stat-label">Зарплаты</div>
-                <div className="stat-value text-red-500">
-                  {formatCurrency(report.salaries)}
-                </div>
-              </div>
-              <div className="p-3 bg-red-50 rounded-xl">
-                <Users className="w-6 h-6 text-red-400" />
-              </div>
-            </div>
-          </div>
-
-          {/* Gross profit */}
-          <div className="stat-card border-l-4 border-green-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="stat-label">Валовая прибыль</div>
-                <div className="stat-value text-green-600">
-                  {formatCurrency(report.grossProfit)}
-                </div>
-              </div>
-              <div className="p-3 bg-green-50 rounded-xl">
-                <TrendingUp className="w-6 h-6 text-green-500" />
-              </div>
-            </div>
-          </div>
-
-          {/* Net profit */}
-          <div className="stat-card border-l-4 border-green-600">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="stat-label">Чистая прибыль</div>
-                <div
-                  className={`stat-value ${
-                    report.netProfit >= 0 ? 'text-green-600' : 'text-red-600'
-                  }`}
-                >
-                  {formatCurrency(report.netProfit)}
-                </div>
-              </div>
-              <div
-                className={`p-3 rounded-xl ${
-                  report.netProfit >= 0 ? 'bg-green-50' : 'bg-red-50'
-                }`}
-              >
+        <div className="space-y-4">
+          {/* Hero: Net Profit */}
+          <div className={`relative overflow-hidden rounded-2xl p-5 ${
+            report.netProfit >= 0
+              ? 'bg-gradient-to-br from-emerald-500 to-emerald-700'
+              : 'bg-gradient-to-br from-red-500 to-red-700'
+          }`}>
+            <div className="relative z-10">
+              <div className="flex items-center gap-2 mb-1">
                 {report.netProfit >= 0 ? (
-                  <DollarSign className="w-6 h-6 text-green-600" />
+                  <ArrowUpRight className="h-4 w-4 text-white/70" />
                 ) : (
-                  <TrendingDown className="w-6 h-6 text-red-600" />
+                  <ArrowDownRight className="h-4 w-4 text-white/70" />
                 )}
+                <span className="text-xs font-semibold text-white/70 uppercase tracking-wider">
+                  Чистая прибыль
+                </span>
+              </div>
+              <p className="text-3xl font-bold text-white tracking-tight">
+                {formatMoney(report.netProfit)}
+              </p>
+              <p className="text-sm text-white/60 mt-1">
+                Маржа {marginPct}%
+              </p>
+            </div>
+            <div className="absolute right-4 top-4 opacity-10">
+              {report.netProfit >= 0 ? (
+                <TrendingUp className="h-24 w-24 text-white" />
+              ) : (
+                <TrendingDown className="h-24 w-24 text-white" />
+              )}
+            </div>
+          </div>
+
+          {/* Revenue + Gross Profit row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-2xl bg-white border border-gray-100 shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50">
+                  <TrendingUp className="h-4 w-4 text-blue-600" />
+                </div>
+                <span className="text-xs font-medium text-gray-500">Выручка</span>
+              </div>
+              <p className="text-xl font-bold text-gray-900">{formatMoney(report.revenue)}</p>
+            </div>
+
+            <div className="rounded-2xl bg-white border border-gray-100 shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-50">
+                  <TrendingUp className="h-4 w-4 text-green-600" />
+                </div>
+                <span className="text-xs font-medium text-gray-500">Валовая прибыль</span>
+              </div>
+              <p className="text-xl font-bold text-gray-900">{formatMoney(report.grossProfit)}</p>
+            </div>
+          </div>
+
+          {/* Expenses breakdown */}
+          <div className="rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-50">
+              <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">Расходы</p>
+            </div>
+
+            <div className="divide-y divide-gray-50">
+              {/* Product cost */}
+              <div className="flex items-center justify-between px-4 py-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-orange-50">
+                    <Package className="h-4 w-4 text-orange-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">Себестоимость товаров</p>
+                    {report.revenue > 0 && (
+                      <p className="text-[11px] text-gray-400">
+                        {((report.productCost / report.revenue) * 100).toFixed(1)}% от выручки
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <p className="text-sm font-bold text-gray-900">{formatMoney(report.productCost)}</p>
+              </div>
+
+              {/* Salaries */}
+              <div className="flex items-center justify-between px-4 py-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-50">
+                    <Users className="h-4 w-4 text-violet-500" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">Зарплаты мастерам</p>
+                    {report.revenue > 0 && (
+                      <p className="text-[11px] text-gray-400">
+                        {((report.salaries / report.revenue) * 100).toFixed(1)}% от выручки
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <p className="text-sm font-bold text-gray-900">{formatMoney(report.salaries)}</p>
               </div>
             </div>
           </div>
 
           {/* Check count */}
-          <div className="stat-card border-l-4 border-blue-400">
+          <div className="rounded-2xl bg-white border border-gray-100 shadow-sm p-4">
             <div className="flex items-center justify-between">
-              <div>
-                <div className="stat-label">Количество чеков</div>
-                <div className="stat-value text-blue-500">
-                  {report.checkCount}
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-50">
+                  <Receipt className="h-4 w-4 text-primary-600" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Количество чеков</p>
+                  {report.checkCount > 0 && report.revenue > 0 && (
+                    <p className="text-[11px] text-gray-400">
+                      Ср. чек: {formatMoney(report.revenue / report.checkCount)}
+                    </p>
+                  )}
                 </div>
               </div>
-              <div className="p-3 bg-blue-50 rounded-xl">
-                <Receipt className="w-6 h-6 text-blue-400" />
-              </div>
+              <p className="text-2xl font-bold text-primary-600">{report.checkCount}</p>
             </div>
           </div>
         </div>

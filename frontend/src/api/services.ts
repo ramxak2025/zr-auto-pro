@@ -439,10 +439,42 @@ export const warehouseCategoriesApi = {
   remove: (id: string) => api.delete(`/warehouse/categories/${id}`),
 };
 
+// Compress image client-side before upload (faster transfer, less storage)
+async function compressImage(file: File, maxWidth = 1200, quality = 0.82): Promise<File> {
+  if (!file.type.startsWith('image/') || file.size < 200 * 1024) return file;
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const ratio = Math.min(1, maxWidth / Math.max(img.width, img.height));
+      const w = Math.round(img.width * ratio);
+      const h = Math.round(img.height * ratio);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { resolve(file); return; }
+      ctx.drawImage(img, 0, 0, w, h);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob || blob.size >= file.size) { resolve(file); return; }
+          resolve(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' }));
+        },
+        'image/jpeg',
+        quality,
+      );
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
 export const uploadsApi = {
-  upload: (file: File) => {
+  upload: async (file: File) => {
+    const compressed = await compressImage(file);
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', compressed);
     return api.post<{ url: string; filename: string; originalname: string; size: number }>('/uploads', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });

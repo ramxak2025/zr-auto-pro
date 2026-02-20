@@ -4,10 +4,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+var allowedImageExts = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true,
+	".webp": true, ".gif": true, ".heic": true, ".heif": true,
+}
 
 func UploadFile(c *gin.Context) {
 	file, err := c.FormFile("file")
@@ -21,7 +27,12 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	ext := filepath.Ext(file.Filename)
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if !allowedImageExts[ext] {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Неподдерживаемый формат. Используйте JPG, PNG, WebP"})
+		return
+	}
+
 	filename := uuid.New().String() + ext
 	uploadDir := "uploads"
 	os.MkdirAll(uploadDir, 0755)

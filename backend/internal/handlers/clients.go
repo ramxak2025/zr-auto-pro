@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"zr-auto-pro/internal/database"
@@ -41,19 +42,33 @@ func GetClients(c *gin.Context) {
 		}
 	}
 
-	query := `SELECT DISTINCT c.id, c.full_name, c.phone, COALESCE(c.comment,''), c.created_at FROM clients c`
+	// Single query with LEFT JOIN: eliminates N+1 problem (was 1+N queries, now always 1)
+	query := `
+		SELECT c.id, c.full_name, c.phone, COALESCE(c.comment,''), c.created_at,
+		       ca.id, ca.plate_number, ca.make_model, COALESCE(ca.comment,''), ca.client_id, ca.created_at
+		FROM (
+			SELECT DISTINCT c2.id, c2.full_name, c2.phone, c2.comment, c2.created_at
+			FROM clients c2`
+
 	args := []interface{}{tenantID}
 	argIdx := 2
 
 	if search != "" {
-		query += ` LEFT JOIN cars ca ON ca.client_id = c.id WHERE c.tenant_id=$1 AND (c.full_name ILIKE $` + strconv.Itoa(argIdx) + ` OR c.phone ILIKE $` + strconv.Itoa(argIdx) + ` OR ca.plate_number ILIKE $` + strconv.Itoa(argIdx) + `)`
+		query += ` LEFT JOIN cars ca2 ON ca2.client_id = c2.id
+			WHERE c2.tenant_id=$1 AND (c2.full_name ILIKE $` + strconv.Itoa(argIdx) + ` OR c2.phone ILIKE $` + strconv.Itoa(argIdx) + ` OR ca2.plate_number ILIKE $` + strconv.Itoa(argIdx) + `)`
 		args = append(args, "%"+search+"%")
 		argIdx++
 	} else {
-		query += ` WHERE c.tenant_id=$1`
+		query += ` WHERE c2.tenant_id=$1`
 	}
-	query += " ORDER BY c.created_at DESC LIMIT $" + strconv.Itoa(argIdx) + " OFFSET $" + strconv.Itoa(argIdx+1)
+
+	query += ` ORDER BY c2.created_at DESC LIMIT $` + strconv.Itoa(argIdx) + ` OFFSET $` + strconv.Itoa(argIdx+1)
 	args = append(args, limit, offset)
+
+	query += `
+		) c
+		LEFT JOIN cars ca ON ca.client_id = c.id
+		ORDER BY c.created_at DESC, ca.created_at`
 
 	rows, err := database.Pool.Query(ctx, query, args...)
 	if err != nil {
@@ -62,39 +77,62 @@ func GetClients(c *gin.Context) {
 	}
 	defer rows.Close()
 
-	clients := []models.Client{}
+	clientMap := map[string]*models.Client{}
+	clientOrder := []string{}
+
 	for rows.Next() {
-		var cl models.Client
-		var comment string
-		if err := rows.Scan(&cl.ID, &cl.FullName, &cl.Phone, &comment, &cl.CreatedAt); err != nil {
+		var cID, fullName, phone, cmt string
+		var createdAt time.Time
+		var carID, carPlate, carModel, carCmt, carClientID *string
+		var carCreated *time.Time
+
+		err := rows.Scan(
+			&cID, &fullName, &phone, &cmt, &createdAt,
+			&carID, &carPlate, &carModel, &carCmt, &carClientID, &carCreated,
+		)
+		if err != nil {
 			serverError(c, "clients row scan", err)
 			return
 		}
-		if comment != "" {
-			cl.Comment = &comment
-		}
-		// Load cars
-		carRows, err := database.Pool.Query(ctx, "SELECT id, plate_number, make_model, COALESCE(comment,''), client_id, created_at FROM cars WHERE client_id=$1", cl.ID)
-		if err != nil {
-			serverError(c, "clients car query", err)
-			return
-		}
-		cl.Cars = []models.Car{}
-		for carRows.Next() {
-			var car models.Car
-			var cc string
-			if err := carRows.Scan(&car.ID, &car.PlateNumber, &car.MakeModel, &cc, &car.ClientID, &car.CreatedAt); err != nil {
-				carRows.Close()
-				serverError(c, "clients car row scan", err)
-				return
+
+		existing, ok := clientMap[cID]
+		if !ok {
+			cl := models.Client{
+				ID:        cID,
+				FullName:  fullName,
+				Phone:     phone,
+				CreatedAt: createdAt,
+				Cars:      []models.Car{},
 			}
-			if cc != "" {
-				car.Comment = &cc
+			if cmt != "" {
+				s := cmt
+				cl.Comment = &s
 			}
-			cl.Cars = append(cl.Cars, car)
+			clientMap[cID] = &cl
+			clientOrder = append(clientOrder, cID)
+			existing = &cl
 		}
-		carRows.Close()
-		clients = append(clients, cl)
+
+		if carID != nil && carPlate != nil && carModel != nil && carClientID != nil {
+			car := models.Car{
+				ID:          *carID,
+				PlateNumber: *carPlate,
+				MakeModel:   *carModel,
+				ClientID:    *carClientID,
+			}
+			if carCreated != nil {
+				car.CreatedAt = *carCreated
+			}
+			if carCmt != nil && *carCmt != "" {
+				car.Comment = carCmt
+			}
+			existing.Cars = append(existing.Cars, car)
+		}
+	}
+
+	clients := make([]models.Client, 0, len(clientOrder))
+	for _, id := range clientOrder {
+		clients = append(clients, *clientMap[id])
 	}
 
 	c.JSON(http.StatusOK, models.PaginatedResponse{Data: clients, Total: total, Page: page, Limit: limit})
@@ -118,7 +156,6 @@ func GetClient(c *gin.Context) {
 		cl.Comment = &comment
 	}
 
-	// Cars
 	carRows, err := database.Pool.Query(ctx, "SELECT id, plate_number, make_model, COALESCE(comment,''), client_id, created_at FROM cars WHERE client_id=$1", cl.ID)
 	if err != nil {
 		serverError(c, "get client cars query", err)
