@@ -34,12 +34,9 @@ function formatMoney(value: number): string {
   return value.toLocaleString('ru-RU') + ' \u20BD';
 }
 
-/** Derive thumbnail URL from an optimized image URL (uuid.jpg → uuid_thumb.jpg) */
+/** Return the image URL as-is (client-side compression handles size) */
 function thumbUrl(url?: string): string | undefined {
-  if (!url) return undefined;
-  if (url.includes('_thumb.')) return url;
-  // Support both .jpg and .webp (legacy) formats
-  return url.replace(/\.(jpg|webp)$/, '_thumb.$1');
+  return url || undefined;
 }
 
 const UNIT_OPTIONS = [

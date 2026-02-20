@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,7 +8,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"zr-auto-pro/internal/imaging"
 )
 
 var allowedImageExts = map[string]bool{
@@ -35,42 +33,22 @@ func UploadFile(c *gin.Context) {
 		return
 	}
 
-	baseName := uuid.New().String()
 	uploadDir := "uploads"
 	os.MkdirAll(uploadDir, 0755)
 
-	// Save original temporarily for processing
-	tmpPath := filepath.Join(uploadDir, baseName+"_orig"+ext)
-	if err := c.SaveUploadedFile(file, tmpPath); err != nil {
+	// Save with UUID name to guarantee uniqueness (immutable cache-safe)
+	fileName := uuid.New().String() + ext
+	filePath := filepath.Join(uploadDir, fileName)
+	if err := c.SaveUploadedFile(file, filePath); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "Ошибка сохранения файла"})
 		return
 	}
 
-	// Process: convert to WebP + generate thumbnail
-	result, err := imaging.Process(tmpPath, uploadDir, baseName)
-	if err != nil {
-		log.Printf("Image processing failed, serving original: %v", err)
-		// Fallback: rename original and serve as-is
-		fallbackName := baseName + ext
-		fallbackPath := filepath.Join(uploadDir, fallbackName)
-		os.Rename(tmpPath, fallbackPath)
-		c.JSON(http.StatusOK, gin.H{
-			"url":          "/api/uploads/" + fallbackName,
-			"thumbnail":    "/api/uploads/" + fallbackName,
-			"filename":     fallbackName,
-			"originalname": file.Filename,
-			"size":         file.Size,
-		})
-		return
-	}
-
-	// Remove temp original
-	os.Remove(tmpPath)
-
+	url := "/api/uploads/" + fileName
 	c.JSON(http.StatusOK, gin.H{
-		"url":          "/api/uploads/" + result.Optimized,
-		"thumbnail":    "/api/uploads/" + result.Thumbnail,
-		"filename":     result.Optimized,
+		"url":          url,
+		"thumbnail":    url,
+		"filename":     fileName,
 		"originalname": file.Filename,
 		"size":         file.Size,
 	})
