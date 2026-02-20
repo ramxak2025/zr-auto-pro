@@ -164,7 +164,7 @@ export default function ClientsPage() {
       {(!search || 'розничный покупатель'.includes(search.toLowerCase())) && (
         <div className="mb-4">
           <div
-            onClick={() => navigate('/checks?search=')}
+            onClick={() => navigate('/clients/retail')}
             className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 p-4 active:bg-blue-100 transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-3">

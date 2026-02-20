@@ -27,6 +27,7 @@ import UsersPage from './pages/UsersPage';
 import SchedulePage from './pages/SchedulePage';
 import MorePage from './pages/MorePage';
 import TariffPage from './pages/TariffPage';
+import RetailChecksPage from './pages/RetailChecksPage';
 
 // Admin pages
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
@@ -64,6 +65,7 @@ export default function App() {
             <Route path="/checks/new" element={<CheckCreatePage />} />
             <Route path="/checks/:id" element={<CheckDetailPage />} />
             <Route path="/clients" element={<ClientsPage />} />
+            <Route path="/clients/retail" element={<RetailChecksPage />} />
             <Route path="/clients/:id" element={<ClientDetailPage />} />
             <Route path="/cars" element={<CarsPage />} />
             <Route path="/products" element={<ProductsPage />} />

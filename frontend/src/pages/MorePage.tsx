@@ -13,6 +13,7 @@ import {
   CalendarDays,
   Camera,
   Loader2,
+  CreditCard,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,6 +26,7 @@ interface MenuItem {
   path: string;
   icon: typeof Users;
   permission?: keyof UserPermissions;
+  roles?: string[];
   color: string;
   iconColor: string;
 }
@@ -97,6 +99,15 @@ const menuItems: MenuItem[] = [
     permission: 'user_management',
     color: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
+  },
+  {
+    label: 'Тариф и подписка',
+    description: 'Ваш тариф, оплата, функционал',
+    path: '/tariff',
+    icon: CreditCard,
+    roles: ['director', 'admin'],
+    color: 'bg-rose-50',
+    iconColor: 'text-rose-600',
   },
 ];
 
@@ -188,6 +199,9 @@ export default function MorePage() {
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100 overflow-hidden">
         {menuItems.map((item) => {
           if (item.permission && !hasPermission(item.permission)) {
+            return null;
+          }
+          if (item.roles && user?.role && !item.roles.includes(user.role)) {
             return null;
           }
 

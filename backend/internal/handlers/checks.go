@@ -61,6 +61,10 @@ func GetChecks(c *gin.Context) {
 		cArgs = append(cArgs, carID)
 		idx++
 	}
+	retail := c.Query("retail")
+	if retail == "true" {
+		baseQ += " AND ch.client_id IS NULL"
+	}
 	if dateFrom != "" {
 		baseQ += " AND ch.date >= $" + strconv.Itoa(idx)
 		args = append(args, dateFrom)
@@ -79,8 +83,8 @@ func GetChecks(c *gin.Context) {
 		log.Printf("GetChecks count error: %v", err)
 	}
 
-	query := `SELECT ch.id, ch.number, ch.date, ch.master_id, COALESCE(m.full_name,''), ch.client_id, COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
-		ch.car_id, COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''), ch.payment_method, ch.total_revenue, ch.is_deferred, ch.discount, ch.created_at` + baseQ +
+	query := `SELECT ch.id, ch.number, ch.date, ch.master_id, COALESCE(m.full_name,''), COALESCE(ch.client_id,''), COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
+		COALESCE(ch.car_id,''), COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''), ch.payment_method, ch.total_revenue, ch.is_deferred, ch.discount, ch.created_at` + baseQ +
 		" ORDER BY ch.date DESC, ch.number DESC LIMIT $" + strconv.Itoa(idx) + " OFFSET $" + strconv.Itoa(idx+1)
 	args = append(args, limit, offset)
 
@@ -120,8 +124,8 @@ func GetCheck(c *gin.Context) {
 	var mileage int
 	err := database.Pool.QueryRow(ctx, `
 		SELECT ch.id, ch.number, ch.date, ch.master_id, COALESCE(m.full_name,''),
-			   ch.client_id, COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
-			   ch.car_id, COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''),
+			   COALESCE(ch.client_id,''), COALESCE(cl.full_name,''), COALESCE(cl.phone,''),
+			   COALESCE(ch.car_id,''), COALESCE(ca.plate_number,''), COALESCE(ca.make_model,''),
 			   COALESCE(ch.mileage,0), COALESCE(ch.comment,''), ch.discount, ch.is_deferred,
 			   ch.payment_method, COALESCE(ch.cash_amount,0), COALESCE(ch.card_amount,0),
 			   ch.service_total, ch.product_total, ch.total_revenue,
@@ -278,7 +282,11 @@ func CreateCheck(c *gin.Context) {
 		productCostTotal += p.CostPrice * p.Quantity
 	}
 
-	totalRevenue := serviceTotal + productTotal - req.Discount
+	discountedProductTotal := productTotal - req.Discount
+	if discountedProductTotal < 0 {
+		discountedProductTotal = 0
+	}
+	totalRevenue := serviceTotal + discountedProductTotal
 	totalCost := productCostTotal + serviceSalaryTotal
 	profit := totalRevenue - totalCost
 

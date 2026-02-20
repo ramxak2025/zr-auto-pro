@@ -269,7 +269,7 @@ export default function CheckDetailPage() {
           </div>
           {(check.discount ?? 0) > 0 && (
             <div className="flex justify-between text-sm">
-              <span className="text-gray-500">{'\u0421\u043A\u0438\u0434\u043A\u0430:'}</span>
+              <span className="text-gray-500">{'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B:'}</span>
               <span className="font-medium text-red-500">-{formatCurrency(check.discount ?? 0)}</span>
             </div>
           )}
@@ -290,12 +290,24 @@ export default function CheckDetailPage() {
             </>
           )}
           {hasPermission('profit_view') && (
-            <div className="flex justify-between text-sm border-t pt-2">
-              <span className="text-gray-500">{'\u041F\u0440\u0438\u0431\u044B\u043B\u044C:'}</span>
-              <span className={`font-semibold ${check.profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {formatCurrency(check.profit)}
-              </span>
-            </div>
+            <>
+              <div className="border-t pt-2 mt-1 space-y-1.5">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-400">{'C\u0435\u0431\u0435\u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C \u0442\u043E\u0432\u0430\u0440\u043E\u0432:'}</span>
+                  <span className="text-gray-500">{formatCurrency(check.productCostTotal)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-400">{'\u0417\u0430\u0440\u043F\u043B\u0430\u0442\u0430 \u043C\u0430\u0441\u0442\u0435\u0440\u043E\u0432:'}</span>
+                  <span className="text-gray-500">{formatCurrency(check.serviceSalaryTotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm font-semibold">
+                  <span className="text-gray-700">{'\u0427\u0438\u0441\u0442\u0430\u044F \u043F\u0440\u0438\u0431\u044B\u043B\u044C:'}</span>
+                  <span className={check.profit >= 0 ? 'text-green-600' : 'text-red-600'}>
+                    {formatCurrency(check.profit)}
+                  </span>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>

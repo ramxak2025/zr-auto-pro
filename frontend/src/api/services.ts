@@ -57,6 +57,7 @@ interface ChecksParams extends PaginationParams {
   carId?: string;
   dateFrom?: string;
   dateTo?: string;
+  retail?: string;
 }
 
 interface DateRangeParams {

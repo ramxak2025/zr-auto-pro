@@ -453,7 +453,8 @@ export default function CheckCreatePage() {
   }, [productLines]);
 
   const totalRevenue = useMemo(() => {
-    return Math.max(serviceTotal + productTotal - discount, 0);
+    const discountedProducts = Math.max(productTotal - discount, 0);
+    return serviceTotal + discountedProducts;
   }, [serviceTotal, productTotal, discount]);
 
   // Change calculation for cash payment
@@ -806,13 +807,18 @@ export default function CheckCreatePage() {
               </div>
               <div className="flex-1 min-w-0">
                 <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Дата</label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  disabled={!canEditDate}
-                  className={`input text-sm py-2 w-full ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                />
+                {canEditDate ? (
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    className="text-sm py-1.5 px-2 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                  />
+                ) : (
+                  <p className="text-sm font-medium text-gray-900 py-1.5">
+                    {format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -1019,7 +1025,7 @@ export default function CheckCreatePage() {
               </div>
               {discount > 0 && (
                 <div className="flex justify-between text-red-500">
-                  <span>{'\u0421\u043A\u0438\u0434\u043A\u0430'}</span>
+                  <span>{'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B'}</span>
                   <span>-{formatCurrency(discount)}</span>
                 </div>
               )}
@@ -1033,7 +1039,7 @@ export default function CheckCreatePage() {
 
             {/* Discount input */}
             <div className="mt-3 flex items-center gap-2">
-              <label className="text-xs text-gray-500 whitespace-nowrap">{'\u0421\u043A\u0438\u0434\u043A\u0430:'}</label>
+              <label className="text-xs text-gray-500 whitespace-nowrap">{'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B:'}</label>
               <input
                 type="number"
                 value={discount || ''}
