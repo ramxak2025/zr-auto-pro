@@ -1,7 +1,11 @@
 #!/bin/bash
-# Auto-deploy script for ZR Auto Pro
-# Works both from host and from webhook container (with docker socket mounted)
-# Usage: ./deploy.sh
+# ============================================================
+# ZR Auto Pro — Safe Deploy Script
+# АВТОМАТИЧЕСКИ делает бэкап базы перед каждым обновлением.
+# Данные клиентов НИКОГДА не удаляются.
+#
+# Использование: ./deploy.sh
+# ============================================================
 
 set -e
 
@@ -25,7 +29,20 @@ log "Branch: $BRANCH"
 
 cd "$REPO_DIR"
 
-# Pull latest changes
+# ═══════════════════════════════════════════════════════
+# STEP 0: AUTOMATIC BACKUP before any changes
+# ═══════════════════════════════════════════════════════
+log "=== Creating backup before deploy ==="
+if bash "$REPO_DIR/backup.sh" 2>&1; then
+    log "Backup completed successfully"
+else
+    log "WARNING: Backup failed, but continuing deploy..."
+    log "Check backup.sh manually if needed"
+fi
+
+# ═══════════════════════════════════════════════════════
+# STEP 1: Pull latest code
+# ═══════════════════════════════════════════════════════
 log "Fetching branch: $BRANCH"
 git fetch origin "$BRANCH" 2>&1
 git checkout "$BRANCH" 2>&1 || true
@@ -34,7 +51,10 @@ git reset --hard "origin/$BRANCH" 2>&1
 log "Git pull complete. Latest commit:"
 git log --oneline -1 2>&1
 
-# Rebuild and restart (only backend + frontend, not webhook itself)
+# ═══════════════════════════════════════════════════════
+# STEP 2: Rebuild ONLY backend + frontend (NOT postgres!)
+# Volume pgdata is NEVER touched — data is safe.
+# ═══════════════════════════════════════════════════════
 log "Rebuilding backend and frontend containers..."
 docker compose up -d --build --no-deps backend frontend 2>&1
 
@@ -50,3 +70,6 @@ docker compose ps 2>&1
 docker image prune -f 2>&1 || true
 
 log "=== Deploy complete ==="
+log ""
+log "IMPORTANT: Data is safe. Backups are in: $REPO_DIR/backups/"
+log "To restore: ./restore.sh"
