@@ -2,13 +2,6 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    entrypoint:
-      - sh
-      - -c
-      - |
-        (until pg_isready -q -U postgres 2>/dev/null; do sleep 0.5; done
-         psql -U postgres -c "ALTER USER postgres PASSWORD '$$POSTGRES_PASSWORD'" 2>/dev/null || true) &
-        exec docker-entrypoint.sh postgres
     environment:
       POSTGRES_DB: zr_auto_pro
       POSTGRES_USER: postgres
