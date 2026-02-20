@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, CreditCard, Loader2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, CreditCard, Loader2, Check, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { plansApi } from '../../api/services';
@@ -10,11 +10,32 @@ import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
 
+// Feature keys and their human-readable labels
+const ALL_FEATURES: { key: string; label: string }[] = [
+  { key: 'checks_view', label: 'Заказ-наряды' },
+  { key: 'clients_view', label: 'Клиенты и авто' },
+  { key: 'warehouse_view', label: 'Склад' },
+  { key: 'services_view', label: 'Услуги' },
+  { key: 'suppliers_view', label: 'Поставщики' },
+  { key: 'cashflow_view', label: 'Движение денег' },
+  { key: 'salary_view', label: 'Зарплата' },
+  { key: 'schedule_view', label: 'Расписание' },
+  { key: 'reports_view', label: 'Отчёты' },
+  { key: 'users_manage', label: 'Управление пользователями' },
+  { key: 'export_data', label: 'Экспорт данных' },
+];
+
+// Helper to get label by feature key
+function getFeatureLabel(key: string): string {
+  const found = ALL_FEATURES.find((f) => f.key === key);
+  return found ? found.label : key;
+}
+
 interface PlanFormData {
   name: string;
   monthlyPrice: number;
   description: string;
-  features: string;
+  features: string[];
   maxUsers: number;
   isActive: boolean;
   sortOrder: number;
@@ -24,7 +45,7 @@ const emptyForm: PlanFormData = {
   name: '',
   monthlyPrice: 0,
   description: '',
-  features: '',
+  features: [],
   maxUsers: 5,
   isActive: true,
   sortOrder: 0,
@@ -88,7 +109,7 @@ export default function AdminPlansPage() {
       name: plan.name,
       monthlyPrice: plan.monthlyPrice,
       description: plan.description || '',
-      features: features.join('\n'),
+      features: [...features],
       maxUsers: plan.maxUsers,
       isActive: plan.isActive,
       sortOrder: plan.sortOrder,
@@ -102,6 +123,18 @@ export default function AdminPlansPage() {
     setForm({ ...emptyForm });
   };
 
+  const toggleFeature = (key: string) => {
+    setForm((prev) => {
+      const has = prev.features.includes(key);
+      return {
+        ...prev,
+        features: has
+          ? prev.features.filter((f) => f !== key)
+          : [...prev.features, key],
+      };
+    });
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.name.trim()) {
@@ -109,16 +142,11 @@ export default function AdminPlansPage() {
       return;
     }
 
-    const featuresArr = form.features
-      .split('\n')
-      .map((f) => f.trim())
-      .filter(Boolean);
-
     const payload = {
       name: form.name,
       monthlyPrice: Number(form.monthlyPrice),
       description: form.description || undefined,
-      features: featuresArr,
+      features: form.features,
       maxUsers: Number(form.maxUsers),
       isActive: form.isActive,
       sortOrder: Number(form.sortOrder),
@@ -191,13 +219,24 @@ export default function AdminPlansPage() {
                   До {plan.maxUsers} сотрудников
                 </div>
 
-                {features.length > 0 && (
-                  <ul className="text-sm text-gray-600 space-y-1">
-                    {features.map((f, i) => (
-                      <li key={i}>• {f}</li>
-                    ))}
-                  </ul>
-                )}
+                {/* Feature availability list */}
+                <ul className="text-sm space-y-1">
+                  {ALL_FEATURES.map((feat) => {
+                    const included = features.includes(feat.key);
+                    return (
+                      <li key={feat.key} className="flex items-center gap-2">
+                        {included ? (
+                          <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
+                        ) : (
+                          <X className="w-4 h-4 text-red-400 flex-shrink-0" />
+                        )}
+                        <span className={included ? 'text-gray-700' : 'text-gray-400'}>
+                          {feat.label}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
 
                 <div className="pt-2 border-t border-gray-100">
                   {plan.isActive ? (
@@ -266,15 +305,25 @@ export default function AdminPlansPage() {
             />
           </div>
 
+          {/* Feature checkboxes */}
           <div>
-            <label className="label">Возможности (каждая с новой строки)</label>
-            <textarea
-              className="input"
-              rows={5}
-              value={form.features}
-              onChange={(e) => setForm({ ...form, features: e.target.value })}
-              placeholder={"Заказ-наряды\nКлиенты и авто\nСклад"}
-            />
+            <label className="label">Доступные функции</label>
+            <div className="border border-gray-200 rounded-lg p-3 space-y-2 max-h-64 overflow-y-auto">
+              {ALL_FEATURES.map((feat) => (
+                <label
+                  key={feat.key}
+                  className="flex items-center gap-3 cursor-pointer py-1 px-2 rounded-md hover:bg-gray-50 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    checked={form.features.includes(feat.key)}
+                    onChange={() => toggleFeature(feat.key)}
+                  />
+                  <span className="text-sm text-gray-700">{feat.label}</span>
+                </label>
+              ))}
+            </div>
           </div>
 
           <div>

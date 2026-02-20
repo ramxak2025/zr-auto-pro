@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { CreditCard, CalendarDays, Info, MessageCircle, Check, Users } from 'lucide-react';
+import { CreditCard, CalendarDays, Info, MessageCircle, Check, X, Users } from 'lucide-react';
 import { format, parseISO, isPast } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -8,6 +8,25 @@ import { SubscriptionInfo } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 const WHATSAPP_PHONE = '79884444436';
+
+const ALL_FEATURES: { key: string; label: string }[] = [
+  { key: 'checks_view', label: 'Заказ-наряды' },
+  { key: 'clients_view', label: 'Клиенты и авто' },
+  { key: 'warehouse_view', label: 'Склад' },
+  { key: 'services_view', label: 'Услуги' },
+  { key: 'suppliers_view', label: 'Поставщики' },
+  { key: 'cashflow_view', label: 'Движение денег' },
+  { key: 'salary_view', label: 'Зарплата' },
+  { key: 'schedule_view', label: 'Расписание' },
+  { key: 'reports_view', label: 'Отчёты' },
+  { key: 'users_manage', label: 'Управление пользователями' },
+  { key: 'export_data', label: 'Экспорт данных' },
+];
+
+function getFeatureLabel(key: string): string {
+  const found = ALL_FEATURES.find((f) => f.key === key);
+  return found ? found.label : key;
+}
 
 export default function TariffPage() {
   const { data: sub, isLoading } = useQuery({
@@ -160,16 +179,23 @@ export default function TariffPage() {
                         </span>
                       </div>
 
-                      {features.length > 0 && (
-                        <ul className="space-y-2">
-                          {features.map((f, i) => (
-                            <li key={i} className="flex items-start gap-2 text-sm">
-                              <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                              <span className="text-gray-700">{f}</span>
+                      <ul className="space-y-1.5">
+                        {ALL_FEATURES.map((feat) => {
+                          const included = features.includes(feat.key);
+                          return (
+                            <li key={feat.key} className="flex items-center gap-2 text-sm">
+                              {included ? (
+                                <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
+                              ) : (
+                                <X className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                              )}
+                              <span className={included ? 'text-gray-700' : 'text-gray-400 line-through'}>
+                                {feat.label}
+                              </span>
                             </li>
-                          ))}
-                        </ul>
-                      )}
+                          );
+                        })}
+                      </ul>
 
                       {!isCurrent && (
                         <a

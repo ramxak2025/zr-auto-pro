@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Pencil, Trash2, Building2, Loader2, UserPlus } from 'lucide-react';
+import { Plus, Pencil, Trash2, Building2, Loader2, UserPlus, ChevronDown, Phone, MapPin, Mail, Calendar, StickyNote, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -66,6 +66,7 @@ export default function AdminTenantsPage() {
   const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [form, setForm] = useState<TenantFormData>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['tenants'],
@@ -191,6 +192,10 @@ export default function AdminTenantsPage() {
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
+  const toggleExpand = (id: string) => {
+    setExpandedId((prev) => (prev === id ? null : id));
+  };
+
   if (isLoading) return <LoadingSpinner />;
 
   return (
@@ -204,7 +209,7 @@ export default function AdminTenantsPage() {
         </button>
       </div>
 
-      {/* Table */}
+      {/* Accordion Cards */}
       {tenants.length === 0 ? (
         <EmptyState
           icon={Building2}
@@ -213,72 +218,133 @@ export default function AdminTenantsPage() {
           action={{ label: 'Создать', onClick: openCreate }}
         />
       ) : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Название</th>
-                <th>Slug</th>
-                <th>Телефон</th>
-                <th>Пользователей</th>
-                <th>Статус</th>
-                <th>Подписка до</th>
-                <th>Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tenants.map((tenant) => (
-                <tr
-                  key={tenant.id}
-                  className="cursor-pointer"
-                  onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
+        <div className="space-y-3">
+          {tenants.map((tenant) => {
+            const isExpanded = expandedId === tenant.id;
+            const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
+
+            return (
+              <div
+                key={tenant.id}
+                className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm"
+              >
+                {/* Collapsed header - always visible */}
+                <button
+                  type="button"
+                  onClick={() => toggleExpand(tenant.id)}
+                  className="w-full flex items-center justify-between px-4 py-3.5 text-left hover:bg-gray-50 transition-colors"
                 >
-                  <td className="font-medium text-gray-900">{tenant.name}</td>
-                  <td className="text-gray-500">{tenant.slug || '-'}</td>
-                  <td>{tenant.phone || '-'}</td>
-                  <td>
-                    <span className="badge-blue">
-                      {tenant.userCount ?? tenant.users?.length ?? 0} / {tenant.maxUsers}
-                    </span>
-                  </td>
-                  <td>
-                    {tenant.isActive ? (
-                      <span className="badge-green">Активна</span>
-                    ) : (
-                      <span className="badge-red">Неактивна</span>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex-shrink-0 w-9 h-9 bg-primary-50 rounded-lg flex items-center justify-center">
+                      <Building2 className="w-4.5 h-4.5 text-primary-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-gray-900 truncate">
+                        {tenant.name}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {tenant.isActive ? (
+                          <span className="badge-green text-xs">Активна</span>
+                        ) : (
+                          <span className="badge-red text-xs">Неактивна</span>
+                        )}
+                        <span className="flex items-center gap-1 text-xs text-gray-500">
+                          <Users className="w-3 h-3" />
+                          {userCount} / {tenant.maxUsers}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`w-5 h-5 text-gray-400 flex-shrink-0 transition-transform duration-200 ${
+                      isExpanded ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {/* Expanded details */}
+                {isExpanded && (
+                  <div className="border-t border-gray-100 px-4 py-3 space-y-2.5 bg-gray-50/50">
+                    {/* Phone */}
+                    <div className="flex items-start gap-2.5 text-sm">
+                      <Phone className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <div className="text-gray-500 text-xs">Телефон</div>
+                        <div className="text-gray-800">{tenant.phone || '—'}</div>
+                      </div>
+                    </div>
+
+                    {/* Address */}
+                    <div className="flex items-start gap-2.5 text-sm">
+                      <MapPin className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <div className="text-gray-500 text-xs">Адрес</div>
+                        <div className="text-gray-800">{tenant.address || '—'}</div>
+                      </div>
+                    </div>
+
+                    {/* Email */}
+                    <div className="flex items-start gap-2.5 text-sm">
+                      <Mail className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <div className="text-gray-500 text-xs">Email</div>
+                        <div className="text-gray-800">{tenant.email || '—'}</div>
+                      </div>
+                    </div>
+
+                    {/* Subscription End */}
+                    <div className="flex items-start gap-2.5 text-sm">
+                      <Calendar className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <div className="text-gray-500 text-xs">Подписка до</div>
+                        <div className="text-gray-800">
+                          {tenant.subscriptionEnd
+                            ? format(parseISO(tenant.subscriptionEnd), 'd MMM yyyy', { locale: ru })
+                            : '—'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Subscription Note */}
+                    {tenant.subscriptionNote && (
+                      <div className="flex items-start gap-2.5 text-sm">
+                        <StickyNote className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <div className="text-gray-500 text-xs">Примечание</div>
+                          <div className="text-gray-800">{tenant.subscriptionNote}</div>
+                        </div>
+                      </div>
                     )}
-                  </td>
-                  <td>
-                    {tenant.subscriptionEnd ? (
-                      <span className="text-sm">
-                        {format(parseISO(tenant.subscriptionEnd), 'd MMM yyyy', { locale: ru })}
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">-</span>
-                    )}
-                  </td>
-                  <td>
-                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-2 pt-2.5 border-t border-gray-200">
+                      <button
+                        onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 rounded-lg transition-colors"
+                      >
+                        <Building2 className="w-4 h-4" />
+                        Подробнее
+                      </button>
                       <button
                         onClick={() => openEdit(tenant)}
-                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
+                        className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-100 rounded-lg transition-colors"
                         title="Редактировать"
                       >
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button
                         onClick={() => setDeleteId(tenant.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                        className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 bg-white border border-gray-200 hover:bg-red-50 hover:border-red-200 rounded-lg transition-colors"
                         title="Удалить"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

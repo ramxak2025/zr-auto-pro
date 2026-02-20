@@ -18,6 +18,8 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import type { UserPermissions } from '../types';
 
+const APP_VERSION = '1.2';
+
 interface NavItem {
   label: string;
   path: string;
@@ -152,11 +154,12 @@ export default function Layout() {
               <LogOut className="h-4 w-4" />
             </button>
           </div>
+          <p className="text-[10px] text-gray-300 text-center mt-2">v{APP_VERSION}</p>
         </div>
       </aside>
 
       {/* ─── Main area ─── */}
-      <div className="flex flex-1 flex-col md:pl-[260px]">
+      <div className="flex flex-1 flex-col md:pl-[260px] w-full min-w-0">
         {/* Desktop top bar */}
         <header className="hidden md:flex sticky top-0 z-20 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
           <div className="flex items-center gap-1.5 text-sm">
@@ -187,6 +190,7 @@ export default function Layout() {
             <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
           </div>
           <div className="flex items-center gap-2">
+            <span className="text-[10px] text-gray-300 mr-1">v{APP_VERSION}</span>
             {user?.avatar ? (
               <img src={user.avatar} alt="" className="h-7 w-7 rounded-full object-cover" />
             ) : (
@@ -198,8 +202,8 @@ export default function Layout() {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-4 md:p-6 w-full max-w-full">
-          <div className="w-full max-w-full">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-4 md:p-6 w-full min-w-0">
+          <div className="w-full min-w-0">
             <Outlet />
           </div>
         </main>

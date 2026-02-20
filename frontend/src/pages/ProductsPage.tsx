@@ -853,7 +853,7 @@ export default function ProductsPage() {
       const res = await productsApi.getAll({ limit: 1000 });
       return res.data;
     },
-    staleTime: 60_000,
+    staleTime: 30_000,
   });
 
   const allProducts = productsData?.data || [];

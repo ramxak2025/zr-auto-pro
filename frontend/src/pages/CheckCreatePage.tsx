@@ -58,6 +58,7 @@ interface ProductLineForm {
   sellPrice: number;
   costPrice: number;
   quantity: number;
+  unit?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -565,10 +566,11 @@ export default function CheckCreatePage() {
     }
 
     setProductLines((prev) => {
+      const step = (product.unit && product.unit !== 'pcs') ? 0.5 : 1;
       const existing = prev.findIndex((l) => l.productId === product.id);
       if (existing !== -1) {
         return prev.map((line, i) =>
-          i === existing ? { ...line, quantity: line.quantity + 1 } : line,
+          i === existing ? { ...line, quantity: line.quantity + step } : line,
         );
       }
       return [
@@ -578,7 +580,8 @@ export default function CheckCreatePage() {
           name: product.name,
           sellPrice: product.sellPrice,
           costPrice: product.costPrice,
-          quantity: 1,
+          quantity: step,
+          unit: product.unit || 'pcs',
         },
       ];
     });
@@ -808,7 +811,7 @@ export default function CheckCreatePage() {
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
                     disabled={!canEditDate}
-                    className={`input text-sm pl-8 py-2 w-[140px] ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                    className={`input text-xs pl-7 py-2 w-[120px] ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                   />
                 </div>
                 {!canEditDate && (
@@ -947,29 +950,42 @@ export default function CheckCreatePage() {
                         {line.name}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {formatCurrency(line.sellPrice)} / {'\u0448\u0442'}
+                        {formatCurrency(line.sellPrice)} / {line.unit === 'm' ? 'м' : line.unit === 'l' ? 'л' : line.unit === 'kg' ? 'кг' : 'шт'}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (line.quantity > 1) {
-                            updateProductLine(index, 'quantity', line.quantity - 1);
-                          }
-                        }}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
-                      >
-                        <Minus className="w-3.5 h-3.5" />
-                      </button>
-                      <span className="w-8 text-center text-sm font-medium">{line.quantity}</span>
-                      <button
-                        type="button"
-                        onClick={() => updateProductLine(index, 'quantity', line.quantity + 1)}
-                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
+                      {line.unit && line.unit !== 'pcs' ? (
+                        <input
+                          type="number"
+                          value={line.quantity}
+                          onChange={(e) => updateProductLine(index, 'quantity', Math.max(0.01, parseFloat(e.target.value) || 0))}
+                          step="0.1"
+                          min="0.01"
+                          className="w-16 text-center text-sm font-medium rounded border border-gray-200 py-1 px-1"
+                        />
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (line.quantity > 1) {
+                                updateProductLine(index, 'quantity', line.quantity - 1);
+                              }
+                            }}
+                            className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                          >
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <span className="w-8 text-center text-sm font-medium">{line.quantity}</span>
+                          <button
+                            type="button"
+                            onClick={() => updateProductLine(index, 'quantity', line.quantity + 1)}
+                            className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
                     </div>
                     <span className="text-sm font-semibold text-gray-700 flex-shrink-0 whitespace-nowrap">
                       {formatCurrency(line.sellPrice * line.quantity)}
@@ -1150,7 +1166,7 @@ export default function CheckCreatePage() {
               />
               <div>
                 <span className="text-sm font-medium text-gray-700">Отложенный чек (черновик)</span>
-                <p className="text-[10px] text-gray-400 mt-0.5">Сохранить как черновик. Виден руководству.</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Сохранить как черновик. Виден администратору и владельцу. Мастер не сможет удалить.</p>
               </div>
             </label>
           </div>
