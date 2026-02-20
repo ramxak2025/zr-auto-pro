@@ -63,6 +63,7 @@ func RunMigrations() {
 	migrationFiles := []string{
 		"migrations/001_init.sql",
 		"migrations/002_decimal_stock.sql",
+		"migrations/003_warehouse_categories.sql",
 	}
 
 	for _, file := range migrationFiles {

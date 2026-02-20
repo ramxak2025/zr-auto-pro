@@ -22,7 +22,7 @@ func GetFinancialReport(c *gin.Context) {
 	if err := database.Pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(total_revenue),0), COALESCE(SUM(product_cost_total),0),
 			   COALESCE(SUM(service_salary_total),0), COALESCE(SUM(profit),0), COUNT(*)
-		FROM checks WHERE tenant_id=$1 AND date >= $2 AND date <= $3::date + interval '1 day'
+		FROM checks WHERE tenant_id=$1 AND date >= $2 AND date <= $3::date + interval '1 day' AND is_deferred=false
 	`, tenantID, dateFrom, dateTo).Scan(
 		&report.Revenue, &report.ProductCost, &report.Salaries, &report.NetProfit, &report.CheckCount,
 	); err != nil {
@@ -47,7 +47,7 @@ func GetCashFlow(c *gin.Context) {
 			   COALESCE(SUM(CASE WHEN payment_method='card' THEN total_revenue ELSE 0 END),0),
 			   COALESCE(SUM(CASE WHEN payment_method='warranty' THEN total_revenue ELSE 0 END),0),
 			   COALESCE(SUM(total_revenue),0)
-		FROM checks WHERE tenant_id=$1 AND date >= $2 AND date <= $3::date + interval '1 day'
+		FROM checks WHERE tenant_id=$1 AND date >= $2 AND date <= $3::date + interval '1 day' AND is_deferred=false
 		GROUP BY date::date ORDER BY date::date
 	`, tenantID, dateFrom, dateTo)
 	if err != nil {

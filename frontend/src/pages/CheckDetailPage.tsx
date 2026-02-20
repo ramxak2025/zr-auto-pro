@@ -10,6 +10,7 @@ import {
   Gauge,
   Wrench,
   MessageSquare,
+  CheckCircle2,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -52,6 +53,19 @@ export default function CheckDetailPage() {
       return res.data;
     },
     enabled: !!id,
+  });
+
+  const finalizeMutation = useMutation({
+    mutationFn: () => checksApi.update(id!, { isDeferred: false }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['check', id] });
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      toast.success('Чек завершён');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Ошибка при завершении чека');
+    },
   });
 
   const deleteMutation = useMutation({
@@ -99,7 +113,7 @@ export default function CheckDetailPage() {
                 {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
               </span>
               {check.isDeferred && (
-                <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">{'\u0427\u0435\u0440\u043D\u043E\u0432\u0438\u043A'}</span>
+                <span className="text-[10px] font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded-full">Отложен</span>
               )}
             </div>
             <p className="text-sm text-gray-500 mt-0.5">
@@ -118,6 +132,25 @@ export default function CheckDetailPage() {
           </button>
         )}
       </div>
+
+      {/* Deferred check banner */}
+      {check.isDeferred && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-red-700">Чек отложен (черновик)</p>
+            <p className="text-xs text-red-500 mt-0.5">Не учитывается в статистике. Нельзя закрыть смену пока чек отложен.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => finalizeMutation.mutate()}
+            disabled={finalizeMutation.isPending}
+            className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50 flex-shrink-0"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            Завершить
+          </button>
+        </div>
+      )}
 
       {/* Info Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

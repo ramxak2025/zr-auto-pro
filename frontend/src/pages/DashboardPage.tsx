@@ -339,14 +339,14 @@ function RevenueChart() {
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
       <div className="px-5 py-4 border-b border-gray-100">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-100">
               <BarChart3 className="h-5 w-5 text-primary-600" />
             </div>
             <h3 className="text-base font-bold text-gray-900">Аналитика</h3>
           </div>
-          <div className="flex rounded-lg bg-gray-100 p-0.5">
+          <div className="flex rounded-lg bg-gray-100 p-0.5 self-start sm:self-auto">
             {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
               <button
                 key={p}
@@ -479,14 +479,14 @@ function AdminDashboard() {
       {isOwner && ranking && (
         <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-100">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100">
                   <Trophy className="h-5 w-5 text-amber-600" />
                 </div>
                 <h3 className="text-base font-bold text-gray-900">Рейтинг сотрудников</h3>
               </div>
-              <div className="flex rounded-lg bg-gray-100 p-0.5">
+              <div className="flex rounded-lg bg-gray-100 p-0.5 self-start sm:self-auto">
                 <button type="button" onClick={() => setRankingTab('today')}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${rankingTab === 'today' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
                   Сегодня

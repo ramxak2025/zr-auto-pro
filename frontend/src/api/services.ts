@@ -432,6 +432,12 @@ export const scheduleApi = {
   getMyStats: () => api.get<{ totalScheduled: number; totalWorked: number; totalLate: number; totalLateMinor: number; totalLateMajor: number; totalOnTime: number; totalDaysOff: number; avgLateMinutes: number }>('/schedule/my-stats'),
 };
 
+export const warehouseCategoriesApi = {
+  getAll: () => api.get<Array<{ id: string; path: string }>>('/warehouse/categories'),
+  create: (path: string) => api.post<{ id: string; path: string }>('/warehouse/categories', { path }),
+  remove: (id: string) => api.delete(`/warehouse/categories/${id}`),
+};
+
 export const uploadsApi = {
   upload: (file: File) => {
     const fd = new FormData();

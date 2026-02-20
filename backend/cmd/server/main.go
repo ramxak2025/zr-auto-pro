@@ -192,6 +192,10 @@ func main() {
 	auth.DELETE("/products/:id", handlers.DeleteProduct)
 	auth.POST("/products/:id/stock", handlers.UpdateStock)
 
+	auth.GET("/warehouse/categories", handlers.GetWarehouseCategories)
+	auth.POST("/warehouse/categories", handlers.CreateWarehouseCategory)
+	auth.DELETE("/warehouse/categories/:id", handlers.DeleteWarehouseCategory)
+
 	auth.GET("/checks", handlers.GetChecks)
 	auth.GET("/checks/dashboard", handlers.GetDashboard)
 	auth.GET("/checks/dashboard/chart", handlers.GetDashboardChart)

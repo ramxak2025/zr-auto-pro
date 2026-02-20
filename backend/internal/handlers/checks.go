@@ -19,6 +19,7 @@ func GetChecks(c *gin.Context) {
 	search := c.Query("search")
 	masterID := c.Query("masterId")
 	clientID := c.Query("clientId")
+	carID := c.Query("carId")
 	dateFrom := c.Query("dateFrom")
 	dateTo := c.Query("dateTo")
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -52,6 +53,12 @@ func GetChecks(c *gin.Context) {
 		baseQ += " AND ch.client_id=$" + strconv.Itoa(idx)
 		args = append(args, clientID)
 		cArgs = append(cArgs, clientID)
+		idx++
+	}
+	if carID != "" {
+		baseQ += " AND ch.car_id=$" + strconv.Itoa(idx)
+		args = append(args, carID)
+		cArgs = append(cArgs, carID)
 		idx++
 	}
 	if dateFrom != "" {
@@ -423,11 +430,11 @@ func GetDashboard(c *gin.Context) {
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
 	var stats models.DashboardStats
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0), COUNT(*) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayRevenue, &stats.TodayChecks)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, weekStart).Scan(&stats.WeekRevenue)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthRevenue)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, todayStart).Scan(&stats.TodayProfit)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2", tenantID, monthStart).Scan(&stats.MonthProfit)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0), COUNT(*) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, todayStart).Scan(&stats.TodayRevenue, &stats.TodayChecks)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, weekStart).Scan(&stats.WeekRevenue)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, monthStart).Scan(&stats.MonthRevenue)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, todayStart).Scan(&stats.TodayProfit)
+	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, monthStart).Scan(&stats.MonthProfit)
 
 	c.JSON(http.StatusOK, stats)
 }
@@ -444,7 +451,7 @@ func GetRanking(c *gin.Context) {
 	todayRows, err := database.Pool.Query(ctx, `
 		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
 		FROM checks ch JOIN users u ON u.id=ch.master_id
-		WHERE ch.tenant_id=$1 AND ch.date >= $2
+		WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false
 		GROUP BY ch.master_id, u.full_name ORDER BY SUM(ch.total_revenue) DESC
 	`, tenantID, todayStart)
 	if err == nil {
@@ -460,7 +467,7 @@ func GetRanking(c *gin.Context) {
 	monthRows, err := database.Pool.Query(ctx, `
 		SELECT ch.master_id, u.full_name, COALESCE(SUM(ch.total_revenue),0), COUNT(*)
 		FROM checks ch JOIN users u ON u.id=ch.master_id
-		WHERE ch.tenant_id=$1 AND ch.date >= $2
+		WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false
 		GROUP BY ch.master_id, u.full_name ORDER BY SUM(ch.total_revenue) DESC
 	`, tenantID, monthStart)
 	if err == nil {
@@ -512,7 +519,7 @@ func GetDashboardChart(c *gin.Context) {
 	}
 
 	query := `SELECT ` + groupBy + ` AS d, COALESCE(SUM(total_revenue),0), COALESCE(SUM(profit),0), COUNT(*)
-		FROM checks WHERE tenant_id=$1 AND date >= $2
+		FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false
 		GROUP BY d ORDER BY d`
 
 	rows, err := database.Pool.Query(ctx, query, tenantID, startDate)

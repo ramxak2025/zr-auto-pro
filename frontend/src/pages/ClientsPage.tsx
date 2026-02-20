@@ -1,7 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Users, Phone, Calendar, Trash2, Edit2 } from 'lucide-react';
+import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { clientsApi } from '../api/services';
 import Modal from '../components/Modal';
@@ -159,6 +159,26 @@ export default function ClientsPage() {
           placeholder="Поиск по имени или телефону..."
         />
       </div>
+
+      {/* Retail buyer card — always visible */}
+      {(!search || 'розничный покупатель'.includes(search.toLowerCase())) && (
+        <div className="mb-4">
+          <div
+            onClick={() => navigate('/checks?search=')}
+            className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 p-4 active:bg-blue-100 transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100">
+                <ShoppingBag className="h-5 w-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Розничный покупатель</p>
+                <p className="text-xs text-gray-500">Чеки без привязки к клиенту</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       {isLoading ? (

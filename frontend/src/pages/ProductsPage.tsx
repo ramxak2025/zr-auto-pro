@@ -19,7 +19,7 @@ import {
   Move,
   FolderPlus,
 } from 'lucide-react';
-import { productsApi, uploadsApi } from '../api/services';
+import { productsApi, uploadsApi, warehouseCategoriesApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse } from '../types';
 import { UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -858,6 +858,20 @@ export default function ProductsPage() {
 
   const allProducts = productsData?.data || [];
 
+  // Fetch persisted empty warehouse categories
+  const { data: warehouseCats } = useQuery<Array<{ id: string; path: string }>>({
+    queryKey: ['warehouse-categories'],
+    queryFn: async () => { const res = await warehouseCategoriesApi.getAll(); return res.data; },
+    staleTime: 30_000,
+  });
+
+  const createCategoryMutation = useMutation({
+    mutationFn: (path: string) => warehouseCategoriesApi.create(path),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+    },
+  });
+
   const categories = useMemo(() => {
     const cats = new Set<string>();
     allProducts.forEach((p: Product) => { if (p.category) cats.add(p.category); });
@@ -897,12 +911,31 @@ export default function ProductsPage() {
       }
     }
 
+    // Merge in persisted empty categories from backend
+    if (warehouseCats) {
+      for (const wc of warehouseCats) {
+        const wcParts = wc.path.split('/');
+        if (activePath.length === 0) {
+          const folderName = wcParts[0];
+          if (!subfolderSet.has(folderName)) {
+            subfolderSet.set(folderName, { count: 0, hasLow: false });
+          }
+        } else if (wc.path.startsWith(prefix + '/')) {
+          const rest = wc.path.slice(prefix.length + 1);
+          const nextSegment = rest.split('/')[0];
+          if (!subfolderSet.has(nextSegment)) {
+            subfolderSet.set(nextSegment, { count: 0, hasLow: false });
+          }
+        }
+      }
+    }
+
     const sortedSubfolders = Array.from(subfolderSet.entries())
       .map(([name, data]) => ({ name, ...data }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return { subfolders: sortedSubfolders, currentProducts: prods };
-  }, [allProducts, activePath]);
+  }, [allProducts, activePath, warehouseCats]);
 
   const allCategoryPaths = useMemo(() => {
     const paths = new Set<string>();
@@ -1469,6 +1502,10 @@ export default function ProductsPage() {
                 type="button"
                 onClick={() => {
                   if (newFolderName.trim()) {
+                    const folderPath = activePath.length > 0
+                      ? activePath.join('/') + '/' + newFolderName.trim()
+                      : newFolderName.trim();
+                    createCategoryMutation.mutate(folderPath);
                     enterFolder(newFolderName.trim());
                     setShowFolderModal(false);
                     setNewFolderName('');

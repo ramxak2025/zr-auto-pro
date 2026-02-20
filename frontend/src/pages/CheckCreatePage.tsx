@@ -18,6 +18,7 @@ import {
   Minus,
   UserIcon,
   CalendarDays,
+  Gauge,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -797,42 +798,38 @@ export default function CheckCreatePage() {
             )}
           </div>
 
-          {/* Date & Mileage — compact layout */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="flex items-end gap-3">
-              <div className="flex-shrink-0">
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">
-                  {'\u0414\u0430\u0442\u0430'}
-                </label>
-                <div className="relative">
-                  <CalendarDays className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    disabled={!canEditDate}
-                    className={`input text-xs pl-7 py-2 w-[120px] ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                  />
-                </div>
-                {!canEditDate && (
-                  <p className="text-[10px] text-gray-400 mt-0.5">{'\u0422\u043E\u043B\u044C\u043A\u043E \u0441\u0435\u0433\u043E\u0434\u043D\u044F'}</p>
-                )}
+          {/* Date & Mileage — separate rows with icons */}
+          <div className="px-5 py-4 border-b border-dashed border-gray-300 space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 flex-shrink-0">
+                <CalendarDays className="h-5 w-5 text-blue-500" />
               </div>
               <div className="flex-1 min-w-0">
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">
-                  {'\u041F\u0440\u043E\u0431\u0435\u0433'}
-                </label>
+                <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Дата</label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  disabled={!canEditDate}
+                  className={`input text-sm py-2 w-full ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 flex-shrink-0">
+                <Gauge className="h-5 w-5 text-orange-500" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Пробег</label>
                 <div className="relative">
                   <input
                     type="number"
                     value={mileage}
                     onChange={(e) => setMileage(e.target.value)}
                     placeholder="0"
-                    className="input text-base sm:text-sm pr-10"
+                    className="input text-sm py-2 w-full pr-10"
                   />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">
-                    {'\u043A\u043C'}
-                  </span>
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">км</span>
                 </div>
               </div>
             </div>
@@ -1157,16 +1154,18 @@ export default function CheckCreatePage() {
               </div>
             )}
 
-            <label className="flex items-center gap-2 cursor-pointer mt-3 bg-amber-50 rounded-lg px-3 py-2.5 border border-amber-200">
+            <label className={`flex items-center gap-2 cursor-pointer mt-3 rounded-lg px-3 py-2.5 border transition-colors ${
+              isDeferred ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'
+            }`}>
               <input
                 type="checkbox"
                 checked={isDeferred}
                 onChange={(e) => setIsDeferred(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
               />
               <div>
-                <span className="text-sm font-medium text-gray-700">Отложенный чек (черновик)</span>
-                <p className="text-[10px] text-gray-400 mt-0.5">Сохранить как черновик. Виден администратору и владельцу. Мастер не сможет удалить.</p>
+                <span className={`text-sm font-medium ${isDeferred ? 'text-red-700' : 'text-gray-700'}`}>Отложить чек</span>
+                <p className="text-[10px] text-gray-400 mt-0.5">Сохранить как черновик. Можно продолжить позже. Нельзя закрыть смену с отложенными чеками.</p>
               </div>
             </label>
           </div>
@@ -1186,18 +1185,27 @@ export default function CheckCreatePage() {
           <div className="px-5 py-4 bg-gray-50">
             <button
               type="submit"
-              disabled={createMutation.isPending || itemCount === 0}
-              className="w-full btn-primary py-3.5 text-base font-bold rounded-xl disabled:opacity-50"
+              disabled={createMutation.isPending || (!isDeferred && itemCount === 0)}
+              className={`w-full py-3.5 text-base font-bold rounded-xl disabled:opacity-50 transition-colors ${
+                isDeferred
+                  ? 'bg-red-600 hover:bg-red-700 text-white'
+                  : 'btn-primary'
+              }`}
             >
               {createMutation.isPending ? (
                 <span className="flex items-center justify-center gap-2">
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  {'\u0421\u043E\u0437\u0434\u0430\u043D\u0438\u0435...'}
+                  Создание...
+                </span>
+              ) : isDeferred ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Receipt className="w-5 h-5" />
+                  Отложить чек
                 </span>
               ) : (
                 <span className="flex items-center justify-center gap-2">
                   <Receipt className="w-5 h-5" />
-                  {'\u041F\u0440\u043E\u0431\u0438\u0442\u044C \u0447\u0435\u043A'} {'\u2014'} {formatCurrency(totalRevenue)}
+                  Пробить чек — {formatCurrency(totalRevenue)}
                 </span>
               )}
             </button>

@@ -135,21 +135,25 @@ export default function ChecksPage() {
           <div className="md:hidden space-y-3">
             {checks.map((check) => (
               <div key={check.id} onClick={() => navigate(`/checks/${check.id}`)}
-                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer">
+                className={`rounded-xl border shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer ${
+                  check.isDeferred
+                    ? 'bg-red-50 border-red-200'
+                    : 'bg-white border-gray-100'
+                }`}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold text-gray-900">#{check.number}</span>
                     <span className="text-xs text-gray-400">{format(new Date(check.date), 'dd.MM.yy', { locale: ru })}</span>
                     {check.isDeferred && (
-                      <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{'\u0427\u0435\u0440\u043D\u043E\u0432\u0438\u043A'}</span>
+                      <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Отложен</span>
                     )}
                   </div>
                   <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-gray-700 truncate">{check.client?.fullName ?? '\u2014'}</p>
-                    {check.car && <p className="text-xs text-gray-400 truncate">{check.car.plateNumber} \u00B7 {check.car.makeModel}</p>}
+                    <p className="text-sm text-gray-700 truncate">{check.client?.fullName ?? 'Розничный покупатель'}</p>
+                    {check.car && <p className="text-xs text-gray-400 truncate">{check.car.plateNumber} {'\u00B7'} {check.car.makeModel}</p>}
                   </div>
                   <span className={`ml-2 flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
                     {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
@@ -169,13 +173,13 @@ export default function ChecksPage() {
               </thead>
               <tbody>
                 {checks.map((check) => (
-                  <tr key={check.id} onClick={() => navigate(`/checks/${check.id}`)} className="cursor-pointer">
+                  <tr key={check.id} onClick={() => navigate(`/checks/${check.id}`)} className={`cursor-pointer ${check.isDeferred ? 'bg-red-50' : ''}`}>
                     <td className="font-medium">
                       <span>{check.number}</span>
-                      {check.isDeferred && <span className="ml-1.5 text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{'\u0427\u0435\u0440\u043D\u043E\u0432\u0438\u043A'}</span>}
+                      {check.isDeferred && <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Отложен</span>}
                     </td>
                     <td>{format(new Date(check.date), 'dd.MM.yyyy', { locale: ru })}</td>
-                    <td>{check.client?.fullName ?? '\u2014'}</td>
+                    <td>{check.client?.fullName ?? 'Розничный покупатель'}</td>
                     <td>{check.car ? <div><div className="text-sm">{check.car.makeModel}</div><div className="text-xs text-gray-400">{check.car.plateNumber}</div></div> : '\u2014'}</td>
                     <td>{check.master?.fullName ?? '\u2014'}</td>
                     <td className="font-semibold">{formatCurrency(check.totalRevenue)}</td>

@@ -21,7 +21,7 @@ func GetSalaries(c *gin.Context) {
 			   COALESCE(SUM(ch.total_revenue),0),
 			   COUNT(ch.id)
 		FROM users u
-		LEFT JOIN checks ch ON ch.master_id = u.id AND ch.date >= $2 AND ch.date <= $3::date + interval '1 day'
+		LEFT JOIN checks ch ON ch.master_id = u.id AND ch.date >= $2 AND ch.date <= $3::date + interval '1 day' AND ch.is_deferred=false
 		WHERE u.tenant_id=$1 AND u.role IN ('master','admin') AND u.is_active=true
 		GROUP BY u.id, u.full_name, u.salary_percent
 		ORDER BY SUM(ch.total_revenue) DESC NULLS LAST
@@ -62,33 +62,33 @@ func GetMySalary(c *gin.Context) {
 		return
 	}
 
-	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2", userID, todayStart).Scan(&summary.Today, &summary.TodayChecks); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2 AND is_deferred=false", userID, todayStart).Scan(&summary.Today, &summary.TodayChecks); err != nil {
 		serverError(c, "my salary today query", err)
 		return
 	}
-	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1 AND date >= $2", userID, weekStart).Scan(&summary.Week); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1 AND date >= $2 AND is_deferred=false", userID, weekStart).Scan(&summary.Week); err != nil {
 		serverError(c, "my salary week query", err)
 		return
 	}
-	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2", userID, monthStart).Scan(&summary.Month, &summary.MonthChecks); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0), COUNT(*) FROM checks WHERE master_id=$1 AND date >= $2 AND is_deferred=false", userID, monthStart).Scan(&summary.Month, &summary.MonthChecks); err != nil {
 		serverError(c, "my salary month query", err)
 		return
 	}
-	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1", userID).Scan(&summary.Total); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(service_salary_total),0) FROM checks WHERE master_id=$1 AND is_deferred=false", userID).Scan(&summary.Total); err != nil {
 		serverError(c, "my salary total query", err)
 		return
 	}
 
 	// Today payment methods
-	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='cash'", userID, todayStart).Scan(&summary.TodayCash); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='cash' AND is_deferred=false", userID, todayStart).Scan(&summary.TodayCash); err != nil {
 		serverError(c, "my salary today cash query", err)
 		return
 	}
-	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='card'", userID, todayStart).Scan(&summary.TodayCard); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='card' AND is_deferred=false", userID, todayStart).Scan(&summary.TodayCard); err != nil {
 		serverError(c, "my salary today card query", err)
 		return
 	}
-	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='warranty'", userID, todayStart).Scan(&summary.TodayWarranty); err != nil {
+	if err := database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE master_id=$1 AND date >= $2 AND payment_method='warranty' AND is_deferred=false", userID, todayStart).Scan(&summary.TodayWarranty); err != nil {
 		serverError(c, "my salary today warranty query", err)
 		return
 	}
