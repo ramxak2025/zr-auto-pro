@@ -19,6 +19,7 @@ import {
   UserIcon,
   CalendarDays,
   Gauge,
+  Pencil,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -337,6 +338,7 @@ export default function CheckCreatePage() {
 
   // Form fields (no top-level master — current user is the default)
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [editingDate, setEditingDate] = useState(false);
   const [mileage, setMileage] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<string>('cash');
   const [comment, setComment] = useState('');
@@ -378,13 +380,14 @@ export default function CheckCreatePage() {
     };
   }, [serviceLines.length, productLines.length]);
 
-  // Fetch masters
+  // Fetch masters (cached 60s — staff rarely changes)
   const { data: masters } = useQuery<User[]>({
     queryKey: ['masters'],
     queryFn: async () => {
       const res = await usersApi.getMasters();
       return res.data;
     },
+    staleTime: 60_000,
   });
 
   // Fetch clients by plate number search
@@ -397,22 +400,24 @@ export default function CheckCreatePage() {
     enabled: plateSearch.length >= 1,
   });
 
-  // Fetch all services
+  // Fetch all services (cached 60s — catalog data)
   const { data: allServices } = useQuery<Service[]>({
     queryKey: ['services-all'],
     queryFn: async () => {
       const res = await servicesApi.getAll({ limit: 1000 });
       return res.data?.data ?? res.data;
     },
+    staleTime: 60_000,
   });
 
-  // Fetch all products
+  // Fetch all products (cached 60s — catalog data)
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: ['products-all'],
     queryFn: async () => {
       const res = await productsApi.getAll({ limit: 1000 });
       return res.data?.data ?? res.data;
     },
+    staleTime: 60_000,
   });
 
   // Mutation
@@ -673,11 +678,38 @@ export default function CheckCreatePage() {
         {/* ===== Receipt-style container ===== */}
         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
 
-          {/* Receipt header */}
+          {/* Receipt header with editable date */}
           <div className="bg-gray-900 text-white px-5 py-4">
             <div className="text-center">
               <h2 className="text-lg font-bold tracking-wider">{'\u0417\u0410\u041A\u0410\u0417-\u041D\u0410\u0420\u042F\u0414'}</h2>
-              <p className="text-gray-400 text-xs mt-1">{format(new Date(), 'dd.MM.yyyy HH:mm')}</p>
+              <div className="flex items-center justify-center gap-2 mt-1">
+                {editingDate ? (
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    onBlur={() => setEditingDate(false)}
+                    autoFocus
+                    className="bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary-400"
+                  />
+                ) : (
+                  <>
+                    <CalendarDays className="h-3.5 w-3.5 text-gray-400" />
+                    <span className="text-gray-400 text-xs">
+                      {format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}
+                    </span>
+                    {canEditDate && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingDate(true)}
+                        className="p-0.5 rounded hover:bg-gray-700 transition-colors"
+                      >
+                        <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-300" />
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
@@ -796,45 +828,23 @@ export default function CheckCreatePage() {
             )}
           </div>
 
-          {/* Date & Mileage */}
+          {/* Mileage */}
           <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 flex-shrink-0">
-                  <CalendarDays className="h-5 w-5 text-blue-500" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Дата чека</label>
-                  {canEditDate ? (
-                    <input
-                      type="date"
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                      className="w-full text-sm h-9 px-2.5 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                    />
-                  ) : (
-                    <p className="text-sm font-medium text-gray-900 h-9 flex items-center">
-                      {format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}
-                    </p>
-                  )}
-                </div>
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 flex-shrink-0">
+                <Gauge className="h-5 w-5 text-orange-500" />
               </div>
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 flex-shrink-0">
-                  <Gauge className="h-5 w-5 text-orange-500" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Пробег</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      value={mileage}
-                      onChange={(e) => setMileage(e.target.value)}
-                      placeholder="0"
-                      className="w-full text-sm h-9 px-2.5 pr-10 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
-                    />
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">км</span>
-                  </div>
+              <div className="flex-1 min-w-0">
+                <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Пробег</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={mileage}
+                    onChange={(e) => setMileage(e.target.value)}
+                    placeholder="0"
+                    className="w-full text-sm h-9 px-2.5 pr-10 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">км</span>
                 </div>
               </div>
             </div>

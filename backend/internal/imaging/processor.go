@@ -2,80 +2,73 @@ package imaging
 
 import (
 	"fmt"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 
-	"github.com/h2non/bimg"
+	"github.com/disintegration/imaging"
 )
 
 const (
-	MaxWidth      = 1200
-	ThumbWidth    = 400
-	WebPQuality   = 80
-	ThumbQuality  = 70
+	MaxWidth     = 1200
+	ThumbWidth   = 400
+	JPEGQuality  = 82
+	ThumbQuality = 72
 )
 
 // ProcessResult holds paths to generated image variants.
 type ProcessResult struct {
-	Optimized string // path to optimized WebP
-	Thumbnail string // path to thumbnail WebP
+	Optimized string // filename of optimized JPEG
+	Thumbnail string // filename of thumbnail JPEG
 }
 
-// Process takes an uploaded file, converts it to WebP with resize,
-// and generates a thumbnail. Returns paths relative to uploadDir.
+// Process takes an uploaded image, resizes it and generates a thumbnail.
+// Pure Go — no CGO, no libvips required.
 func Process(srcPath, uploadDir, baseName string) (*ProcessResult, error) {
-	buf, err := os.ReadFile(srcPath)
+	src, err := imaging.Open(srcPath, imaging.AutoOrientation(true))
 	if err != nil {
-		return nil, fmt.Errorf("read source: %w", err)
+		return nil, fmt.Errorf("open image: %w", err)
 	}
 
-	// Detect original dimensions
-	size, err := bimg.NewImage(buf).Size()
-	if err != nil {
-		return nil, fmt.Errorf("read image size: %w", err)
+	bounds := src.Bounds()
+	origWidth := bounds.Dx()
+
+	// --- Optimized version (max 1200px wide, JPEG) ---
+	optimized := src
+	if origWidth > MaxWidth {
+		optimized = imaging.Resize(src, MaxWidth, 0, imaging.Lanczos)
 	}
 
-	// --- Optimized version (max 1200px wide, WebP) ---
-	optWidth := size.Width
-	if optWidth > MaxWidth {
-		optWidth = MaxWidth
-	}
-
-	optimized, err := bimg.NewImage(buf).Process(bimg.Options{
-		Width:   optWidth,
-		Type:    bimg.WEBP,
-		Quality: WebPQuality,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("optimize image: %w", err)
-	}
-
-	optName := baseName + ".webp"
+	optName := baseName + ".jpg"
 	optPath := filepath.Join(uploadDir, optName)
-	if err := os.WriteFile(optPath, optimized, 0644); err != nil {
-		return nil, fmt.Errorf("write optimized: %w", err)
-	}
-
-	// --- Thumbnail (400px wide, WebP) ---
-	thumbWidth := ThumbWidth
-	if size.Width < thumbWidth {
-		thumbWidth = size.Width
-	}
-
-	thumb, err := bimg.NewImage(buf).Process(bimg.Options{
-		Width:   thumbWidth,
-		Type:    bimg.WEBP,
-		Quality: ThumbQuality,
-	})
+	optFile, err := os.Create(optPath)
 	if err != nil {
-		return nil, fmt.Errorf("create thumbnail: %w", err)
+		return nil, fmt.Errorf("create optimized file: %w", err)
 	}
+	if err := jpeg.Encode(optFile, optimized, &jpeg.Options{Quality: JPEGQuality}); err != nil {
+		optFile.Close()
+		return nil, fmt.Errorf("encode optimized: %w", err)
+	}
+	optFile.Close()
 
-	thumbName := baseName + "_thumb.webp"
-	thumbPath := filepath.Join(uploadDir, thumbName)
-	if err := os.WriteFile(thumbPath, thumb, 0644); err != nil {
-		return nil, fmt.Errorf("write thumbnail: %w", err)
+	// --- Thumbnail (400px wide, JPEG) ---
+	thumbW := ThumbWidth
+	if origWidth < thumbW {
+		thumbW = origWidth
 	}
+	thumb := imaging.Resize(src, thumbW, 0, imaging.Lanczos)
+
+	thumbName := baseName + "_thumb.jpg"
+	thumbPath := filepath.Join(uploadDir, thumbName)
+	thumbFile, err := os.Create(thumbPath)
+	if err != nil {
+		return nil, fmt.Errorf("create thumbnail file: %w", err)
+	}
+	if err := jpeg.Encode(thumbFile, thumb, &jpeg.Options{Quality: ThumbQuality}); err != nil {
+		thumbFile.Close()
+		return nil, fmt.Errorf("encode thumbnail: %w", err)
+	}
+	thumbFile.Close()
 
 	return &ProcessResult{
 		Optimized: optName,

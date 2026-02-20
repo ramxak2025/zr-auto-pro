@@ -1,13 +1,12 @@
 FROM golang:1.24-alpine AS builder
-RUN apk add --no-cache vips-dev gcc musl-dev pkgconf
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download 2>/dev/null || true
 COPY . .
-RUN go mod tidy && CGO_ENABLED=1 go build -o server ./cmd/server
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
 
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata vips
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/server .
 COPY --from=builder /app/migrations ./migrations

@@ -444,12 +444,23 @@ func GetDashboard(c *gin.Context) {
 	}
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 
+	// Single query instead of 5 sequential queries
 	var stats models.DashboardStats
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0), COUNT(*) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, todayStart).Scan(&stats.TodayRevenue, &stats.TodayChecks)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, weekStart).Scan(&stats.WeekRevenue)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(total_revenue),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, monthStart).Scan(&stats.MonthRevenue)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, todayStart).Scan(&stats.TodayProfit)
-	database.Pool.QueryRow(ctx, "SELECT COALESCE(SUM(profit),0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false", tenantID, monthStart).Scan(&stats.MonthProfit)
+	database.Pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN date >= $2 THEN total_revenue ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN date >= $2 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN date >= $3 THEN total_revenue ELSE 0 END), 0),
+			COALESCE(SUM(total_revenue), 0),
+			COALESCE(SUM(CASE WHEN date >= $2 THEN profit ELSE 0 END), 0),
+			COALESCE(SUM(profit), 0)
+		FROM checks
+		WHERE tenant_id = $1 AND date >= $4 AND is_deferred = false
+	`, tenantID, todayStart, weekStart, monthStart).Scan(
+		&stats.TodayRevenue, &stats.TodayChecks,
+		&stats.WeekRevenue, &stats.MonthRevenue,
+		&stats.TodayProfit, &stats.MonthProfit,
+	)
 
 	c.JSON(http.StatusOK, stats)
 }
