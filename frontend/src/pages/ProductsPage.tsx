@@ -20,7 +20,7 @@ import {
   FolderPlus,
 } from 'lucide-react';
 import { productsApi, uploadsApi } from '../api/services';
-import type { Product, PaginatedResponse } from '../types';
+import type { Product, BundleItem, PaginatedResponse } from '../types';
 import { UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -32,6 +32,18 @@ import ConfirmDialog from '../components/ConfirmDialog';
 
 function formatMoney(value: number): string {
   return value.toLocaleString('ru-RU') + ' \u20BD';
+}
+
+const UNIT_OPTIONS = [
+  { value: 'pcs', label: 'шт' },
+  { value: 'm', label: 'м' },
+  { value: 'l', label: 'л' },
+  { value: 'kg', label: 'кг' },
+];
+
+function unitLabel(unit?: string): string {
+  const found = UNIT_OPTIONS.find((u) => u.value === unit);
+  return found ? found.label : 'шт';
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -56,6 +68,9 @@ interface ProductFormData {
   sellPrice: number;
   stock: number;
   minStock: number;
+  unit: string;
+  isBundle: boolean;
+  bundleItems: BundleItem[];
 }
 
 interface ProductFormModalProps {
@@ -65,6 +80,7 @@ interface ProductFormModalProps {
   onSubmit: (data: ProductFormData) => void;
   isLoading: boolean;
   categories: string[];
+  allProducts: Product[];
 }
 
 function ProductFormModal({
@@ -74,6 +90,7 @@ function ProductFormModal({
   onSubmit,
   isLoading,
   categories,
+  allProducts,
 }: ProductFormModalProps) {
   const [name, setName] = useState(product?.name || '');
   const [category, setCategory] = useState(product?.category || '');
@@ -83,7 +100,34 @@ function ProductFormModal({
   const [sellPrice, setSellPrice] = useState(product?.sellPrice?.toString() || '0');
   const [stock, setStock] = useState(product?.stock?.toString() || '0');
   const [minStock, setMinStock] = useState(product?.minStock?.toString() || '0');
+  const [unit, setUnit] = useState(product?.unit || 'pcs');
+  const [isBundle, setIsBundle] = useState(product?.isBundle || false);
+  const [bundleItems, setBundleItems] = useState<BundleItem[]>(product?.bundleItems || []);
+  const [bundleSearch, setBundleSearch] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const bundleSearchResults = useMemo(() => {
+    if (!bundleSearch.trim()) return [];
+    const q = bundleSearch.toLowerCase();
+    return allProducts
+      .filter((p) => !p.isBundle && p.name.toLowerCase().includes(q) && !bundleItems.some((bi) => bi.productId === p.id))
+      .slice(0, 8);
+  }, [bundleSearch, allProducts, bundleItems]);
+
+  function addBundleItem(p: Product) {
+    setBundleItems((prev) => [...prev, { productId: p.id, name: p.name, quantity: 1 }]);
+    setBundleSearch('');
+  }
+
+  function removeBundleItem(productId: string) {
+    setBundleItems((prev) => prev.filter((bi) => bi.productId !== productId));
+  }
+
+  function updateBundleItemQty(productId: string, qty: number) {
+    setBundleItems((prev) =>
+      prev.map((bi) => (bi.productId === productId ? { ...bi, quantity: Math.max(1, qty) } : bi)),
+    );
+  }
 
   async function handlePhotoUpload(file: File) {
     if (file.size > 5 * 1024 * 1024) {
@@ -108,6 +152,10 @@ function ProductFormModal({
       toast.error('Введите название товара');
       return;
     }
+    if (isBundle && bundleItems.length === 0) {
+      toast.error('Добавьте товары в комплект');
+      return;
+    }
     onSubmit({
       name: name.trim(),
       category: category.trim(),
@@ -116,6 +164,9 @@ function ProductFormModal({
       sellPrice: parseFloat(sellPrice) || 0,
       stock: parseInt(stock) || 0,
       minStock: parseInt(minStock) || 0,
+      unit,
+      isBundle,
+      bundleItems: isBundle ? bundleItems : [],
     });
   }
 
@@ -126,7 +177,7 @@ function ProductFormModal({
       title={product ? 'Редактировать товар' : 'Новый товар'}
       size="lg"
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4 max-h-[75vh] overflow-y-auto">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
             Фото товара
@@ -210,6 +261,29 @@ function ProductFormModal({
           </datalist>
         </div>
 
+        {/* Unit selector */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">
+            Единица измерения
+          </label>
+          <div className="flex gap-2">
+            {UNIT_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setUnit(opt.value)}
+                className={`px-4 py-2 rounded-xl text-sm font-medium border transition-colors ${
+                  unit === opt.value
+                    ? 'bg-primary-600 text-white border-primary-600'
+                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
@@ -265,6 +339,81 @@ function ProductFormModal({
             />
           </div>
         </div>
+
+        {/* Bundle toggle */}
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            type="button"
+            onClick={() => setIsBundle((v) => !v)}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              isBundle ? 'bg-primary-600' : 'bg-gray-200'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                isBundle ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+          <span className="text-sm font-medium text-gray-700">Комплект (набор товаров)</span>
+        </div>
+
+        {/* Bundle items editor */}
+        {isBundle && (
+          <div className="space-y-3 rounded-xl border border-primary-200 bg-primary-50/50 p-3">
+            <p className="text-xs font-semibold text-primary-600 uppercase tracking-wider">Состав комплекта</p>
+            {bundleItems.length > 0 && (
+              <div className="space-y-2">
+                {bundleItems.map((bi) => (
+                  <div key={bi.productId} className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-gray-200">
+                    <span className="flex-1 text-sm text-gray-900 truncate">{bi.name}</span>
+                    <input
+                      type="number"
+                      value={bi.quantity}
+                      onChange={(e) => updateBundleItemQty(bi.productId, parseInt(e.target.value) || 1)}
+                      min="1"
+                      className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-sm text-center focus:border-primary-500 focus:outline-none"
+                    />
+                    <span className="text-xs text-gray-400">{unitLabel(allProducts.find((p) => p.id === bi.productId)?.unit)}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeBundleItem(bi.productId)}
+                      className="p-1 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input
+                type="text"
+                value={bundleSearch}
+                onChange={(e) => setBundleSearch(e.target.value)}
+                placeholder="Поиск товара для комплекта..."
+                className="block w-full rounded-lg border border-gray-200 pl-9 pr-3 py-2 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none"
+              />
+            </div>
+            {bundleSearchResults.length > 0 && (
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {bundleSearchResults.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => addBundleItem(p)}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-200 text-left hover:bg-gray-50 transition-colors"
+                  >
+                    <Package className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                    <span className="flex-1 text-sm text-gray-900 truncate">{p.name}</span>
+                    <span className="text-xs text-gray-400">{p.stock} {unitLabel(p.unit)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
@@ -457,12 +606,19 @@ function ProductCard({
 
       {/* Info */}
       <div className="p-2.5">
-        <p className="text-[13px] font-medium text-gray-900 leading-tight line-clamp-2 min-h-[2.5em]">
-          {product.name}
-        </p>
+        <div className="flex items-start gap-1">
+          <p className="text-[13px] font-medium text-gray-900 leading-tight line-clamp-2 min-h-[2.5em] flex-1">
+            {product.name}
+          </p>
+          {product.isBundle && (
+            <span className="flex-shrink-0 text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full mt-0.5">
+              КМП
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1 mt-1.5">
           <span className={`text-[11px] ${isLow ? 'text-red-500 font-semibold' : 'text-gray-400'}`}>
-            {product.stock} шт
+            {product.stock} {unitLabel(product.unit)}
           </span>
           {isLow && <AlertTriangle className="h-3 w-3 text-red-500" />}
         </div>
@@ -528,6 +684,7 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
   onDelete: () => void;
 }) {
   const isLow = product.stock <= product.minStock;
+  const uLabel = unitLabel(product.unit);
 
   return (
     <Modal isOpen onClose={onClose} title={product.name} size="lg">
@@ -542,12 +699,31 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
             )}
           </div>
           <div className="flex-1 min-w-0 space-y-1.5">
-            {product.category && (
-              <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">{product.category}</span>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              {product.category && (
+                <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">{product.category}</span>
+              )}
+              {product.isBundle && (
+                <span className="inline-block text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Комплект</span>
+              )}
+            </div>
             <p className="text-base font-bold text-gray-900">{product.name}</p>
           </div>
         </div>
+
+        {/* Bundle contents */}
+        {product.isBundle && product.bundleItems && product.bundleItems.length > 0 && (
+          <div className="rounded-xl border border-primary-200 bg-primary-50/50 p-3 space-y-2">
+            <p className="text-[11px] font-semibold text-primary-600 uppercase tracking-wider">Состав комплекта</p>
+            {product.bundleItems.map((bi, idx) => (
+              <div key={idx} className="flex items-center gap-2 text-sm">
+                <Package className="h-3.5 w-3.5 text-primary-400 flex-shrink-0" />
+                <span className="flex-1 text-gray-900 truncate">{bi.name}</span>
+                <span className="text-gray-500 font-medium">{bi.quantity} {unitLabel('pcs')}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Stats grid */}
         <div className="grid grid-cols-2 gap-3">
@@ -562,12 +738,12 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
           <div className={`rounded-xl p-3 ${isLow ? 'bg-red-50' : 'bg-gray-50'}`}>
             <p className="text-[11px] text-gray-400 mb-0.5">Остаток</p>
             <p className={`text-sm font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
-              {product.stock} шт {isLow && <AlertTriangle className="inline h-3 w-3 ml-1" />}
+              {product.stock} {uLabel} {isLow && <AlertTriangle className="inline h-3 w-3 ml-1" />}
             </p>
           </div>
           <div className="rounded-xl bg-gray-50 p-3">
             <p className="text-[11px] text-gray-400 mb-0.5">Мин. остаток</p>
-            <p className="text-sm font-bold text-gray-900">{product.minStock} шт</p>
+            <p className="text-sm font-bold text-gray-900">{product.minStock} {uLabel}</p>
           </div>
         </div>
 
@@ -603,6 +779,14 @@ export default function ProductsPage() {
   const queryClient = useQueryClient();
   const { isRole } = useAuth();
   const canManageWarehouse = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const isOwner = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+
+  const { data: warehouseStats } = useQuery({
+    queryKey: ['warehouse-stats'],
+    queryFn: async () => { const res = await productsApi.getWarehouseStats(); return res.data; },
+    staleTime: 60_000,
+    enabled: isOwner,
+  });
 
   const [searchText, setSearchText] = useState('');
   const [activePath, setActivePath] = useState<string[]>([]);
@@ -866,7 +1050,7 @@ export default function ProductsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-2">
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
@@ -884,6 +1068,28 @@ export default function ProductsPage() {
           </button>
         )}
       </div>
+
+      {/* Warehouse stats for owner */}
+      {isOwner && warehouseStats && (
+        <div className="grid grid-cols-2 gap-2.5">
+          <div className="rounded-xl bg-indigo-50 p-3">
+            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Себестоимость склада</p>
+            <p className="text-base font-bold text-indigo-700 mt-0.5">{formatMoney(warehouseStats.totalCostValue)}</p>
+          </div>
+          <div className="rounded-xl bg-green-50 p-3">
+            <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">В розн. ценах</p>
+            <p className="text-base font-bold text-green-700 mt-0.5">{formatMoney(warehouseStats.totalSellValue)}</p>
+          </div>
+          <div className="rounded-xl bg-orange-50 p-3">
+            <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-wider">Расход за месяц</p>
+            <p className="text-base font-bold text-orange-700 mt-0.5">{formatMoney(warehouseStats.monthProductCost)}</p>
+          </div>
+          <div className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Расход пред. мес.</p>
+            <p className="text-base font-bold text-gray-700 mt-0.5">{formatMoney(warehouseStats.lastMonthProductCost)}</p>
+          </div>
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative">
@@ -1054,7 +1260,7 @@ export default function ProductsPage() {
 
       {/* Bottom action bar when products are selected */}
       {selectMode && selectedProducts.size > 0 && (
-        <div className="sticky bottom-0 z-10 -mx-4 -mb-4 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3">
+        <div className="sticky bottom-20 md:bottom-0 z-10 -mx-4 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 rounded-xl shadow-lg">
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-600">Выбрано: {selectedProducts.size}</span>
             <button
@@ -1091,6 +1297,7 @@ export default function ProductsPage() {
           onSubmit={handleFormSubmit}
           isLoading={isMutating}
           categories={categories}
+          allProducts={allProducts}
         />
       )}
 

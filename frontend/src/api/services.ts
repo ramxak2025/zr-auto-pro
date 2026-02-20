@@ -117,6 +117,9 @@ interface CreateProductRequest {
   sellPrice: number;
   stock: number;
   minStock: number;
+  unit?: string;
+  isBundle?: boolean;
+  bundleItems?: Array<{ productId: string; name: string; quantity: number }>;
 }
 
 interface UpdateProductRequest {
@@ -127,6 +130,9 @@ interface UpdateProductRequest {
   sellPrice?: number;
   stock?: number;
   minStock?: number;
+  unit?: string;
+  isBundle?: boolean;
+  bundleItems?: Array<{ productId: string; name: string; quantity: number }>;
 }
 
 interface StockUpdateRequest {
@@ -305,6 +311,7 @@ export const authApi = {
   login: (data: LoginRequest) => api.post<LoginResponse>('/auth/login', data),
   register: (data: RegisterRequest) => api.post<LoginResponse>('/auth/register', data),
   me: () => api.get<User>('/auth/me'),
+  updateAvatar: (avatar: string) => api.patch<{ avatar: string }>('/auth/avatar', { avatar }),
 };
 
 export const usersApi = {
@@ -356,6 +363,7 @@ export const productsApi = {
   getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Product>>('/products', { params }),
   getLowStock: () => api.get<Product[]>('/products/low-stock'),
   getMovements: (params?: PaginationParams) => api.get<StockMovement[]>('/products/movements', { params }),
+  getWarehouseStats: () => api.get<{ totalCostValue: number; totalSellValue: number; totalItems: number; monthProductCost: number; lastMonthProductCost: number }>('/products/warehouse-stats'),
   getById: (id: string) => api.get<Product>(`/products/${id}`),
   create: (data: CreateProductRequest) => api.post<Product>('/products', data),
   update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
@@ -374,6 +382,7 @@ export const servicesApi = {
 export const checksApi = {
   getAll: (params?: ChecksParams) => api.get<PaginatedResponse<Check>>('/checks', { params }),
   getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
+  getDashboardChart: (period: string) => api.get<{ points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>; totalRevenue: number; totalProfit: number; totalChecks: number }>('/checks/dashboard/chart', { params: { period } }),
   getRanking: () => api.get<EmployeeRanking>('/checks/ranking'),
   getById: (id: string) => api.get<Check>(`/checks/${id}`),
   create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),

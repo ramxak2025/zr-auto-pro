@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -203,9 +204,18 @@ func CreateCheck(c *gin.Context) {
 		return
 	}
 
-	if req.MasterID == "" || req.ClientID == "" || req.CarID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "Мастер, клиент и авто обязательны"})
+	if req.MasterID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Мастер обязателен"})
 		return
+	}
+
+	// ClientID and CarID are optional (retail buyer)
+	var clientID, carID interface{}
+	if req.ClientID != "" {
+		clientID = req.ClientID
+	}
+	if req.CarID != "" {
+		carID = req.CarID
 	}
 
 	date := time.Now()
@@ -280,7 +290,7 @@ func CreateCheck(c *gin.Context) {
 			service_salary_total, total_cost, profit, tenant_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		RETURNING id, number
-	`, date, req.MasterID, req.ClientID, req.CarID, req.Mileage, req.Comment, req.Discount,
+	`, date, req.MasterID, clientID, carID, req.Mileage, req.Comment, req.Discount,
 		req.IsDeferred, req.PaymentMethod, req.CashAmount, req.CardAmount,
 		serviceTotal, productTotal, totalRevenue,
 		productCostTotal, serviceSalaryTotal, totalCost, profit, tenantID).Scan(&checkID, &checkNumber)
@@ -448,4 +458,85 @@ func GetRanking(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, ranking)
+}
+
+// GetDashboardChart returns daily chart data for owner dashboard
+func GetDashboardChart(c *gin.Context) {
+	ctx := c.Request.Context()
+	tenantID := c.GetString("tenantID")
+	period := c.DefaultQuery("period", "week")
+
+	now := time.Now()
+	var startDate time.Time
+	switch period {
+	case "today":
+		startDate = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	case "week":
+		startDate = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -6)
+	case "month":
+		startDate = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	case "year":
+		startDate = time.Date(now.Year(), 1, 1, 0, 0, 0, 0, now.Location())
+	default:
+		startDate = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -6)
+	}
+
+	type ChartPoint struct {
+		Date       string  `json:"date"`
+		Revenue    float64 `json:"revenue"`
+		Profit     float64 `json:"profit"`
+		CheckCount int     `json:"checkCount"`
+	}
+
+	var groupBy string
+	if period == "year" {
+		groupBy = "TO_CHAR(date, 'YYYY-MM')"
+	} else {
+		groupBy = "date::date"
+	}
+
+	query := `SELECT ` + groupBy + ` AS d, COALESCE(SUM(total_revenue),0), COALESCE(SUM(profit),0), COUNT(*)
+		FROM checks WHERE tenant_id=$1 AND date >= $2
+		GROUP BY d ORDER BY d`
+
+	rows, err := database.Pool.Query(ctx, query, tenantID, startDate)
+	if err != nil {
+		serverError(c, "dashboard chart query", err)
+		return
+	}
+	defer rows.Close()
+
+	points := []ChartPoint{}
+	for rows.Next() {
+		var p ChartPoint
+		var dateVal interface{}
+		if err := rows.Scan(&dateVal, &p.Revenue, &p.Profit, &p.CheckCount); err != nil {
+			continue
+		}
+		switch v := dateVal.(type) {
+		case time.Time:
+			p.Date = v.Format("2006-01-02")
+		case string:
+			p.Date = v
+		default:
+			p.Date = fmt.Sprintf("%v", v)
+		}
+		points = append(points, p)
+	}
+
+	// Totals
+	var totalRevenue, totalProfit float64
+	var totalChecks int
+	for _, p := range points {
+		totalRevenue += p.Revenue
+		totalProfit += p.Profit
+		totalChecks += p.CheckCount
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"points":       points,
+		"totalRevenue": totalRevenue,
+		"totalProfit":  totalProfit,
+		"totalChecks":  totalChecks,
+	})
 }

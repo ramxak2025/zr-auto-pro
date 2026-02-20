@@ -137,9 +137,13 @@ export default function Layout() {
 
         <div className="border-t border-gray-200 px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
-              {user?.fullName?.charAt(0) || 'U'}
-            </div>
+            {user?.avatar ? (
+              <img src={user.avatar} alt="" className="h-8 w-8 rounded-full object-cover" />
+            ) : (
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
+                {user?.fullName?.charAt(0) || 'U'}
+              </div>
+            )}
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-gray-900">{user?.fullName || 'User'}</p>
               <p className="truncate text-xs text-gray-500">{roleLabel}</p>
@@ -183,14 +187,18 @@ export default function Layout() {
             <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
           </div>
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
-              {user?.fullName?.charAt(0) || 'U'}
-            </div>
+            {user?.avatar ? (
+              <img src={user.avatar} alt="" className="h-7 w-7 rounded-full object-cover" />
+            ) : (
+              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
+                {user?.fullName?.charAt(0) || 'U'}
+              </div>
+            )}
           </div>
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-4 md:p-6">
           <Outlet />
         </main>
 

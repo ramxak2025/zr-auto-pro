@@ -45,6 +45,7 @@ type User struct {
 	Password      string          `json:"-"`
 	FullName      string          `json:"fullName"`
 	Username      *string         `json:"username,omitempty"`
+	Avatar        *string         `json:"avatar,omitempty"`
 	Role          string          `json:"role"`
 	SalaryPercent float64         `json:"salaryPercent"`
 	Permissions   json.RawMessage `json:"permissions"`
@@ -86,18 +87,21 @@ type Service struct {
 }
 
 type Product struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Category  *string   `json:"category,omitempty"`
-	Photo     *string   `json:"photo,omitempty"`
-	CostPrice float64   `json:"costPrice"`
-	SellPrice float64   `json:"sellPrice"`
-	Stock     int       `json:"stock"`
-	MinStock  int       `json:"minStock"`
-	SupplierID *string  `json:"supplierId,omitempty"`
-	Supplier  *Supplier `json:"supplier,omitempty"`
-	TenantID  string    `json:"-"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Category    *string         `json:"category,omitempty"`
+	Photo       *string         `json:"photo,omitempty"`
+	CostPrice   float64         `json:"costPrice"`
+	SellPrice   float64         `json:"sellPrice"`
+	Stock       int             `json:"stock"`
+	MinStock    int             `json:"minStock"`
+	Unit        string          `json:"unit"`
+	IsBundle    bool            `json:"isBundle"`
+	BundleItems json.RawMessage `json:"bundleItems"`
+	SupplierID  *string         `json:"supplierId,omitempty"`
+	Supplier    *Supplier       `json:"supplier,omitempty"`
+	TenantID    string          `json:"-"`
+	CreatedAt   time.Time       `json:"createdAt"`
 }
 
 type Check struct {

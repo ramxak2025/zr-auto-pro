@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"zr-auto-pro/internal/database"
@@ -26,7 +28,7 @@ func GetProducts(c *gin.Context) {
 	offset := (page - 1) * limit
 
 	countQ := "SELECT COUNT(*) FROM products WHERE tenant_id=$1"
-	query := `SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, created_at FROM products WHERE tenant_id=$1`
+	query := `SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, COALESCE(unit,'pcs'), COALESCE(is_bundle,false), COALESCE(bundle_items,'[]'), created_at FROM products WHERE tenant_id=$1`
 	args := []interface{}{tenantID}
 	cArgs := []interface{}{tenantID}
 	idx := 2
@@ -59,7 +61,7 @@ func GetProducts(c *gin.Context) {
 	for rows.Next() {
 		var p models.Product
 		var cat, photo string
-		if err := rows.Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.Unit, &p.IsBundle, &p.BundleItems, &p.CreatedAt); err != nil {
 			serverError(c, "products row scan", err)
 			return
 		}
@@ -144,9 +146,9 @@ func GetProduct(c *gin.Context) {
 	var p models.Product
 	var cat, photo string
 	err := database.Pool.QueryRow(ctx, `
-		SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, created_at
+		SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, COALESCE(unit,'pcs'), COALESCE(is_bundle,false), COALESCE(bundle_items,'[]'), created_at
 		FROM products WHERE id=$1 AND tenant_id=$2
-	`, id, tenantID).Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.CreatedAt)
+	`, id, tenantID).Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.Unit, &p.IsBundle, &p.BundleItems, &p.CreatedAt)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
 		return
@@ -164,25 +166,34 @@ func CreateProduct(c *gin.Context) {
 	ctx := c.Request.Context()
 	tenantID := c.GetString("tenantID")
 	var body struct {
-		Name      string  `json:"name"`
-		Category  *string `json:"category"`
-		Photo     *string `json:"photo"`
-		CostPrice float64 `json:"costPrice"`
-		SellPrice float64 `json:"sellPrice"`
-		Stock     int     `json:"stock"`
-		MinStock  int     `json:"minStock"`
+		Name        string          `json:"name"`
+		Category    *string         `json:"category"`
+		Photo       *string         `json:"photo"`
+		CostPrice   float64         `json:"costPrice"`
+		SellPrice   float64         `json:"sellPrice"`
+		Stock       int             `json:"stock"`
+		MinStock    int             `json:"minStock"`
+		Unit        string          `json:"unit"`
+		IsBundle    bool            `json:"isBundle"`
+		BundleItems json.RawMessage `json:"bundleItems"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
 		return
 	}
+	if body.Unit == "" {
+		body.Unit = "pcs"
+	}
+	if body.BundleItems == nil {
+		body.BundleItems = json.RawMessage("[]")
+	}
 
 	var p models.Product
 	err := database.Pool.QueryRow(ctx, `
-		INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, tenant_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id, name, cost_price, sell_price, stock, min_stock, created_at
-	`, body.Name, body.Category, body.Photo, body.CostPrice, body.SellPrice, body.Stock, body.MinStock, tenantID).Scan(
-		&p.ID, &p.Name, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.CreatedAt,
+		INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, tenant_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, name, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, created_at
+	`, body.Name, body.Category, body.Photo, body.CostPrice, body.SellPrice, body.Stock, body.MinStock, body.Unit, body.IsBundle, body.BundleItems, tenantID).Scan(
+		&p.ID, &p.Name, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.Unit, &p.IsBundle, &p.BundleItems, &p.CreatedAt,
 	)
 	if err != nil {
 		serverError(c, "create product", err)
@@ -198,13 +209,16 @@ func UpdateProduct(c *gin.Context) {
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
-		Name      *string  `json:"name"`
-		Category  *string  `json:"category"`
-		Photo     *string  `json:"photo"`
-		CostPrice *float64 `json:"costPrice"`
-		SellPrice *float64 `json:"sellPrice"`
-		Stock     *int     `json:"stock"`
-		MinStock  *int     `json:"minStock"`
+		Name        *string          `json:"name"`
+		Category    *string          `json:"category"`
+		Photo       *string          `json:"photo"`
+		CostPrice   *float64         `json:"costPrice"`
+		SellPrice   *float64         `json:"sellPrice"`
+		Stock       *int             `json:"stock"`
+		MinStock    *int             `json:"minStock"`
+		Unit        *string          `json:"unit"`
+		IsBundle    *bool            `json:"isBundle"`
+		BundleItems *json.RawMessage `json:"bundleItems"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
@@ -215,9 +229,10 @@ func UpdateProduct(c *gin.Context) {
 		UPDATE products SET
 			name = COALESCE($1, name), category = COALESCE($2, category), photo = COALESCE($3, photo),
 			cost_price = COALESCE($4, cost_price), sell_price = COALESCE($5, sell_price),
-			stock = COALESCE($6, stock), min_stock = COALESCE($7, min_stock)
-		WHERE id=$8 AND tenant_id=$9
-	`, body.Name, body.Category, body.Photo, body.CostPrice, body.SellPrice, body.Stock, body.MinStock, id, tenantID)
+			stock = COALESCE($6, stock), min_stock = COALESCE($7, min_stock),
+			unit = COALESCE($8, unit), is_bundle = COALESCE($9, is_bundle), bundle_items = COALESCE($10, bundle_items)
+		WHERE id=$11 AND tenant_id=$12
+	`, body.Name, body.Category, body.Photo, body.CostPrice, body.SellPrice, body.Stock, body.MinStock, body.Unit, body.IsBundle, body.BundleItems, id, tenantID)
 	if err != nil {
 		serverError(c, "update product", err)
 		return
@@ -226,9 +241,9 @@ func UpdateProduct(c *gin.Context) {
 	var p models.Product
 	var cat, photo string
 	if err := database.Pool.QueryRow(ctx, `
-		SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, created_at
+		SELECT id, name, COALESCE(category,''), COALESCE(photo,''), cost_price, sell_price, stock, min_stock, COALESCE(unit,'pcs'), COALESCE(is_bundle,false), COALESCE(bundle_items,'[]'), created_at
 		FROM products WHERE id=$1
-	`, id).Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.CreatedAt); err != nil {
+	`, id).Scan(&p.ID, &p.Name, &cat, &photo, &p.CostPrice, &p.SellPrice, &p.Stock, &p.MinStock, &p.Unit, &p.IsBundle, &p.BundleItems, &p.CreatedAt); err != nil {
 		serverError(c, "update product re-read", err)
 		return
 	}
@@ -305,4 +320,46 @@ func UpdateStock(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"stock": newStock})
+}
+
+// GetWarehouseStats returns total cost price of all stock and product cost used this month
+func GetWarehouseStats(c *gin.Context) {
+	ctx := c.Request.Context()
+	tenantID := c.GetString("tenantID")
+
+	// Total cost of current stock
+	var totalCostValue float64
+	var totalItems int
+	database.Pool.QueryRow(ctx,
+		"SELECT COALESCE(SUM(cost_price * stock), 0), COALESCE(SUM(stock), 0) FROM products WHERE tenant_id=$1",
+		tenantID).Scan(&totalCostValue, &totalItems)
+
+	// Total sell value of current stock
+	var totalSellValue float64
+	database.Pool.QueryRow(ctx,
+		"SELECT COALESCE(SUM(sell_price * stock), 0) FROM products WHERE tenant_id=$1",
+		tenantID).Scan(&totalSellValue)
+
+	// Products cost used this month (from checks)
+	now := time.Now()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	var monthProductCost float64
+	database.Pool.QueryRow(ctx,
+		"SELECT COALESCE(SUM(product_cost_total), 0) FROM checks WHERE tenant_id=$1 AND date >= $2",
+		tenantID, monthStart).Scan(&monthProductCost)
+
+	// Products cost used last month (for comparison)
+	lastMonthStart := monthStart.AddDate(0, -1, 0)
+	var lastMonthProductCost float64
+	database.Pool.QueryRow(ctx,
+		"SELECT COALESCE(SUM(product_cost_total), 0) FROM checks WHERE tenant_id=$1 AND date >= $2 AND date < $3",
+		tenantID, lastMonthStart, monthStart).Scan(&lastMonthProductCost)
+
+	c.JSON(http.StatusOK, gin.H{
+		"totalCostValue":       totalCostValue,
+		"totalSellValue":       totalSellValue,
+		"totalItems":           totalItems,
+		"monthProductCost":     monthProductCost,
+		"lastMonthProductCost": lastMonthProductCost,
+	})
 }

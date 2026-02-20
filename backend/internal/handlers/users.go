@@ -157,7 +157,7 @@ func UpdateUser(c *gin.Context) {
 	fieldMap := map[string]string{
 		"phone": "phone", "fullName": "full_name", "role": "role",
 		"salaryPercent": "salary_percent", "permissions": "permissions",
-		"isActive": "is_active", "password": "password",
+		"isActive": "is_active", "password": "password", "avatar": "avatar",
 	}
 	for jsonKey, dbCol := range fieldMap {
 		if val, ok := body[jsonKey]; ok {
@@ -194,14 +194,36 @@ func UpdateUser(c *gin.Context) {
 	// Return updated user
 	var u models.User
 	if err := database.Pool.QueryRow(ctx, `
-		SELECT id, phone, full_name, role, salary_percent, permissions, is_active, created_at
+		SELECT id, phone, full_name, avatar, role, salary_percent, permissions, is_active, created_at
 		FROM users WHERE id=$1
-	`, id).Scan(&u.ID, &u.Phone, &u.FullName, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt); err != nil {
+	`, id).Scan(&u.ID, &u.Phone, &u.FullName, &u.Avatar, &u.Role, &u.SalaryPercent, &u.Permissions, &u.IsActive, &u.CreatedAt); err != nil {
 		serverError(c, "update user re-read", err)
 		return
 	}
 
 	c.JSON(http.StatusOK, u)
+}
+
+// UpdateMyAvatar allows any user to update their own avatar
+func UpdateMyAvatar(c *gin.Context) {
+	ctx := c.Request.Context()
+	userID := c.GetString("userID")
+
+	var body struct {
+		Avatar string `json:"avatar"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
+		return
+	}
+
+	_, err := database.Pool.Exec(ctx, "UPDATE users SET avatar=$1, updated_at=now() WHERE id=$2", body.Avatar, userID)
+	if err != nil {
+		serverError(c, "update avatar", err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"avatar": body.Avatar})
 }
 
 func DeleteUser(c *gin.Context) {

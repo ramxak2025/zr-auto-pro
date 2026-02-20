@@ -126,7 +126,7 @@ export default function CheckDetailPage() {
             <UserIcon className="w-4 h-4 text-gray-400" />
             <span className="stat-label">{'\u041A\u043B\u0438\u0435\u043D\u0442'}</span>
           </div>
-          <p className="text-sm font-semibold text-gray-900">{check.client?.fullName ?? '\u2014'}</p>
+          <p className="text-sm font-semibold text-gray-900">{check.client?.fullName ?? '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}</p>
           {check.client?.phone && (
             <p className="text-xs text-gray-400 mt-0.5">{check.client.phone}</p>
           )}

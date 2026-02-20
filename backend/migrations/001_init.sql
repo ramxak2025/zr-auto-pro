@@ -77,6 +77,12 @@ DO $$ BEGIN ALTER TABLE users ADD COLUMN permissions JSONB DEFAULT '{}'; EXCEPTI
 DO $$ BEGIN ALTER TABLE users ADD COLUMN salary_percent NUMERIC(5,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 DO $$ BEGIN ALTER TABLE users ADD COLUMN username TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 DO $$ BEGIN ALTER TABLE users ADD COLUMN updated_at TIMESTAMPTZ DEFAULT now(); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE users ADD COLUMN avatar TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
+-- Products: unit type and bundles
+DO $$ BEGIN ALTER TABLE products ADD COLUMN unit TEXT DEFAULT 'pcs'; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE products ADD COLUMN is_bundle BOOLEAN DEFAULT false; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE products ADD COLUMN bundle_items JSONB DEFAULT '[]'; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS clients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

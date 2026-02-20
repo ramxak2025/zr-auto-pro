@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
@@ -14,7 +14,6 @@ import {
   CreditCard,
   ShieldCheck,
   ClipboardList,
-  Star,
   Trophy,
   Play,
   Square,
@@ -325,6 +324,161 @@ function ShiftControl() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Revenue/Profit Chart Component
+// ---------------------------------------------------------------------------
+
+type ChartPeriod = 'today' | 'week' | 'month' | 'year';
+const periodLabels: Record<ChartPeriod, string> = {
+  today: 'Сегодня',
+  week: 'Неделя',
+  month: 'Месяц',
+  year: 'Год',
+};
+
+function RevenueChart() {
+  const [period, setPeriod] = useState<ChartPeriod>('week');
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['dashboard-chart', period],
+    queryFn: async () => {
+      const res = await checksApi.getDashboardChart(period);
+      return res.data;
+    },
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+
+  const maxValue = useMemo(() => {
+    if (!data?.points?.length) return 1;
+    return Math.max(...data.points.map((p: { revenue: number }) => p.revenue), 1);
+  }, [data]);
+
+  const formatLabel = (dateStr: string): string => {
+    if (period === 'year') {
+      const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+      const parts = dateStr.split('-');
+      return months[parseInt(parts[1]) - 1] || dateStr;
+    }
+    const d = new Date(dateStr);
+    return `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-100">
+              <BarChart3 className="h-5 w-5 text-primary-600" />
+            </div>
+            <h3 className="text-base font-bold text-gray-900">Аналитика</h3>
+          </div>
+          <div className="flex rounded-lg bg-gray-100 p-0.5">
+            {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setPeriod(p)}
+                className={`px-2.5 py-1.5 text-[11px] font-medium rounded-md transition-all ${
+                  period === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {periodLabels[p]}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="p-5">
+        {/* Summary totals */}
+        {data && (
+          <div className="grid grid-cols-3 gap-3 mb-5">
+            <div className="rounded-xl bg-green-50 p-3">
+              <p className="text-[10px] font-semibold text-green-600 uppercase tracking-wider">Оборот</p>
+              <p className="text-lg font-bold text-green-700 mt-0.5">{formatMoney(data.totalRevenue)}</p>
+            </div>
+            <div className="rounded-xl bg-blue-50 p-3">
+              <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Прибыль</p>
+              <p className="text-lg font-bold text-blue-700 mt-0.5">{formatMoney(data.totalProfit)}</p>
+            </div>
+            <div className="rounded-xl bg-purple-50 p-3">
+              <p className="text-[10px] font-semibold text-purple-600 uppercase tracking-wider">Чеки</p>
+              <p className="text-lg font-bold text-purple-700 mt-0.5">{data.totalChecks}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Bar chart */}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
+          </div>
+        ) : !data?.points?.length ? (
+          <div className="text-center py-12 text-sm text-gray-400">Нет данных за выбранный период</div>
+        ) : (
+          <div className="space-y-2">
+            {/* Legend */}
+            <div className="flex items-center gap-4 text-[10px] text-gray-500 mb-3">
+              <div className="flex items-center gap-1">
+                <div className="w-2.5 h-2.5 rounded-sm bg-primary-500" />
+                <span>Оборот</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />
+                <span>Прибыль</span>
+              </div>
+            </div>
+
+            {/* Bars */}
+            <div className="flex items-end gap-1" style={{ height: '160px' }}>
+              {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => {
+                const heightPct = (point.revenue / maxValue) * 100;
+                const profitPct = maxValue > 0 ? (point.profit / maxValue) * 100 : 0;
+                return (
+                  <div key={idx} className="flex-1 flex flex-col items-center gap-0.5 min-w-0 group relative">
+                    {/* Tooltip */}
+                    <div className="absolute bottom-full mb-2 hidden group-hover:block z-10">
+                      <div className="bg-gray-900 text-white text-[10px] rounded-lg px-2.5 py-1.5 whitespace-nowrap shadow-lg">
+                        <p className="font-semibold">{formatLabel(point.date)}</p>
+                        <p>Оборот: {formatMoney(point.revenue)}</p>
+                        <p>Прибыль: {formatMoney(point.profit)}</p>
+                        <p>{point.checkCount} чеков</p>
+                      </div>
+                    </div>
+                    {/* Revenue bar */}
+                    <div className="w-full flex flex-col items-center justify-end" style={{ height: '140px' }}>
+                      <div className="w-full flex gap-[1px] justify-center items-end" style={{ height: '100%' }}>
+                        <div
+                          className="flex-1 bg-primary-400 rounded-t-sm transition-all duration-300 max-w-3"
+                          style={{ height: `${Math.max(heightPct, 2)}%` }}
+                        />
+                        <div
+                          className="flex-1 bg-emerald-400 rounded-t-sm transition-all duration-300 max-w-3"
+                          style={{ height: `${Math.max(profitPct, 0)}%` }}
+                        />
+                      </div>
+                    </div>
+                    {/* Label */}
+                    <span className="text-[9px] text-gray-400 truncate w-full text-center">
+                      {formatLabel(point.date)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Admin / Director Dashboard
+// ---------------------------------------------------------------------------
+
 function AdminDashboard() {
   const { user } = useAuth();
   const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
@@ -388,6 +542,9 @@ function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Revenue / Profit chart */}
+      {isOwner && <RevenueChart />}
 
       {/* Staff status circles */}
       {isOwner && <StaffStatusCircles />}
@@ -475,15 +632,8 @@ function MasterDashboard() {
     return <ErrorBanner message="Не удалось загрузить данные по зарплате" />;
   }
 
-  const levelPercent = Math.min(100, Math.round((data.month / 50000) * 100));
   const initials = user?.fullName?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'М';
   const greeting = getGreeting();
-
-  // Achievement tiers
-  const tier = levelPercent >= 80 ? { label: 'Эксперт', color: 'from-amber-400 to-yellow-500', star: 'text-amber-400', bg: 'bg-amber-500/20' }
-    : levelPercent >= 50 ? { label: 'Профи', color: 'from-blue-400 to-indigo-500', star: 'text-blue-400', bg: 'bg-blue-500/20' }
-    : levelPercent >= 25 ? { label: 'Опытный', color: 'from-emerald-400 to-teal-500', star: 'text-emerald-400', bg: 'bg-emerald-500/20' }
-    : { label: 'Новичок', color: 'from-gray-400 to-slate-500', star: 'text-gray-300', bg: 'bg-white/10' };
 
   return (
     <div className="space-y-4">
@@ -497,14 +647,6 @@ function MasterDashboard() {
             <p className="text-xs text-white/60">{greeting}</p>
             <p className="text-lg font-bold truncate">{user?.fullName || 'Мастер'}</p>
             <p className="text-sm text-white/70">Ставка {data.salaryPercent}%</p>
-          </div>
-          {/* Achievement badge */}
-          <div className="flex flex-col items-center flex-shrink-0">
-            <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${tier.bg} backdrop-blur-sm`}>
-              <Star className={`h-6 w-6 ${tier.star} fill-current`} />
-            </div>
-            <span className="text-[10px] font-bold text-white/80 mt-1">{tier.label}</span>
-            <span className="text-[10px] text-white/50">{levelPercent}%</span>
           </div>
         </div>
       </div>

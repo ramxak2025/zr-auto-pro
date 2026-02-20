@@ -17,6 +17,7 @@ import {
   Calculator,
   Minus,
   UserIcon,
+  CalendarDays,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -179,7 +180,7 @@ function ProductPickerModal({
         </div>
       </div>
 
-      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 sticky top-[57px] z-10">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
@@ -304,12 +305,17 @@ function ProductCard({ product, onSelect }: ProductCardProps) {
             <Package className="w-10 h-10 text-gray-300" />
           </div>
         )}
-        <div
-          className={`absolute top-1.5 right-1.5 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-            inStock ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-          }`}
-        >
-          {inStock ? `${product.stock} \u0448\u0442` : '\u041D\u0435\u0442'}
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+          {product.isBundle && (
+            <span className="text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full">КМП</span>
+          )}
+          <span
+            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+              inStock ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+            }`}
+          >
+            {inStock ? `${product.stock}` : '\u041D\u0435\u0442'}
+          </span>
         </div>
       </div>
       <div className="p-2.5 flex flex-col gap-1">
@@ -531,6 +537,33 @@ export default function CheckCreatePage() {
 
   // Product line handlers
   const handleProductSelected = useCallback((product: Product) => {
+    // If it's a bundle, add each component product
+    if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
+      setProductLines((prev) => {
+        let updated = [...prev];
+        for (const bi of product.bundleItems!) {
+          const matchProduct = (allProducts ?? []).find((p) => p.id === bi.productId);
+          const existing = updated.findIndex((l) => l.productId === bi.productId);
+          if (existing !== -1) {
+            updated = updated.map((line, i) =>
+              i === existing ? { ...line, quantity: line.quantity + bi.quantity } : line,
+            );
+          } else {
+            updated.push({
+              productId: bi.productId,
+              name: bi.name,
+              sellPrice: matchProduct?.sellPrice ?? 0,
+              costPrice: matchProduct?.costPrice ?? 0,
+              quantity: bi.quantity,
+            });
+          }
+        }
+        return updated;
+      });
+      toast.success(`Комплект "${product.name}" добавлен`);
+      return;
+    }
+
     setProductLines((prev) => {
       const existing = prev.findIndex((l) => l.productId === product.id);
       if (existing !== -1) {
@@ -549,7 +582,7 @@ export default function CheckCreatePage() {
         },
       ];
     });
-  }, []);
+  }, [allProducts]);
 
   const updateProductLine = (index: number, field: keyof ProductLineForm, value: any) => {
     setProductLines((prev) =>
@@ -568,14 +601,7 @@ export default function CheckCreatePage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!selectedClient) {
-      toast.error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u043A\u043B\u0438\u0435\u043D\u0442\u0430 \u043F\u043E \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440\u0443');
-      return;
-    }
-    if (!selectedCarId) {
-      toast.error('\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0430\u0432\u0442\u043E\u043C\u043E\u0431\u0438\u043B\u044C');
-      return;
-    }
+    // Client and car are optional (retail buyer mode)
 
     const services: CheckServiceLine[] = serviceLines.map((l) => ({
       serviceId: l.serviceId || undefined,
@@ -608,8 +634,8 @@ export default function CheckCreatePage() {
     }
 
     createMutation.mutate({
-      clientId: selectedClient.id,
-      carId: selectedCarId,
+      clientId: selectedClient?.id || '',
+      carId: selectedCarId || '',
       masterId: user?.id || '',
       date,
       mileage: mileage ? Number(mileage) : undefined,
@@ -717,6 +743,17 @@ export default function CheckCreatePage() {
               </div>
             )}
 
+            {/* Retail buyer default when no client selected */}
+            {!selectedClient && !plateSearch && (
+              <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <div className="flex items-center gap-2">
+                  <UserIcon className="h-4 w-4 text-blue-500" />
+                  <span className="text-sm font-medium text-blue-700">{'\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}</span>
+                </div>
+                <p className="text-xs text-blue-500 mt-1">{'\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440 \u0447\u0442\u043E\u0431\u044B \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u043A\u043B\u0438\u0435\u043D\u0442\u0430'}</p>
+              </div>
+            )}
+
             {/* Selected client/car info */}
             {selectedClient && (
               <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
@@ -764,13 +801,16 @@ export default function CheckCreatePage() {
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">
                   {'\u0414\u0430\u0442\u0430'}
                 </label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  disabled={!canEditDate}
-                  className={`input text-base sm:text-sm ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                />
+                <div className="relative">
+                  <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    disabled={!canEditDate}
+                    className={`input text-sm pl-10 py-2 ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                  />
+                </div>
                 {!canEditDate && (
                   <p className="text-[10px] text-gray-400 mt-0.5">{'\u0422\u043E\u043B\u044C\u043A\u043E \u0441\u0435\u0433\u043E\u0434\u043D\u044F'}</p>
                 )}

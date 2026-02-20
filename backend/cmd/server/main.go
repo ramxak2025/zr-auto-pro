@@ -155,6 +155,7 @@ func main() {
 	auth.Use(middleware.JWTAuth())
 
 	auth.GET("/auth/me", handlers.Me)
+	auth.PATCH("/auth/avatar", handlers.UpdateMyAvatar)
 
 	auth.GET("/users", handlers.GetUsers)
 	auth.GET("/users/masters", handlers.GetMasters)
@@ -184,6 +185,7 @@ func main() {
 	auth.GET("/products", handlers.GetProducts)
 	auth.GET("/products/low-stock", handlers.GetProductsLowStock)
 	auth.GET("/products/movements", handlers.GetStockMovements)
+	auth.GET("/products/warehouse-stats", handlers.GetWarehouseStats)
 	auth.GET("/products/:id", handlers.GetProduct)
 	auth.POST("/products", handlers.CreateProduct)
 	auth.PATCH("/products/:id", handlers.UpdateProduct)
@@ -192,6 +194,7 @@ func main() {
 
 	auth.GET("/checks", handlers.GetChecks)
 	auth.GET("/checks/dashboard", handlers.GetDashboard)
+	auth.GET("/checks/dashboard/chart", handlers.GetDashboardChart)
 	auth.GET("/checks/ranking", handlers.GetRanking)
 	auth.GET("/checks/:id", handlers.GetCheck)
 	auth.POST("/checks", handlers.CreateCheck)

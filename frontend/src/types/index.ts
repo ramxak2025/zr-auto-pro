@@ -52,6 +52,7 @@ export interface PlatformStats {
 export interface User {
   id: string;
   username?: string;
+  avatar?: string;
   phone: string;
   fullName: string;
   role: UserRole;
@@ -105,6 +106,12 @@ export interface Car {
   createdAt: string;
 }
 
+export interface BundleItem {
+  productId: string;
+  name: string;
+  quantity: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -114,6 +121,9 @@ export interface Product {
   sellPrice: number;
   stock: number;
   minStock: number;
+  unit?: string;
+  isBundle?: boolean;
+  bundleItems?: BundleItem[];
   supplierId?: string;
   supplier?: Supplier;
   createdAt: string;

@@ -294,7 +294,7 @@ export default function LoginPage() {
       {/* Copyright footer */}
       <div className="pb-8 pt-4">
         <p className="text-center text-xs text-gray-300">
-          Autexa &copy; 2026
+          Autexa v1.1 &copy; 2026
         </p>
       </div>
     </div>

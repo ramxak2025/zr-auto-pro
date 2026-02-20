@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Users,
@@ -10,8 +11,12 @@ import {
   ChevronRight,
   ArrowRightLeft,
   CalendarDays,
+  Camera,
+  Loader2,
 } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { authApi, uploadsApi } from '../api/services';
 import type { UserPermissions } from '../types';
 
 interface MenuItem {
@@ -97,6 +102,7 @@ const menuItems: MenuItem[] = [
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
+  director: 'Владелец',
   owner: 'Владелец',
   admin: 'Администратор',
   master: 'Мастер',
@@ -105,16 +111,69 @@ const roleLabels: Record<string, string> = {
 };
 
 export default function MorePage() {
-  const { user, logout, hasPermission } = useAuth();
+  const { user, logout, hasPermission, refreshUser } = useAuth();
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleAvatarUpload = async (file: File) => {
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error('Максимальный размер файла: 5 МБ');
+      return;
+    }
+    setUploading(true);
+    try {
+      const res = await uploadsApi.upload(file);
+      await authApi.updateAvatar(res.data.url);
+      await refreshUser();
+      toast.success('Аватарка обновлена');
+    } catch {
+      toast.error('Не удалось загрузить аватарку');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
       {/* User card */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-lg font-bold">
-            {user?.fullName?.charAt(0) || 'U'}
+          <div className="relative">
+            {user?.avatar ? (
+              <img
+                src={user.avatar}
+                alt=""
+                className="h-14 w-14 rounded-full object-cover border-2 border-gray-100"
+              />
+            ) : (
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xl font-bold">
+                {user?.fullName?.charAt(0) || 'U'}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-white border-2 border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors shadow-sm"
+            >
+              {uploading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Camera className="h-3.5 w-3.5" />
+              )}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleAvatarUpload(file);
+                e.target.value = '';
+              }}
+            />
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-base font-semibold text-gray-900 truncate">
