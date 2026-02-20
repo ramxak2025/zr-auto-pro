@@ -158,7 +158,7 @@ function ProductPickerModal({
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white sticky top-0 z-10">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
         <button type="button" onClick={goBack} className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600">
           {activePath.length > 0 ? <ChevronLeft className="w-5 h-5" /> : <X className="w-5 h-5" />}
         </button>
@@ -187,7 +187,7 @@ function ProductPickerModal({
       </div>
 
       {/* Search */}
-      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 sticky top-[57px] z-10">
+      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex-shrink-0">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input

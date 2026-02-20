@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -80,18 +79,12 @@ func OpenShift(c *gin.Context) {
 	userID := c.GetString("userID")
 	tenantID := c.GetString("tenantID")
 
-	// Check if already open
-	var openCount int
-	if err := database.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM shifts WHERE user_id=$1 AND tenant_id=$2 AND closed_at IS NULL", userID, tenantID).Scan(&openCount); err != nil {
-		serverError(c, "open shift count query", err)
-		return
-	}
-	if openCount > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "Смена уже открыта"})
-		return
-	}
-
+	// Auto-close any stale open shifts (from previous days or forgotten)
 	now := time.Now()
+	database.Pool.Exec(ctx,
+		"UPDATE shifts SET closed_at=$1, is_auto_closed=true WHERE user_id=$2 AND tenant_id=$3 AND closed_at IS NULL",
+		now, userID, tenantID)
+
 	var s models.Shift
 	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO shifts (user_id, date, opened_at, tenant_id) VALUES ($1,$2,$3,$4) RETURNING id, user_id, date, opened_at
@@ -144,29 +137,14 @@ func CloseShift(c *gin.Context) {
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 
-	// Determine shift owner to check deferred checks
-	var shiftUserID, shiftDate string
-	if err := database.Pool.QueryRow(ctx, "SELECT user_id, date FROM shifts WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&shiftUserID, &shiftDate); err != nil {
-		serverError(c, "close shift lookup", err)
-		return
-	}
-
-	// Block closing if there are deferred checks for this master today
-	var deferredCount int
-	if err := database.Pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM checks WHERE master_id=$1 AND tenant_id=$2 AND date::date=$3::date AND is_deferred=true",
-		shiftUserID, tenantID, shiftDate).Scan(&deferredCount); err != nil {
-		serverError(c, "close shift deferred check", err)
-		return
-	}
-	if deferredCount > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Невозможно закрыть смену: %d отложенных чеков не оплачено", deferredCount)})
-		return
-	}
-
 	now := time.Now()
-	if _, err := database.Pool.Exec(ctx, "UPDATE shifts SET closed_at=$1 WHERE id=$2 AND tenant_id=$3", now, id, tenantID); err != nil {
+	tag, err := database.Pool.Exec(ctx, "UPDATE shifts SET closed_at=$1 WHERE id=$2 AND tenant_id=$3 AND closed_at IS NULL", now, id, tenantID)
+	if err != nil {
 		serverError(c, "close shift update", err)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "Смена уже закрыта"})
 		return
 	}
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/disintegration/imaging"
+	img "github.com/disintegration/imaging"
 )
 
 const (
@@ -25,7 +25,7 @@ type ProcessResult struct {
 // Process takes an uploaded image, resizes it and generates a thumbnail.
 // Pure Go — no CGO, no libvips required.
 func Process(srcPath, uploadDir, baseName string) (*ProcessResult, error) {
-	src, err := imaging.Open(srcPath, imaging.AutoOrientation(true))
+	src, err := img.Open(srcPath, img.AutoOrientation(true))
 	if err != nil {
 		return nil, fmt.Errorf("open image: %w", err)
 	}
@@ -36,7 +36,7 @@ func Process(srcPath, uploadDir, baseName string) (*ProcessResult, error) {
 	// --- Optimized version (max 1200px wide, JPEG) ---
 	optimized := src
 	if origWidth > MaxWidth {
-		optimized = imaging.Resize(src, MaxWidth, 0, imaging.Lanczos)
+		optimized = img.Resize(src, MaxWidth, 0, img.Lanczos)
 	}
 
 	optName := baseName + ".jpg"
@@ -56,7 +56,7 @@ func Process(srcPath, uploadDir, baseName string) (*ProcessResult, error) {
 	if origWidth < thumbW {
 		thumbW = origWidth
 	}
-	thumb := imaging.Resize(src, thumbW, 0, imaging.Lanczos)
+	thumb := img.Resize(src, thumbW, 0, img.Lanczos)
 
 	thumbName := baseName + "_thumb.jpg"
 	thumbPath := filepath.Join(uploadDir, thumbName)
