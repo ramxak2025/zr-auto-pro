@@ -80,108 +80,112 @@ function ProductPickerModal({
   onSelectProduct,
 }: ProductPickerModalProps) {
   const [search, setSearch] = useState('');
-  const [currentCategory, setCurrentCategory] = useState<string | null>(null);
+  const [activePath, setActivePath] = useState<string[]>([]);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isOpen) {
       setSearch('');
-      setCurrentCategory(null);
-      setTimeout(() => {
-        searchInputRef.current?.focus();
-      }, 100);
+      setActivePath([]);
+      setTimeout(() => searchInputRef.current?.focus(), 100);
     }
   }, [isOpen]);
 
-  const categories = useMemo(() => {
-    const cats = new Set<string>();
-    products.forEach((p) => {
-      if (p.category) cats.add(p.category);
-    });
-    return Array.from(cats).sort();
-  }, [products]);
+  // Build hierarchical folder structure from path-based categories
+  const { subfolders, currentProducts } = useMemo(() => {
+    const prefix = activePath.length > 0 ? activePath.join('/') : '';
+    const subfolderMap = new Map<string, number>();
+    const prods: Product[] = [];
 
-  const uncategorizedCount = useMemo(
-    () => products.filter((p) => !p.category).length,
-    [products],
-  );
+    for (const p of products) {
+      const cat = p.category || '';
+      const catParts = cat ? cat.split('/') : [];
 
-  const filteredProducts = useMemo(() => {
-    let list = products;
-    if (currentCategory !== null) {
-      if (currentCategory === '__uncategorized__') {
-        list = list.filter((p) => !p.category);
+      if (activePath.length === 0) {
+        if (!cat) {
+          prods.push(p);
+        } else {
+          const folder = catParts[0];
+          subfolderMap.set(folder, (subfolderMap.get(folder) || 0) + 1);
+        }
       } else {
-        list = list.filter((p) => p.category === currentCategory);
+        if (cat === prefix) {
+          prods.push(p);
+        } else if (cat.startsWith(prefix + '/')) {
+          const rest = cat.slice(prefix.length + 1);
+          const nextSegment = rest.split('/')[0];
+          subfolderMap.set(nextSegment, (subfolderMap.get(nextSegment) || 0) + 1);
+        }
       }
     }
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.category && p.category.toLowerCase().includes(q)),
-      );
-    }
-    return list;
-  }, [products, currentCategory, search]);
 
-  const categoryProductCount = useCallback(
-    (cat: string) => products.filter((p) => p.category === cat).length,
-    [products],
-  );
+    const sorted = Array.from(subfolderMap.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { subfolders: sorted, currentProducts: prods };
+  }, [products, activePath]);
+
+  // Global search across all products
+  const searchResults = useMemo(() => {
+    if (!search.trim()) return [];
+    const q = search.trim().toLowerCase();
+    return products.filter(
+      (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
+    );
+  }, [products, search]);
 
   const handleSelect = (product: Product) => {
     onSelectProduct(product);
     onClose();
   };
 
+  const goBack = () => {
+    if (activePath.length > 0) {
+      setActivePath((prev) => prev.slice(0, -1));
+    } else {
+      onClose();
+    }
+  };
+
   if (!isOpen) return null;
+
+  const breadcrumbLabel = activePath.length > 0
+    ? activePath[activePath.length - 1]
+    : 'Товары';
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white">
+      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white sticky top-0 z-10">
-        <button
-          type="button"
-          onClick={() => {
-            if (currentCategory !== null && !search.trim()) {
-              setCurrentCategory(null);
-            } else {
-              onClose();
-            }
-          }}
-          className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600"
-        >
-          {currentCategory !== null && !search.trim() ? (
-            <ChevronLeft className="w-5 h-5" />
-          ) : (
-            <X className="w-5 h-5" />
-          )}
+        <button type="button" onClick={goBack} className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600">
+          {activePath.length > 0 ? <ChevronLeft className="w-5 h-5" /> : <X className="w-5 h-5" />}
         </button>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1 text-sm text-gray-500 mb-0.5">
-            <button
-              type="button"
-              onClick={() => { setCurrentCategory(null); setSearch(''); }}
-              className="hover:text-primary-600 truncate"
-            >
-              {'\u0422\u043E\u0432\u0430\u0440\u044B'}
-            </button>
-            {currentCategory !== null && (
-              <>
-                <span>/</span>
-                <span className="text-gray-900 font-medium truncate">
-                  {currentCategory === '__uncategorized__' ? '\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438' : currentCategory}
+          {activePath.length > 0 && (
+            <div className="flex items-center gap-1 text-xs text-gray-400 mb-0.5 overflow-hidden">
+              <button type="button" onClick={() => setActivePath([])} className="hover:text-primary-600 flex-shrink-0">
+                Товары
+              </button>
+              {activePath.map((seg, idx) => (
+                <span key={idx} className="flex items-center gap-1 min-w-0">
+                  <span className="flex-shrink-0">/</span>
+                  <button
+                    type="button"
+                    onClick={() => setActivePath(activePath.slice(0, idx + 1))}
+                    className={idx === activePath.length - 1 ? 'text-gray-900 font-medium truncate' : 'hover:text-primary-600 truncate'}
+                  >
+                    {seg}
+                  </button>
                 </span>
-              </>
-            )}
-          </div>
-          <h2 className="text-lg font-semibold text-gray-900 leading-tight">
-            {'\u0412\u044B\u0431\u043E\u0440 \u0442\u043E\u0432\u0430\u0440\u0430'}
-          </h2>
+              ))}
+            </div>
+          )}
+          <h2 className="text-lg font-semibold text-gray-900 leading-tight truncate">{breadcrumbLabel}</h2>
         </div>
       </div>
 
+      {/* Search */}
       <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 sticky top-[57px] z-10">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -190,87 +194,69 @@ function ProductPickerModal({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={'\u041F\u043E\u0438\u0441\u043A \u0442\u043E\u0432\u0430\u0440\u0430...'}
+            placeholder="Поиск товара..."
             className="input pl-10 w-full"
           />
           {search && (
-            <button
-              type="button"
-              onClick={() => setSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-            >
+            <button type="button" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
               <X className="w-4 h-4" />
             </button>
           )}
         </div>
       </div>
 
+      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {search.trim() ? (
+          /* Search results */
           <div className="p-4">
-            {filteredProducts.length === 0 ? (
+            {searchResults.length === 0 ? (
               <div className="text-center py-12 text-gray-400">
                 <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">{'\u041D\u0438\u0447\u0435\u0433\u043E \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D\u043E'}</p>
+                <p className="text-sm">Ничего не найдено</p>
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {filteredProducts.map((product) => (
+                {searchResults.map((product) => (
                   <ProductCard key={product.id} product={product} onSelect={handleSelect} />
                 ))}
-              </div>
-            )}
-          </div>
-        ) : currentCategory === null ? (
-          <div className="p-4 space-y-2">
-            {categories.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setCurrentCategory(cat)}
-                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
-              >
-                <FolderOpen className="w-5 h-5 text-amber-500 flex-shrink-0" />
-                <span className="flex-1 text-left font-medium text-gray-900 truncate">{cat}</span>
-                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                  {categoryProductCount(cat)}
-                </span>
-              </button>
-            ))}
-            {uncategorizedCount > 0 && (
-              <button
-                type="button"
-                onClick={() => setCurrentCategory('__uncategorized__')}
-                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
-              >
-                <Package className="w-5 h-5 text-gray-400 flex-shrink-0" />
-                <span className="flex-1 text-left font-medium text-gray-500 truncate">
-                  {'\u0411\u0435\u0437 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438'}
-                </span>
-                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                  {uncategorizedCount}
-                </span>
-              </button>
-            )}
-            {categories.length === 0 && uncategorizedCount === 0 && (
-              <div className="text-center py-12 text-gray-400">
-                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">{'\u041D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}</p>
               </div>
             )}
           </div>
         ) : (
-          <div className="p-4">
-            {filteredProducts.length === 0 ? (
-              <div className="text-center py-12 text-gray-400">
-                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="text-sm">{'\u0412 \u044D\u0442\u043E\u0439 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438 \u043D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}</p>
+          <div className="p-4 space-y-3">
+            {/* Subfolders */}
+            {subfolders.length > 0 && (
+              <div className="space-y-2">
+                {subfolders.map((folder) => (
+                  <button
+                    key={folder.name}
+                    type="button"
+                    onClick={() => setActivePath((prev) => [...prev, folder.name])}
+                    className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
+                  >
+                    <FolderOpen className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                    <span className="flex-1 text-left font-medium text-gray-900 truncate">{folder.name}</span>
+                    <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{folder.count}</span>
+                  </button>
+                ))}
               </div>
-            ) : (
+            )}
+
+            {/* Products at current level */}
+            {currentProducts.length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {filteredProducts.map((product) => (
+                {currentProducts.map((product) => (
                   <ProductCard key={product.id} product={product} onSelect={handleSelect} />
                 ))}
+              </div>
+            )}
+
+            {/* Empty state */}
+            {subfolders.length === 0 && currentProducts.length === 0 && (
+              <div className="text-center py-12 text-gray-400">
+                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">{activePath.length > 0 ? 'В этой папке нет товаров' : 'Нет товаров'}</p>
               </div>
             )}
           </div>
@@ -812,13 +798,13 @@ export default function CheckCreatePage() {
 
           {/* Date & Mileage */}
           <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 flex-shrink-0">
                   <CalendarDays className="h-5 w-5 text-blue-500" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Дата</label>
+                  <label className="text-[11px] font-medium text-gray-400 block mb-0.5">Дата чека</label>
                   {canEditDate ? (
                     <input
                       type="date"

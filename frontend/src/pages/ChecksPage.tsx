@@ -1,16 +1,18 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
-import { Plus, FileText } from 'lucide-react';
+import { Plus, FileText, Trash2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import toast from 'react-hot-toast';
 import { checksApi, usersApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import SearchInput from '../components/SearchInput';
-import type { Check, User, PaginatedResponse, PaymentMethod } from '../types';
+import type { Check, User, PaginatedResponse } from '../types';
 
 const paymentMethodLabels: Record<string, string> = {
   cash: '\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435',
@@ -32,6 +34,9 @@ const formatCurrency = (value: number): string => {
 
 export default function ChecksPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canDelete = hasPermission('checks_delete');
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [masterId, setMasterId] = useState('');
@@ -59,6 +64,27 @@ export default function ChecksPage() {
       return res.data;
     },
   });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => checksApi.remove(id),
+    onSuccess: () => {
+      toast.success('Чек удалён');
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось удалить чек');
+    },
+  });
+
+  const handleDelete = (e: React.MouseEvent, checkId: string, checkNumber: number) => {
+    e.stopPropagation();
+    if (window.confirm(`Удалить чек #${checkNumber}? Это действие необратимо.`)) {
+      deleteMutation.mutate(checkId);
+    }
+  };
 
   const handleDateChange = (from: string, to: string) => {
     setDateFrom(from);
@@ -148,7 +174,18 @@ export default function ChecksPage() {
                       <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Отложен</span>
                     )}
                   </div>
-                  <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleDelete(e, check.id, check.number)}
+                        className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="min-w-0 flex-1">
@@ -169,6 +206,7 @@ export default function ChecksPage() {
               <thead>
                 <tr>
                   <th>#</th><th>Дата</th><th>Клиент</th><th>Авто</th><th>Мастер</th><th>Сумма</th><th>Оплата</th>
+                  {canDelete && <th className="w-10"></th>}
                 </tr>
               </thead>
               <tbody>
@@ -184,6 +222,17 @@ export default function ChecksPage() {
                     <td>{check.master?.fullName ?? '\u2014'}</td>
                     <td className="font-semibold">{formatCurrency(check.totalRevenue)}</td>
                     <td><span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>{paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}</span></td>
+                    {canDelete && (
+                      <td>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDelete(e, check.id, check.number)}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
