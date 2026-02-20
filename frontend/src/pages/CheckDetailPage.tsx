@@ -173,9 +173,7 @@ export default function CheckDetailPage() {
                   <th>#</th>
                   <th>{'\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435'}</th>
                   <th>{'\u041C\u0430\u0441\u0442\u0435\u0440'}</th>
-                  <th>{'\u0426\u0435\u043D\u0430'}</th>
-                  <th>{'\u041A\u043E\u043B-\u0432\u043E'}</th>
-                  <th>{'\u0418\u0442\u043E\u0433\u043E'}</th>
+                  <th>{'\u0421\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -184,8 +182,6 @@ export default function CheckDetailPage() {
                     <td>{idx + 1}</td>
                     <td className="font-medium">{svc.name}</td>
                     <td>{svc.master?.fullName ?? '\u2014'}</td>
-                    <td>{formatCurrency(svc.price)}</td>
-                    <td>{svc.quantity}</td>
                     <td className="font-semibold">{formatCurrency(svc.total)}</td>
                   </tr>
                 ))}

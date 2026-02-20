@@ -13,6 +13,7 @@ import {
   MoreHorizontal,
   Receipt,
   BookOpen,
+  CalendarDays,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import type { UserPermissions } from '../types';
@@ -33,6 +34,7 @@ const navItems: NavItem[] = [
   { label: 'Поставщики', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
   { label: 'Движение денег', path: '/cashflow', icon: Wallet },
   { label: 'Зарплата', path: '/salary', icon: Wallet },
+  { label: 'Расписание', path: '/schedule', icon: CalendarDays },
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
   { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management' },
 ];

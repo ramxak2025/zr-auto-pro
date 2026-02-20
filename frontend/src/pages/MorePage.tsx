@@ -9,6 +9,7 @@ import {
   LogOut,
   ChevronRight,
   ArrowRightLeft,
+  CalendarDays,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import type { UserPermissions } from '../types';
@@ -24,6 +25,14 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
+  {
+    label: 'Расписание',
+    description: 'График работы и смены',
+    path: '/schedule',
+    icon: CalendarDays,
+    color: 'bg-indigo-50',
+    iconColor: 'text-indigo-600',
+  },
   {
     label: 'Клиенты',
     description: 'База клиентов',

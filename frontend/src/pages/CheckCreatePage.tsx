@@ -757,11 +757,11 @@ export default function CheckCreatePage() {
             )}
           </div>
 
-          {/* Date & Mileage (no master selector — master is per service) */}
+          {/* Date & Mileage — stacked on mobile, side-by-side on sm+ */}
           <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3 sm:space-y-0 sm:grid sm:grid-cols-2 sm:gap-3">
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">
                   {'\u0414\u0430\u0442\u0430'}
                 </label>
                 <input
@@ -769,14 +769,14 @@ export default function CheckCreatePage() {
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   disabled={!canEditDate}
-                  className={`input text-sm ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                  className={`input text-base sm:text-sm ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                 />
                 {!canEditDate && (
                   <p className="text-[10px] text-gray-400 mt-0.5">{'\u0422\u043E\u043B\u044C\u043A\u043E \u0441\u0435\u0433\u043E\u0434\u043D\u044F'}</p>
                 )}
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 block">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">
                   {'\u041F\u0440\u043E\u0431\u0435\u0433'}
                 </label>
                 <div className="relative">
@@ -785,7 +785,7 @@ export default function CheckCreatePage() {
                     value={mileage}
                     onChange={(e) => setMileage(e.target.value)}
                     placeholder="0"
-                    className="input text-sm pr-10"
+                    className="input text-base sm:text-sm pr-10"
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">
                     {'\u043A\u043C'}
@@ -853,25 +853,17 @@ export default function CheckCreatePage() {
                       </select>
                     </div>
 
-                    {/* Row 3: Price x Qty = Total */}
-                    <div className="flex items-center gap-2">
+                    {/* Row 3: Price */}
+                    <div className="relative">
                       <input
                         type="number"
                         value={line.price}
                         onChange={(e) => updateServiceLine(index, 'price', Number(e.target.value))}
-                        className="input text-sm flex-1 min-w-0 text-right"
+                        className="input text-base sm:text-sm text-right pr-8"
                         placeholder={'\u0426\u0435\u043D\u0430'}
                       />
-                      <span className="text-gray-400 text-xs flex-shrink-0">{'\u00D7'}</span>
-                      <input
-                        type="number"
-                        value={line.quantity}
-                        min={1}
-                        onChange={(e) => updateServiceLine(index, 'quantity', Number(e.target.value))}
-                        className="input text-sm w-14 text-center flex-shrink-0"
-                      />
-                      <span className="text-sm font-bold text-gray-700 flex-shrink-0 whitespace-nowrap">
-                        = {formatCurrency(line.price * line.quantity)}
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">
+                        {'\u20BD'}
                       </span>
                     </div>
                   </div>

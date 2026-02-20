@@ -268,6 +268,7 @@ function ShiftControl() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
       toast.success('Смена открыта');
     },
     onError: (err: any) => toast.error(err?.response?.data?.message || 'Ошибка'),

@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -88,8 +91,8 @@ func OpenShift(c *gin.Context) {
 		return
 	}
 
-	var s models.Shift
 	now := time.Now()
+	var s models.Shift
 	err := database.Pool.QueryRow(ctx, `
 		INSERT INTO shifts (user_id, date, opened_at, tenant_id) VALUES ($1,$2,$3,$4) RETURNING id, user_id, date, opened_at
 	`, userID, now.Format("2006-01-02"), now, tenantID).Scan(&s.ID, &s.UserID, &s.Date, &s.OpenedAt)
@@ -98,6 +101,41 @@ func OpenShift(c *gin.Context) {
 		return
 	}
 	s.TenantID = tenantID
+
+	// Auto-mark lateness in schedule based on shift_start
+	today := now.Format("2006-01-02")
+	var scheduleID, shiftStart string
+	schedErr := database.Pool.QueryRow(ctx, `
+		SELECT id, COALESCE(shift_start,'') FROM schedule_entries
+		WHERE user_id=$1 AND tenant_id=$2 AND date=$3 AND NOT is_day_off
+	`, userID, tenantID, today).Scan(&scheduleID, &shiftStart)
+
+	if schedErr == nil && shiftStart != "" {
+		parts := strings.Split(shiftStart, ":")
+		if len(parts) >= 2 {
+			hour, _ := strconv.Atoi(parts[0])
+			minute, _ := strconv.Atoi(parts[1])
+			scheduledTime := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+			lateMinutes := int(now.Sub(scheduledTime).Minutes())
+
+			if lateMinutes > 0 {
+				lateStatus := "late_minor"
+				if lateMinutes >= 60 {
+					lateStatus = "late_major"
+				}
+				database.Pool.Exec(ctx, `
+					UPDATE schedule_entries SET actual_arrival=$1, late_minutes=$2, late_status=$3
+					WHERE id=$4
+				`, now, lateMinutes, lateStatus, scheduleID)
+			} else {
+				database.Pool.Exec(ctx, `
+					UPDATE schedule_entries SET actual_arrival=$1, late_minutes=0, late_status='on_time'
+					WHERE id=$2
+				`, now, scheduleID)
+			}
+		}
+	}
+
 	c.JSON(http.StatusCreated, s)
 }
 
@@ -105,6 +143,26 @@ func CloseShift(c *gin.Context) {
 	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
+
+	// Determine shift owner to check deferred checks
+	var shiftUserID, shiftDate string
+	if err := database.Pool.QueryRow(ctx, "SELECT user_id, date FROM shifts WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&shiftUserID, &shiftDate); err != nil {
+		serverError(c, "close shift lookup", err)
+		return
+	}
+
+	// Block closing if there are deferred checks for this master today
+	var deferredCount int
+	if err := database.Pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM checks WHERE master_id=$1 AND tenant_id=$2 AND date::date=$3::date AND is_deferred=true",
+		shiftUserID, tenantID, shiftDate).Scan(&deferredCount); err != nil {
+		serverError(c, "close shift deferred check", err)
+		return
+	}
+	if deferredCount > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"message": fmt.Sprintf("Невозможно закрыть смену: %d отложенных чеков не оплачено", deferredCount)})
+		return
+	}
 
 	now := time.Now()
 	if _, err := database.Pool.Exec(ctx, "UPDATE shifts SET closed_at=$1 WHERE id=$2 AND tenant_id=$3", now, id, tenantID); err != nil {
