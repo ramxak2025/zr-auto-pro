@@ -794,28 +794,28 @@ export default function CheckCreatePage() {
             )}
           </div>
 
-          {/* Date & Mileage — stacked on mobile, side-by-side on sm+ */}
+          {/* Date & Mileage — compact layout */}
           <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <div className="space-y-3 sm:space-y-0 sm:grid sm:grid-cols-2 sm:gap-3">
-              <div>
+            <div className="flex items-end gap-3">
+              <div className="flex-shrink-0">
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">
                   {'\u0414\u0430\u0442\u0430'}
                 </label>
                 <div className="relative">
-                  <CalendarDays className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+                  <CalendarDays className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
                   <input
                     type="date"
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
                     disabled={!canEditDate}
-                    className={`input text-sm pl-10 py-2 ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                    className={`input text-sm pl-8 py-2 w-[140px] ${!canEditDate ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                   />
                 </div>
                 {!canEditDate && (
                   <p className="text-[10px] text-gray-400 mt-0.5">{'\u0422\u043E\u043B\u044C\u043A\u043E \u0441\u0435\u0433\u043E\u0434\u043D\u044F'}</p>
                 )}
               </div>
-              <div>
+              <div className="flex-1 min-w-0">
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5 block">
                   {'\u041F\u0440\u043E\u0431\u0435\u0433'}
                 </label>
@@ -1141,14 +1141,17 @@ export default function CheckCreatePage() {
               </div>
             )}
 
-            <label className="flex items-center gap-2 cursor-pointer mt-3">
+            <label className="flex items-center gap-2 cursor-pointer mt-3 bg-amber-50 rounded-lg px-3 py-2.5 border border-amber-200">
               <input
                 type="checkbox"
                 checked={isDeferred}
                 onChange={(e) => setIsDeferred(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                className="w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
               />
-              <span className="text-sm text-gray-700">{'\u041E\u0442\u043B\u043E\u0436\u0435\u043D\u043D\u0430\u044F \u043E\u043F\u043B\u0430\u0442\u0430'}</span>
+              <div>
+                <span className="text-sm font-medium text-gray-700">Отложенный чек (черновик)</span>
+                <p className="text-[10px] text-gray-400 mt-0.5">Сохранить как черновик. Виден руководству.</p>
+              </div>
             </label>
           </div>
 

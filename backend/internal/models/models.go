@@ -93,8 +93,8 @@ type Product struct {
 	Photo       *string         `json:"photo,omitempty"`
 	CostPrice   float64         `json:"costPrice"`
 	SellPrice   float64         `json:"sellPrice"`
-	Stock       int             `json:"stock"`
-	MinStock    int             `json:"minStock"`
+	Stock       float64         `json:"stock"`
+	MinStock    float64         `json:"minStock"`
 	Unit        string          `json:"unit"`
 	IsBundle    bool            `json:"isBundle"`
 	BundleItems json.RawMessage `json:"bundleItems"`
@@ -153,7 +153,7 @@ type CheckProductLine struct {
 	Name      string  `json:"name"`
 	SellPrice float64 `json:"sellPrice"`
 	CostPrice float64 `json:"costPrice"`
-	Quantity  int     `json:"quantity"`
+	Quantity  float64 `json:"quantity"`
 	TotalSell float64 `json:"totalSell"`
 	TotalCost float64 `json:"totalCost"`
 }
@@ -188,7 +188,7 @@ type DeliveryItem struct {
 	DeliveryID string   `json:"-"`
 	ProductID  string   `json:"productId"`
 	Product    *Product `json:"product,omitempty"`
-	Quantity   int      `json:"quantity"`
+	Quantity   float64  `json:"quantity"`
 	Price      float64  `json:"price"`
 	Total      float64  `json:"total"`
 }
@@ -207,9 +207,9 @@ type StockMovement struct {
 	ProductID   string    `json:"productId"`
 	Product     *Product  `json:"product,omitempty"`
 	Type        string    `json:"type"`
-	Quantity    int       `json:"quantity"`
-	StockBefore int       `json:"stockBefore"`
-	StockAfter  int       `json:"stockAfter"`
+	Quantity    float64   `json:"quantity"`
+	StockBefore float64   `json:"stockBefore"`
+	StockAfter  float64   `json:"stockAfter"`
 	Reason      *string   `json:"reason,omitempty"`
 	TenantID    string    `json:"-"`
 	CreatedAt   time.Time `json:"createdAt"`
@@ -391,7 +391,7 @@ type CreateCheckProductLine struct {
 	Name      string  `json:"name"`
 	SellPrice float64 `json:"sellPrice"`
 	CostPrice float64 `json:"costPrice"`
-	Quantity  int     `json:"quantity"`
+	Quantity  float64 `json:"quantity"`
 }
 
 type TenantStats struct {

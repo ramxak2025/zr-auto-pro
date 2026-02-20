@@ -3,12 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   FileText,
-  CalendarDays,
   TrendingUp,
   PlusCircle,
   Search,
   AlertCircle,
-  Wallet,
   BarChart3,
   Banknote,
   CreditCard,
@@ -23,7 +21,7 @@ import {
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { checksApi, salaryApi, shiftsApi, scheduleApi } from '../api/services';
-import type { DashboardStats, SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
+import type { SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -50,32 +48,6 @@ function StatCardSkeleton() {
         <div className="h-4 w-24 rounded bg-gray-200" />
       </div>
       <div className="h-7 w-32 rounded bg-gray-200" />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Stat card
-// ---------------------------------------------------------------------------
-
-interface StatCardProps {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  color: string; // Tailwind bg color for the icon wrapper, e.g. "bg-blue-100"
-  iconColor: string; // Tailwind text color for the icon, e.g. "text-blue-600"
-}
-
-function StatCard({ icon, label, value, color, iconColor }: StatCardProps) {
-  return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 hover:shadow-md transition-shadow">
-      <div className="flex items-center gap-3 mb-3">
-        <div className={`flex items-center justify-center w-10 h-10 rounded-lg ${color}`}>
-          <span className={iconColor}>{icon}</span>
-        </div>
-        <span className="text-sm text-gray-500">{label}</span>
-      </div>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
     </div>
   );
 }
@@ -483,13 +455,6 @@ function AdminDashboard() {
   const { user } = useAuth();
   const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
 
-  const { data, isLoading, isError } = useQuery<DashboardStats>({
-    queryKey: ['dashboard'],
-    queryFn: async () => { const res = await checksApi.getDashboard(); return res.data; },
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  });
-
   const { data: ranking } = useQuery<EmployeeRanking>({
     queryKey: ['employee-ranking'],
     queryFn: async () => { const res = await checksApi.getRanking(); return res.data; },
@@ -500,54 +465,15 @@ function AdminDashboard() {
 
   const [rankingTab, setRankingTab] = useState<'today' | 'month'>('today');
 
-  if (isLoading) {
-    return (
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)}
-      </div>
-    );
-  }
-
-  if (isError || !data) {
-    return <ErrorBanner message="Не удалось загрузить данные дашборда" />;
-  }
-
   const rankingData = rankingTab === 'today' ? (ranking?.today || []) : (ranking?.month || []);
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={<Wallet className="h-5 w-5" />} label="Выручка сегодня" value={formatMoney(data.todayRevenue)} color="bg-green-100" iconColor="text-green-600" />
-        <StatCard icon={<FileText className="h-5 w-5" />} label="Заказов сегодня" value={String(data.todayChecks)} color="bg-blue-100" iconColor="text-blue-600" />
-        <StatCard icon={<CalendarDays className="h-5 w-5" />} label="Выручка за неделю" value={formatMoney(data.weekRevenue)} color="bg-purple-100" iconColor="text-purple-600" />
-        <StatCard icon={<TrendingUp className="h-5 w-5" />} label="Выручка за месяц" value={formatMoney(data.monthRevenue)} color="bg-orange-100" iconColor="text-orange-600" />
-      </div>
-
-      {/* Profit cards for owner */}
-      {isOwner && (
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-gradient-to-br from-emerald-500 to-emerald-700 rounded-xl p-5 text-white shadow-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingUp className="h-4 w-4 text-emerald-200" />
-              <span className="text-sm text-emerald-100">Прибыль сегодня</span>
-            </div>
-            <p className="text-2xl font-bold">{formatMoney(data.todayProfit)}</p>
-          </div>
-          <div className="bg-gradient-to-br from-violet-500 to-violet-700 rounded-xl p-5 text-white shadow-lg">
-            <div className="flex items-center gap-2 mb-2">
-              <BarChart3 className="h-4 w-4 text-violet-200" />
-              <span className="text-sm text-violet-100">Прибыль за месяц</span>
-            </div>
-            <p className="text-2xl font-bold">{formatMoney(data.monthProfit)}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Revenue / Profit chart */}
+      {/* Analytics chart on top */}
       {isOwner && <RevenueChart />}
 
       {/* Staff status circles */}
-      {isOwner && <StaffStatusCircles />}
+      <StaffStatusCircles />
 
       {/* Employee ranking for owner */}
       {isOwner && ranking && (

@@ -42,7 +42,7 @@ export default function CheckDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
   const { data: check, isLoading } = useQuery<Check>({
@@ -99,7 +99,7 @@ export default function CheckDetailPage() {
                 {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
               </span>
               {check.isDeferred && (
-                <span className="badge-yellow">{'\u041E\u0442\u043B\u043E\u0436\u0435\u043D'}</span>
+                <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">{'\u0427\u0435\u0440\u043D\u043E\u0432\u0438\u043A'}</span>
               )}
             </div>
             <p className="text-sm text-gray-500 mt-0.5">
@@ -108,7 +108,7 @@ export default function CheckDetailPage() {
             </p>
           </div>
         </div>
-        {hasPermission('checks_delete') && (
+        {hasPermission('checks_delete') && !(user?.role === 'master' && check.isDeferred) && (
           <button
             onClick={() => setShowDeleteDialog(true)}
             className="btn-danger btn-sm"

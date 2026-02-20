@@ -81,6 +81,7 @@ interface ProductFormModalProps {
   isLoading: boolean;
   categories: string[];
   allProducts: Product[];
+  defaultCategory?: string;
 }
 
 function ProductFormModal({
@@ -91,9 +92,10 @@ function ProductFormModal({
   isLoading,
   categories,
   allProducts,
+  defaultCategory,
 }: ProductFormModalProps) {
   const [name, setName] = useState(product?.name || '');
-  const [category, setCategory] = useState(product?.category || '');
+  const [category, setCategory] = useState(product?.category || defaultCategory || '');
   const [photo, setPhoto] = useState(product?.photo || '');
   const [uploading, setUploading] = useState(false);
   const [costPrice, setCostPrice] = useState(product?.costPrice?.toString() || '0');
@@ -162,8 +164,8 @@ function ProductFormModal({
       photo: photo || undefined,
       costPrice: parseFloat(costPrice) || 0,
       sellPrice: parseFloat(sellPrice) || 0,
-      stock: parseInt(stock) || 0,
-      minStock: parseInt(minStock) || 0,
+      stock: parseFloat(stock) || 0,
+      minStock: parseFloat(minStock) || 0,
       unit,
       isBundle,
       bundleItems: isBundle ? bundleItems : [],
@@ -316,13 +318,14 @@ function ProductFormModal({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Остаток
+              Остаток {unit !== 'pcs' && <span className="text-gray-400 font-normal">({unit === 'm' ? 'м' : unit === 'l' ? 'л' : unit === 'kg' ? 'кг' : unit})</span>}
             </label>
             <input
               type="number"
               value={stock}
               onChange={(e) => setStock(e.target.value)}
               min="0"
+              step={unit === 'pcs' ? '1' : '0.01'}
               className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
@@ -335,6 +338,7 @@ function ProductFormModal({
               value={minStock}
               onChange={(e) => setMinStock(e.target.value)}
               min="0"
+              step={unit === 'pcs' ? '1' : '0.01'}
               className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
@@ -456,7 +460,7 @@ function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: Writeo
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const qty = parseInt(quantity);
+    const qty = parseFloat(quantity);
     if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
     if (qty > product.stock) { toast.error('Количество превышает остаток'); return; }
     if (!reason.trim()) { toast.error('Укажите причину списания'); return; }
@@ -509,7 +513,7 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const actual = parseInt(actualStock);
+    const actual = parseFloat(actualStock);
     if (isNaN(actual) || actual < 0) { toast.error('Введите корректный остаток'); return; }
     if (!reason.trim()) { toast.error('Укажите причину'); return; }
     onSubmit({ actualStock: actual, reason: reason.trim() });
@@ -1009,6 +1013,10 @@ export default function ProductsPage() {
     if (editingProduct) {
       updateMutation.mutate({ id: editingProduct.id, data });
     } else {
+      // Auto-fill category from current folder path
+      if (!data.category && activePath.length > 0) {
+        data.category = activePath.join('/');
+      }
       createMutation.mutate(data);
     }
   }
@@ -1298,6 +1306,7 @@ export default function ProductsPage() {
           isLoading={isMutating}
           categories={categories}
           allProducts={allProducts}
+          defaultCategory={activePath.length > 0 ? activePath.join('/') : undefined}
         />
       )}
 

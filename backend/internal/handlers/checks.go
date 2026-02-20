@@ -267,8 +267,8 @@ func CreateCheck(c *gin.Context) {
 	}
 
 	for _, p := range req.Products {
-		productTotal += p.SellPrice * float64(p.Quantity)
-		productCostTotal += p.CostPrice * float64(p.Quantity)
+		productTotal += p.SellPrice * p.Quantity
+		productCostTotal += p.CostPrice * p.Quantity
 	}
 
 	totalRevenue := serviceTotal + productTotal - req.Discount
@@ -315,8 +315,8 @@ func CreateCheck(c *gin.Context) {
 	}
 
 	for _, p := range req.Products {
-		totalSell := p.SellPrice * float64(p.Quantity)
-		totalCostLine := p.CostPrice * float64(p.Quantity)
+		totalSell := p.SellPrice * p.Quantity
+		totalCostLine := p.CostPrice * p.Quantity
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO check_product_lines (id, check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -383,6 +383,22 @@ func DeleteCheck(c *gin.Context) {
 	ctx := c.Request.Context()
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
+	role := c.GetString("role")
+
+	// Masters cannot delete deferred (draft) checks
+	if role == "master" {
+		var isDeferred bool
+		err := database.Pool.QueryRow(ctx, "SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&isDeferred)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"message": "Не найден"})
+			return
+		}
+		if isDeferred {
+			c.JSON(http.StatusForbidden, gin.H{"message": "Мастер не может удалить отложенный чек"})
+			return
+		}
+	}
+
 	tag, err := database.Pool.Exec(ctx, "DELETE FROM checks WHERE id=$1 AND tenant_id=$2", id, tenantID)
 	if err != nil {
 		serverError(c, "DeleteCheck", err)

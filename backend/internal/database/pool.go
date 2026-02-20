@@ -57,19 +57,30 @@ func Close() {
 
 // RunMigrations applies SQL migration files at startup.
 func RunMigrations() {
-	migration, err := os.ReadFile("migrations/001_init.sql")
-	if err != nil {
-		log.Fatalf("Failed to read migration file: %v", err)
+	ctx := context.Background()
+
+	// Apply all migration files in order
+	migrationFiles := []string{
+		"migrations/001_init.sql",
+		"migrations/002_decimal_stock.sql",
 	}
 
-	ctx := context.Background()
-	_, err = Pool.Exec(ctx, string(migration))
-	if err != nil {
-		log.Printf("Migration batch warning: %v", err)
-		log.Println("Retrying migration statements individually...")
-		runMigrationStatements(ctx, string(migration))
+	for _, file := range migrationFiles {
+		migration, err := os.ReadFile(file)
+		if err != nil {
+			log.Printf("Migration file %s not found, skipping: %v", file, err)
+			continue
+		}
+
+		_, err = Pool.Exec(ctx, string(migration))
+		if err != nil {
+			log.Printf("Migration %s batch warning: %v", file, err)
+			log.Printf("Retrying %s statements individually...", file)
+			runMigrationStatements(ctx, string(migration))
+		}
+		log.Printf("Migration %s applied", file)
 	}
-	log.Println("Migrations applied")
+	log.Println("All migrations applied")
 }
 
 func runMigrationStatements(ctx context.Context, sql string) {

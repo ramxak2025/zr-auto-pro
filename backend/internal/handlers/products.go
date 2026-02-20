@@ -22,8 +22,8 @@ func GetProducts(c *gin.Context) {
 	}
 	if limit < 1 {
 		limit = 1
-	} else if limit > 100 {
-		limit = 100
+	} else if limit > 1000 {
+		limit = 1000
 	}
 	offset := (page - 1) * limit
 
@@ -171,8 +171,8 @@ func CreateProduct(c *gin.Context) {
 		Photo       *string         `json:"photo"`
 		CostPrice   float64         `json:"costPrice"`
 		SellPrice   float64         `json:"sellPrice"`
-		Stock       int             `json:"stock"`
-		MinStock    int             `json:"minStock"`
+		Stock       float64         `json:"stock"`
+		MinStock    float64         `json:"minStock"`
 		Unit        string          `json:"unit"`
 		IsBundle    bool            `json:"isBundle"`
 		BundleItems json.RawMessage `json:"bundleItems"`
@@ -214,8 +214,8 @@ func UpdateProduct(c *gin.Context) {
 		Photo       *string          `json:"photo"`
 		CostPrice   *float64         `json:"costPrice"`
 		SellPrice   *float64         `json:"sellPrice"`
-		Stock       *int             `json:"stock"`
-		MinStock    *int             `json:"minStock"`
+		Stock       *float64         `json:"stock"`
+		MinStock    *float64         `json:"minStock"`
 		Unit        *string          `json:"unit"`
 		IsBundle    *bool            `json:"isBundle"`
 		BundleItems *json.RawMessage `json:"bundleItems"`
@@ -277,16 +277,16 @@ func UpdateStock(c *gin.Context) {
 	id := c.Param("id")
 	tenantID := c.GetString("tenantID")
 	var body struct {
-		Type     string `json:"type"`
-		Quantity int    `json:"quantity"`
-		Reason   string `json:"reason"`
+		Type     string  `json:"type"`
+		Quantity float64 `json:"quantity"`
+		Reason   string  `json:"reason"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Неверный формат"})
 		return
 	}
 
-	var currentStock int
+	var currentStock float64
 	if err := database.Pool.QueryRow(ctx, "SELECT stock FROM products WHERE id=$1 AND tenant_id=$2", id, tenantID).Scan(&currentStock); err != nil {
 		serverError(c, "update stock read current", err)
 		return
@@ -329,7 +329,7 @@ func GetWarehouseStats(c *gin.Context) {
 
 	// Total cost of current stock
 	var totalCostValue float64
-	var totalItems int
+	var totalItems float64
 	database.Pool.QueryRow(ctx,
 		"SELECT COALESCE(SUM(cost_price * stock), 0), COALESCE(SUM(stock), 0) FROM products WHERE tenant_id=$1",
 		tenantID).Scan(&totalCostValue, &totalItems)

@@ -140,6 +140,9 @@ export default function ChecksPage() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-bold text-gray-900">#{check.number}</span>
                     <span className="text-xs text-gray-400">{format(new Date(check.date), 'dd.MM.yy', { locale: ru })}</span>
+                    {check.isDeferred && (
+                      <span className="text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{'\u0427\u0435\u0440\u043D\u043E\u0432\u0438\u043A'}</span>
+                    )}
                   </div>
                   <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
                 </div>
@@ -167,7 +170,10 @@ export default function ChecksPage() {
               <tbody>
                 {checks.map((check) => (
                   <tr key={check.id} onClick={() => navigate(`/checks/${check.id}`)} className="cursor-pointer">
-                    <td className="font-medium">{check.number}</td>
+                    <td className="font-medium">
+                      <span>{check.number}</span>
+                      {check.isDeferred && <span className="ml-1.5 text-[9px] font-bold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">{'\u0427\u0435\u0440\u043D\u043E\u0432\u0438\u043A'}</span>}
+                    </td>
                     <td>{format(new Date(check.date), 'dd.MM.yyyy', { locale: ru })}</td>
                     <td>{check.client?.fullName ?? '\u2014'}</td>
                     <td>{check.car ? <div><div className="text-sm">{check.car.makeModel}</div><div className="text-xs text-gray-400">{check.car.plateNumber}</div></div> : '\u2014'}</td>
