@@ -475,7 +475,7 @@ export const uploadsApi = {
     const compressed = await compressImage(file);
     const fd = new FormData();
     fd.append('file', compressed);
-    return api.post<{ url: string; filename: string; originalname: string; size: number }>('/uploads', fd, {
+    return api.post<{ url: string; thumbnail: string; filename: string; originalname: string; size: number }>('/uploads', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },

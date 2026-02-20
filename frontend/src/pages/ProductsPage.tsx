@@ -34,6 +34,13 @@ function formatMoney(value: number): string {
   return value.toLocaleString('ru-RU') + ' \u20BD';
 }
 
+/** Derive thumbnail URL from an optimized image URL (uuid.webp → uuid_thumb.webp) */
+function thumbUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  if (url.includes('_thumb.')) return url;
+  return url.replace(/\.webp$/, '_thumb.webp');
+}
+
 const UNIT_OPTIONS = [
   { value: 'pcs', label: 'шт' },
   { value: 'm', label: 'м' },
@@ -599,10 +606,10 @@ function ProductCard({
         </div>
       )}
 
-      {/* Image area */}
+      {/* Image area — use thumbnail for fast grid loading */}
       <div className="aspect-[4/3] bg-gray-50 flex items-center justify-center overflow-hidden">
         {product.photo ? (
-          <img src={product.photo} alt="" className="w-full h-full object-cover" />
+          <img src={thumbUrl(product.photo) || product.photo} alt="" className="w-full h-full object-cover" loading="lazy" />
         ) : (
           <Package className="h-10 w-10 text-gray-200" />
         )}
@@ -697,7 +704,7 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
         <div className="flex items-start gap-4">
           <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-gray-50 flex-shrink-0 overflow-hidden">
             {product.photo ? (
-              <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-xl" />
+              <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-xl" loading="lazy" />
             ) : (
               <Package className="h-8 w-8 text-gray-300" />
             )}

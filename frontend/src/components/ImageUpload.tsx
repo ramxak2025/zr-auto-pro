@@ -70,7 +70,7 @@ export default function ImageUpload({
             <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
           ) : imageUrl ? (
             <>
-              <img src={imageUrl} alt="" className="w-full h-full object-cover" />
+              <img src={imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <Camera className="h-5 w-5 text-white" />
               </div>
@@ -112,7 +112,7 @@ export default function ImageUpload({
           <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
         ) : imageUrl ? (
           <>
-            <img src={imageUrl} alt="" className="w-full h-full object-cover" />
+            <img src={imageUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
             <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
               <Camera className="h-6 w-6 text-white" />
             </div>

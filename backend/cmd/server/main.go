@@ -55,7 +55,11 @@ func main() {
 		AllowHeaders:    []string{"Origin", "Content-Type", "Authorization"},
 	}))
 
-	r.Static("/api/uploads", "./uploads")
+	// Serve uploads with long cache (images are immutable — unique UUID names)
+	r.Group("/api/uploads").Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		c.Next()
+	}).Static("/", "./uploads")
 
 	api := r.Group("/api")
 
