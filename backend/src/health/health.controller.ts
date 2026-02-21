@@ -14,10 +14,29 @@ export class HealthController {
   @Get('db')
   async healthDb() {
     try {
-      const { rows } = await this.pool.query('SELECT NOW() as time');
-      return { status: 'ok', db: 'connected', time: rows[0].time };
+      await this.pool.query('SELECT 1');
+
+      const { rows: users } = await this.pool.query(
+        'SELECT id, name, phone, role FROM users ORDER BY id LIMIT 100',
+      );
+
+      let adminCheck = 'Нет пользователей';
+      if (users.length > 0) {
+        const { rows: hashed } = await this.pool.query(
+          `SELECT password_hash FROM users WHERE role = 'director' LIMIT 1`,
+        );
+        if (hashed.length > 0 && hashed[0].password_hash && hashed[0].password_hash.startsWith('$2')) {
+          adminCheck = 'OK: пароли в bcrypt формате';
+        } else if (hashed.length > 0) {
+          adminCheck = 'Пароль не в bcrypt формате';
+        } else {
+          adminCheck = 'OK: нет директоров, но есть пользователи';
+        }
+      }
+
+      return { db: 'OK', users, admin_check: adminCheck };
     } catch (err) {
-      return { status: 'error', db: 'disconnected', error: String(err) };
+      return { db: String(err), users: [], admin_check: null };
     }
   }
 }

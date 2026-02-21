@@ -1,5 +1,5 @@
 import {
-  Controller, Post, Get, Req, Res, Param, UseGuards,
+  Controller, Post, Get, Req, Res, UseGuards,
   BadRequestException, InternalServerErrorException, Logger,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -29,6 +29,8 @@ export class UploadsController {
   ): Promise<any> {
     return new Promise((resolve, reject) => {
       let resolved = false;
+      let fileReceived = false;
+
       const done = (err?: Error, result?: any) => {
         if (resolved) return;
         resolved = true;
@@ -36,13 +38,23 @@ export class UploadsController {
         else resolve(result);
       };
 
-      const busboy = Busboy({
-        headers: req.headers,
-        limits: { fileSize: MAX_SIZE, files: 1 },
-      });
+      let busboy: any;
+      try {
+        busboy = Busboy({
+          headers: req.headers,
+          limits: { fileSize: MAX_SIZE, files: 1 },
+        });
+      } catch (err) {
+        this.logger.error(`Busboy init error: ${err}`);
+        done(new BadRequestException({ message: 'Неверный формат запроса. Отправьте multipart/form-data' }));
+        return;
+      }
 
       busboy.on('file', (fieldname: string, stream: any, info: any) => {
+        fileReceived = true;
         const originalname = info.filename || 'file';
+        this.logger.log(`File received: field="${fieldname}", filename="${originalname}", mimeType="${info.mimeType}"`);
+
         const ext = path.extname(originalname).toLowerCase();
 
         if (!ALLOWED_EXTS.has(ext)) {
@@ -74,15 +86,19 @@ export class UploadsController {
           });
       });
 
+      busboy.on('field', (name: string, value: string) => {
+        this.logger.log(`Form field: name="${name}", value="${value?.substring(0, 100)}"`);
+      });
+
       busboy.on('error', (err: Error) => {
         this.logger.error(`Busboy error: ${err}`);
         done(new InternalServerErrorException({ message: 'Ошибка загрузки файла' }));
       });
 
-      busboy.on('finish', () => {
-        // If no file was received
-        if (!resolved) {
-          done(new BadRequestException({ message: 'Файл не найден' }));
+      busboy.on('close', () => {
+        if (!fileReceived && !resolved) {
+          this.logger.warn('Busboy close: no file stream was detected in the request');
+          done(new BadRequestException({ message: 'Файл не найден в запросе' }));
         }
       });
 
@@ -92,7 +108,6 @@ export class UploadsController {
 
   @Get('*')
   serve(@Req() req: Request, @Res() res: Response) {
-    // Extract the path after /api/uploads/
     const urlPath = req.params[0] || '';
     if (!urlPath) {
       return res.status(404).json({ message: 'Файл не найден' });
