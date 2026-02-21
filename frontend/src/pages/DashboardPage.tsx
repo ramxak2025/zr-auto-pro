@@ -363,21 +363,20 @@ function RevenueChart() {
     return Math.max(...data.points.map((p: { profit: number }) => p.profit), 1);
   }, [data]);
 
-  const formatLabel = (dateStr: string): string => {
-    if (period === 'today') {
-      const d = new Date(dateStr);
-      return `${d.getHours()}:00`;
-    }
+  const formatLabel = (dateStr: string, idx: number, total: number): string => {
+    if (period === 'today') return '';
     if (period === 'year') {
       const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
       const parts = dateStr.split('-');
-      return months[parseInt(parts[1]) - 1] || dateStr;
+      return months[parseInt(parts[1]) - 1] || '';
     }
     const d = new Date(dateStr);
     if (period === 'week') {
       const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
       return days[d.getDay()];
     }
+    const step = total > 15 ? 5 : total > 10 ? 3 : 2;
+    if (idx % step !== 0 && idx !== total - 1) return '';
     return `${d.getDate()}`;
   };
 
@@ -516,25 +515,20 @@ function RevenueChart() {
                 {/* Profit area + line */}
                 <path d={buildAreaPath(profitValues, chartHeight, chartWidth, maxProfit)} fill="url(#profGrad)" />
                 <path d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)} fill="none" stroke="rgb(6,182,212)" strokeWidth="2" strokeLinecap="round" />
-                {/* Revenue dots */}
-                {revenueValues.map((v: number, i: number) => {
-                  const padding = 16;
-                  const stepX = (chartWidth - padding * 2) / Math.max(revenueValues.length - 1, 1);
-                  const x = padding + i * stepX;
-                  const y = chartHeight - (v / maxValue) * (chartHeight - 24) - 12;
-                  return (
-                    <circle key={`r-${i}`} cx={x} cy={y} r="3.5" fill="rgb(37,99,235)" stroke="rgba(15,23,42,0.8)" strokeWidth="2" />
-                  );
-                })}
               </svg>
               {/* X-axis labels */}
-              <div className="flex justify-between mt-1 px-4">
-                {data.points.map((point: { date: string }, idx: number) => (
-                  <span key={idx} className="text-[9px] text-slate-500 text-center" style={{ width: `${100 / data.points.length}%` }}>
-                    {formatLabel(point.date)}
-                  </span>
-                ))}
-              </div>
+              {period !== 'today' && (
+                <div className="flex mt-1 px-4">
+                  {data.points.map((point: { date: string }, idx: number) => {
+                    const label = formatLabel(point.date, idx, data.points.length);
+                    return (
+                      <span key={idx} className="text-[10px] text-slate-500 text-center flex-1">
+                        {label}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -564,7 +558,7 @@ function RevenueChart() {
           <div className="flex overflow-x-auto gap-2 pb-1 scrollbar-hide">
             {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
               <div key={idx} className="flex-shrink-0 text-center px-3 py-2 rounded-xl bg-white/5 min-w-[64px]">
-                <p className="text-[9px] text-slate-500 font-medium">{formatLabel(point.date)}</p>
+                <p className="text-[9px] text-slate-500 font-medium">{formatLabel(point.date, idx, data.points.length)}</p>
                 <p className="text-[11px] font-bold text-blue-300">{formatMoney(point.revenue)}</p>
                 <p className="text-[9px] text-cyan-400">{formatMoney(point.profit)}</p>
               </div>

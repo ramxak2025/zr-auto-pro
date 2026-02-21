@@ -30,6 +30,7 @@ import MorePage from './pages/MorePage';
 import TariffPage from './pages/TariffPage';
 import RetailChecksPage from './pages/RetailChecksPage';
 import ExpensesPage from './pages/ExpensesPage';
+import MarketingPage from './pages/MarketingPage';
 
 // Admin pages
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
@@ -102,6 +103,7 @@ export default function App() {
                 <Route path="/schedule" element={<SchedulePage />} />
                 <Route path="/more" element={<MorePage />} />
                 <Route path="/tariff" element={<TariffPage />} />
+                <Route path="/marketing" element={<MarketingPage />} />
               </Route>
 
               {/* Admin routes inside AdminLayout (superadmin only) */}

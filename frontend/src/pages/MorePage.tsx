@@ -14,6 +14,7 @@ import {
   Camera,
   Loader2,
   CreditCard,
+  Megaphone,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -99,6 +100,14 @@ const menuItems: MenuItem[] = [
     permission: 'financial_reports',
     color: 'bg-purple-50',
     iconColor: 'text-purple-600',
+  },
+  {
+    label: 'Маркетинг',
+    description: 'Рассылки, акции, аналитика',
+    path: '/marketing',
+    icon: Megaphone,
+    color: 'bg-violet-50',
+    iconColor: 'text-violet-600',
   },
   {
     label: 'Пользователи',
