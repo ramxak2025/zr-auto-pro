@@ -268,6 +268,9 @@ CREATE TABLE IF NOT EXISTS work_modes (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Per-user regular days off (array of weekday numbers: 0=Sun, 1=Mon, ..., 6=Sat)
+DO $$ BEGIN ALTER TABLE users ADD COLUMN days_off JSONB DEFAULT '[]'; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+
 -- Add cash_amount and card_amount to checks for mixed payments
 DO $$ BEGIN ALTER TABLE checks ADD COLUMN cash_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
 DO $$ BEGIN ALTER TABLE checks ADD COLUMN card_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;

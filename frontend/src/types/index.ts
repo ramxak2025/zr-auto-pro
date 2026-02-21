@@ -58,6 +58,7 @@ export interface User {
   role: UserRole;
   salaryPercent: number;
   permissions: UserPermissions;
+  daysOff?: number[];
   isActive: boolean;
   tenantId?: string;
   tenant?: Tenant;

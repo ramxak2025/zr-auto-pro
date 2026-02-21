@@ -431,7 +431,7 @@ function RevenueChart() {
   const revChange = prevRevenue > 0 ? Math.round(((lastRevenue - prevRevenue) / prevRevenue) * 100) : 0;
 
   return (
-    <div className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden shadow-xl">
+    <div className="rounded-3xl bg-gradient-to-br from-blue-950 via-slate-900 to-blue-950 overflow-hidden shadow-xl">
       {/* Header */}
       <div className="px-5 pt-5 pb-3">
         <div className="flex items-center justify-between mb-4">
@@ -439,7 +439,7 @@ function RevenueChart() {
             <p className="text-[11px] font-medium text-slate-400 uppercase tracking-widest">Аналитика</p>
             <p className="text-xl font-bold text-white mt-0.5">{data ? formatMoney(data.totalRevenue) : '...'}</p>
             {data && revChange !== 0 && (
-              <p className={`text-xs font-medium mt-0.5 ${revChange > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              <p className={`text-xs font-medium mt-0.5 ${revChange > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
                 {revChange > 0 ? '+' : ''}{revChange}% к пред. периоду
               </p>
             )}
@@ -503,12 +503,12 @@ function RevenueChart() {
               >
                 <defs>
                   <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="rgb(99,102,241)" stopOpacity="0.35" />
-                    <stop offset="100%" stopColor="rgb(99,102,241)" stopOpacity="0" />
+                    <stop offset="0%" stopColor="rgb(37,99,235)" stopOpacity="0.4" />
+                    <stop offset="100%" stopColor="rgb(37,99,235)" stopOpacity="0" />
                   </linearGradient>
                   <linearGradient id="profGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="rgb(52,211,153)" stopOpacity="0.25" />
-                    <stop offset="100%" stopColor="rgb(52,211,153)" stopOpacity="0" />
+                    <stop offset="0%" stopColor="rgb(6,182,212)" stopOpacity="0.3" />
+                    <stop offset="100%" stopColor="rgb(6,182,212)" stopOpacity="0" />
                   </linearGradient>
                 </defs>
                 {/* Subtle grid */}
@@ -517,10 +517,10 @@ function RevenueChart() {
                 ))}
                 {/* Revenue area + line */}
                 <path d={buildAreaPath(revenueValues, chartHeight, chartWidth, maxValue)} fill="url(#revGrad)" />
-                <path d={buildWavePath(revenueValues, chartHeight, chartWidth, maxValue)} fill="none" stroke="rgb(129,140,248)" strokeWidth="2.5" strokeLinecap="round" />
+                <path d={buildWavePath(revenueValues, chartHeight, chartWidth, maxValue)} fill="none" stroke="rgb(37,99,235)" strokeWidth="2.5" strokeLinecap="round" />
                 {/* Profit area + line */}
                 <path d={buildAreaPath(profitValues, chartHeight, chartWidth, maxProfit)} fill="url(#profGrad)" />
-                <path d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" strokeLinecap="round" strokeDasharray="6 3" />
+                <path d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)} fill="none" stroke="rgb(6,182,212)" strokeWidth="2" strokeLinecap="round" />
                 {/* Revenue dots */}
                 {revenueValues.map((v: number, i: number) => {
                   const padding = 16;
@@ -528,7 +528,7 @@ function RevenueChart() {
                   const x = padding + i * stepX;
                   const y = chartHeight - (v / maxValue) * (chartHeight - 24) - 12;
                   return (
-                    <circle key={`r-${i}`} cx={x} cy={y} r="3.5" fill="rgb(129,140,248)" stroke="rgba(30,27,75,0.8)" strokeWidth="2" />
+                    <circle key={`r-${i}`} cx={x} cy={y} r="3.5" fill="rgb(37,99,235)" stroke="rgba(15,23,42,0.8)" strokeWidth="2" />
                   );
                 })}
               </svg>
@@ -554,7 +554,7 @@ function RevenueChart() {
           </div>
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
             <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Прибыль</p>
-            <p className="text-base font-bold text-emerald-400 mt-0.5">{formatMoney(data.totalProfit)}</p>
+            <p className="text-base font-bold text-cyan-400 mt-0.5">{formatMoney(data.totalProfit)}</p>
           </div>
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
             <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Чеков</p>
@@ -570,8 +570,8 @@ function RevenueChart() {
             {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
               <div key={idx} className="flex-shrink-0 text-center px-3 py-2 rounded-xl bg-white/5 min-w-[64px]">
                 <p className="text-[9px] text-slate-500 font-medium">{formatLabel(point.date)}</p>
-                <p className="text-[11px] font-bold text-indigo-300">{formatMoney(point.revenue)}</p>
-                <p className="text-[9px] text-emerald-400">{formatMoney(point.profit)}</p>
+                <p className="text-[11px] font-bold text-blue-300">{formatMoney(point.revenue)}</p>
+                <p className="text-[9px] text-cyan-400">{formatMoney(point.profit)}</p>
               </div>
             ))}
           </div>

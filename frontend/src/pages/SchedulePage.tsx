@@ -403,44 +403,46 @@ export default function SchedulePage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-2xl p-1 mb-6 max-w-md">
-        <button
-          onClick={() => setTab('schedule')}
-          className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-            tab === 'schedule' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <CalendarDays className="w-4 h-4 inline-block mr-1 -mt-0.5" />
-          График
-        </button>
-        <button
-          onClick={() => setTab('today')}
-          className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-            tab === 'today' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <Clock className="w-4 h-4 inline-block mr-1 -mt-0.5" />
-          Сегодня
-        </button>
-        <button
-          onClick={() => setTab('mystats')}
-          className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-            tab === 'mystats' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <Users className="w-4 h-4 inline-block mr-1 -mt-0.5" />
-          Мои смены
-        </button>
-        {canEdit && (
+      <div className="overflow-x-auto -mx-1 px-1 mb-6 scrollbar-hide">
+        <div className="inline-flex gap-1 bg-gray-100 rounded-2xl p-1 min-w-0">
           <button
-            onClick={() => setTab('settings')}
-            className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-              tab === 'settings' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            onClick={() => setTab('schedule')}
+            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+              tab === 'schedule' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            Настройки
+            <CalendarDays className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            График
           </button>
-        )}
+          <button
+            onClick={() => setTab('today')}
+            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+              tab === 'today' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Clock className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            Сегодня
+          </button>
+          <button
+            onClick={() => setTab('mystats')}
+            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+              tab === 'mystats' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Users className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            Смены
+          </button>
+          {canEdit && (
+            <button
+              onClick={() => setTab('settings')}
+              className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+                tab === 'settings' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              Настройки
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Schedule Tab - Grid: rows=employees, columns=dates */}
@@ -795,6 +797,9 @@ export default function SchedulePage() {
           {workModes.length > 0 && (
             <ApplyWorkModeCard workModes={workModes} users={users} />
           )}
+
+          {/* Per-master days off */}
+          <MasterDaysOffCard users={users} />
         </div>
       )}
 
@@ -921,6 +926,68 @@ function WorkModeForm({ onSubmit }: { onSubmit: (data: any) => void }) {
         <Plus className="w-4 h-4" /> Создать
       </button>
     </form>
+  );
+}
+
+const DAY_NAMES_FULL = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const ORDERED_DAYS = [1, 2, 3, 4, 5, 6, 0]; // Пн-Вс
+
+function MasterDaysOffCard({ users }: { users: User[] }) {
+  const queryClient = useQueryClient();
+  const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
+
+  const updateMutation = useMutation({
+    mutationFn: ({ userId, daysOff }: { userId: string; daysOff: number[] }) =>
+      usersApi.update(userId, { daysOff } as any),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast.success('Выходные дни обновлены');
+    },
+    onError: () => toast.error('Ошибка сохранения'),
+  });
+
+  const toggleDay = (user: User, day: number) => {
+    const current = user.daysOff || [];
+    const next = current.includes(day) ? current.filter(d => d !== day) : [...current, day];
+    updateMutation.mutate({ userId: user.id, daysOff: next });
+  };
+
+  if (activeUsers.length === 0) return null;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <h2 className="text-lg font-semibold text-gray-900 mb-2">Выходные дни мастеров</h2>
+      <p className="text-xs text-gray-400 mb-4">
+        Отметьте дни недели, в которые у мастера выходной. При применении графика эти дни будут автоматически проставлены как выходные.
+      </p>
+      <div className="space-y-3">
+        {activeUsers.map((u) => (
+          <div key={u.id} className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+            <p className="text-sm font-semibold text-gray-800 mb-2">{u.fullName}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {ORDERED_DAYS.map((day) => {
+                const isOff = (u.daysOff || []).includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => toggleDay(u, day)}
+                    disabled={updateMutation.isPending}
+                    className={`w-10 h-9 rounded-lg text-xs font-bold transition-all ${
+                      isOff
+                        ? 'bg-red-500 text-white shadow-sm'
+                        : 'bg-white text-gray-500 border border-gray-200 hover:border-red-300 hover:text-red-500'
+                    } disabled:opacity-50`}
+                  >
+                    {DAY_NAMES_FULL[day]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

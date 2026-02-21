@@ -203,36 +203,46 @@ export class ScheduleService {
     if (wmRows.length === 0) throw new NotFoundException({ message: 'Режим работы не найден' });
     const wm = wmRows[0];
 
-    // Get target users
-    let userIds: string[] = [];
+    // Get target users with their days_off
+    let userRows: Array<{ id: string; days_off: number[] }> = [];
     if (userId) {
-      userIds = [userId];
+      const { rows: uRows } = await this.pool.query(
+        `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE id=$1 AND tenant_id=$2`,
+        [userId, tenantID],
+      );
+      userRows = uRows.map(r => ({ id: r.id, days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : (r.days_off || []) }));
     } else {
       const { rows: uRows } = await this.pool.query(
-        `SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('master', 'admin')`,
+        `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('master', 'admin')`,
         [tenantID],
       );
-      userIds = uRows.map(r => r.id);
+      userRows = uRows.map(r => ({ id: r.id, days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : (r.days_off || []) }));
     }
 
-    if (userIds.length === 0) return { created: 0 };
+    if (userRows.length === 0) return { created: 0 };
 
     // Generate entries for each day in range
     const start = new Date(dateFrom);
     const end = new Date(dateTo);
     let created = 0;
 
-    for (const uid of userIds) {
+    for (const userInfo of userRows) {
+      const uid = userInfo.id;
+      const userDaysOff: number[] = userInfo.days_off || [];
       const cursor = new Date(start);
       while (cursor <= end) {
         const dateStr = cursor.toISOString().split('T')[0];
         const dayOfWeek = cursor.getDay(); // 0=Sun, 6=Sat
 
-        // Determine if working day based on weekDays array (if specified)
+        // Determine if working day based on weekDays array (if specified) + per-user days off
         const weekDays: number[] = wm.week_days || [];
         let isWorkDay = true;
         if (weekDays.length > 0) {
           isWorkDay = weekDays.includes(dayOfWeek);
+        }
+        // Per-user days off override
+        if (userDaysOff.includes(dayOfWeek)) {
+          isWorkDay = false;
         }
 
         // Delete existing entry for this user/date

@@ -81,6 +81,7 @@ interface UpdateUserRequest {
   role?: string;
   salaryPercent?: number;
   permissions?: Record<string, boolean>;
+  daysOff?: number[];
   isActive?: boolean;
 }
 
