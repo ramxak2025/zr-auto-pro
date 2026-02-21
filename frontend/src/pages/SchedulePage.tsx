@@ -146,7 +146,7 @@ export default function SchedulePage() {
 
   // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
-    const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin' || u.role === 'director'));
+    const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
     const activeIds = new Set(activeUsers.map(u => u.id));
 
     // Add any users from entries that aren't in the active users list (e.g., recently deactivated)
