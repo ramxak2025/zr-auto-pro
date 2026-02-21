@@ -19,8 +19,8 @@ export class ChecksController {
   }
 
   @Get('dashboard/chart')
-  getDashboardChart(@CurrentUser() user: JwtPayload, @Query('period') period: string) {
-    return this.checksService.getDashboardChart(user.tenantID, period);
+  getDashboardChart(@CurrentUser() user: JwtPayload, @Query('period') period: string, @Query('offset') offset: string) {
+    return this.checksService.getDashboardChart(user.tenantID, period, parseInt(offset) || 0);
   }
 
   @Get('ranking')

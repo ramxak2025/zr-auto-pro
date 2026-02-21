@@ -211,9 +211,9 @@ export default function ChecksPage() {
 
                   {/* Comment preview */}
                   {check.comment && (
-                    <div className="flex items-start gap-2 mb-3">
-                      <MessageSquare className="w-3.5 h-3.5 text-gray-300 flex-shrink-0 mt-0.5" />
-                      <p className="text-xs text-gray-400 line-clamp-1">{check.comment}</p>
+                    <div className="flex items-start gap-2 mb-3 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100">
+                      <MessageSquare className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-700 line-clamp-2">{check.comment}</p>
                     </div>
                   )}
                 </div>
@@ -291,9 +291,9 @@ export default function ChecksPage() {
                     <td>
                       <div className="text-sm font-medium">{check.client?.fullName ?? 'Розничный покупатель'}</div>
                       {check.comment && (
-                        <div className="text-xs text-gray-400 truncate max-w-[200px]" title={check.comment}>
-                          <MessageSquare className="w-3 h-3 inline mr-1" />
-                          {check.comment}
+                        <div className="text-xs text-amber-600 bg-amber-50 rounded px-1.5 py-0.5 mt-0.5 truncate max-w-[200px] inline-flex items-center gap-1" title={check.comment}>
+                          <MessageSquare className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate">{check.comment}</span>
                         </div>
                       )}
                     </td>

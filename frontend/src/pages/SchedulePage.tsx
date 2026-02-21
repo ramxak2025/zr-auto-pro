@@ -1,10 +1,9 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
   Clock,
   Plus,
-  Pencil,
   Trash2,
   Loader2,
   CheckCircle2,
@@ -17,18 +16,13 @@ import {
 import toast from 'react-hot-toast';
 import {
   format,
-  addDays,
-  parseISO,
   eachDayOfInterval,
-  startOfWeek,
-  endOfWeek,
   startOfMonth,
   endOfMonth,
   addMonths,
   subMonths,
-  isSameMonth,
   isToday,
-  isSameDay,
+  getDay,
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -42,26 +36,6 @@ import EmptyState from '../components/EmptyState';
 
 type TabType = 'schedule' | 'today' | 'mystats';
 
-/** Employee color palette for dot badges in the calendar */
-const EMPLOYEE_COLORS = [
-  'bg-blue-500',
-  'bg-purple-500',
-  'bg-pink-500',
-  'bg-amber-500',
-  'bg-teal-500',
-  'bg-indigo-500',
-  'bg-rose-500',
-  'bg-cyan-500',
-  'bg-lime-600',
-  'bg-orange-500',
-  'bg-emerald-500',
-  'bg-violet-500',
-];
-
-function getEmployeeColor(index: number): string {
-  return EMPLOYEE_COLORS[index % EMPLOYEE_COLORS.length];
-}
-
 export default function SchedulePage() {
   const queryClient = useQueryClient();
   const { user: authUser } = useAuth();
@@ -72,27 +46,19 @@ export default function SchedulePage() {
 
   const [tab, setTab] = useState<TabType>('schedule');
 
-  // Current month for calendar navigation
   const today = new Date();
   const [currentMonth, setCurrentMonth] = useState(today);
 
-  // Compute dateFrom / dateTo covering the entire visible calendar grid
-  // (from Monday of the week containing the 1st, to Sunday of the week containing the last day)
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
-  const calendarStart = startOfWeek(monthStart, { weekStartsOn: 1 });
-  const calendarEnd = endOfWeek(monthEnd, { weekStartsOn: 1 });
 
-  const dateFrom = format(calendarStart, 'yyyy-MM-dd');
-  const dateTo = format(calendarEnd, 'yyyy-MM-dd');
+  const dateFrom = format(monthStart, 'yyyy-MM-dd');
+  const dateTo = format(monthEnd, 'yyyy-MM-dd');
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ScheduleEntry | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-
-  // Day detail popup (for tapping a day cell on mobile)
-  const [selectedDay, setSelectedDay] = useState<Date | null>(null);
 
   const [entryForm, setEntryForm] = useState({
     userId: '',
@@ -144,27 +110,16 @@ export default function SchedulePage() {
   const todayStatuses = todayData ?? [];
   const users = usersData ?? [];
 
-  // Compute days in visible calendar grid
-  const calendarDays = useMemo(() => {
+  // Days of the current month
+  const monthDays = useMemo(() => {
     try {
-      return eachDayOfInterval({ start: calendarStart, end: calendarEnd });
+      return eachDayOfInterval({ start: monthStart, end: monthEnd });
     } catch {
       return [];
     }
   }, [dateFrom, dateTo]);
 
-  // Group entries by date -> userId
-  const dateEntryMap = useMemo(() => {
-    const map: Record<string, Record<string, ScheduleEntry>> = {};
-    entries.forEach((entry) => {
-      const d = entry.date.slice(0, 10);
-      if (!map[d]) map[d] = {};
-      map[d][entry.userId] = entry;
-    });
-    return map;
-  }, [entries]);
-
-  // Also keep user->date map for the day detail view
+  // Build user -> date -> entry map
   const entryMap = useMemo(() => {
     const map: Record<string, Record<string, ScheduleEntry>> = {};
     entries.forEach((entry) => {
@@ -195,15 +150,6 @@ export default function SchedulePage() {
     });
     return allUsers;
   }, [entries, users]);
-
-  // Stable user -> color index map
-  const userColorMap = useMemo(() => {
-    const map: Record<string, number> = {};
-    scheduleUsers.forEach((u, i) => {
-      map[u.id] = i;
-    });
-    return map;
-  }, [scheduleUsers]);
 
   // Month navigation
   const goToPrevMonth = useCallback(() => setCurrentMonth((m) => subMonths(m, 1)), []);
@@ -319,116 +265,34 @@ export default function SchedulePage() {
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
-  // Helper: get entries for a given day
-  const getEntriesForDay = (day: Date) => {
-    const dateStr = format(day, 'yyyy-MM-dd');
-    const dayEntries = dateEntryMap[dateStr];
-    if (!dayEntries) return [];
-    return Object.values(dayEntries);
-  };
-
-  // Handle day cell click
-  const handleDayCellClick = (day: Date) => {
-    if (!isSameMonth(day, currentMonth)) return;
-    setSelectedDay(day);
-  };
-
-  // Handle adding schedule from day detail
-  const handleAddFromDayDetail = (date: string, userId?: string) => {
-    setSelectedDay(null);
-    openCreate(userId, date);
-  };
-
-  // Handle editing from day detail
-  const handleEditFromDayDetail = (entry: ScheduleEntry) => {
-    setSelectedDay(null);
-    openEdit(entry);
-  };
-
-  // Entry status helpers — green=shift, black=dayoff, grey=sick
-  const getEntryDotColor = (entry: ScheduleEntry): string => {
-    const isSick = (entry.note || '').toLowerCase().includes('больнич');
-    if (isSick) return 'bg-gray-400';
-    if (entry.isDayOff) return 'bg-gray-900';
-    return 'bg-green-500';
-  };
-
-  const getEntryStatusLabel = (entry: ScheduleEntry): string => {
-    const isSick = (entry.note || '').toLowerCase().includes('больнич');
-    if (isSick) return 'Больничный';
-    if (entry.isDayOff) return 'Выходной';
-    return `${entry.shiftStart?.slice(0, 5)} - ${entry.shiftEnd?.slice(0, 5)}`;
-  };
-
-  const getEntryStatusBadge = (entry: ScheduleEntry) => {
+  // Cell rendering helpers
+  const getCellContent = (entry: ScheduleEntry | undefined) => {
+    if (!entry) return null;
     const isSick = (entry.note || '').toLowerCase().includes('больнич');
     if (isSick) {
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-gray-200 text-gray-600">
-          Б/Л
-        </span>
-      );
+      return { icon: '🏥', label: 'Б/Л', bgColor: 'bg-gray-100', textColor: 'text-gray-500', borderColor: 'border-gray-200' };
     }
     if (entry.isDayOff) {
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-gray-900 text-white">
-          Вых
-        </span>
-      );
+      return { icon: '🌙', label: 'Вых', bgColor: 'bg-gray-800', textColor: 'text-white', borderColor: 'border-gray-700' };
     }
-    return (
-      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium bg-green-100 text-green-700">
-        {entry.shiftStart?.slice(0, 5)}-{entry.shiftEnd?.slice(0, 5)}
-      </span>
-    );
+    // Working shift
+    const time = entry.shiftStart?.slice(0, 5) || '';
+    return { icon: '✓', label: time, bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' };
   };
 
-  // Today tab helpers — green=shift, yellow=late<1h, orange=late>1h, red=absent, black=dayoff, grey=sick
-  const getStatusColor = (status: TodayEmployeeStatus) => {
-    if (status.isDayOff) return 'text-gray-900';
-    if (status.lateStatus === 'late_major') return 'text-orange-600';
-    if (status.lateStatus === 'late_minor') return 'text-yellow-600';
-    if (status.isWorking) return 'text-green-600';
-    if (status.hasSchedule) return 'text-red-600';
-    return 'text-gray-500';
-  };
-
+  // Today tab helpers
   const getStatusBadge = (status: TodayEmployeeStatus) => {
     if (status.isDayOff)
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-900 text-white">
-          Выходной
-        </span>
-      );
+      return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-900 text-white">Выходной</span>;
     if (!status.hasSchedule)
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500">
-          Нет расписания
-        </span>
-      );
+      return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500">Нет расписания</span>;
     if (status.lateStatus === 'late_major')
-      return (
-        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">
-          Опоздание &gt;1ч
-        </span>
-      );
+      return <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">Опоздание &gt;1ч</span>;
     if (status.lateStatus === 'late_minor')
-      return (
-        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">
-          Опоздание &lt;1ч
-        </span>
-      );
+      return <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">Опоздание &lt;1ч</span>;
     if (status.isWorking)
-      return (
-        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700">
-          На смене
-        </span>
-      );
-    return (
-      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700">
-        Прогул
-      </span>
-    );
+      return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700">На смене</span>;
+    return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700">Прогул</span>;
   };
 
   const getStatusIcon = (status: TodayEmployeeStatus) => {
@@ -440,22 +304,7 @@ export default function SchedulePage() {
     return <Clock className="w-5 h-5 text-gray-400" />;
   };
 
-  // Weekday header names (Mon-Sun)
-  const weekdayNames = useMemo(() => {
-    const start = startOfWeek(new Date(), { weekStartsOn: 1 });
-    return Array.from({ length: 7 }, (_, i) =>
-      format(addDays(start, i), 'EEEEEE', { locale: ru }).toUpperCase()
-    );
-  }, []);
-
-  // Split calendar days into weeks (rows of 7)
-  const calendarWeeks = useMemo(() => {
-    const weeks: Date[][] = [];
-    for (let i = 0; i < calendarDays.length; i += 7) {
-      weeks.push(calendarDays.slice(i, i + 7));
-    }
-    return weeks;
-  }, [calendarDays]);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className="pb-6">
@@ -475,9 +324,7 @@ export default function SchedulePage() {
         <button
           onClick={() => setTab('schedule')}
           className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-            tab === 'schedule'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'
+            tab === 'schedule' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
           }`}
         >
           <CalendarDays className="w-4 h-4 inline-block mr-1 -mt-0.5" />
@@ -486,9 +333,7 @@ export default function SchedulePage() {
         <button
           onClick={() => setTab('today')}
           className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-            tab === 'today'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'
+            tab === 'today' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
           }`}
         >
           <Clock className="w-4 h-4 inline-block mr-1 -mt-0.5" />
@@ -497,9 +342,7 @@ export default function SchedulePage() {
         <button
           onClick={() => setTab('mystats')}
           className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-            tab === 'mystats'
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'
+            tab === 'mystats' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
           }`}
         >
           <Users className="w-4 h-4 inline-block mr-1 -mt-0.5" />
@@ -507,12 +350,12 @@ export default function SchedulePage() {
         </button>
       </div>
 
-      {/* Schedule Tab - Month Calendar */}
+      {/* Schedule Tab - Grid: rows=employees, columns=dates */}
       {tab === 'schedule' && (
         <div>
           {/* Month Navigation */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-6">
-            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3 sm:px-6 sm:py-4">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-4">
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3">
               <div className="flex items-center justify-between">
                 <button
                   onClick={goToPrevMonth}
@@ -521,7 +364,7 @@ export default function SchedulePage() {
                   <ChevronLeft className="w-5 h-5" />
                 </button>
                 <div className="text-center">
-                  <h2 className="text-white font-semibold text-lg sm:text-xl capitalize">
+                  <h2 className="text-white font-semibold text-lg capitalize">
                     {format(currentMonth, 'LLLL yyyy', { locale: ru })}
                   </h2>
                   <button
@@ -540,346 +383,126 @@ export default function SchedulePage() {
               </div>
             </div>
 
-            {/* Color Legend */}
-            <div className="px-4 py-2.5 sm:px-6 border-b border-gray-100 bg-gray-50/50">
+            {/* Legend */}
+            <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50/50">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
                 <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block" />
+                  <span className="w-5 h-5 rounded bg-green-50 border border-green-200 flex items-center justify-center text-[10px]">✓</span>
                   Смена
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 inline-block" />
-                  Опоздание &lt;1ч
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block" />
-                  Опоздание &gt;1ч
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
-                  Прогул
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-gray-900 inline-block" />
+                  <span className="w-5 h-5 rounded bg-gray-800 border border-gray-700 flex items-center justify-center text-[10px]">🌙</span>
                   Выходной
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-gray-400 inline-block" />
+                  <span className="w-5 h-5 rounded bg-gray-100 border border-gray-200 flex items-center justify-center text-[10px]">🏥</span>
                   Больничный
                 </span>
               </div>
             </div>
 
             {scheduleLoading ? (
+              <div className="py-16"><LoadingSpinner /></div>
+            ) : scheduleUsers.length === 0 ? (
               <div className="py-16">
-                <LoadingSpinner />
+                <EmptyState icon={Users} title="Нет сотрудников" description="Добавьте сотрудников для составления расписания" />
               </div>
             ) : (
-              <>
-                {/* Desktop Calendar Grid */}
-                <div className="hidden md:block">
-                  {/* Weekday Headers */}
-                  <div className="grid grid-cols-7 border-b border-gray-100">
-                    {weekdayNames.map((name, i) => (
+              /* Grid Table — horizontal scroll on mobile */
+              <div className="relative">
+                <div className="flex">
+                  {/* Sticky employee names column */}
+                  <div className="flex-shrink-0 sticky left-0 z-10 bg-white border-r border-gray-200">
+                    {/* Corner header */}
+                    <div className="h-10 border-b border-gray-200 bg-gray-50 px-3 flex items-center">
+                      <span className="text-[10px] font-semibold text-gray-500 uppercase">Сотрудник</span>
+                    </div>
+                    {/* Employee rows */}
+                    {scheduleUsers.map((u) => (
                       <div
-                        key={i}
-                        className="px-2 py-2.5 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider"
+                        key={u.id}
+                        className="h-12 border-b border-gray-50 px-3 flex items-center"
                       >
-                        {name}
+                        <span className="text-xs font-medium text-gray-800 truncate max-w-[100px] sm:max-w-[140px]">
+                          {u.fullName}
+                        </span>
                       </div>
                     ))}
                   </div>
 
-                  {/* Calendar Weeks */}
-                  {calendarWeeks.map((week, wi) => (
-                    <div key={wi} className="grid grid-cols-7 border-b border-gray-50 last:border-b-0">
-                      {week.map((day) => {
-                        const inMonth = isSameMonth(day, currentMonth);
-                        const todayHighlight = isToday(day);
-                        const dayEntries = getEntriesForDay(day);
-                        const dateStr = format(day, 'yyyy-MM-dd');
-
-                        return (
-                          <div
-                            key={dateStr}
-                            onClick={() => handleDayCellClick(day)}
-                            className={`
-                              min-h-[100px] p-2 border-r border-gray-50 last:border-r-0
-                              transition-all duration-150 group
-                              ${inMonth ? 'bg-white hover:bg-blue-50/50 cursor-pointer' : 'bg-gray-50/60'}
-                              ${todayHighlight ? 'ring-2 ring-inset ring-blue-400/50 bg-blue-50/30' : ''}
-                            `}
-                          >
-                            {/* Day number */}
-                            <div className="flex items-center justify-between mb-1.5">
-                              <span
-                                className={`
-                                  text-sm font-medium leading-none
-                                  ${todayHighlight ? 'bg-blue-600 text-white w-7 h-7 rounded-full flex items-center justify-center' : ''}
-                                  ${inMonth ? (todayHighlight ? '' : 'text-gray-900') : 'text-gray-300'}
-                                `}
-                              >
+                  {/* Scrollable dates area */}
+                  <div className="overflow-x-auto flex-1" ref={scrollRef}>
+                    <div style={{ minWidth: `${monthDays.length * 44}px` }}>
+                      {/* Date headers */}
+                      <div className="flex border-b border-gray-200 bg-gray-50">
+                        {monthDays.map((day) => {
+                          const dayOfWeek = getDay(day);
+                          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                          const isTodayDate = isToday(day);
+                          return (
+                            <div
+                              key={format(day, 'yyyy-MM-dd')}
+                              className={`w-11 flex-shrink-0 h-10 flex flex-col items-center justify-center ${
+                                isTodayDate ? 'bg-blue-100' : isWeekend ? 'bg-red-50/50' : ''
+                              }`}
+                            >
+                              <span className={`text-[9px] font-medium ${isWeekend ? 'text-red-400' : 'text-gray-400'}`}>
+                                {format(day, 'EE', { locale: ru }).slice(0, 2).toUpperCase()}
+                              </span>
+                              <span className={`text-xs font-bold ${
+                                isTodayDate ? 'text-blue-600' : isWeekend ? 'text-red-500' : 'text-gray-700'
+                              }`}>
                                 {format(day, 'd')}
                               </span>
-                              {canEdit && inMonth && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    openCreate(undefined, dateStr);
-                                  }}
-                                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded-md hover:bg-blue-100 text-blue-500 transition-all duration-150"
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                </button>
-                              )}
                             </div>
-
-                            {/* Employee entries as badges */}
-                            {inMonth && (
-                              <div className="space-y-0.5">
-                                {dayEntries.slice(0, 4).map((entry) => {
-                                  const userName = entry.user?.fullName || 'Сотрудник';
-                                  const shortName = userName.split(' ')[0];
-                                  const dotColor = getEntryDotColor(entry);
-                                  return (
-                                    <div
-                                      key={entry.id}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        if (canEdit) {
-                                          openEdit(entry);
-                                        } else {
-                                          handleDayCellClick(day);
-                                        }
-                                      }}
-                                      className={`
-                                        flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight truncate
-                                        ${canEdit ? 'hover:bg-gray-100 cursor-pointer' : ''}
-                                        transition-colors duration-100
-                                      `}
-                                      title={`${userName}: ${getEntryStatusLabel(entry)}`}
-                                    >
-                                      <span className={`w-2 h-2 rounded-full ${dotColor} flex-shrink-0`} />
-                                      <span className="truncate text-gray-700">{shortName}</span>
-                                    </div>
-                                  );
-                                })}
-                                {dayEntries.length > 4 && (
-                                  <div className="text-[10px] text-gray-400 px-1.5 font-medium">
-                                    +{dayEntries.length - 4} ещё
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Mobile Calendar Grid */}
-                <div className="md:hidden">
-                  {/* Weekday Headers */}
-                  <div className="grid grid-cols-7 border-b border-gray-100">
-                    {weekdayNames.map((name, i) => (
-                      <div
-                        key={i}
-                        className="px-0.5 py-2 text-center text-[10px] font-semibold text-gray-500 uppercase tracking-wider"
-                      >
-                        {name}
+                          );
+                        })}
                       </div>
-                    ))}
-                  </div>
 
-                  {/* Calendar Weeks (mobile) */}
-                  {calendarWeeks.map((week, wi) => (
-                    <div key={wi} className="grid grid-cols-7 border-b border-gray-50 last:border-b-0">
-                      {week.map((day) => {
-                        const inMonth = isSameMonth(day, currentMonth);
-                        const todayHighlight = isToday(day);
-                        const dayEntries = getEntriesForDay(day);
-                        const dateStr = format(day, 'yyyy-MM-dd');
-                        const isSelected = selectedDay && isSameDay(day, selectedDay);
+                      {/* Employee schedule rows */}
+                      {scheduleUsers.map((u) => (
+                        <div key={u.id} className="flex border-b border-gray-50">
+                          {monthDays.map((day) => {
+                            const dateStr = format(day, 'yyyy-MM-dd');
+                            const entry = entryMap[u.id]?.[dateStr];
+                            const cellData = getCellContent(entry);
+                            const dayOfWeek = getDay(day);
+                            const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                            const isTodayDate = isToday(day);
 
-                        return (
-                          <button
-                            key={dateStr}
-                            type="button"
-                            onClick={() => handleDayCellClick(day)}
-                            className={`
-                              min-h-[60px] p-1 border-r border-gray-50 last:border-r-0
-                              flex flex-col items-center transition-all duration-150
-                              ${inMonth ? 'bg-white active:bg-blue-50' : 'bg-gray-50/60'}
-                              ${todayHighlight ? 'ring-2 ring-inset ring-blue-400/40' : ''}
-                              ${isSelected ? 'bg-blue-50' : ''}
-                            `}
-                            disabled={!inMonth}
-                          >
-                            {/* Day number */}
-                            <span
-                              className={`
-                                text-xs font-medium mb-1
-                                ${todayHighlight ? 'bg-blue-600 text-white w-6 h-6 rounded-full flex items-center justify-center' : ''}
-                                ${inMonth ? (todayHighlight ? '' : 'text-gray-900') : 'text-gray-300'}
-                              `}
-                            >
-                              {format(day, 'd')}
-                            </span>
-
-                            {/* Dots for employees */}
-                            {inMonth && dayEntries.length > 0 && (
-                              <div className="flex flex-wrap justify-center gap-[3px] mt-auto">
-                                {dayEntries.slice(0, 6).map((entry) => (
-                                  <span
-                                    key={entry.id}
-                                    className={`w-[6px] h-[6px] rounded-full ${getEntryDotColor(entry)}`}
-                                  />
-                                ))}
-                                {dayEntries.length > 6 && (
-                                  <span className="text-[8px] text-gray-400 leading-none">+</span>
-                                )}
+                            return (
+                              <div
+                                key={dateStr}
+                                onClick={() => {
+                                  if (!canEdit) return;
+                                  if (entry) {
+                                    openEdit(entry);
+                                  } else {
+                                    openCreate(u.id, dateStr);
+                                  }
+                                }}
+                                className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors ${
+                                  canEdit ? 'cursor-pointer hover:bg-blue-50/50' : ''
+                                } ${isTodayDate ? 'bg-blue-50/40' : isWeekend ? 'bg-red-50/20' : ''}`}
+                              >
+                                {cellData ? (
+                                  <div className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}>
+                                    <span className={`text-[10px] font-bold ${cellData.textColor}`}>
+                                      {cellData.label}
+                                    </span>
+                                  </div>
+                                ) : null}
                               </div>
-                            )}
-                          </button>
-                        );
-                      })}
+                            );
+                          })}
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  </div>
                 </div>
-              </>
+              </div>
             )}
           </div>
-
-          {/* Employee Legend */}
-          {!scheduleLoading && scheduleUsers.length > 0 && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 sm:p-5 mb-6">
-              <div className="flex items-center gap-2 mb-3">
-                <Users className="w-4 h-4 text-gray-400" />
-                <h3 className="text-sm font-semibold text-gray-700">Сотрудники</h3>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {scheduleUsers.map((u, i) => (
-                  <span
-                    key={u.id}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-50 text-gray-700 border border-gray-100"
-                  >
-                    <span className={`w-2.5 h-2.5 rounded-full ${getEmployeeColor(i)}`} />
-                    {u.fullName}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Day Detail Panel (shows when a day is selected) */}
-          {selectedDay && isSameMonth(selectedDay, currentMonth) && (
-            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-6 animate-in fade-in slide-in-from-bottom-2 duration-200">
-              <div className="bg-gradient-to-r from-gray-700 to-gray-800 px-4 py-3 sm:px-6 flex items-center justify-between">
-                <h3 className="text-white font-semibold text-sm sm:text-base capitalize">
-                  {format(selectedDay, 'EEEE, d MMMM yyyy', { locale: ru })}
-                </h3>
-                <div className="flex items-center gap-2">
-                  {canEdit && (
-                    <button
-                      onClick={() => handleAddFromDayDetail(format(selectedDay, 'yyyy-MM-dd'))}
-                      className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition-all"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setSelectedDay(null)}
-                    className="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 text-white transition-all"
-                  >
-                    <XCircle className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-4 sm:p-5">
-                {(() => {
-                  const dayEntries = getEntriesForDay(selectedDay);
-                  if (dayEntries.length === 0) {
-                    return (
-                      <div className="text-center py-6">
-                        <CalendarDays className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                        <p className="text-sm text-gray-500">Нет записей на этот день</p>
-                        {canEdit && (
-                          <button
-                            onClick={() =>
-                              handleAddFromDayDetail(format(selectedDay, 'yyyy-MM-dd'))
-                            }
-                            className="mt-3 btn-primary btn-sm"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            Добавить запись
-                          </button>
-                        )}
-                      </div>
-                    );
-                  }
-                  return (
-                    <div className="space-y-2.5">
-                      {dayEntries.map((entry) => {
-                        const userName = entry.user?.fullName || 'Сотрудник';
-                        const colorIdx = userColorMap[entry.userId] ?? 0;
-                        const isSick = (entry.note || '').toLowerCase().includes('больнич');
-
-                        return (
-                          <div
-                            key={entry.id}
-                            className={`
-                              flex items-center gap-3 p-3 rounded-xl border border-gray-100
-                              ${canEdit ? 'hover:border-gray-200 hover:shadow-sm cursor-pointer' : ''}
-                              transition-all duration-150
-                            `}
-                            onClick={() => {
-                              if (canEdit) handleEditFromDayDetail(entry);
-                            }}
-                          >
-                            <div
-                              className={`w-9 h-9 rounded-xl ${getEmployeeColor(colorIdx)} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}
-                            >
-                              {userName.charAt(0)}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-gray-900 truncate">{userName}</p>
-                              <p className="text-xs text-gray-500 mt-0.5">
-                                {isSick
-                                  ? 'Больничный'
-                                  : entry.isDayOff
-                                    ? 'Выходной'
-                                    : `Смена: ${entry.shiftStart?.slice(0, 5)} - ${entry.shiftEnd?.slice(0, 5)}`}
-                              </p>
-                            </div>
-                            <div className="flex-shrink-0">
-                              {getEntryStatusBadge(entry)}
-                            </div>
-                            {canEdit && (
-                              <Pencil className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
-                            )}
-                          </div>
-                        );
-                      })}
-
-                      {canEdit && (
-                        <button
-                          onClick={() =>
-                            handleAddFromDayDetail(format(selectedDay, 'yyyy-MM-dd'))
-                          }
-                          className="w-full flex items-center justify-center gap-2 p-2.5 rounded-xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-blue-300 hover:text-blue-500 transition-all duration-150 text-sm"
-                        >
-                          <Plus className="w-4 h-4" />
-                          Добавить запись
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -904,7 +527,7 @@ export default function SchedulePage() {
                   <div className="flex-shrink-0">{getStatusIcon(status)}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className={`font-medium ${getStatusColor(status)}`}>
+                      <span className="font-medium text-gray-900">
                         {status.fullName}
                       </span>
                       {getStatusBadge(status)}
@@ -1023,7 +646,7 @@ export default function SchedulePage() {
             />
           </div>
 
-          {/* Type selector: Work / Day Off / Sick Day */}
+          {/* Type selector */}
           <div>
             <label className="label">Тип</label>
             <div className="grid grid-cols-3 gap-2">
@@ -1063,7 +686,7 @@ export default function SchedulePage() {
             </div>
           </div>
 
-          {/* Shift Times (hidden when day off or sick day) */}
+          {/* Shift Times */}
           {!entryForm.isDayOff && !entryForm.isSickDay && (
             <div className="grid grid-cols-2 gap-4">
               <div>

@@ -16,8 +16,10 @@ import {
   Banknote,
   TrendingUp,
   ChevronRight,
+  ChevronDown,
   Package,
   ShieldCheck,
+  Pencil,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -59,6 +61,8 @@ export default function CheckDetailPage() {
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [servicesOpen, setServicesOpen] = useState(true);
+  const [productsOpen, setProductsOpen] = useState(true);
 
   const { data: check, isLoading } = useQuery<Check>({
     queryKey: ['check', id],
@@ -140,23 +144,33 @@ export default function CheckDetailPage() {
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {check.isDeferred && (
-            <button
-              type="button"
-              onClick={() => finalizeMutation.mutate()}
-              disabled={finalizeMutation.isPending}
-              className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              Завершить
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => navigate(`/checks/${check.id}/edit`)}
+                className="flex items-center gap-2 rounded-xl bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-600 hover:bg-primary-100 transition-colors"
+              >
+                <Pencil className="w-4 h-4" />
+                <span className="hidden sm:inline">Редактировать</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => finalizeMutation.mutate()}
+                disabled={finalizeMutation.isPending}
+                className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Завершить</span>
+              </button>
+            </>
           )}
           {hasPermission('checks_delete') && !(user?.role === 'master' && check.isDeferred) && (
             <button
               onClick={() => setShowDeleteDialog(true)}
-              className="btn-danger btn-sm"
+              className="p-2.5 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+              title="Удалить чек"
             >
               <Trash2 className="w-4 h-4" />
-              {'Удалить'}
             </button>
           )}
         </div>
@@ -166,7 +180,7 @@ export default function CheckDetailPage() {
       {check.isDeferred && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4">
           <p className="text-sm font-semibold text-red-700">Чек отложен (черновик)</p>
-          <p className="text-xs text-red-500 mt-0.5">Не учитывается в статистике. Нельзя закрыть смену пока чек отложен.</p>
+          <p className="text-xs text-red-500 mt-0.5">Не учитывается в статистике. Нажмите «Редактировать» чтобы дописать услуги или товары.</p>
         </div>
       )}
 
@@ -268,75 +282,142 @@ export default function CheckDetailPage() {
         </div>
       </div>
 
-      {/* Services Table */}
+      {/* Services - Accordion */}
       {check.services && check.services.length > 0 && (
-        <div className="animate-fade-in-up" style={{ animationDelay: '320ms' }}>
-          <div className="flex items-center gap-2 mb-3">
-            <Wrench className="w-4 h-4 text-gray-400" />
-            <h2 className="text-base font-semibold text-gray-900">{'Услуги'}</h2>
-            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.services.length}</span>
-          </div>
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th className="w-10">#</th>
-                  <th>{'Название'}</th>
-                  <th>{'Мастер'}</th>
-                  <th className="text-right">{'Цена'}</th>
-                  <th className="text-center w-16">{'Кол-во'}</th>
-                  <th className="text-right">{'Итого'}</th>
-                </tr>
-              </thead>
-              <tbody>
+        <div className="card overflow-hidden animate-fade-in-up" style={{ animationDelay: '320ms' }}>
+          <button
+            type="button"
+            onClick={() => setServicesOpen(!servicesOpen)}
+            className="w-full flex items-center justify-between px-4 py-3 sm:px-5 hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Wrench className="w-4 h-4 text-gray-400" />
+              <h2 className="text-base font-semibold text-gray-900">{'Услуги'}</h2>
+              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.services.length}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-700">{formatCurrency(check.serviceTotal)}</span>
+              <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${servicesOpen ? 'rotate-180' : ''}`} />
+            </div>
+          </button>
+          {servicesOpen && (
+            <div className="border-t border-gray-100">
+              {/* Mobile: card layout */}
+              <div className="sm:hidden divide-y divide-gray-50">
                 {check.services.map((svc, idx) => (
-                  <tr key={svc.id ?? idx}>
-                    <td className="text-gray-400">{idx + 1}</td>
-                    <td className="font-medium">{svc.name}</td>
-                    <td className="text-gray-600">{svc.master?.fullName ?? '—'}</td>
-                    <td className="text-right text-gray-600">{formatCurrency(svc.price)}</td>
-                    <td className="text-center text-gray-600">{svc.quantity}</td>
-                    <td className="text-right font-semibold">{formatCurrency(svc.total)}</td>
-                  </tr>
+                  <div key={svc.id ?? idx} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900">{svc.name}</p>
+                        {svc.master?.fullName && (
+                          <p className="text-xs text-gray-400 mt-0.5">{svc.master.fullName}</p>
+                        )}
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-sm font-semibold text-gray-900">{formatCurrency(svc.total)}</p>
+                        {svc.quantity > 1 && (
+                          <p className="text-xs text-gray-400">{svc.quantity} x {formatCurrency(svc.price)}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+              {/* Desktop: table */}
+              <div className="hidden sm:block">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th className="w-10">#</th>
+                      <th>{'Название'}</th>
+                      <th>{'Мастер'}</th>
+                      <th className="text-right">{'Цена'}</th>
+                      <th className="text-center w-16">{'Кол-во'}</th>
+                      <th className="text-right">{'Итого'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {check.services.map((svc, idx) => (
+                      <tr key={svc.id ?? idx}>
+                        <td className="text-gray-400">{idx + 1}</td>
+                        <td className="font-medium">{svc.name}</td>
+                        <td className="text-gray-600">{svc.master?.fullName ?? '—'}</td>
+                        <td className="text-right text-gray-600">{formatCurrency(svc.price)}</td>
+                        <td className="text-center text-gray-600">{svc.quantity}</td>
+                        <td className="text-right font-semibold">{formatCurrency(svc.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Products Table */}
+      {/* Products - Accordion */}
       {check.products && check.products.length > 0 && (
-        <div className="animate-fade-in-up" style={{ animationDelay: '400ms' }}>
-          <div className="flex items-center gap-2 mb-3">
-            <Package className="w-4 h-4 text-gray-400" />
-            <h2 className="text-base font-semibold text-gray-900">{'Товары'}</h2>
-            <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.products.length}</span>
-          </div>
-          <div className="table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th className="w-10">#</th>
-                  <th>{'Название'}</th>
-                  <th className="text-right">{'Цена'}</th>
-                  <th className="text-center w-16">{'Кол-во'}</th>
-                  <th className="text-right">{'Итого'}</th>
-                </tr>
-              </thead>
-              <tbody>
+        <div className="card overflow-hidden animate-fade-in-up" style={{ animationDelay: '400ms' }}>
+          <button
+            type="button"
+            onClick={() => setProductsOpen(!productsOpen)}
+            className="w-full flex items-center justify-between px-4 py-3 sm:px-5 hover:bg-gray-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Package className="w-4 h-4 text-gray-400" />
+              <h2 className="text-base font-semibold text-gray-900">{'Товары'}</h2>
+              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.products.length}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-gray-700">{formatCurrency(check.productTotal)}</span>
+              <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${productsOpen ? 'rotate-180' : ''}`} />
+            </div>
+          </button>
+          {productsOpen && (
+            <div className="border-t border-gray-100">
+              {/* Mobile: card layout */}
+              <div className="sm:hidden divide-y divide-gray-50">
                 {check.products.map((prod, idx) => (
-                  <tr key={prod.id ?? idx}>
-                    <td className="text-gray-400">{idx + 1}</td>
-                    <td className="font-medium">{prod.name}</td>
-                    <td className="text-right text-gray-600">{formatCurrency(prod.sellPrice)}</td>
-                    <td className="text-center text-gray-600">{prod.quantity}</td>
-                    <td className="text-right font-semibold">{formatCurrency(prod.totalSell)}</td>
-                  </tr>
+                  <div key={prod.id ?? idx} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900">{prod.name}</p>
+                        {prod.quantity > 1 && (
+                          <p className="text-xs text-gray-400 mt-0.5">{prod.quantity} x {formatCurrency(prod.sellPrice)}</p>
+                        )}
+                      </div>
+                      <p className="text-sm font-semibold text-gray-900 flex-shrink-0">{formatCurrency(prod.totalSell)}</p>
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+              {/* Desktop: table */}
+              <div className="hidden sm:block">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th className="w-10">#</th>
+                      <th>{'Название'}</th>
+                      <th className="text-right">{'Цена'}</th>
+                      <th className="text-center w-16">{'Кол-во'}</th>
+                      <th className="text-right">{'Итого'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {check.products.map((prod, idx) => (
+                      <tr key={prod.id ?? idx}>
+                        <td className="text-gray-400">{idx + 1}</td>
+                        <td className="font-medium">{prod.name}</td>
+                        <td className="text-right text-gray-600">{formatCurrency(prod.sellPrice)}</td>
+                        <td className="text-center text-gray-600">{prod.quantity}</td>
+                        <td className="text-right font-semibold">{formatCurrency(prod.totalSell)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -417,14 +498,14 @@ export default function CheckDetailPage() {
             </div>
           )}
 
-          {/* Comment inside payment card if exists */}
+          {/* Comment */}
           {check.comment && (
             <div className="mt-4 pt-4 border-t border-gray-100">
               <div className="flex items-center gap-2 mb-2">
-                <MessageSquare className="w-4 h-4 text-gray-400" />
+                <MessageSquare className="w-4 h-4 text-amber-400" />
                 <span className="text-sm font-medium text-gray-700">{'Комментарий'}</span>
               </div>
-              <p className="text-sm text-gray-600 whitespace-pre-wrap bg-gray-50 rounded-lg p-3">{check.comment}</p>
+              <p className="text-sm text-amber-700 whitespace-pre-wrap bg-amber-50 rounded-lg p-3 border border-amber-100">{check.comment}</p>
             </div>
           )}
         </div>

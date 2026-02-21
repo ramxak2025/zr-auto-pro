@@ -17,7 +17,11 @@ import {
   Square,
   Clock,
   Loader2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
+import { format, subDays, addDays, startOfWeek, addWeeks, subWeeks, startOfMonth, addMonths, subMonths, startOfYear, addYears, subYears } from 'date-fns';
+import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { checksApi, salaryApi, shiftsApi, scheduleApi } from '../api/services';
@@ -147,7 +151,6 @@ function StaffStatusCircles() {
   const statuses = todayData ?? [];
   if (statuses.length === 0) return null;
 
-  // Color scheme: green=shift, yellow=late<1h, orange=late>1h, red=absent, black=dayoff, gray=sick
   const getCircleColor = (s: TodayEmployeeStatus) => {
     const isSick = (s as any).isSickDay || (s.isDayOff && s.lateStatus === null && !s.isWorking && !s.hasSchedule === false);
     if (s.isDayOff && !isSick) return 'bg-gray-900 ring-gray-700';
@@ -168,12 +171,11 @@ function StaffStatusCircles() {
     return '';
   };
 
-  // Sort employees: 1. On shift (green/yellow/orange) 2. Expected but absent 3. Day off 4. Sick
   const sortPriority = (s: TodayEmployeeStatus): number => {
-    if (s.isWorking && !s.isDayOff) return 0; // on shift (including late)
-    if (!s.isWorking && !s.isDayOff && s.hasSchedule) return 1; // expected but absent
-    if (s.isDayOff) return 2; // day off
-    return 3; // no schedule
+    if (s.isWorking && !s.isDayOff) return 0;
+    if (!s.isWorking && !s.isDayOff && s.hasSchedule) return 1;
+    if (s.isDayOff) return 2;
+    return 3;
   };
 
   const sorted = [...statuses].sort((a, b) => sortPriority(a) - sortPriority(b));
@@ -297,7 +299,7 @@ function ShiftControl() {
 }
 
 // ---------------------------------------------------------------------------
-// Revenue/Profit Chart Component
+// Revenue/Profit Wave Chart Component
 // ---------------------------------------------------------------------------
 
 type ChartPeriod = 'today' | 'week' | 'month' | 'year';
@@ -308,13 +310,39 @@ const periodLabels: Record<ChartPeriod, string> = {
   year: 'Год',
 };
 
+function getOffsetLabel(period: ChartPeriod, offset: number): string {
+  const now = new Date();
+  switch (period) {
+    case 'today': {
+      const d = addDays(now, offset);
+      return format(d, 'd MMMM yyyy', { locale: ru });
+    }
+    case 'week': {
+      const wStart = addWeeks(startOfWeek(now, { weekStartsOn: 1 }), offset);
+      const wEnd = addDays(wStart, 6);
+      return `${format(wStart, 'd MMM', { locale: ru })} — ${format(wEnd, 'd MMM', { locale: ru })}`;
+    }
+    case 'month': {
+      const m = addMonths(startOfMonth(now), offset);
+      return format(m, 'LLLL yyyy', { locale: ru });
+    }
+    case 'year': {
+      const y = addYears(startOfYear(now), offset);
+      return format(y, 'yyyy');
+    }
+    default:
+      return '';
+  }
+}
+
 function RevenueChart() {
   const [period, setPeriod] = useState<ChartPeriod>('week');
+  const [offset, setOffset] = useState(0);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['dashboard-chart', period],
+    queryKey: ['dashboard-chart', period, offset],
     queryFn: async () => {
-      const res = await checksApi.getDashboardChart(period);
+      const res = await checksApi.getDashboardChart(period, offset);
       return res.data;
     },
     staleTime: 30_000,
@@ -327,14 +355,63 @@ function RevenueChart() {
   }, [data]);
 
   const formatLabel = (dateStr: string): string => {
+    if (period === 'today') {
+      const d = new Date(dateStr);
+      return `${d.getHours()}:00`;
+    }
     if (period === 'year') {
       const months = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
       const parts = dateStr.split('-');
       return months[parseInt(parts[1]) - 1] || dateStr;
     }
     const d = new Date(dateStr);
-    return `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+    if (period === 'week') {
+      const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+      return days[d.getDay()];
+    }
+    return `${d.getDate()}`;
   };
+
+  const handlePeriodChange = (p: ChartPeriod) => {
+    setPeriod(p);
+    setOffset(0);
+  };
+
+  // Build SVG wave path
+  const buildWavePath = (values: number[], height: number, width: number): string => {
+    if (values.length === 0) return '';
+    const stepX = width / Math.max(values.length - 1, 1);
+    const points = values.map((v, i) => ({
+      x: i * stepX,
+      y: height - (v / maxValue) * (height - 8) - 4,
+    }));
+
+    if (points.length === 1) {
+      return `M ${points[0].x} ${points[0].y} L ${points[0].x} ${points[0].y}`;
+    }
+
+    let path = `M ${points[0].x} ${points[0].y}`;
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const curr = points[i];
+      const cpx = (prev.x + curr.x) / 2;
+      path += ` C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`;
+    }
+    return path;
+  };
+
+  const buildAreaPath = (values: number[], height: number, width: number): string => {
+    const wavePath = buildWavePath(values, height, width);
+    if (!wavePath) return '';
+    const stepX = width / Math.max(values.length - 1, 1);
+    return `${wavePath} L ${(values.length - 1) * stepX} ${height} L 0 ${height} Z`;
+  };
+
+  const chartHeight = 140;
+  const chartWidth = 600;
+
+  const revenueValues = data?.points?.map((p: { revenue: number }) => p.revenue) ?? [];
+  const profitValues = data?.points?.map((p: { profit: number }) => p.profit) ?? [];
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
@@ -351,7 +428,7 @@ function RevenueChart() {
               <button
                 key={p}
                 type="button"
-                onClick={() => setPeriod(p)}
+                onClick={() => handlePeriodChange(p)}
                 className={`px-2.5 py-1.5 text-[11px] font-medium rounded-md transition-all ${
                   period === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                 }`}
@@ -361,6 +438,28 @@ function RevenueChart() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Period navigation with arrows */}
+      <div className="px-5 py-2.5 border-b border-gray-50 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => setOffset(o => o - 1)}
+          className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <span className="text-sm font-medium text-gray-700 capitalize">
+          {getOffsetLabel(period, offset)}
+        </span>
+        <button
+          type="button"
+          onClick={() => setOffset(o => o < 0 ? o + 1 : 0)}
+          disabled={offset >= 0}
+          className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
       </div>
 
       <div className="p-5">
@@ -382,7 +481,7 @@ function RevenueChart() {
           </div>
         )}
 
-        {/* Bar chart */}
+        {/* Wave chart */}
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
@@ -403,42 +502,101 @@ function RevenueChart() {
               </div>
             </div>
 
-            {/* Bars */}
-            <div className="flex items-end gap-1" style={{ height: '160px' }}>
-              {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => {
-                const heightPct = (point.revenue / maxValue) * 100;
-                const profitPct = maxValue > 0 ? (point.profit / maxValue) * 100 : 0;
-                return (
-                  <div key={idx} className="flex-1 flex flex-col items-center gap-0.5 min-w-0 group relative">
-                    {/* Tooltip */}
-                    <div className="absolute bottom-full mb-2 hidden group-hover:block z-10">
-                      <div className="bg-gray-900 text-white text-[10px] rounded-lg px-2.5 py-1.5 whitespace-nowrap shadow-lg">
-                        <p className="font-semibold">{formatLabel(point.date)}</p>
-                        <p>Оборот: {formatMoney(point.revenue)}</p>
-                        <p>Прибыль: {formatMoney(point.profit)}</p>
-                        <p>{point.checkCount} чеков</p>
-                      </div>
-                    </div>
-                    {/* Revenue bar */}
-                    <div className="w-full flex flex-col items-center justify-end" style={{ height: '140px' }}>
-                      <div className="w-full flex gap-[1px] justify-center items-end" style={{ height: '100%' }}>
-                        <div
-                          className="flex-1 bg-primary-400 rounded-t-sm transition-all duration-300 max-w-3"
-                          style={{ height: `${Math.max(heightPct, 2)}%` }}
-                        />
-                        <div
-                          className="flex-1 bg-emerald-400 rounded-t-sm transition-all duration-300 max-w-3"
-                          style={{ height: `${Math.max(profitPct, 0)}%` }}
-                        />
-                      </div>
-                    </div>
-                    {/* Label */}
-                    <span className="text-[9px] text-gray-400 truncate w-full text-center">
-                      {formatLabel(point.date)}
-                    </span>
-                  </div>
-                );
-              })}
+            {/* SVG Wave Chart */}
+            <div className="relative" style={{ height: `${chartHeight + 24}px` }}>
+              <svg
+                viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+                className="w-full"
+                style={{ height: `${chartHeight}px` }}
+                preserveAspectRatio="none"
+              >
+                <defs>
+                  <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgb(99,102,241)" stopOpacity="0.2" />
+                    <stop offset="100%" stopColor="rgb(99,102,241)" stopOpacity="0.02" />
+                  </linearGradient>
+                  <linearGradient id="profitGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgb(16,185,129)" stopOpacity="0.15" />
+                    <stop offset="100%" stopColor="rgb(16,185,129)" stopOpacity="0.02" />
+                  </linearGradient>
+                </defs>
+                {/* Grid lines */}
+                {[0.25, 0.5, 0.75].map((pct) => (
+                  <line
+                    key={pct}
+                    x1="0"
+                    y1={chartHeight * (1 - pct)}
+                    x2={chartWidth}
+                    y2={chartHeight * (1 - pct)}
+                    stroke="#f3f4f6"
+                    strokeWidth="1"
+                  />
+                ))}
+                {/* Revenue area */}
+                <path
+                  d={buildAreaPath(revenueValues, chartHeight, chartWidth)}
+                  fill="url(#revenueGradient)"
+                />
+                {/* Profit area */}
+                <path
+                  d={buildAreaPath(profitValues, chartHeight, chartWidth)}
+                  fill="url(#profitGradient)"
+                />
+                {/* Revenue line */}
+                <path
+                  d={buildWavePath(revenueValues, chartHeight, chartWidth)}
+                  fill="none"
+                  stroke="rgb(99,102,241)"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                {/* Profit line */}
+                <path
+                  d={buildWavePath(profitValues, chartHeight, chartWidth)}
+                  fill="none"
+                  stroke="rgb(16,185,129)"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                {/* Revenue dots */}
+                {revenueValues.map((v: number, i: number) => {
+                  const stepX = chartWidth / Math.max(revenueValues.length - 1, 1);
+                  const x = i * stepX;
+                  const y = chartHeight - (v / maxValue) * (chartHeight - 8) - 4;
+                  return (
+                    <circle
+                      key={`r-${i}`}
+                      cx={x}
+                      cy={y}
+                      r="3"
+                      fill="white"
+                      stroke="rgb(99,102,241)"
+                      strokeWidth="2"
+                    />
+                  );
+                })}
+              </svg>
+              {/* X-axis labels */}
+              <div className="flex justify-between mt-1" style={{ paddingLeft: 0, paddingRight: 0 }}>
+                {data.points.map((point: { date: string }, idx: number) => (
+                  <span key={idx} className="text-[9px] text-gray-400 text-center" style={{ width: `${100 / data.points.length}%` }}>
+                    {formatLabel(point.date)}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Hover details - show all points inline on mobile */}
+            <div className="flex overflow-x-auto gap-2 pb-1 -mx-1 px-1 scrollbar-hide">
+              {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
+                <div key={idx} className="flex-shrink-0 text-center px-2 py-1.5 rounded-lg bg-gray-50 min-w-[60px]">
+                  <p className="text-[9px] text-gray-400 font-medium">{formatLabel(point.date)}</p>
+                  <p className="text-[10px] font-bold text-primary-600">{formatMoney(point.revenue)}</p>
+                  <p className="text-[9px] text-emerald-600">{formatMoney(point.profit)}</p>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -633,6 +791,7 @@ function MasterDashboard() {
 export default function DashboardPage() {
   const { user } = useAuth();
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
+  const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
 
   const greeting = getGreeting();
   const displayName = user?.fullName?.split(' ')[0] || user?.username || '';
@@ -651,8 +810,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Shift control */}
-      <ShiftControl />
+      {/* Shift control — hidden for owner/director */}
+      {!isOwner && <ShiftControl />}
 
       {/* Stats */}
       {isMaster ? <MasterDashboard /> : <AdminDashboard />}

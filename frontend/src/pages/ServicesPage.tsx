@@ -11,17 +11,7 @@ import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import { Service, PaginatedResponse } from '../types';
 
-const SERVICE_CATEGORIES = [
-  'Все',
-  'Диагностика',
-  'ТО',
-  'Ремонт двигателя',
-  'Ходовая',
-  'Электрика',
-  'Кузовные работы',
-  'Шиномонтаж',
-  'Другое',
-];
+const SERVICE_CATEGORIES: string[] = [];
 
 export default function ServicesPage() {
   const queryClient = useQueryClient();
@@ -176,25 +166,11 @@ export default function ServicesPage() {
         />
       </div>
 
-      {/* Category Filter Tabs */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {SERVICE_CATEGORIES.map((cat) => (
-          <button
-            key={cat}
-            onClick={() => {
-              setCategoryFilter(cat);
-              setPage(1);
-            }}
-            className={`px-3 py-1.5 text-sm rounded-lg font-medium transition-colors ${
-              categoryFilter === cat
-                ? 'bg-primary-600 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {cat}
-          </button>
-        ))}
-      </div>
+      {/* Category Filter Tabs - dynamic from existing services */}
+      {(() => {
+        // No preset categories — filters only shown if categories exist in data
+        return null;
+      })()}
 
       {/* Content */}
       {isLoading ? (
@@ -333,18 +309,13 @@ export default function ServicesPage() {
 
           <div>
             <label className="label">Категория</label>
-            <select
+            <input
+              type="text"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
               className="input"
-            >
-              <option value="">Без категории</option>
-              {SERVICE_CATEGORIES.filter((c) => c !== 'Все').map((cat) => (
-                <option key={cat} value={cat}>
-                  {cat}
-                </option>
-              ))}
-            </select>
+              placeholder="Например: Диагностика, ТО, Ходовая..."
+            />
           </div>
 
           <div>

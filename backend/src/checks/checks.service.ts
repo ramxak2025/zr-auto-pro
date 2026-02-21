@@ -295,6 +295,11 @@ export class ChecksService {
   }
 
   async update(id: string, tenantID: string, userRole: string, dto: any) {
+    // If services or products are provided, do a full re-edit (only for deferred checks)
+    if (dto.services !== undefined || dto.products !== undefined) {
+      return this.fullUpdate(id, tenantID, userRole, dto);
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -321,6 +326,135 @@ export class ChecksService {
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
     return this.getById(id, tenantID);
+  }
+
+  private async fullUpdate(id: string, tenantID: string, userRole: string, dto: any) {
+    // Verify check exists and is deferred
+    const { rows: checkRows } = await this.pool.query(
+      'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
+    if (checkRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+    if (!checkRows[0].is_deferred) {
+      throw new ForbiddenException({ message: 'Редактирование доступно только для отложенных чеков' });
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const services = dto.services || [];
+      const products = dto.products || [];
+
+      // Calculate service totals and salary
+      let serviceTotal = 0;
+      let serviceSalaryTotal = 0;
+
+      const masterIds = new Set<string>();
+      if (dto.masterId) masterIds.add(dto.masterId);
+      const existingMasterId = checkRows[0].master_id;
+      if (existingMasterId) masterIds.add(existingMasterId);
+      for (const svc of services) {
+        if (svc.masterId) masterIds.add(svc.masterId);
+      }
+
+      const salaryMap: Record<string, number> = {};
+      if (masterIds.size > 0) {
+        const { rows: salaryRows } = await client.query(
+          `SELECT id, COALESCE(salary_percent, 0) as salary_percent FROM users WHERE id = ANY($1) AND tenant_id = $2`,
+          [Array.from(masterIds), tenantID],
+        );
+        for (const r of salaryRows) {
+          salaryMap[r.id] = parseFloat(r.salary_percent) || 0;
+        }
+      }
+
+      const serviceLines: any[] = [];
+      const primaryMasterId = dto.masterId || existingMasterId;
+      for (const svc of services) {
+        const total = (svc.price || 0) * (svc.quantity || 1);
+        serviceTotal += total;
+        const masterId = svc.masterId || primaryMasterId;
+        const salaryPct = salaryMap[masterId] || 0;
+        serviceSalaryTotal += total * salaryPct / 100;
+        serviceLines.push({ ...svc, total, masterId });
+      }
+
+      // Calculate product totals
+      let productTotal = 0;
+      let productCostTotal = 0;
+      const productLines: any[] = [];
+      for (const prod of products) {
+        const totalSell = (prod.sellPrice || 0) * (prod.quantity || 1);
+        const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
+        productTotal += totalSell;
+        productCostTotal += totalCost;
+        productLines.push({ ...prod, totalSell, totalCost });
+      }
+
+      const discount = dto.discount ?? parseFloat(checkRows[0].discount) || 0;
+      const discountedProductTotal = productTotal - discount;
+      const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
+      const totalCost = productCostTotal + serviceSalaryTotal;
+      const profit = totalRevenue - totalCost;
+
+      // Update check record
+      const updateFields: string[] = [];
+      const updateVals: any[] = [];
+      let ui = 1;
+
+      if (dto.masterId !== undefined) { updateFields.push(`master_id=$${ui++}`); updateVals.push(dto.masterId); }
+      if (dto.clientId !== undefined) { updateFields.push(`client_id=$${ui++}`); updateVals.push(dto.clientId || null); }
+      if (dto.carId !== undefined) { updateFields.push(`car_id=$${ui++}`); updateVals.push(dto.carId || null); }
+      if (dto.mileage !== undefined) { updateFields.push(`mileage=$${ui++}`); updateVals.push(dto.mileage || null); }
+      if (dto.comment !== undefined) { updateFields.push(`comment=$${ui++}`); updateVals.push(dto.comment || null); }
+      if (dto.discount !== undefined) { updateFields.push(`discount=$${ui++}`); updateVals.push(dto.discount || 0); }
+      if (dto.paymentMethod !== undefined) { updateFields.push(`payment_method=$${ui++}`); updateVals.push(dto.paymentMethod); }
+      if (dto.cashAmount !== undefined) { updateFields.push(`cash_amount=$${ui++}`); updateVals.push(dto.cashAmount || 0); }
+      if (dto.cardAmount !== undefined) { updateFields.push(`card_amount=$${ui++}`); updateVals.push(dto.cardAmount || 0); }
+      if (dto.isDeferred !== undefined) { updateFields.push(`is_deferred=$${ui++}`); updateVals.push(dto.isDeferred); }
+
+      // Always update calculated fields
+      updateFields.push(`service_total=$${ui++}`); updateVals.push(serviceTotal);
+      updateFields.push(`product_total=$${ui++}`); updateVals.push(productTotal);
+      updateFields.push(`total_revenue=$${ui++}`); updateVals.push(totalRevenue);
+      updateFields.push(`product_cost_total=$${ui++}`); updateVals.push(productCostTotal);
+      updateFields.push(`service_salary_total=$${ui++}`); updateVals.push(serviceSalaryTotal);
+      updateFields.push(`total_cost=$${ui++}`); updateVals.push(totalCost);
+      updateFields.push(`profit=$${ui++}`); updateVals.push(profit);
+
+      updateVals.push(id, tenantID);
+      await client.query(
+        `UPDATE checks SET ${updateFields.join(', ')} WHERE id=$${ui++} AND tenant_id=$${ui}`,
+        updateVals,
+      );
+
+      // Delete existing lines and re-insert
+      await client.query('DELETE FROM check_service_lines WHERE check_id=$1', [id]);
+      await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
+
+      for (const svc of serviceLines) {
+        await client.query(
+          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [id, svc.serviceId || null, svc.masterId || null, svc.name, svc.price || 0, svc.quantity || 1, svc.total],
+        );
+      }
+
+      for (const prod of productLines) {
+        await client.query(
+          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [id, prod.productId || null, prod.name, prod.sellPrice || 0, prod.costPrice || 0, prod.quantity || 1, prod.totalSell, prod.totalCost],
+        );
+      }
+
+      await client.query('COMMIT');
+      return this.getById(id, tenantID);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   async remove(id: string, tenantID: string, userRole: string) {
@@ -368,25 +502,45 @@ export class ChecksService {
     };
   }
 
-  async getDashboardChart(tenantID: string, period: string) {
+  async getDashboardChart(tenantID: string, period: string, offset: number = 0) {
     let dateFrom: Date;
+    let dateTo: Date;
     const now = new Date();
 
     switch (period) {
-      case 'today':
-        dateFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      case 'today': {
+        const base = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+        dateFrom = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+        dateTo = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59);
         break;
-      case 'week':
-        dateFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+      }
+      case 'week': {
+        const dayOfWeek = now.getDay() === 0 ? 7 : now.getDay();
+        const mondayOffset = 1 - dayOfWeek;
+        const baseMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset + offset * 7);
+        dateFrom = new Date(baseMonday.getFullYear(), baseMonday.getMonth(), baseMonday.getDate());
+        dateTo = new Date(baseMonday.getFullYear(), baseMonday.getMonth(), baseMonday.getDate() + 6, 23, 59, 59);
         break;
-      case 'month':
-        dateFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+      }
+      case 'month': {
+        const baseMonth = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+        dateFrom = new Date(baseMonth.getFullYear(), baseMonth.getMonth(), 1);
+        dateTo = new Date(baseMonth.getFullYear(), baseMonth.getMonth() + 1, 0, 23, 59, 59);
         break;
-      case 'year':
-        dateFrom = new Date(now.getFullYear(), 0, 1);
+      }
+      case 'year': {
+        const baseYear = now.getFullYear() + offset;
+        dateFrom = new Date(baseYear, 0, 1);
+        dateTo = new Date(baseYear, 11, 31, 23, 59, 59);
         break;
-      default:
-        dateFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+      }
+      default: {
+        const dow = now.getDay() === 0 ? 7 : now.getDay();
+        const mo = 1 - dow;
+        const bm = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mo + offset * 7);
+        dateFrom = new Date(bm.getFullYear(), bm.getMonth(), bm.getDate());
+        dateTo = new Date(bm.getFullYear(), bm.getMonth(), bm.getDate() + 6, 23, 59, 59);
+      }
     }
 
     const { rows } = await this.pool.query(
@@ -395,10 +549,10 @@ export class ChecksService {
               COALESCE(SUM(profit), 0) as profit,
               COUNT(*) as check_count
        FROM checks
-       WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false
+       WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false
        GROUP BY date::date
        ORDER BY day`,
-      [tenantID, dateFrom.toISOString()],
+      [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
     );
 
     const points = rows.map((r) => ({

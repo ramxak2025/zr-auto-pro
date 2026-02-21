@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -325,6 +325,8 @@ function ProductCard({ product, onSelect }: ProductCardProps) {
 
 export default function CheckCreatePage() {
   const navigate = useNavigate();
+  const { id: editCheckId } = useParams<{ id: string }>();
+  const isEditMode = !!editCheckId;
   const queryClient = useQueryClient();
   const { user, isRole } = useAuth();
   const canEditDate = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
@@ -420,6 +422,56 @@ export default function CheckCreatePage() {
     staleTime: 60_000,
   });
 
+  // Load existing check for edit mode
+  const { data: existingCheck } = useQuery({
+    queryKey: ['check', editCheckId],
+    queryFn: async () => {
+      const res = await checksApi.getById(editCheckId!);
+      return res.data;
+    },
+    enabled: isEditMode,
+  });
+
+  // Pre-fill form when editing
+  const [editLoaded, setEditLoaded] = useState(false);
+  useEffect(() => {
+    if (!existingCheck || editLoaded) return;
+    setEditLoaded(true);
+
+    if (existingCheck.client) {
+      setSelectedClient(existingCheck.client);
+      setSelectedCarId(existingCheck.carId || '');
+      const car = existingCheck.client.cars?.find((c: Car) => c.id === existingCheck.carId);
+      if (car) setPlateSearch(car.plateNumber);
+    }
+    setDate(existingCheck.date ? format(new Date(existingCheck.date), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
+    setMileage(existingCheck.mileage ? String(existingCheck.mileage) : '');
+    setPaymentMethod(existingCheck.paymentMethod || 'cash');
+    setComment(existingCheck.comment || '');
+    setDiscount(existingCheck.discount || 0);
+    setIsDeferred(existingCheck.isDeferred || false);
+
+    if (existingCheck.services?.length) {
+      setServiceLines(existingCheck.services.map((s: CheckServiceLine) => ({
+        serviceId: s.serviceId || '',
+        masterId: s.masterId || user?.id || '',
+        name: s.name,
+        price: s.price,
+        quantity: s.quantity,
+      })));
+    }
+    if (existingCheck.products?.length) {
+      setProductLines(existingCheck.products.map((p: CheckProductLine) => ({
+        productId: p.productId || '',
+        name: p.name,
+        sellPrice: p.sellPrice,
+        costPrice: p.costPrice,
+        quantity: p.quantity,
+        unit: 'pcs',
+      })));
+    }
+  }, [existingCheck, editLoaded, user?.id]);
+
   // Mutation
   const createMutation = useMutation({
     mutationFn: (data: any) => checksApi.create(data),
@@ -441,6 +493,31 @@ export default function CheckCreatePage() {
         toast.error(msg || 'Нет прав для создания чека');
       } else {
         toast.error(msg || 'Ошибка при создании чека');
+      }
+    },
+  });
+
+  // Update mutation (edit mode)
+  const updateMutation = useMutation({
+    mutationFn: (data: any) => checksApi.update(editCheckId!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['check', editCheckId] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+      queryClient.invalidateQueries({ queryKey: ['products-all'] });
+      toast.success('Чек обновлён');
+      navigate(`/checks/${editCheckId}`);
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      if (err?.code === 'ERR_NETWORK' || !err?.response) {
+        toast.error('Сервер недоступен. Проверьте подключение.');
+      } else if (err?.response?.status === 403) {
+        toast.error(msg || 'Нет прав для редактирования чека');
+      } else {
+        toast.error(msg || 'Ошибка при обновлении чека');
       }
     },
   });
@@ -640,7 +717,7 @@ export default function CheckCreatePage() {
       finalCard = Math.max(totalRevenue - cashAmount, 0);
     }
 
-    createMutation.mutate({
+    const payload = {
       clientId: selectedClient?.id || '',
       carId: selectedCarId || '',
       masterId: user?.id || '',
@@ -654,7 +731,13 @@ export default function CheckCreatePage() {
       cardAmount: finalCard,
       comment: comment || undefined,
       isDeferred,
-    });
+    };
+
+    if (isEditMode) {
+      updateMutation.mutate(payload);
+    } else {
+      createMutation.mutate(payload);
+    }
   };
 
   const itemCount = serviceLines.length + productLines.length;
@@ -669,7 +752,7 @@ export default function CheckCreatePage() {
           </button>
           <div className="flex items-center gap-2">
             <Receipt className="w-5 h-5 text-primary-600" />
-            <h1 className="page-title">{'\u041D\u043E\u0432\u044B\u0439 \u0447\u0435\u043A'}</h1>
+            <h1 className="page-title">{isEditMode ? 'Редактировать чек' : 'Новый чек'}</h1>
           </div>
         </div>
       </div>
@@ -1200,17 +1283,22 @@ export default function CheckCreatePage() {
           <div className="px-5 py-4 bg-gray-50">
             <button
               type="submit"
-              disabled={createMutation.isPending || (!isDeferred && itemCount === 0)}
+              disabled={(createMutation.isPending || updateMutation.isPending) || (!isDeferred && itemCount === 0)}
               className={`w-full py-3.5 text-base font-bold rounded-xl disabled:opacity-50 transition-colors ${
                 isDeferred
                   ? 'bg-red-600 hover:bg-red-700 text-white'
                   : 'btn-primary'
               }`}
             >
-              {createMutation.isPending ? (
+              {(createMutation.isPending || updateMutation.isPending) ? (
                 <span className="flex items-center justify-center gap-2">
                   <Loader2 className="w-5 h-5 animate-spin" />
-                  Создание...
+                  {isEditMode ? 'Сохранение...' : 'Создание...'}
+                </span>
+              ) : isEditMode ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Receipt className="w-5 h-5" />
+                  {isDeferred ? 'Сохранить чек' : `Сохранить — ${formatCurrency(totalRevenue)}`}
                 </span>
               ) : isDeferred ? (
                 <span className="flex items-center justify-center gap-2">

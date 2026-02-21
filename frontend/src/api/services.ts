@@ -189,6 +189,25 @@ interface UpdateCheckRequest {
   comment?: string;
   cashAmount?: number;
   cardAmount?: number;
+  clientId?: string;
+  carId?: string;
+  masterId?: string;
+  mileage?: number;
+  discount?: number;
+  services?: Array<{
+    serviceId?: string;
+    masterId?: string;
+    name: string;
+    price: number;
+    quantity: number;
+  }>;
+  products?: Array<{
+    productId?: string;
+    name: string;
+    sellPrice: number;
+    costPrice: number;
+    quantity: number;
+  }>;
 }
 
 interface CreateSupplierRequest {
@@ -383,7 +402,7 @@ export const servicesApi = {
 export const checksApi = {
   getAll: (params?: ChecksParams) => api.get<PaginatedResponse<Check>>('/checks', { params }),
   getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
-  getDashboardChart: (period: string) => api.get<{ points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>; totalRevenue: number; totalProfit: number; totalChecks: number }>('/checks/dashboard/chart', { params: { period } }),
+  getDashboardChart: (period: string, offset?: number) => api.get<{ points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>; totalRevenue: number; totalProfit: number; totalChecks: number }>('/checks/dashboard/chart', { params: { period, offset: offset ?? 0 } }),
   getRanking: () => api.get<EmployeeRanking>('/checks/ranking'),
   getById: (id: string) => api.get<Check>(`/checks/${id}`),
   create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
