@@ -9,6 +9,18 @@ export class UsersService {
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
+  private normalizePhone(phone: string): string {
+    let digits = '';
+    for (const c of phone) {
+      if (c >= '0' && c <= '9') digits += c;
+    }
+    if (digits.length === 11 && digits[0] === '8') {
+      digits = '7' + digits.substring(1);
+    }
+    if (digits.length > 0) return '+' + digits;
+    return phone;
+  }
+
   private mapUser(row: any) {
     let daysOff: number[] = [];
     if (row.days_off) {
@@ -77,9 +89,26 @@ export class UsersService {
       throw new BadRequestException({ message: 'Телефон, пароль и имя обязательны' });
     }
 
+    const phone = this.normalizePhone(dto.phone);
+
+    // Check maxUsers limit for the tenant
+    const { rows: tenantRows } = await this.pool.query(
+      `SELECT t.max_users, (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as current_users
+       FROM tenants t WHERE t.id=$1`,
+      [tenantID],
+    );
+    if (tenantRows.length > 0) {
+      const maxUsers = tenantRows[0].max_users || 10;
+      const currentUsers = parseInt(tenantRows[0].current_users) || 0;
+      if (currentUsers >= maxUsers) {
+        throw new BadRequestException({ message: `Достигнут лимит сотрудников (${maxUsers}). Измените тариф для добавления новых сотрудников` });
+      }
+    }
+
+    // Check duplicate phone (normalized)
     const { rows: existsRows } = await this.pool.query(
       'SELECT EXISTS(SELECT 1 FROM users WHERE phone=$1) as exists',
-      [dto.phone],
+      [phone],
     );
     if (existsRows[0].exists) {
       throw new BadRequestException({ message: 'Пользователь с таким телефоном уже существует' });
@@ -88,13 +117,21 @@ export class UsersService {
     const hash = await bcrypt.hash(dto.password, 10);
     const perms = dto.permissions ? JSON.stringify(dto.permissions) : '{}';
 
-    const { rows } = await this.pool.query(
-      `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, true, $7)
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
-      [dto.phone, hash, dto.fullName, dto.role || 'master', dto.salaryPercent || 0, perms, tenantID],
-    );
-    return this.mapUser(rows[0]);
+    try {
+      const { rows } = await this.pool.query(
+        `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6, true, $7)
+         RETURNING id, phone, full_name, username, avatar, role, salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
+        [phone, hash, dto.fullName, dto.role || 'master', dto.salaryPercent || 0, perms, tenantID],
+      );
+      return this.mapUser(rows[0]);
+    } catch (err: any) {
+      if (err.code === '23505') {
+        throw new BadRequestException({ message: 'Пользователь с таким телефоном уже существует' });
+      }
+      this.logger.error(`User create error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка создания сотрудника' });
+    }
   }
 
   async update(id: string, tenantID: string, dto: any) {
@@ -102,7 +139,7 @@ export class UsersService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(dto.phone); }
+    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(this.normalizePhone(dto.phone)); }
     if (dto.fullName !== undefined) { sets.push(`full_name=$${idx++}`); vals.push(dto.fullName); }
     if (dto.role !== undefined) { sets.push(`role=$${idx++}`); vals.push(dto.role); }
     if (dto.salaryPercent !== undefined) { sets.push(`salary_percent=$${idx++}`); vals.push(dto.salaryPercent); }

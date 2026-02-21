@@ -9,6 +9,18 @@ export class TenantsService {
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
+  private normalizePhone(phone: string): string {
+    let digits = '';
+    for (const c of phone) {
+      if (c >= '0' && c <= '9') digits += c;
+    }
+    if (digits.length === 11 && digits[0] === '8') {
+      digits = '7' + digits.substring(1);
+    }
+    if (digits.length > 0) return '+' + digits;
+    return phone;
+  }
+
   private mapTenant(row: any) {
     return {
       id: row.id,
@@ -137,12 +149,13 @@ export class TenantsService {
 
       // Create director user if provided
       if (dto.directorPhone && dto.directorPassword && dto.directorName) {
+        const directorPhone = this.normalizePhone(dto.directorPhone);
         const hash = await bcrypt.hash(dto.directorPassword, 10);
         const allPerms = '{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}';
         await client.query(
           `INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions)
            VALUES ($1, $2, $3, 'director', true, $4, $5)`,
-          [dto.directorPhone, hash, dto.directorName, tenant.id, allPerms],
+          [directorPhone, hash, dto.directorName, tenant.id, allPerms],
         );
       }
 
