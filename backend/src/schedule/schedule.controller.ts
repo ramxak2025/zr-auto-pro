@@ -38,6 +38,11 @@ export class ScheduleController {
     return this.scheduleService.createWorkMode(user.tenantID, dto);
   }
 
+  @Post('apply-work-mode')
+  applyWorkMode(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.scheduleService.applyWorkMode(user.tenantID, dto);
+  }
+
   @Patch('work-modes/:id')
   updateWorkMode(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.scheduleService.updateWorkMode(id, user.tenantID, dto);

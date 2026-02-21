@@ -18,6 +18,7 @@ import {
   Check as CheckIcon,
   Move,
   FolderPlus,
+  Warehouse,
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse } from '../types';
@@ -817,6 +818,11 @@ export default function ProductsPage() {
   const [writeoffTarget, setWriteoffTarget] = useState<Product | null>(null);
   const [inventoryTarget, setInventoryTarget] = useState<Product | null>(null);
 
+  // Global warehouse operations
+  const [warehouseOpsOpen, setWarehouseOpsOpen] = useState(false);
+  const [warehouseOpsMode, setWarehouseOpsMode] = useState<'inventory' | 'writeoff' | null>(null);
+  const [warehouseOpsProducts, setWarehouseOpsProducts] = useState<Record<string, { actual: string; reason: string }>>({});
+
   // Select & move state
   const [selectMode, setSelectMode] = useState(false);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
@@ -1113,14 +1119,24 @@ export default function ProductsPage() {
           <p className="text-xs text-gray-400 mt-0.5">{allProducts.length} товаров</p>
         </div>
         {canManageWarehouse && (
-          <button
-            type="button"
-            onClick={openCreate}
-            className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all flex-shrink-0"
-          >
-            <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">Добавить</span>
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => setWarehouseOpsOpen(true)}
+              className="flex items-center gap-2 rounded-xl bg-amber-500 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-600 active:scale-[0.97] transition-all"
+              title="Складские операции"
+            >
+              <Warehouse className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={openCreate}
+              className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all"
+            >
+              <Plus className="h-4 w-4" />
+              <span className="hidden sm:inline">Добавить</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -1481,6 +1497,74 @@ export default function ProductsPage() {
         </Modal>
       )}
 
+      {/* Warehouse operations chooser */}
+      {warehouseOpsOpen && !warehouseOpsMode && (
+        <Modal isOpen onClose={() => setWarehouseOpsOpen(false)} title="Складские операции" size="sm">
+          <div className="space-y-2">
+            <button type="button"
+              onClick={() => { setWarehouseOpsMode('inventory'); setWarehouseOpsProducts({}); }}
+              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-blue-50 transition-colors text-left border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
+                <ClipboardCheck className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Инвентаризация</p>
+                <p className="text-xs text-gray-500">Пересчёт остатков на складе</p>
+              </div>
+            </button>
+            <button type="button"
+              onClick={() => { setWarehouseOpsMode('writeoff'); setWarehouseOpsProducts({}); }}
+              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-orange-50 transition-colors text-left border border-gray-100">
+              <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center">
+                <PackageMinus className="w-5 h-5 text-orange-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Списание</p>
+                <p className="text-xs text-gray-500">Списать брак, потери, просрочку</p>
+              </div>
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Global inventory modal */}
+      {warehouseOpsMode === 'inventory' && (
+        <Modal isOpen onClose={() => { setWarehouseOpsMode(null); setWarehouseOpsOpen(false); }} title="Инвентаризация" size="lg">
+          <GlobalInventoryForm
+            products={allProducts}
+            categories={categories}
+            activePath={activePath}
+            onSubmit={async (items) => {
+              for (const item of items) {
+                await productsApi.updateStock(item.productId, { type: 'inventory', quantity: item.actual, reason: item.reason || 'Инвентаризация' });
+              }
+              queryClient.invalidateQueries({ queryKey: ['products'] });
+              toast.success(`Инвентаризация завершена (${items.length} позиций)`);
+              setWarehouseOpsMode(null);
+              setWarehouseOpsOpen(false);
+            }}
+          />
+        </Modal>
+      )}
+
+      {/* Global writeoff modal */}
+      {warehouseOpsMode === 'writeoff' && (
+        <Modal isOpen onClose={() => { setWarehouseOpsMode(null); setWarehouseOpsOpen(false); }} title="Списание товаров" size="lg">
+          <GlobalWriteoffForm
+            products={allProducts}
+            onSubmit={async (items) => {
+              for (const item of items) {
+                await productsApi.updateStock(item.productId, { type: 'writeoff', quantity: item.quantity, reason: item.reason });
+              }
+              queryClient.invalidateQueries({ queryKey: ['products'] });
+              toast.success(`Списано ${items.length} позиций`);
+              setWarehouseOpsMode(null);
+              setWarehouseOpsOpen(false);
+            }}
+          />
+        </Modal>
+      )}
+
       {/* Add new folder modal */}
       {showFolderModal && (
         <Modal
@@ -1534,6 +1618,220 @@ export default function ProductsPage() {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Global Inventory Form
+// ---------------------------------------------------------------------------
+
+function GlobalInventoryForm({
+  products,
+  categories,
+  activePath,
+  onSubmit,
+}: {
+  products: Product[];
+  categories: string[];
+  activePath: string[];
+  onSubmit: (items: Array<{ productId: string; actual: number; reason: string }>) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [filterCat, setFilterCat] = useState('');
+  const [entries, setEntries] = useState<Record<string, { actual: string; reason: string }>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  const filtered = useMemo(() => {
+    let list = products.filter(p => !p.isBundle);
+    if (filterCat) {
+      list = list.filter(p => p.category === filterCat || (p.category && p.category.startsWith(filterCat + '/')));
+    }
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(p => p.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [products, filterCat, search]);
+
+  const handleSubmit = async () => {
+    const items = Object.entries(entries)
+      .filter(([, v]) => v.actual !== '')
+      .map(([productId, v]) => ({
+        productId,
+        actual: parseFloat(v.actual) || 0,
+        reason: v.reason || 'Инвентаризация',
+      }));
+    if (items.length === 0) { toast.error('Укажите фактические остатки'); return; }
+    setSubmitting(true);
+    try { await onSubmit(items); } finally { setSubmitting(false); }
+  };
+
+  const countedIds = new Set(Object.keys(entries).filter(id => entries[id].actual !== ''));
+
+  return (
+    <div className="space-y-4 max-h-[70vh] flex flex-col">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Поиск товара..." className="input pl-9" />
+        </div>
+        <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="input w-auto">
+          <option value="">Все папки</option>
+          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+      </div>
+
+      <p className="text-xs text-gray-400">
+        Посчитано: <span className="font-bold text-primary-600">{countedIds.size}</span> / {filtered.length} товаров
+      </p>
+
+      <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
+        {filtered.map(p => {
+          const entry = entries[p.id] || { actual: '', reason: '' };
+          const actual = entry.actual !== '' ? parseFloat(entry.actual) || 0 : null;
+          const diff = actual !== null ? actual - p.stock : null;
+          const isCounted = entry.actual !== '';
+
+          return (
+            <div key={p.id} className={`rounded-xl border p-3 transition-colors ${isCounted ? 'border-green-200 bg-green-50/30' : 'border-gray-100 bg-white'}`}>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
+                  <p className="text-[11px] text-gray-400">В системе: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}</p>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <input
+                    type="number"
+                    value={entry.actual}
+                    onChange={e => setEntries(prev => ({ ...prev, [p.id]: { ...prev[p.id] || { reason: '' }, actual: e.target.value } }))}
+                    placeholder="Факт"
+                    className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-sm text-center font-semibold focus:border-primary-500 focus:outline-none"
+                    min="0"
+                    step="any"
+                  />
+                  {diff !== null && diff !== 0 && (
+                    <span className={`text-xs font-bold ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {diff > 0 ? '+' : ''}{diff}
+                    </span>
+                  )}
+                  {isCounted && diff === 0 && (
+                    <CheckIcon className="w-4 h-4 text-green-500" />
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {filtered.length === 0 && (
+          <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+        <p className="text-xs text-gray-400">{countedIds.size} позиций</p>
+        <button type="button" onClick={handleSubmit} disabled={submitting || countedIds.size === 0}
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardCheck className="w-4 h-4" />}
+          Провести инвентаризацию
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Global Writeoff Form
+// ---------------------------------------------------------------------------
+
+function GlobalWriteoffForm({
+  products,
+  onSubmit,
+}: {
+  products: Product[];
+  onSubmit: (items: Array<{ productId: string; quantity: number; reason: string }>) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [entries, setEntries] = useState<Record<string, { quantity: string; reason: string }>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [reason, setReason] = useState('');
+
+  const filtered = useMemo(() => {
+    let list = products.filter(p => !p.isBundle && p.stock > 0);
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(p => p.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [products, search]);
+
+  const handleSubmit = async () => {
+    const items = Object.entries(entries)
+      .filter(([, v]) => v.quantity !== '' && parseFloat(v.quantity) > 0)
+      .map(([productId, v]) => ({
+        productId,
+        quantity: parseFloat(v.quantity) || 0,
+        reason: v.reason || reason || 'Списание',
+      }));
+    if (items.length === 0) { toast.error('Укажите количество для списания'); return; }
+    setSubmitting(true);
+    try { await onSubmit(items); } finally { setSubmitting(false); }
+  };
+
+  const count = Object.values(entries).filter(v => v.quantity !== '' && parseFloat(v.quantity) > 0).length;
+
+  return (
+    <div className="space-y-4 max-h-[70vh] flex flex-col">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Поиск товара..." className="input pl-9" />
+      </div>
+
+      <div>
+        <label className="text-xs font-medium text-gray-500 mb-1 block">Общая причина списания</label>
+        <input type="text" value={reason} onChange={e => setReason(e.target.value)}
+          placeholder="Брак, просрочка..." className="input" />
+      </div>
+
+      <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
+        {filtered.map(p => {
+          const entry = entries[p.id] || { quantity: '', reason: '' };
+          return (
+            <div key={p.id} className="rounded-xl border border-gray-100 bg-white p-3">
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
+                  <p className="text-[11px] text-gray-400">Остаток: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}</p>
+                </div>
+                <input
+                  type="number"
+                  value={entry.quantity}
+                  onChange={e => setEntries(prev => ({ ...prev, [p.id]: { quantity: e.target.value, reason: prev[p.id]?.reason || '' } }))}
+                  placeholder="Кол-во"
+                  className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-sm text-center font-semibold focus:border-orange-500 focus:outline-none"
+                  min="0"
+                  max={p.stock}
+                  step="any"
+                />
+              </div>
+            </div>
+          );
+        })}
+        {filtered.length === 0 && (
+          <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between pt-3 border-t border-gray-100">
+        <p className="text-xs text-gray-400">{count} позиций</p>
+        <button type="button" onClick={handleSubmit} disabled={submitting || count === 0}
+          className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageMinus className="w-4 h-4" />}
+          Списать
+        </button>
+      </div>
     </div>
   );
 }

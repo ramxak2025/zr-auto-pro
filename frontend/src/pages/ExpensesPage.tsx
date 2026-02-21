@@ -122,7 +122,7 @@ export default function ExpensesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="page-header">
+      <div className="flex flex-col gap-3">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100">
             <Wallet className="h-5 w-5 text-rose-600" />
@@ -134,10 +134,10 @@ export default function ExpensesPage() {
         </div>
         {isDirector && (
           <div className="flex items-center gap-2">
-            <button onClick={() => setCatModalOpen(true)} className="btn-secondary text-xs">
+            <button onClick={() => setCatModalOpen(true)} className="btn-secondary text-xs flex-1 sm:flex-none justify-center">
               <Tag className="w-3.5 h-3.5" /> Категории
             </button>
-            <button onClick={() => setModalOpen(true)} className="btn-primary">
+            <button onClick={() => setModalOpen(true)} className="btn-primary flex-1 sm:flex-none justify-center">
               <Plus className="w-4 h-4" /> Добавить
             </button>
           </div>

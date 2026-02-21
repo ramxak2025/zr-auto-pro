@@ -369,6 +369,7 @@ export const clientsApi = {
   create: (data: CreateClientRequest) => api.post<Client>('/clients', data),
   update: (id: string, data: UpdateClientRequest) => api.patch<Client>(`/clients/${id}`, data),
   remove: (id: string) => api.delete(`/clients/${id}`),
+  exportCsv: () => api.get('/clients/export-csv', { responseType: 'blob' }),
 };
 
 export const carsApi = {
@@ -448,6 +449,7 @@ export const scheduleApi = {
   getWorkModes: () => api.get<WorkMode[]>('/schedule/work-modes'),
   createWorkMode: (data: CreateWorkModeRequest) => api.post<WorkMode>('/schedule/work-modes', data),
   updateWorkMode: (id: string, data: UpdateWorkModeRequest) => api.patch(`/schedule/work-modes/${id}`, data),
+  applyWorkMode: (data: { workModeId: string; userId?: string; dateFrom: string; dateTo: string }) => api.post<{ created: number }>('/schedule/apply-work-mode', data),
   getToday: () => api.get<TodayEmployeeStatus[]>('/schedule/today'),
   getMyStats: () => api.get<{ totalScheduled: number; totalWorked: number; totalLate: number; totalLateMinor: number; totalLateMajor: number; totalOnTime: number; totalDaysOff: number; avgLateMinutes: number }>('/schedule/my-stats'),
 };

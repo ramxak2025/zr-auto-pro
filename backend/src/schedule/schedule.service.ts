@@ -191,6 +191,75 @@ export class ScheduleService {
     };
   }
 
+  async applyWorkMode(tenantID: string, dto: any) {
+    // Apply a work mode schedule to one or all masters for a date range
+    const { workModeId, userId, dateFrom, dateTo } = dto;
+
+    // Get the work mode
+    const { rows: wmRows } = await this.pool.query(
+      'SELECT * FROM work_modes WHERE id=$1 AND tenant_id=$2',
+      [workModeId, tenantID],
+    );
+    if (wmRows.length === 0) throw new NotFoundException({ message: 'Режим работы не найден' });
+    const wm = wmRows[0];
+
+    // Get target users
+    let userIds: string[] = [];
+    if (userId) {
+      userIds = [userId];
+    } else {
+      const { rows: uRows } = await this.pool.query(
+        `SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('master', 'admin')`,
+        [tenantID],
+      );
+      userIds = uRows.map(r => r.id);
+    }
+
+    if (userIds.length === 0) return { created: 0 };
+
+    // Generate entries for each day in range
+    const start = new Date(dateFrom);
+    const end = new Date(dateTo);
+    let created = 0;
+
+    for (const uid of userIds) {
+      const cursor = new Date(start);
+      while (cursor <= end) {
+        const dateStr = cursor.toISOString().split('T')[0];
+        const dayOfWeek = cursor.getDay(); // 0=Sun, 6=Sat
+
+        // Determine if working day based on weekDays array (if specified)
+        const weekDays: number[] = wm.week_days || [];
+        let isWorkDay = true;
+        if (weekDays.length > 0) {
+          isWorkDay = weekDays.includes(dayOfWeek);
+        }
+
+        // Delete existing entry for this user/date
+        await this.pool.query(
+          'DELETE FROM schedule_entries WHERE user_id=$1 AND date=$2 AND tenant_id=$3',
+          [uid, dateStr, tenantID],
+        );
+
+        // Insert new entry
+        await this.pool.query(
+          `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, tenant_id)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [uid, dateStr,
+           isWorkDay ? wm.shift_start : null,
+           isWorkDay ? wm.shift_end : null,
+           !isWorkDay,
+           tenantID],
+        );
+        created++;
+
+        cursor.setDate(cursor.getDate() + 1);
+      }
+    }
+
+    return { created };
+  }
+
   async updateWorkMode(id: string, tenantID: string, dto: any) {
     const sets: string[] = [];
     const vals: any[] = [];

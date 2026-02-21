@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Res, Header } from '@nestjs/common';
+import { Response } from 'express';
 import { ClientsService } from './clients.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -11,6 +12,15 @@ export class ClientsController {
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.clientsService.getAll(user.tenantID, query);
+  }
+
+  @Get('export-csv')
+  async exportCsv(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const csv = await this.clientsService.exportCsv(user.tenantID);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="clients.csv"');
+    // Add BOM for Excel
+    res.send('\uFEFF' + csv);
   }
 
   @Get(':id')

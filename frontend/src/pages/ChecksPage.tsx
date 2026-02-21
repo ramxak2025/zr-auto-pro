@@ -50,6 +50,7 @@ export default function ChecksPage() {
   const [masterId, setMasterId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [showWarehouseDocs, setShowWarehouseDocs] = useState(false);
   const limit = 20;
 
   const { data: mastersData } = useQuery<User[]>({
@@ -167,6 +168,16 @@ export default function ChecksPage() {
               />
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => { setShowWarehouseDocs(!showWarehouseDocs); setPage(1); }}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
+              showWarehouseDocs ? 'bg-purple-100 text-purple-700 border border-purple-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <Package className="w-3.5 h-3.5" />
+            Документы склада
+          </button>
         </div>
       </div>
 
@@ -174,7 +185,7 @@ export default function ChecksPage() {
       {recentMovements.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1">Складские операции</p>
-          {recentMovements.slice(0, 5).map((m) => {
+          {(showWarehouseDocs ? recentMovements : recentMovements.slice(0, 5)).map((m) => {
             const cfg = movementTypeConfig[m.type] || movementTypeConfig.expense;
             const Icon = cfg.icon;
             return (
@@ -200,7 +211,9 @@ export default function ChecksPage() {
       )}
 
       {/* Content */}
-      {isLoading ? (
+      {showWarehouseDocs ? (
+        recentMovements.length === 0 && <EmptyState icon={Package} title="Нет складских операций" description="Выберите период для просмотра складских документов" />
+      ) : isLoading ? (
         <LoadingSpinner />
       ) : checks.length === 0 ? (
         <EmptyState icon={FileText} title="Чеков не найдено" description="Попробуйте изменить фильтры или создайте новый чек" />

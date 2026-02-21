@@ -1,9 +1,10 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag } from 'lucide-react';
+import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { clientsApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import SearchInput from '../components/SearchInput';
@@ -16,6 +17,8 @@ import { Client, PaginatedResponse } from '../types';
 export default function ClientsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isDirector = user?.role === 'director' || user?.role === 'superadmin';
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -142,10 +145,37 @@ export default function ClientsPage() {
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Клиенты</h1>
-        <button onClick={openCreateModal} className="btn-primary">
-          <Plus className="w-4 h-4" />
-          Новый клиент
-        </button>
+        <div className="flex items-center gap-2">
+          {isDirector && (
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const res = await clientsApi.exportCsv();
+                  const blob = new Blob([res.data as any], { type: 'text/csv;charset=utf-8' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'clients.csv';
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast.success('CSV скачан');
+                } catch {
+                  toast.error('Ошибка экспорта');
+                }
+              }}
+              className="btn-secondary"
+              title="Экспорт CSV"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">CSV</span>
+            </button>
+          )}
+          <button onClick={openCreateModal} className="btn-primary">
+            <Plus className="w-4 h-4" />
+            Новый клиент
+          </button>
+        </div>
       </div>
 
       {/* Search */}

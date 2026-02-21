@@ -127,6 +127,16 @@ export class ClientsService {
     return this.mapClient(rows[0]);
   }
 
+  async exportCsv(tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT full_name, phone FROM clients WHERE tenant_id = $1 ORDER BY full_name`,
+      [tenantID],
+    );
+    const header = 'Имя;Телефон';
+    const lines = rows.map(r => `${r.full_name};${r.phone}`);
+    return [header, ...lines].join('\n');
+  }
+
   async remove(id: string, tenantID: string) {
     await this.pool.query('DELETE FROM clients WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     return { message: 'Удалено' };

@@ -358,6 +358,11 @@ function RevenueChart() {
     return Math.max(...data.points.map((p: { revenue: number }) => p.revenue), 1);
   }, [data]);
 
+  const maxProfit = useMemo(() => {
+    if (!data?.points?.length) return 1;
+    return Math.max(...data.points.map((p: { profit: number }) => p.profit), 1);
+  }, [data]);
+
   const formatLabel = (dateStr: string): string => {
     if (period === 'today') {
       const d = new Date(dateStr);
@@ -382,12 +387,13 @@ function RevenueChart() {
   };
 
   // Build SVG wave path
-  const buildWavePath = (values: number[], height: number, width: number): string => {
+  const buildWavePath = (values: number[], height: number, width: number, max: number): string => {
     if (values.length === 0) return '';
-    const stepX = width / Math.max(values.length - 1, 1);
+    const padding = 16;
+    const stepX = (width - padding * 2) / Math.max(values.length - 1, 1);
     const points = values.map((v, i) => ({
-      x: i * stepX,
-      y: height - (v / maxValue) * (height - 8) - 4,
+      x: padding + i * stepX,
+      y: height - (v / max) * (height - 24) - 12,
     }));
 
     if (points.length === 1) {
@@ -404,37 +410,48 @@ function RevenueChart() {
     return path;
   };
 
-  const buildAreaPath = (values: number[], height: number, width: number): string => {
-    const wavePath = buildWavePath(values, height, width);
+  const buildAreaPath = (values: number[], height: number, width: number, max: number): string => {
+    const wavePath = buildWavePath(values, height, width, max);
     if (!wavePath) return '';
-    const stepX = width / Math.max(values.length - 1, 1);
-    return `${wavePath} L ${(values.length - 1) * stepX} ${height} L 0 ${height} Z`;
+    const padding = 16;
+    const stepX = (width - padding * 2) / Math.max(values.length - 1, 1);
+    const lastX = padding + (values.length - 1) * stepX;
+    return `${wavePath} L ${lastX} ${height} L ${padding} ${height} Z`;
   };
 
-  const chartHeight = 140;
+  const chartHeight = 160;
   const chartWidth = 600;
 
   const revenueValues = data?.points?.map((p: { revenue: number }) => p.revenue) ?? [];
   const profitValues = data?.points?.map((p: { profit: number }) => p.profit) ?? [];
 
+  // Calculate change percentages
+  const prevRevenue = revenueValues.length > 1 ? revenueValues[revenueValues.length - 2] : 0;
+  const lastRevenue = revenueValues.length > 0 ? revenueValues[revenueValues.length - 1] : 0;
+  const revChange = prevRevenue > 0 ? Math.round(((lastRevenue - prevRevenue) / prevRevenue) * 100) : 0;
+
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-      <div className="px-5 py-4 border-b border-gray-100">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-100">
-              <BarChart3 className="h-5 w-5 text-primary-600" />
-            </div>
-            <h3 className="text-base font-bold text-gray-900">Аналитика</h3>
+    <div className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden shadow-xl">
+      {/* Header */}
+      <div className="px-5 pt-5 pb-3">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-[11px] font-medium text-slate-400 uppercase tracking-widest">Аналитика</p>
+            <p className="text-xl font-bold text-white mt-0.5">{data ? formatMoney(data.totalRevenue) : '...'}</p>
+            {data && revChange !== 0 && (
+              <p className={`text-xs font-medium mt-0.5 ${revChange > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {revChange > 0 ? '+' : ''}{revChange}% к пред. периоду
+              </p>
+            )}
           </div>
-          <div className="flex rounded-lg bg-gray-100 p-0.5 self-start sm:self-auto">
+          <div className="flex items-center gap-1.5 bg-white/10 rounded-xl p-1 backdrop-blur-sm">
             {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
               <button
                 key={p}
                 type="button"
                 onClick={() => handlePeriodChange(p)}
-                className={`px-2.5 py-1.5 text-[11px] font-medium rounded-md transition-all ${
-                  period === p ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-all ${
+                  period === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-300 hover:text-white'
                 }`}
               >
                 {periodLabels[p]}
@@ -442,72 +459,42 @@ function RevenueChart() {
             ))}
           </div>
         </div>
+
+        {/* Period navigation */}
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => setOffset(o => o - 1)}
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <span className="text-sm font-medium text-slate-300 capitalize">
+            {getOffsetLabel(period, offset)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setOffset(o => o < 0 ? o + 1 : 0)}
+            disabled={offset >= 0}
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-20"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
-      {/* Period navigation with arrows */}
-      <div className="px-5 py-2.5 border-b border-gray-50 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => setOffset(o => o - 1)}
-          className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-        <span className="text-sm font-medium text-gray-700 capitalize">
-          {getOffsetLabel(period, offset)}
-        </span>
-        <button
-          type="button"
-          onClick={() => setOffset(o => o < 0 ? o + 1 : 0)}
-          disabled={offset >= 0}
-          className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
-
-      <div className="p-5">
-        {/* Summary totals */}
-        {data && (
-          <div className="grid grid-cols-3 gap-3 mb-5">
-            <div className="rounded-xl bg-green-50 p-3">
-              <p className="text-[10px] font-semibold text-green-600 uppercase tracking-wider">Оборот</p>
-              <p className="text-lg font-bold text-green-700 mt-0.5">{formatMoney(data.totalRevenue)}</p>
-            </div>
-            <div className="rounded-xl bg-blue-50 p-3">
-              <p className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">Прибыль</p>
-              <p className="text-lg font-bold text-blue-700 mt-0.5">{formatMoney(data.totalProfit)}</p>
-            </div>
-            <div className="rounded-xl bg-purple-50 p-3">
-              <p className="text-[10px] font-semibold text-purple-600 uppercase tracking-wider">Чеки</p>
-              <p className="text-lg font-bold text-purple-700 mt-0.5">{data.totalChecks}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Wave chart */}
+      {/* Chart area */}
+      <div className="px-2">
         {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
           </div>
         ) : !data?.points?.length ? (
-          <div className="text-center py-12 text-sm text-gray-400">Нет данных за выбранный период</div>
+          <div className="text-center py-16 text-sm text-slate-500">Нет данных</div>
         ) : (
-          <div className="space-y-2">
-            {/* Legend */}
-            <div className="flex items-center gap-4 text-[10px] text-gray-500 mb-3">
-              <div className="flex items-center gap-1">
-                <div className="w-2.5 h-2.5 rounded-sm bg-primary-500" />
-                <span>Оборот</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <div className="w-2.5 h-2.5 rounded-sm bg-emerald-500" />
-                <span>Прибыль</span>
-              </div>
-            </div>
-
-            {/* SVG Wave Chart */}
-            <div className="relative" style={{ height: `${chartHeight + 24}px` }}>
+          <div>
+            {/* SVG Chart */}
+            <div className="relative" style={{ height: `${chartHeight + 20}px` }}>
               <svg
                 viewBox={`0 0 ${chartWidth} ${chartHeight}`}
                 className="w-full"
@@ -515,96 +502,81 @@ function RevenueChart() {
                 preserveAspectRatio="none"
               >
                 <defs>
-                  <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="rgb(99,102,241)" stopOpacity="0.2" />
-                    <stop offset="100%" stopColor="rgb(99,102,241)" stopOpacity="0.02" />
+                  <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgb(99,102,241)" stopOpacity="0.35" />
+                    <stop offset="100%" stopColor="rgb(99,102,241)" stopOpacity="0" />
                   </linearGradient>
-                  <linearGradient id="profitGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="rgb(16,185,129)" stopOpacity="0.15" />
-                    <stop offset="100%" stopColor="rgb(16,185,129)" stopOpacity="0.02" />
+                  <linearGradient id="profGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgb(52,211,153)" stopOpacity="0.25" />
+                    <stop offset="100%" stopColor="rgb(52,211,153)" stopOpacity="0" />
                   </linearGradient>
                 </defs>
-                {/* Grid lines */}
+                {/* Subtle grid */}
                 {[0.25, 0.5, 0.75].map((pct) => (
-                  <line
-                    key={pct}
-                    x1="0"
-                    y1={chartHeight * (1 - pct)}
-                    x2={chartWidth}
-                    y2={chartHeight * (1 - pct)}
-                    stroke="#f3f4f6"
-                    strokeWidth="1"
-                  />
+                  <line key={pct} x1="16" y1={chartHeight * (1 - pct)} x2={chartWidth - 16} y2={chartHeight * (1 - pct)} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
                 ))}
-                {/* Revenue area */}
-                <path
-                  d={buildAreaPath(revenueValues, chartHeight, chartWidth)}
-                  fill="url(#revenueGradient)"
-                />
-                {/* Profit area */}
-                <path
-                  d={buildAreaPath(profitValues, chartHeight, chartWidth)}
-                  fill="url(#profitGradient)"
-                />
-                {/* Revenue line */}
-                <path
-                  d={buildWavePath(revenueValues, chartHeight, chartWidth)}
-                  fill="none"
-                  stroke="rgb(99,102,241)"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                {/* Profit line */}
-                <path
-                  d={buildWavePath(profitValues, chartHeight, chartWidth)}
-                  fill="none"
-                  stroke="rgb(16,185,129)"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
+                {/* Revenue area + line */}
+                <path d={buildAreaPath(revenueValues, chartHeight, chartWidth, maxValue)} fill="url(#revGrad)" />
+                <path d={buildWavePath(revenueValues, chartHeight, chartWidth, maxValue)} fill="none" stroke="rgb(129,140,248)" strokeWidth="2.5" strokeLinecap="round" />
+                {/* Profit area + line */}
+                <path d={buildAreaPath(profitValues, chartHeight, chartWidth, maxProfit)} fill="url(#profGrad)" />
+                <path d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)} fill="none" stroke="rgb(52,211,153)" strokeWidth="2" strokeLinecap="round" strokeDasharray="6 3" />
                 {/* Revenue dots */}
                 {revenueValues.map((v: number, i: number) => {
-                  const stepX = chartWidth / Math.max(revenueValues.length - 1, 1);
-                  const x = i * stepX;
-                  const y = chartHeight - (v / maxValue) * (chartHeight - 8) - 4;
+                  const padding = 16;
+                  const stepX = (chartWidth - padding * 2) / Math.max(revenueValues.length - 1, 1);
+                  const x = padding + i * stepX;
+                  const y = chartHeight - (v / maxValue) * (chartHeight - 24) - 12;
                   return (
-                    <circle
-                      key={`r-${i}`}
-                      cx={x}
-                      cy={y}
-                      r="3"
-                      fill="white"
-                      stroke="rgb(99,102,241)"
-                      strokeWidth="2"
-                    />
+                    <circle key={`r-${i}`} cx={x} cy={y} r="3.5" fill="rgb(129,140,248)" stroke="rgba(30,27,75,0.8)" strokeWidth="2" />
                   );
                 })}
               </svg>
               {/* X-axis labels */}
-              <div className="flex justify-between mt-1" style={{ paddingLeft: 0, paddingRight: 0 }}>
+              <div className="flex justify-between mt-1 px-4">
                 {data.points.map((point: { date: string }, idx: number) => (
-                  <span key={idx} className="text-[9px] text-gray-400 text-center" style={{ width: `${100 / data.points.length}%` }}>
+                  <span key={idx} className="text-[9px] text-slate-500 text-center" style={{ width: `${100 / data.points.length}%` }}>
                     {formatLabel(point.date)}
                   </span>
                 ))}
               </div>
             </div>
-
-            {/* Hover details - show all points inline on mobile */}
-            <div className="flex overflow-x-auto gap-2 pb-1 -mx-1 px-1 scrollbar-hide">
-              {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
-                <div key={idx} className="flex-shrink-0 text-center px-2 py-1.5 rounded-lg bg-gray-50 min-w-[60px]">
-                  <p className="text-[9px] text-gray-400 font-medium">{formatLabel(point.date)}</p>
-                  <p className="text-[10px] font-bold text-primary-600">{formatMoney(point.revenue)}</p>
-                  <p className="text-[9px] text-emerald-600">{formatMoney(point.profit)}</p>
-                </div>
-              ))}
-            </div>
           </div>
         )}
       </div>
+
+      {/* Bottom stats row */}
+      {data && (
+        <div className="grid grid-cols-3 gap-px bg-white/5 mt-2">
+          <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
+            <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Оборот</p>
+            <p className="text-base font-bold text-white mt-0.5">{formatMoney(data.totalRevenue)}</p>
+          </div>
+          <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
+            <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Прибыль</p>
+            <p className="text-base font-bold text-emerald-400 mt-0.5">{formatMoney(data.totalProfit)}</p>
+          </div>
+          <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
+            <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Чеков</p>
+            <p className="text-base font-bold text-white mt-0.5">{data.totalChecks}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Scrollable details */}
+      {(data?.points?.length ?? 0) > 0 && data && (
+        <div className="px-4 py-3">
+          <div className="flex overflow-x-auto gap-2 pb-1 scrollbar-hide">
+            {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
+              <div key={idx} className="flex-shrink-0 text-center px-3 py-2 rounded-xl bg-white/5 min-w-[64px]">
+                <p className="text-[9px] text-slate-500 font-medium">{formatLabel(point.date)}</p>
+                <p className="text-[11px] font-bold text-indigo-300">{formatMoney(point.revenue)}</p>
+                <p className="text-[9px] text-emerald-400">{formatMoney(point.profit)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

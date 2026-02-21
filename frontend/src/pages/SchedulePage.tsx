@@ -790,6 +790,11 @@ export default function SchedulePage() {
             )}
             <WorkModeForm onSubmit={(data: any) => createWorkModeMutation.mutate(data)} />
           </div>
+
+          {/* Apply work mode to masters */}
+          {workModes.length > 0 && (
+            <ApplyWorkModeCard workModes={workModes} users={users} />
+          )}
         </div>
       )}
 
@@ -916,5 +921,89 @@ function WorkModeForm({ onSubmit }: { onSubmit: (data: any) => void }) {
         <Plus className="w-4 h-4" /> Создать
       </button>
     </form>
+  );
+}
+
+function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User[] }) {
+  const queryClient = useQueryClient();
+  const [selectedMode, setSelectedMode] = useState('');
+  const [selectedUser, setSelectedUser] = useState('');
+  const [applyFrom, setApplyFrom] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [applyTo, setApplyTo] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
+
+  const applyMutation = useMutation({
+    mutationFn: (data: { workModeId: string; userId?: string; dateFrom: string; dateTo: string }) =>
+      scheduleApi.applyWorkMode(data),
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      toast.success(`График применён (${res.data?.created || 0} записей)`);
+    },
+    onError: () => toast.error('Ошибка при применении графика'),
+  });
+
+  const handleApply = () => {
+    if (!selectedMode) { toast.error('Выберите режим работы'); return; }
+    if (!applyFrom || !applyTo) { toast.error('Укажите период'); return; }
+    applyMutation.mutate({
+      workModeId: selectedMode,
+      userId: selectedUser || undefined,
+      dateFrom: applyFrom,
+      dateTo: applyTo,
+    });
+  };
+
+  const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <h2 className="text-lg font-semibold text-gray-900 mb-2">Применить график</h2>
+      <p className="text-xs text-gray-400 mb-4">
+        Заполните расписание для всех мастеров или конкретного сотрудника по выбранному режиму.
+      </p>
+
+      <div className="space-y-3">
+        <div>
+          <label className="label">Режим работы</label>
+          <select className="input" value={selectedMode} onChange={(e) => setSelectedMode(e.target.value)}>
+            <option value="">Выберите режим</option>
+            {workModes.map((wm: any) => (
+              <option key={wm.id} value={wm.id}>{wm.name} ({wm.shiftStart}–{wm.shiftEnd})</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="label">Сотрудник</label>
+          <select className="input" value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}>
+            <option value="">Все мастера</option>
+            {activeUsers.map((u) => (
+              <option key={u.id} value={u.id}>{u.fullName}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">С</label>
+            <input type="date" className="input" value={applyFrom} onChange={(e) => setApplyFrom(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">По</label>
+            <input type="date" className="input" value={applyTo} onChange={(e) => setApplyTo(e.target.value)} />
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleApply}
+          disabled={applyMutation.isPending}
+          className="btn-primary w-full justify-center"
+        >
+          {applyMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarDays className="w-4 h-4" />}
+          Применить расписание
+        </button>
+      </div>
+    </div>
   );
 }
