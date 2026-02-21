@@ -51,11 +51,7 @@ export default function ImageUpload({
     e.target.value = '';
   };
 
-  const imageUrl = value
-    ? value.startsWith('http')
-      ? value
-      : (import.meta.env.VITE_API_URL || '') + value
-    : null;
+  const imageUrl = value || null;
 
   if (variant === 'avatar') {
     return (
