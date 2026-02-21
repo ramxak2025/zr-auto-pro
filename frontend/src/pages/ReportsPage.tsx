@@ -10,6 +10,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   BarChart3,
+  Wallet,
 } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 
@@ -194,6 +195,26 @@ export default function ReportsPage() {
                 </div>
                 <p className="text-sm font-bold text-gray-900">{formatMoney(report.salaries)}</p>
               </div>
+
+              {/* Other expenses (director) */}
+              {((report as any).otherExpenses ?? 0) > 0 && (
+                <div className="flex items-center justify-between px-4 py-3.5">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-50">
+                      <Wallet className="h-4 w-4 text-rose-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">Прочие расходы</p>
+                      {report.revenue > 0 && (
+                        <p className="text-[11px] text-gray-400">
+                          {(((report as any).otherExpenses / report.revenue) * 100).toFixed(1)}% от выручки
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-sm font-bold text-gray-900">{formatMoney((report as any).otherExpenses)}</p>
+                </div>
+              )}
             </div>
           </div>
 

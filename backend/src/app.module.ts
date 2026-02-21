@@ -18,6 +18,7 @@ import { ScheduleModule } from './schedule/schedule.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { WarehouseModule } from './warehouse/warehouse.module';
 import { HealthModule } from './health/health.module';
+import { ExpensesModule } from './expenses/expenses.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { HealthModule } from './health/health.module';
     UploadsModule,
     WarehouseModule,
     HealthModule,
+    ExpensesModule,
   ],
   providers: [MigrationRunner],
 })

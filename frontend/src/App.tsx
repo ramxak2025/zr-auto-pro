@@ -28,6 +28,7 @@ import SchedulePage from './pages/SchedulePage';
 import MorePage from './pages/MorePage';
 import TariffPage from './pages/TariffPage';
 import RetailChecksPage from './pages/RetailChecksPage';
+import ExpensesPage from './pages/ExpensesPage';
 
 // Admin pages
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
@@ -76,6 +77,7 @@ export default function App() {
             <Route path="/salary" element={<SalaryPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/cashflow" element={<CashFlowPage />} />
+            <Route path="/expenses" element={<ExpensesPage />} />
             <Route path="/users" element={<UsersPage />} />
             <Route path="/schedule" element={<SchedulePage />} />
             <Route path="/more" element={<MorePage />} />

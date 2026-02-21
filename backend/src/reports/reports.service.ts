@@ -26,7 +26,15 @@ export class ReportsService {
     const productCost = parseFloat(r.product_cost) || 0;
     const salaries = parseFloat(r.salaries) || 0;
     const grossProfit = revenue - productCost;
-    const netProfit = grossProfit - salaries;
+
+    // Get director expenses for the same period
+    const { rows: expRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz`,
+      [tenantID, dateFrom, dateTo],
+    );
+    const otherExpenses = parseFloat(expRows[0]?.total) || 0;
+
+    const netProfit = grossProfit - salaries - otherExpenses;
 
     return {
       dateFrom,
@@ -34,6 +42,7 @@ export class ReportsService {
       revenue,
       productCost,
       salaries,
+      otherExpenses,
       grossProfit,
       netProfit,
       checkCount: parseInt(r.check_count) || 0,

@@ -56,7 +56,7 @@ export class ScheduleService {
     const { rows } = await this.pool.query(
       `SELECT u.id as user_id, u.full_name, u.role,
               se.is_day_off, se.shift_start, se.shift_end,
-              se.actual_arrival, se.late_minutes, se.late_status,
+              se.actual_arrival, se.late_minutes, se.late_status, se.note,
               CASE WHEN s.id IS NOT NULL AND s.closed_at IS NULL THEN true ELSE false END as is_working,
               CASE WHEN se.id IS NOT NULL THEN true ELSE false END as has_schedule
        FROM users u
@@ -77,6 +77,7 @@ export class ScheduleService {
       actualArrival: r.actual_arrival,
       lateMinutes: r.late_minutes || 0,
       lateStatus: r.late_status,
+      note: r.note || null,
       isWorking: r.is_working,
       hasSchedule: r.has_schedule,
     }));

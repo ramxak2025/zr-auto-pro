@@ -151,61 +151,63 @@ function StaffStatusCircles() {
   const statuses = todayData ?? [];
   if (statuses.length === 0) return null;
 
+  const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
+
   const getCircleColor = (s: TodayEmployeeStatus) => {
-    const isSick = (s as any).isSickDay || (s.isDayOff && s.lateStatus === null && !s.isWorking && !s.hasSchedule === false);
-    if (s.isDayOff && !isSick) return 'bg-gray-900 ring-gray-700';
-    if (isSick) return 'bg-gray-400 ring-gray-300';
+    if (isSick(s)) return 'bg-rose-400 ring-rose-300';
+    if (s.isDayOff) return 'bg-gray-400 ring-gray-300';
     if (s.lateStatus === 'late_major') return 'bg-orange-500 ring-orange-400';
     if (s.lateStatus === 'late_minor') return 'bg-yellow-400 ring-yellow-300';
     if (s.isWorking) return 'bg-green-500 ring-green-400';
-    if (!s.isWorking && s.hasSchedule) return 'bg-red-500 ring-red-400';
-    return 'bg-gray-300 ring-gray-200';
+    if (!s.isWorking && s.hasSchedule) return 'bg-gray-300 ring-gray-200 grayscale';
+    return 'bg-gray-200 ring-gray-100';
   };
 
   const getStatusLabel = (s: TodayEmployeeStatus) => {
+    if (isSick(s)) return 'Больничный';
     if (s.isDayOff) return 'Выходной';
-    if (s.lateStatus === 'late_major') return `Опозд. ${s.lateMinutes}м`;
-    if (s.lateStatus === 'late_minor') return `Опозд. ${s.lateMinutes}м`;
+    if (s.lateStatus === 'late_major') return `Опозд. >${'\u00A0'}1ч`;
+    if (s.lateStatus === 'late_minor') return `Опозд. <${'\u00A0'}1ч`;
     if (s.isWorking) return 'На смене';
     if (s.hasSchedule) return 'Не пришёл';
     return '';
   };
 
-  const sortPriority = (s: TodayEmployeeStatus): number => {
-    if (s.isWorking && !s.isDayOff) return 0;
-    if (!s.isWorking && !s.isDayOff && s.hasSchedule) return 1;
-    if (s.isDayOff) return 2;
-    return 3;
+  const getStatusEmoji = (s: TodayEmployeeStatus) => {
+    if (isSick(s)) return '🏥';
+    if (s.isDayOff) return '🌙';
+    return null;
   };
 
-  const sorted = [...statuses].sort((a, b) => sortPriority(a) - sortPriority(b));
+  // Group employees
+  const onShift = statuses.filter(s => s.isWorking && !s.isDayOff && !isSick(s));
+  const notArrived = statuses.filter(s => !s.isWorking && !s.isDayOff && s.hasSchedule && !isSick(s));
+  const dayOff = statuses.filter(s => s.isDayOff && !isSick(s));
+  const sick = statuses.filter(s => isSick(s));
 
-  const onShift = sorted.filter(s => s.isWorking && !s.isDayOff);
-  const absent = sorted.filter(s => !s.isWorking && !s.isDayOff && s.hasSchedule);
-  const dayOff = sorted.filter(s => s.isDayOff);
-
-  const renderGroup = (title: string, items: TodayEmployeeStatus[], emptyText?: string) => {
-    if (items.length === 0 && !emptyText) return null;
+  const renderGroup = (title: string, icon: string, items: TodayEmployeeStatus[]) => {
+    if (items.length === 0) return null;
     return (
       <div>
-        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">{title}</p>
-        {items.length === 0 ? (
-          <p className="text-xs text-gray-300 italic">{emptyText}</p>
-        ) : (
-          <div className="flex flex-wrap gap-3">
-            {items.map((s) => (
-              <div key={s.userId} className="flex flex-col items-center gap-1" title={getStatusLabel(s)}>
+        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+          <span>{icon}</span> {title} <span className="text-gray-300">({items.length})</span>
+        </p>
+        <div className="flex flex-wrap gap-3">
+          {items.map((s) => (
+            <div key={s.userId} className="flex flex-col items-center gap-1" title={getStatusLabel(s)}>
+              <div className="relative">
                 <div className={`w-11 h-11 rounded-full ring-2 flex items-center justify-center text-xs font-bold text-white ${getCircleColor(s)}`}>
                   {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2)}
                 </div>
-                <span className="text-[10px] text-gray-500 max-w-[60px] truncate text-center">{s.fullName.split(' ')[0]}</span>
-                {getStatusLabel(s) && (
-                  <span className="text-[9px] text-gray-400">{getStatusLabel(s)}</span>
+                {getStatusEmoji(s) && (
+                  <span className="absolute -bottom-0.5 -right-0.5 text-xs">{getStatusEmoji(s)}</span>
                 )}
               </div>
-            ))}
-          </div>
-        )}
+              <span className="text-[10px] text-gray-500 max-w-[60px] truncate text-center">{s.fullName.split(' ')[0]}</span>
+              <span className="text-[9px] text-gray-400">{getStatusLabel(s)}</span>
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
@@ -216,14 +218,16 @@ function StaffStatusCircles() {
         <h3 className="text-sm font-bold text-gray-900">Сотрудники сегодня</h3>
         <div className="flex items-center gap-3 text-[11px] text-gray-400">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onShift.length}</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> {absent.length}</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-900" /> {dayOff.length}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> {notArrived.length}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {dayOff.length}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400" /> {sick.length}</span>
         </div>
       </div>
 
-      {renderGroup('На смене', onShift)}
-      {renderGroup('Ожидается', absent)}
-      {renderGroup('Выходной / Больничный', dayOff)}
+      {renderGroup('На смене', '🟢', onShift)}
+      {renderGroup('Ещё не пришёл', '⏳', notArrived)}
+      {renderGroup('Выходной', '🌙', dayOff)}
+      {renderGroup('Больничный', '🏥', sick)}
     </div>
   );
 }

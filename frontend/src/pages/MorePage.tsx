@@ -83,6 +83,15 @@ const menuItems: MenuItem[] = [
     iconColor: 'text-green-600',
   },
   {
+    label: 'Расходы',
+    description: 'Аренда, маркетинг и др.',
+    path: '/expenses',
+    icon: Wallet,
+    roles: ['director', 'superadmin'],
+    color: 'bg-rose-50',
+    iconColor: 'text-rose-600',
+  },
+  {
     label: 'Отчёты',
     description: 'Финансовые отчёты',
     path: '/reports',

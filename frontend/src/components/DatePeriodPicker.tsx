@@ -118,13 +118,13 @@ export default function DatePeriodPicker({
         <div
           className="
             md:hidden
-            absolute top-full left-0 mt-1.5 z-40
-            w-[15rem]
-            bg-white rounded-xl border border-gray-100
-            shadow-xl shadow-gray-200/60
+            fixed inset-x-3 top-auto z-50
+            bg-white rounded-2xl border border-gray-100
+            shadow-2xl shadow-gray-300/50
             animate-fade-in-down
             overflow-hidden
           "
+          style={{ marginTop: '0.5rem' }}
         >
           {/* Quick filters */}
           <div className="flex border-b border-gray-100">
@@ -137,7 +137,7 @@ export default function DatePeriodPicker({
                   setOpen(false);
                 }}
                 className={`
-                  flex-1 py-2 text-[11px] font-semibold tracking-wide
+                  flex-1 py-3 text-sm font-semibold tracking-wide
                   transition-colors duration-150
                   ${
                     activeFilter === key
@@ -152,9 +152,9 @@ export default function DatePeriodPicker({
           </div>
 
           {/* Date inputs */}
-          <div className="px-3 pt-2.5 pb-3 space-y-2">
-            <div className="flex items-center gap-2">
-              <label className="text-[10px] font-semibold text-gray-400 uppercase w-5 flex-shrink-0 tracking-wider">
+          <div className="px-4 pt-3 pb-4 space-y-3">
+            <div className="flex items-center gap-3">
+              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">
                 С
               </label>
               <input
@@ -163,17 +163,17 @@ export default function DatePeriodPicker({
                 onChange={(e) => onChange(e.target.value, dateTo)}
                 className="
                   flex-1 min-w-0
-                  h-7 px-2 rounded-md
+                  h-10 px-3 rounded-xl
                   border border-gray-200 bg-gray-50/80
-                  text-xs text-gray-700
+                  text-sm text-gray-700
                   focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30
                   focus:outline-none focus:bg-white
                   transition-colors
                 "
               />
             </div>
-            <div className="flex items-center gap-2">
-              <label className="text-[10px] font-semibold text-gray-400 uppercase w-5 flex-shrink-0 tracking-wider">
+            <div className="flex items-center gap-3">
+              <label className="text-xs font-semibold text-gray-500 w-6 flex-shrink-0">
                 По
               </label>
               <input
@@ -182,9 +182,9 @@ export default function DatePeriodPicker({
                 onChange={(e) => onChange(dateFrom, e.target.value)}
                 className="
                   flex-1 min-w-0
-                  h-7 px-2 rounded-md
+                  h-10 px-3 rounded-xl
                   border border-gray-200 bg-gray-50/80
-                  text-xs text-gray-700
+                  text-sm text-gray-700
                   focus:border-primary-400 focus:ring-1 focus:ring-primary-400/30
                   focus:outline-none focus:bg-white
                   transition-colors
@@ -197,10 +197,10 @@ export default function DatePeriodPicker({
               type="button"
               onClick={() => setOpen(false)}
               className="
-                w-full h-7 mt-0.5
-                text-[11px] font-semibold
+                w-full h-10 mt-1
+                text-sm font-semibold
                 text-white bg-primary-600 hover:bg-primary-700
-                rounded-md
+                rounded-xl
                 transition-colors duration-150
                 active:scale-[0.98]
               "

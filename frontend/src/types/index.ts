@@ -354,6 +354,26 @@ export interface TodayEmployeeStatus {
   actualArrival?: string | null;
   lateMinutes: number;
   lateStatus?: LateStatus | null;
+  note?: string | null;
   isWorking: boolean;
   hasSchedule: boolean;
+}
+
+export interface ExpenseCategory {
+  id: string;
+  name: string;
+  tenantId: string;
+  createdAt: string;
+}
+
+export interface Expense {
+  id: string;
+  categoryId?: string;
+  categoryName?: string;
+  amount: number;
+  description?: string;
+  date: string;
+  userId?: string;
+  userName?: string;
+  createdAt: string;
 }

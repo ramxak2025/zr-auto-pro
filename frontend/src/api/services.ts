@@ -452,6 +452,15 @@ export const scheduleApi = {
   getMyStats: () => api.get<{ totalScheduled: number; totalWorked: number; totalLate: number; totalLateMinor: number; totalLateMajor: number; totalOnTime: number; totalDaysOff: number; avgLateMinutes: number }>('/schedule/my-stats'),
 };
 
+export const expensesApi = {
+  getCategories: () => api.get<Array<{ id: string; name: string }>>('/expenses/categories'),
+  createCategory: (data: { name: string }) => api.post('/expenses/categories', data),
+  removeCategory: (id: string) => api.delete(`/expenses/categories/${id}`),
+  getAll: (params?: DateRangeParams) => api.get<Array<{ id: string; categoryId?: string; categoryName?: string; amount: number; description?: string; date: string; userId?: string; userName?: string; createdAt: string }>>('/expenses', { params }),
+  create: (data: { categoryId?: string; amount: number; description?: string; date?: string }) => api.post('/expenses', data),
+  remove: (id: string) => api.delete(`/expenses/${id}`),
+};
+
 export const warehouseCategoriesApi = {
   getAll: () => api.get<Array<{ id: string; path: string }>>('/warehouse/categories'),
   create: (path: string) => api.post<{ id: string; path: string }>('/warehouse/categories', { path }),

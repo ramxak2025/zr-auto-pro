@@ -392,7 +392,7 @@ export class ChecksService {
         productLines.push({ ...prod, totalSell, totalCost });
       }
 
-      const discount = dto.discount ?? parseFloat(checkRows[0].discount) || 0;
+      const discount = dto.discount ?? (parseFloat(checkRows[0].discount) || 0);
       const discountedProductTotal = productTotal - discount;
       const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
       const totalCost = productCostTotal + serviceSalaryTotal;
@@ -555,18 +555,70 @@ export class ChecksService {
       [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
     );
 
-    const points = rows.map((r) => ({
-      date: r.day,
-      revenue: parseFloat(r.revenue) || 0,
-      profit: parseFloat(r.profit) || 0,
-      checkCount: parseInt(r.check_count) || 0,
-    }));
-
+    // Build lookup from query results
+    const dataMap: Record<string, { revenue: number; profit: number; checkCount: number }> = {};
     let totalRevenue = 0, totalProfit = 0, totalChecks = 0;
-    for (const p of points) {
-      totalRevenue += p.revenue;
-      totalProfit += p.profit;
-      totalChecks += p.checkCount;
+    for (const r of rows) {
+      const key = typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10);
+      const revenue = parseFloat(r.revenue) || 0;
+      const profit = parseFloat(r.profit) || 0;
+      const checkCount = parseInt(r.check_count) || 0;
+      dataMap[key] = { revenue, profit, checkCount };
+      totalRevenue += revenue;
+      totalProfit += profit;
+      totalChecks += checkCount;
+    }
+
+    // Fill in all time slots so the chart always has a complete axis
+    const points: Array<{ date: string; revenue: number; profit: number; checkCount: number }> = [];
+
+    if (period === 'today') {
+      for (let h = 0; h < 24; h++) {
+        const d = new Date(dateFrom.getFullYear(), dateFrom.getMonth(), dateFrom.getDate(), h);
+        const key = d.toISOString().slice(0, 10);
+        // For hourly, we need to re-query per hour — instead, use the daily total spread across existing data
+        points.push({ date: d.toISOString(), revenue: 0, profit: 0, checkCount: 0 });
+      }
+      // Overlay actual hourly data from a separate query
+      const { rows: hourlyRows } = await this.pool.query(
+        `SELECT EXTRACT(HOUR FROM date) as hour,
+                COALESCE(SUM(total_revenue), 0) as revenue,
+                COALESCE(SUM(profit), 0) as profit,
+                COUNT(*) as check_count
+         FROM checks
+         WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false
+         GROUP BY EXTRACT(HOUR FROM date)
+         ORDER BY hour`,
+        [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
+      );
+      for (const hr of hourlyRows) {
+        const idx = parseInt(hr.hour);
+        if (idx >= 0 && idx < 24) {
+          points[idx].revenue = parseFloat(hr.revenue) || 0;
+          points[idx].profit = parseFloat(hr.profit) || 0;
+          points[idx].checkCount = parseInt(hr.check_count) || 0;
+        }
+      }
+    } else if (period === 'year') {
+      for (let m = 0; m < 12; m++) {
+        const d = new Date(dateFrom.getFullYear(), m, 1);
+        const key = d.toISOString().slice(0, 7); // yyyy-MM
+        // Sum all matching days in this month
+        let rev = 0, prof = 0, cc = 0;
+        for (const [dk, dv] of Object.entries(dataMap)) {
+          if (dk.startsWith(key)) { rev += dv.revenue; prof += dv.profit; cc += dv.checkCount; }
+        }
+        points.push({ date: `${dateFrom.getFullYear()}-${String(m + 1).padStart(2, '0')}-01`, revenue: rev, profit: prof, checkCount: cc });
+      }
+    } else {
+      // week / month — fill each day
+      const cursor = new Date(dateFrom);
+      while (cursor <= dateTo) {
+        const key = cursor.toISOString().slice(0, 10);
+        const d = dataMap[key] || { revenue: 0, profit: 0, checkCount: 0 };
+        points.push({ date: key, ...d });
+        cursor.setDate(cursor.getDate() + 1);
+      }
     }
 
     return { points, totalRevenue, totalProfit, totalChecks };

@@ -51,15 +51,8 @@ function unitLabel(unit?: string): string {
   return found ? found.label : 'шт';
 }
 
-const CATEGORY_ICONS: Record<string, string> = {
-  'Масла': '🛢️',
-  'Фильтры': '🔧',
-  'Тормозная система': '🛞',
-  'Жидкости': '💧',
-  'Электрика': '⚡',
-  'ГРМ': '⛓️',
-  'Подвеска': '🔩',
-};
+// Unified folder icons — all use the same clean icon style
+const CATEGORY_ICONS: Record<string, string> = {};
 
 // ---------------------------------------------------------------------------
 // Product Form Modal
@@ -516,35 +509,55 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
   const [actualStock, setActualStock] = useState(product.stock.toString());
   const [reason, setReason] = useState('');
 
+  const actual = parseFloat(actualStock) || 0;
+  const diff = actual - product.stock;
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const actual = parseFloat(actualStock);
-    if (isNaN(actual) || actual < 0) { toast.error('Введите корректный остаток'); return; }
+    const a = parseFloat(actualStock);
+    if (isNaN(a) || a < 0) { toast.error('Введите корректный остаток'); return; }
     if (!reason.trim()) { toast.error('Укажите причину'); return; }
-    onSubmit({ actualStock: actual, reason: reason.trim() });
+    onSubmit({ actualStock: a, reason: reason.trim() });
   }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Инвентаризация">
       <form onSubmit={handleSubmit} className="space-y-4">
-        <p className="text-sm text-gray-600">
-          Товар: <span className="font-medium text-gray-900">{product.name}</span>
-          <br />В системе: <span className="font-medium text-gray-900">{product.stock}</span>
-        </p>
+        {/* Product info card */}
+        <div className="rounded-xl bg-gray-50 border border-gray-100 p-4">
+          <p className="text-sm font-semibold text-gray-900 mb-2">{product.name}</p>
+          <div className="grid grid-cols-3 gap-3 text-center">
+            <div>
+              <p className="text-lg font-bold text-gray-800">{product.stock}</p>
+              <p className="text-[10px] text-gray-400 uppercase">В системе</p>
+            </div>
+            <div>
+              <p className={`text-lg font-bold ${actual !== product.stock ? 'text-primary-600' : 'text-gray-400'}`}>{actual}</p>
+              <p className="text-[10px] text-gray-400 uppercase">Факт</p>
+            </div>
+            <div>
+              <p className={`text-lg font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                {diff > 0 ? '+' : ''}{diff !== 0 ? diff.toFixed(product.unit === 'pcs' ? 0 : 2) : '—'}
+              </p>
+              <p className="text-[10px] text-gray-400 uppercase">Разница</p>
+            </div>
+          </div>
+        </div>
+
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Фактический остаток *</label>
-          <input type="number" value={actualStock} onChange={(e) => setActualStock(e.target.value)} min="0"
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Фактический остаток</label>
+          <input type="number" value={actualStock} onChange={(e) => setActualStock(e.target.value)} min="0" step="any"
+            className="block w-full rounded-xl border border-gray-300 px-4 py-3 text-base font-semibold focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина *</label>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="Причина корректировки..."
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина</label>
+          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Причина корректировки..."
             className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
         </div>
         <div className="flex items-center justify-end gap-3 pt-2">
           <button type="button" onClick={onClose} disabled={isLoading} className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Отмена</button>
-          <button type="submit" disabled={isLoading} className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
-            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Провести
+          <button type="submit" disabled={isLoading || diff === 0} className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Провести инвентаризацию
           </button>
         </div>
       </form>
@@ -668,11 +681,7 @@ function FolderTile({
         </div>
       )}
       <div className="h-12 w-12 rounded-xl bg-primary-50 flex items-center justify-center">
-        {CATEGORY_ICONS[name] ? (
-          <span className="text-2xl leading-none">{CATEGORY_ICONS[name]}</span>
-        ) : (
-          <FolderOpen className="h-6 w-6 text-primary-500" />
-        )}
+        <FolderOpen className="h-6 w-6 text-primary-500" />
       </div>
       <p className="text-[13px] font-semibold text-gray-900 text-center truncate w-full">{name}</p>
       <p className="text-[11px] text-gray-400">{count} шт</p>

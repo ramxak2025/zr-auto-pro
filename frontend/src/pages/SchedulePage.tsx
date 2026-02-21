@@ -34,7 +34,10 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 
-type TabType = 'schedule' | 'today' | 'mystats';
+type TabType = 'schedule' | 'today' | 'mystats' | 'settings';
+
+// Correct Russian day abbreviations (date-fns 'EE' locale gives wrong 2-char prefix for Сб)
+const DAY_ABBR = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
 export default function SchedulePage() {
   const queryClient = useQueryClient();
@@ -60,6 +63,13 @@ export default function SchedulePage() {
   const [editingEntry, setEditingEntry] = useState<ScheduleEntry | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  // Quick status popup
+  const [quickPopup, setQuickPopup] = useState<{
+    userId: string;
+    date: string;
+    entry?: ScheduleEntry;
+  } | null>(null);
+
   const [entryForm, setEntryForm] = useState({
     userId: '',
     date: format(today, 'yyyy-MM-dd'),
@@ -69,6 +79,9 @@ export default function SchedulePage() {
     isSickDay: false,
     note: '',
   });
+
+  // Settings tab state
+  const [settingsTab, setSettingsTab] = useState<'service' | 'masters'>('service');
 
   // Queries
   const { data: scheduleData, isLoading: scheduleLoading } = useQuery({
@@ -265,19 +278,89 @@ export default function SchedulePage() {
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
+  // Work modes query
+  const { data: workModesData } = useQuery({
+    queryKey: ['work-modes'],
+    queryFn: () => scheduleApi.getWorkModes(),
+    select: (res) => res.data,
+    enabled: tab === 'settings',
+  });
+  const workModes = workModesData ?? [];
+
+  const createWorkModeMutation = useMutation({
+    mutationFn: (data: any) => scheduleApi.createWorkMode(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['work-modes'] });
+      toast.success('Режим работы создан');
+    },
+  });
+
+  const updateWorkModeMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.updateWorkMode(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['work-modes'] });
+      toast.success('Режим обновлён');
+    },
+  });
+
+  // Quick status change — directly creates/updates entry without opening modal
+  const quickSetStatus = (status: 'shift' | 'dayoff' | 'sick' | 'late_minor' | 'late_major' | 'delete') => {
+    if (!quickPopup) return;
+    const { userId, date, entry } = quickPopup;
+
+    if (status === 'delete' && entry) {
+      deleteMutation.mutate(entry.id);
+      setQuickPopup(null);
+      return;
+    }
+
+    const isDayOff = status === 'dayoff' || status === 'sick';
+    const note = status === 'sick' ? 'Больничный' : (status === 'late_minor' ? 'Опоздание <1ч' : status === 'late_major' ? 'Опоздание >1ч' : '');
+    const lateStatus = status === 'late_minor' ? 'late_minor' : status === 'late_major' ? 'late_major' : undefined;
+
+    const payload: any = {
+      userId,
+      date,
+      shiftStart: isDayOff ? null : '09:00',
+      shiftEnd: isDayOff ? null : '18:00',
+      isDayOff,
+      note: note || undefined,
+    };
+
+    if (entry) {
+      // Preserve existing shift times if editing shift
+      if (!isDayOff && entry.shiftStart) {
+        payload.shiftStart = entry.shiftStart;
+        payload.shiftEnd = entry.shiftEnd;
+      }
+      updateMutation.mutate({ id: entry.id, data: payload });
+    } else {
+      createMutation.mutate(payload);
+    }
+    setQuickPopup(null);
+  };
+
   // Cell rendering helpers
   const getCellContent = (entry: ScheduleEntry | undefined) => {
     if (!entry) return null;
     const isSick = (entry.note || '').toLowerCase().includes('больнич');
+    const isLateMinor = (entry.note || '').includes('<1ч') || entry.lateStatus === 'late_minor';
+    const isLateMajor = (entry.note || '').includes('>1ч') || entry.lateStatus === 'late_major';
     if (isSick) {
-      return { icon: '🏥', label: 'Б/Л', bgColor: 'bg-gray-100', textColor: 'text-gray-500', borderColor: 'border-gray-200' };
+      return { label: '🏥', bgColor: 'bg-rose-50', textColor: 'text-rose-500', borderColor: 'border-rose-200' };
     }
     if (entry.isDayOff) {
-      return { icon: '🌙', label: 'Вых', bgColor: 'bg-gray-800', textColor: 'text-white', borderColor: 'border-gray-700' };
+      return { label: '🌙', bgColor: 'bg-gray-800', textColor: 'text-white', borderColor: 'border-gray-700' };
+    }
+    if (isLateMajor) {
+      return { label: '⚠️', bgColor: 'bg-orange-50', textColor: 'text-orange-600', borderColor: 'border-orange-300' };
+    }
+    if (isLateMinor) {
+      return { label: '⏰', bgColor: 'bg-yellow-50', textColor: 'text-yellow-600', borderColor: 'border-yellow-300' };
     }
     // Working shift
-    const time = entry.shiftStart?.slice(0, 5) || '';
-    return { icon: '✓', label: time, bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' };
+    const time = entry.shiftStart?.slice(0, 5) || '✓';
+    return { label: time, bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' };
   };
 
   // Today tab helpers
@@ -348,6 +431,16 @@ export default function SchedulePage() {
           <Users className="w-4 h-4 inline-block mr-1 -mt-0.5" />
           Мои смены
         </button>
+        {canEdit && (
+          <button
+            onClick={() => setTab('settings')}
+            className={`flex-1 py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+              tab === 'settings' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Настройки
+          </button>
+        )}
       </div>
 
       {/* Schedule Tab - Grid: rows=employees, columns=dates */}
@@ -385,18 +478,26 @@ export default function SchedulePage() {
 
             {/* Legend */}
             <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50/50">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
-                <span className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
+                <span className="flex items-center gap-1">
                   <span className="w-5 h-5 rounded bg-green-50 border border-green-200 flex items-center justify-center text-[10px]">✓</span>
                   Смена
                 </span>
-                <span className="flex items-center gap-1.5">
+                <span className="flex items-center gap-1">
                   <span className="w-5 h-5 rounded bg-gray-800 border border-gray-700 flex items-center justify-center text-[10px]">🌙</span>
-                  Выходной
+                  Вых
                 </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded bg-gray-100 border border-gray-200 flex items-center justify-center text-[10px]">🏥</span>
-                  Больничный
+                <span className="flex items-center gap-1">
+                  <span className="w-5 h-5 rounded bg-rose-50 border border-rose-200 flex items-center justify-center text-[10px]">🏥</span>
+                  Б/Л
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-5 h-5 rounded bg-yellow-50 border border-yellow-300 flex items-center justify-center text-[10px]">⏰</span>
+                  &lt;1ч
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-5 h-5 rounded bg-orange-50 border border-orange-300 flex items-center justify-center text-[10px]">⚠️</span>
+                  &gt;1ч
                 </span>
               </div>
             </div>
@@ -447,7 +548,7 @@ export default function SchedulePage() {
                               }`}
                             >
                               <span className={`text-[9px] font-medium ${isWeekend ? 'text-red-400' : 'text-gray-400'}`}>
-                                {format(day, 'EE', { locale: ru }).slice(0, 2).toUpperCase()}
+                                {DAY_ABBR[getDay(day)]}
                               </span>
                               <span className={`text-xs font-bold ${
                                 isTodayDate ? 'text-blue-600' : isWeekend ? 'text-red-500' : 'text-gray-700'
@@ -475,11 +576,7 @@ export default function SchedulePage() {
                                 key={dateStr}
                                 onClick={() => {
                                   if (!canEdit) return;
-                                  if (entry) {
-                                    openEdit(entry);
-                                  } else {
-                                    openCreate(u.id, dateStr);
-                                  }
+                                  setQuickPopup({ userId: u.id, date: dateStr, entry });
                                 }}
                                 className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors ${
                                   canEdit ? 'cursor-pointer hover:bg-blue-50/50' : ''
@@ -606,7 +703,97 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* Create / Edit Modal */}
+      {/* Quick Status Popup — simple tap to set status */}
+      {quickPopup && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setQuickPopup(null)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div
+            className="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm mx-auto shadow-2xl overflow-hidden animate-fade-in-down"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 pt-4 pb-2">
+              <p className="text-sm font-bold text-gray-900">
+                {users.find(u => u.id === quickPopup.userId)?.fullName || ''} — {quickPopup.date.slice(5).replace('-', '.')}
+              </p>
+            </div>
+            <div className="px-3 pb-4 space-y-1">
+              <button
+                onClick={() => quickSetStatus('shift')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-green-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center text-sm">✅</span>
+                <span className="text-sm font-medium text-gray-800">Смена</span>
+              </button>
+              <button
+                onClick={() => quickSetStatus('dayoff')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-gray-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center text-sm">🌙</span>
+                <span className="text-sm font-medium text-gray-800">Выходной</span>
+              </button>
+              <button
+                onClick={() => quickSetStatus('sick')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-rose-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center text-sm">🏥</span>
+                <span className="text-sm font-medium text-gray-800">Больничный</span>
+              </button>
+              <button
+                onClick={() => quickSetStatus('late_minor')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-yellow-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-lg bg-yellow-100 flex items-center justify-center text-sm">⏰</span>
+                <span className="text-sm font-medium text-gray-800">Опоздал до часа</span>
+              </button>
+              <button
+                onClick={() => quickSetStatus('late_major')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-orange-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center text-sm">⚠️</span>
+                <span className="text-sm font-medium text-gray-800">Опоздал больше часа</span>
+              </button>
+              {quickPopup.entry && (
+                <button
+                  onClick={() => quickSetStatus('delete')}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 transition-colors text-left"
+                >
+                  <span className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center"><Trash2 className="w-4 h-4 text-red-500" /></span>
+                  <span className="text-sm font-medium text-red-600">Удалить запись</span>
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Tab — Work Mode */}
+      {tab === 'settings' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Режим работы сервиса</h2>
+            <p className="text-xs text-gray-400 mb-4">
+              Создайте режимы работы (например, «Основной: Пн-Вс 9:00-19:00») и назначайте их мастерам.
+            </p>
+            {workModes.length > 0 ? (
+              <div className="space-y-3 mb-4">
+                {workModes.map((wm: any) => (
+                  <div key={wm.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-800">{wm.name}</p>
+                      <p className="text-xs text-gray-500">{wm.shiftStart} — {wm.shiftEnd}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400 mb-4">Режимы работы не созданы</p>
+            )}
+            <WorkModeForm onSubmit={(data: any) => createWorkModeMutation.mutate(data)} />
+          </div>
+        </div>
+      )}
+
+      {/* Create / Edit Modal (for + button) */}
       <Modal
         isOpen={modalOpen}
         onClose={closeModal}
@@ -614,146 +801,60 @@ export default function SchedulePage() {
         size="md"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* User */}
           <div>
             <label className="label">Сотрудник</label>
-            <select
-              className="input"
-              value={entryForm.userId}
-              onChange={(e) => setEntryForm({ ...entryForm, userId: e.target.value })}
-              required
-            >
+            <select className="input" value={entryForm.userId} onChange={(e) => setEntryForm({ ...entryForm, userId: e.target.value })} required>
               <option value="">Выберите сотрудника</option>
-              {users
-                .filter((u) => u.isActive)
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.fullName}
-                  </option>
-                ))}
+              {users.filter((u) => u.isActive).map((u) => (
+                <option key={u.id} value={u.id}>{u.fullName}</option>
+              ))}
             </select>
           </div>
-
-          {/* Date */}
           <div>
             <label className="label">Дата</label>
-            <input
-              type="date"
-              className="input"
-              value={entryForm.date}
-              onChange={(e) => setEntryForm({ ...entryForm, date: e.target.value })}
-              required
-            />
+            <input type="date" className="input" value={entryForm.date} onChange={(e) => setEntryForm({ ...entryForm, date: e.target.value })} required />
           </div>
-
-          {/* Type selector */}
           <div>
             <label className="label">Тип</label>
             <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: false })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${
-                  !entryForm.isDayOff && !entryForm.isSickDay
-                    ? 'border-green-500 bg-green-50 text-green-700'
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
+              <button type="button" onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: false })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${!entryForm.isDayOff && !entryForm.isSickDay ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
                 Смена
               </button>
-              <button
-                type="button"
-                onClick={() => setEntryForm({ ...entryForm, isDayOff: true, isSickDay: false })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${
-                  entryForm.isDayOff && !entryForm.isSickDay
-                    ? 'border-gray-500 bg-gray-100 text-gray-700'
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
+              <button type="button" onClick={() => setEntryForm({ ...entryForm, isDayOff: true, isSickDay: false })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isDayOff && !entryForm.isSickDay ? 'border-gray-500 bg-gray-100 text-gray-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
                 Выходной
               </button>
-              <button
-                type="button"
-                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: true })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${
-                  entryForm.isSickDay
-                    ? 'border-red-400 bg-red-50 text-red-700'
-                    : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
-                }`}
-              >
+              <button type="button" onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: true })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isSickDay ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
                 Больничный
               </button>
             </div>
           </div>
-
-          {/* Shift Times */}
           {!entryForm.isDayOff && !entryForm.isSickDay && (
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label">Начало смены</label>
-                <input
-                  type="time"
-                  className="input"
-                  value={entryForm.shiftStart}
-                  onChange={(e) => setEntryForm({ ...entryForm, shiftStart: e.target.value })}
-                />
+                <label className="label">Начало</label>
+                <input type="time" className="input" value={entryForm.shiftStart} onChange={(e) => setEntryForm({ ...entryForm, shiftStart: e.target.value })} />
               </div>
               <div>
-                <label className="label">Конец смены</label>
-                <input
-                  type="time"
-                  className="input"
-                  value={entryForm.shiftEnd}
-                  onChange={(e) => setEntryForm({ ...entryForm, shiftEnd: e.target.value })}
-                />
+                <label className="label">Конец</label>
+                <input type="time" className="input" value={entryForm.shiftEnd} onChange={(e) => setEntryForm({ ...entryForm, shiftEnd: e.target.value })} />
               </div>
             </div>
           )}
-
-          {/* Note */}
-          <div>
-            <label className="label">Заметка</label>
-            <input
-              type="text"
-              className="input"
-              value={entryForm.note}
-              onChange={(e) => setEntryForm({ ...entryForm, note: e.target.value })}
-              placeholder="Необязательно"
-            />
-          </div>
-
-          {/* Actions */}
           <div className="flex items-center justify-between pt-4 border-t border-gray-200">
             <div>
               {editingEntry && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeleteId(editingEntry.id);
-                    closeModal();
-                  }}
-                  className="btn-danger btn-sm"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Удалить
+                <button type="button" onClick={() => { setDeleteId(editingEntry.id); closeModal(); }} className="btn-danger btn-sm">
+                  <Trash2 className="w-3.5 h-3.5" /> Удалить
                 </button>
               )}
             </div>
             <div className="flex items-center gap-3">
-              <button type="button" onClick={closeModal} className="btn-secondary">
-                Отмена
-              </button>
+              <button type="button" onClick={closeModal} className="btn-secondary">Отмена</button>
               <button type="submit" disabled={isSaving} className="btn-primary">
-                {isSaving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Сохранение...
-                  </>
-                ) : editingEntry ? (
-                  'Сохранить'
-                ) : (
-                  'Создать'
-                )}
+                {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> Сохранение...</> : editingEntry ? 'Сохранить' : 'Создать'}
               </button>
             </div>
           </div>
@@ -774,5 +875,46 @@ export default function SchedulePage() {
         variant="danger"
       />
     </div>
+  );
+}
+
+function WorkModeForm({ onSubmit }: { onSubmit: (data: any) => void }) {
+  const [name, setName] = useState('');
+  const [shiftStart, setShiftStart] = useState('09:00');
+  const [shiftEnd, setShiftEnd] = useState('19:00');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onSubmit({ name: name.trim(), shiftStart, shiftEnd });
+    setName('');
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
+      <input
+        type="text"
+        className="input flex-1"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Название (напр. Основной)"
+        required
+      />
+      <input
+        type="time"
+        className="input w-24"
+        value={shiftStart}
+        onChange={(e) => setShiftStart(e.target.value)}
+      />
+      <input
+        type="time"
+        className="input w-24"
+        value={shiftEnd}
+        onChange={(e) => setShiftEnd(e.target.value)}
+      />
+      <button type="submit" className="btn-primary px-4 whitespace-nowrap">
+        <Plus className="w-4 h-4" /> Создать
+      </button>
+    </form>
   );
 }

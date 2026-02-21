@@ -1,18 +1,25 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
-import { Plus, FileText, Trash2, Clock, MessageSquare, TrendingUp, Car, User as UserIcon, Percent } from 'lucide-react';
+import { Plus, FileText, Trash2, Clock, MessageSquare, TrendingUp, Car, User as UserIcon, Percent, Package, AlertTriangle, ArrowDown, ArrowUp, ClipboardCheck } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { checksApi, usersApi } from '../api/services';
+import { checksApi, usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import SearchInput from '../components/SearchInput';
-import type { Check, User, PaginatedResponse } from '../types';
+import type { Check, User, PaginatedResponse, StockMovement } from '../types';
+
+const movementTypeConfig: Record<string, { label: string; color: string; bg: string; icon: typeof Package }> = {
+  writeoff: { label: 'Списание', color: 'text-red-600', bg: 'bg-red-50 border-red-200', icon: AlertTriangle },
+  inventory: { label: 'Инвентаризация', color: 'text-purple-600', bg: 'bg-purple-50 border-purple-200', icon: ClipboardCheck },
+  income: { label: 'Поступление', color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200', icon: ArrowDown },
+  expense: { label: 'Продажа', color: 'text-green-600', bg: 'bg-green-50 border-green-200', icon: ArrowUp },
+};
 
 const paymentMethodLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -103,6 +110,18 @@ export default function ChecksPage() {
     setPage(1);
   };
 
+  // Stock movements query (write-offs, corrections, purchases)
+  const { data: movements } = useQuery<StockMovement[]>({
+    queryKey: ['stock-movements-journal', dateFrom, dateTo],
+    queryFn: async () => {
+      const res = await productsApi.getMovements({ dateFrom, dateTo } as any);
+      return res.data;
+    },
+    enabled: !!dateFrom && !!dateTo,
+  });
+
+  const recentMovements = (movements ?? []).filter(m => m.type !== 'expense');
+
   const checks = checksData?.data ?? [];
   const total = checksData?.total ?? 0;
 
@@ -150,6 +169,35 @@ export default function ChecksPage() {
           </div>
         </div>
       </div>
+
+      {/* Stock Movements — write-offs, corrections, purchases with colors */}
+      {recentMovements.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1">Складские операции</p>
+          {recentMovements.slice(0, 5).map((m) => {
+            const cfg = movementTypeConfig[m.type] || movementTypeConfig.expense;
+            const Icon = cfg.icon;
+            return (
+              <div key={m.id} className={`rounded-xl border shadow-sm p-3 flex items-center gap-3 ${cfg.bg}`}>
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${cfg.bg}`}>
+                  <Icon className={`w-4 h-4 ${cfg.color}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-bold ${cfg.color}`}>{cfg.label}</span>
+                    <span className="text-xs text-gray-500 truncate">{m.product?.name || '—'}</span>
+                  </div>
+                  <p className="text-[10px] text-gray-400">
+                    {m.quantity > 0 ? (m.type === 'income' ? '+' : '-') : ''}{Math.abs(m.quantity)} шт
+                    {m.reason ? ` · ${m.reason}` : ''}
+                    {' · '}{format(new Date(m.createdAt), 'dd.MM HH:mm', { locale: ru })}
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Content */}
       {isLoading ? (
