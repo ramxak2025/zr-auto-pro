@@ -1,0 +1,135 @@
+import { Injectable, Inject, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Pool } from 'pg';
+import { PG_POOL } from '../database.module';
+
+@Injectable()
+export class ShiftsService {
+  private readonly logger = new Logger('ShiftsService');
+
+  constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  private mapShift(row: any) {
+    const shift: any = {
+      id: row.id,
+      tenantId: row.tenant_id,
+      userId: row.user_id,
+      date: row.date,
+      openedAt: row.opened_at,
+      closedAt: row.closed_at,
+      isAutoClosed: row.is_auto_closed,
+      note: row.note,
+    };
+    if (row.user_full_name) {
+      shift.user = {
+        id: row.user_id,
+        fullName: row.user_full_name,
+        role: row.user_role,
+        avatar: row.user_avatar,
+      };
+    }
+    return shift;
+  }
+
+  async getAll(tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
+       FROM shifts s JOIN users u ON u.id = s.user_id
+       WHERE s.tenant_id = $1
+       ORDER BY s.opened_at DESC LIMIT 100`,
+      [tenantID],
+    );
+    return rows.map(this.mapShift);
+  }
+
+  async getMy(userID: string, tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
+       FROM shifts s JOIN users u ON u.id = s.user_id
+       WHERE s.user_id = $1 AND s.tenant_id = $2
+       ORDER BY s.opened_at DESC LIMIT 30`,
+      [userID, tenantID],
+    );
+    return rows.map(this.mapShift);
+  }
+
+  async open(userID: string, tenantID: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Auto-close old open shifts for this user
+      await client.query(
+        `UPDATE shifts SET closed_at = now(), is_auto_closed = true
+         WHERE user_id = $1 AND tenant_id = $2 AND closed_at IS NULL`,
+        [userID, tenantID],
+      );
+
+      // Create new shift
+      const today = new Date().toISOString().split('T')[0];
+      const { rows } = await client.query(
+        `INSERT INTO shifts (user_id, date, tenant_id) VALUES ($1, $2, $3)
+         RETURNING *`,
+        [userID, today, tenantID],
+      );
+      const shift = rows[0];
+
+      // Update schedule entry with lateness info
+      const { rows: schedRows } = await client.query(
+        `SELECT id, shift_start FROM schedule_entries
+         WHERE user_id = $1 AND date = $2 AND tenant_id = $3`,
+        [userID, today, tenantID],
+      );
+
+      if (schedRows.length > 0 && schedRows[0].shift_start) {
+        const schedEntry = schedRows[0];
+        const now = new Date();
+        const [h, m] = schedEntry.shift_start.split(':').map(Number);
+        const scheduled = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m);
+        const lateMinutes = Math.round((now.getTime() - scheduled.getTime()) / 60000);
+
+        let lateStatus = 'on_time';
+        if (lateMinutes > 0) {
+          lateStatus = lateMinutes < 60 ? 'late_minor' : 'late_major';
+        }
+
+        await client.query(
+          `UPDATE schedule_entries SET actual_arrival = now(), late_minutes = $1, late_status = $2
+           WHERE id = $3`,
+          [Math.max(lateMinutes, 0), lateStatus, schedEntry.id],
+        );
+      }
+
+      await client.query('COMMIT');
+
+      // Return with user info
+      const { rows: fullRows } = await this.pool.query(
+        `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
+         FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
+        [shift.id],
+      );
+      return this.mapShift(fullRows[0]);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`Shift open error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+  }
+
+  async close(id: string, tenantID: string) {
+    const { rows } = await this.pool.query(
+      `UPDATE shifts SET closed_at = now() WHERE id = $1 AND tenant_id = $2
+       RETURNING *`,
+      [id, tenantID],
+    );
+    if (rows.length === 0) return { message: 'Смена не найдена' };
+
+    const { rows: fullRows } = await this.pool.query(
+      `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
+       FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
+      [id],
+    );
+    return this.mapShift(fullRows[0]);
+  }
+}

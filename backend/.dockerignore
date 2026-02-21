@@ -1,4 +1,6 @@
 .git
 .gitignore
 *.md
+node_modules/
+dist/
 uploads/

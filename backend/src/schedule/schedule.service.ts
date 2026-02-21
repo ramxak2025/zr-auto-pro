@@ -1,0 +1,218 @@
+import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Pool } from 'pg';
+import { PG_POOL } from '../database.module';
+
+@Injectable()
+export class ScheduleService {
+  constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  private mapEntry(row: any) {
+    const entry: any = {
+      id: row.id,
+      tenantId: row.tenant_id,
+      userId: row.user_id,
+      date: row.date,
+      shiftStart: row.shift_start,
+      shiftEnd: row.shift_end,
+      isDayOff: row.is_day_off,
+      actualArrival: row.actual_arrival,
+      lateMinutes: row.late_minutes || 0,
+      lateStatus: row.late_status,
+      note: row.note,
+      isManualOverride: row.is_manual_override,
+    };
+    if (row.user_full_name) {
+      entry.user = {
+        id: row.user_id,
+        fullName: row.user_full_name,
+        role: row.user_role,
+      };
+    }
+    return entry;
+  }
+
+  async getAll(tenantID: string, query: any) {
+    const dateFrom = query.dateFrom;
+    const dateTo = query.dateTo;
+
+    if (!dateFrom || !dateTo) {
+      return [];
+    }
+
+    const { rows } = await this.pool.query(
+      `SELECT se.*, u.full_name as user_full_name, u.role as user_role
+       FROM schedule_entries se
+       JOIN users u ON u.id = se.user_id
+       WHERE se.tenant_id = $1 AND se.date >= $2 AND se.date <= $3
+       ORDER BY se.date, u.full_name`,
+      [tenantID, dateFrom, dateTo],
+    );
+    return rows.map(this.mapEntry);
+  }
+
+  async getToday(tenantID: string) {
+    const today = new Date().toISOString().split('T')[0];
+
+    const { rows } = await this.pool.query(
+      `SELECT u.id as user_id, u.full_name, u.role,
+              se.is_day_off, se.shift_start, se.shift_end,
+              se.actual_arrival, se.late_minutes, se.late_status,
+              CASE WHEN s.id IS NOT NULL AND s.closed_at IS NULL THEN true ELSE false END as is_working,
+              CASE WHEN se.id IS NOT NULL THEN true ELSE false END as has_schedule
+       FROM users u
+       LEFT JOIN schedule_entries se ON se.user_id = u.id AND se.date = $2 AND se.tenant_id = $1
+       LEFT JOIN shifts s ON s.user_id = u.id AND s.date = $2 AND s.tenant_id = $1 AND s.closed_at IS NULL
+       WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
+       ORDER BY u.full_name`,
+      [tenantID, today],
+    );
+
+    return rows.map((r) => ({
+      userId: r.user_id,
+      fullName: r.full_name,
+      role: r.role,
+      isDayOff: r.is_day_off || false,
+      shiftStart: r.shift_start,
+      shiftEnd: r.shift_end,
+      actualArrival: r.actual_arrival,
+      lateMinutes: r.late_minutes || 0,
+      lateStatus: r.late_status,
+      isWorking: r.is_working,
+      hasSchedule: r.has_schedule,
+    }));
+  }
+
+  async getMyStats(tenantID: string, userID: string) {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+
+    const { rows } = await this.pool.query(
+      `SELECT
+         COUNT(*) as total_scheduled,
+         COUNT(CASE WHEN actual_arrival IS NOT NULL THEN 1 END) as total_worked,
+         COUNT(CASE WHEN late_status IN ('late_minor','late_major') THEN 1 END) as total_late,
+         COUNT(CASE WHEN late_status = 'late_minor' THEN 1 END) as total_late_minor,
+         COUNT(CASE WHEN late_status = 'late_major' THEN 1 END) as total_late_major,
+         COUNT(CASE WHEN late_status = 'on_time' THEN 1 END) as total_on_time,
+         COUNT(CASE WHEN is_day_off = true THEN 1 END) as total_days_off,
+         COALESCE(AVG(CASE WHEN late_minutes > 0 THEN late_minutes END), 0) as avg_late_minutes
+       FROM schedule_entries
+       WHERE user_id = $1 AND tenant_id = $2 AND date >= $3 AND date <= $4`,
+      [userID, tenantID, monthStart, monthEnd],
+    );
+
+    const r = rows[0];
+    return {
+      totalScheduled: parseInt(r.total_scheduled) || 0,
+      totalWorked: parseInt(r.total_worked) || 0,
+      totalLate: parseInt(r.total_late) || 0,
+      totalLateMinor: parseInt(r.total_late_minor) || 0,
+      totalLateMajor: parseInt(r.total_late_major) || 0,
+      totalOnTime: parseInt(r.total_on_time) || 0,
+      totalDaysOff: parseInt(r.total_days_off) || 0,
+      avgLateMinutes: Math.round(parseFloat(r.avg_late_minutes) || 0),
+    };
+  }
+
+  async create(tenantID: string, dto: any) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [dto.userId, dto.date, dto.shiftStart, dto.shiftEnd,
+       dto.isDayOff || false, dto.note, tenantID],
+    );
+    return this.mapEntry(rows[0]);
+  }
+
+  async update(id: string, tenantID: string, dto: any) {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+
+    if (dto.shiftStart !== undefined) { sets.push(`shift_start=$${idx++}`); vals.push(dto.shiftStart); }
+    if (dto.shiftEnd !== undefined) { sets.push(`shift_end=$${idx++}`); vals.push(dto.shiftEnd); }
+    if (dto.isDayOff !== undefined) { sets.push(`is_day_off=$${idx++}`); vals.push(dto.isDayOff); }
+    if (dto.note !== undefined) { sets.push(`note=$${idx++}`); vals.push(dto.note); }
+
+    if (sets.length === 0) {
+      const { rows } = await this.pool.query('SELECT * FROM schedule_entries WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+      return rows.length > 0 ? this.mapEntry(rows[0]) : null;
+    }
+
+    vals.push(id, tenantID);
+    const { rows } = await this.pool.query(
+      `UPDATE schedule_entries SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+      vals,
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Запись не найдена' });
+    return this.mapEntry(rows[0]);
+  }
+
+  async remove(id: string, tenantID: string) {
+    await this.pool.query('DELETE FROM schedule_entries WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+    return { message: 'Удалено' };
+  }
+
+  // Work modes
+
+  async getWorkModes(tenantID: string) {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM work_modes WHERE tenant_id=$1 ORDER BY name',
+      [tenantID],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      type: r.type,
+      workDays: r.work_days,
+      offDays: r.off_days,
+      weekDays: r.week_days || [],
+      shiftStart: r.shift_start,
+      shiftEnd: r.shift_end,
+    }));
+  }
+
+  async createWorkMode(tenantID: string, dto: any) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO work_modes (name, type, work_days, off_days, week_days, shift_start, shift_end, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [dto.name, dto.type || 'rotating', dto.workDays || 2, dto.offDays || 2,
+       JSON.stringify(dto.weekDays || []), dto.shiftStart || '09:00', dto.shiftEnd || '18:00', tenantID],
+    );
+    const r = rows[0];
+    return {
+      id: r.id, tenantId: r.tenant_id, name: r.name, type: r.type,
+      workDays: r.work_days, offDays: r.off_days, weekDays: r.week_days || [],
+      shiftStart: r.shift_start, shiftEnd: r.shift_end,
+    };
+  }
+
+  async updateWorkMode(id: string, tenantID: string, dto: any) {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+
+    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
+    if (dto.type !== undefined) { sets.push(`type=$${idx++}`); vals.push(dto.type); }
+    if (dto.shiftStart !== undefined) { sets.push(`shift_start=$${idx++}`); vals.push(dto.shiftStart); }
+    if (dto.shiftEnd !== undefined) { sets.push(`shift_end=$${idx++}`); vals.push(dto.shiftEnd); }
+
+    if (sets.length === 0) return {};
+
+    vals.push(id, tenantID);
+    const { rows } = await this.pool.query(
+      `UPDATE work_modes SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+      vals,
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Режим не найден' });
+    const r = rows[0];
+    return {
+      id: r.id, tenantId: r.tenant_id, name: r.name, type: r.type,
+      workDays: r.work_days, offDays: r.off_days, weekDays: r.week_days || [],
+      shiftStart: r.shift_start, shiftEnd: r.shift_end,
+    };
+  }
+}

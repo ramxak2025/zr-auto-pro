@@ -1,22 +1,17 @@
-FROM golang:1.24-alpine AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
-
-# Skip network-dependent sum verification — all checksums already in go.sum
-ENV GONOSUMDB=*
-ENV GONOSUMCHECK=*
-ENV GOFLAGS=-mod=mod
-
-COPY go.mod go.sum ./
-RUN go mod download
-
+COPY package.json package-lock.json* ./
+RUN npm install --legacy-peer-deps
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/server
+RUN npm run build
 
-FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata
+FROM node:20-alpine
+RUN apk add --no-cache wget
 WORKDIR /app
-COPY --from=builder /app/server .
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json .
 COPY --from=builder /app/migrations ./migrations
 RUN mkdir -p uploads
 EXPOSE 3000
-CMD ["./server"]
+CMD ["node", "dist/main"]

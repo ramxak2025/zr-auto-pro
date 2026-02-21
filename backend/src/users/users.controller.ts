@@ -1,0 +1,40 @@
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { UsersService } from './users.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+
+@UseGuards(JwtAuthGuard)
+@Controller('users')
+export class UsersController {
+  constructor(private usersService: UsersService) {}
+
+  @Get()
+  getAll(@CurrentUser() user: JwtPayload) {
+    return this.usersService.getAll(user.tenantID);
+  }
+
+  @Get('masters')
+  getMasters(@CurrentUser() user: JwtPayload) {
+    return this.usersService.getMasters(user.tenantID);
+  }
+
+  @Get(':id')
+  getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.getById(id, user.tenantID);
+  }
+
+  @Post()
+  create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.usersService.create(user.tenantID, dto);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.usersService.update(id, user.tenantID, dto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.remove(id, user.tenantID, user.userID, user.role);
+  }
+}

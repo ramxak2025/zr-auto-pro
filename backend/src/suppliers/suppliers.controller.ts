@@ -1,0 +1,60 @@
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { SuppliersService } from './suppliers.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+
+@UseGuards(JwtAuthGuard)
+@Controller('suppliers')
+export class SuppliersController {
+  constructor(private suppliersService: SuppliersService) {}
+
+  @Get()
+  getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
+    return this.suppliersService.getAll(user.tenantID, query);
+  }
+
+  @Get('deliveries')
+  getDeliveries(@CurrentUser() user: JwtPayload, @Query() query: any) {
+    return this.suppliersService.getDeliveries(user.tenantID, query);
+  }
+
+  @Get('payments')
+  getPayments(@CurrentUser() user: JwtPayload, @Query() query: any) {
+    return this.suppliersService.getPayments(user.tenantID, query);
+  }
+
+  @Get('deliveries/:id')
+  getDeliveryById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.suppliersService.getDeliveryById(id, user.tenantID);
+  }
+
+  @Get(':id')
+  getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.suppliersService.getById(id, user.tenantID);
+  }
+
+  @Post()
+  create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.suppliersService.create(user.tenantID, dto);
+  }
+
+  @Post('deliveries')
+  createDelivery(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.suppliersService.createDelivery(user.tenantID, dto);
+  }
+
+  @Post('payments')
+  createPayment(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.suppliersService.createPayment(user.tenantID, dto);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.suppliersService.update(id, user.tenantID, dto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.suppliersService.remove(id, user.tenantID);
+  }
+}
