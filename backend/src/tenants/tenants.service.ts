@@ -188,8 +188,12 @@ export class TenantsService {
   }
 
   async remove(id: string) {
-    await this.pool.query('UPDATE tenants SET is_active=false, updated_at=now() WHERE id=$1', [id]);
-    return { message: 'Деактивировано' };
+    // Full cascade delete — all related data (users, clients, cars, checks,
+    // products, services, suppliers, deliveries, schedule, shifts, expenses, etc.)
+    // will be removed via ON DELETE CASCADE foreign keys in the database schema.
+    const { rowCount } = await this.pool.query('DELETE FROM tenants WHERE id=$1', [id]);
+    if (rowCount === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+    return { message: 'Удалено' };
   }
 
   async getSubscription(tenantID: string) {

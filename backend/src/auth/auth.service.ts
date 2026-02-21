@@ -48,7 +48,10 @@ export class AuthService {
                 json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
                   'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
                   'email',COALESCE(t.email,''),'isActive',t.is_active,
-                  'maxUsers',t.max_users,'createdAt',t.created_at,'updatedAt',t.updated_at)::text
+                  'maxUsers',t.max_users,
+                  'subscriptionEnd',t.subscription_end,
+                  'subscriptionNote',COALESCE(t.subscription_note,''),
+                  'createdAt',t.created_at,'updatedAt',t.updated_at)::text
               ELSE NULL END as tenant_json
        FROM users u
        LEFT JOIN tenants t ON t.id = u.tenant_id
@@ -176,7 +179,10 @@ export class AuthService {
                 json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
                   'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
                   'email',COALESCE(t.email,''),'isActive',t.is_active,
-                  'maxUsers',t.max_users,'createdAt',t.created_at,'updatedAt',t.updated_at)::text
+                  'maxUsers',t.max_users,
+                  'subscriptionEnd',t.subscription_end,
+                  'subscriptionNote',COALESCE(t.subscription_note,''),
+                  'createdAt',t.created_at,'updatedAt',t.updated_at)::text
               ELSE NULL END as tenant_json
        FROM users u
        LEFT JOIN tenants t ON t.id = u.tenant_id
