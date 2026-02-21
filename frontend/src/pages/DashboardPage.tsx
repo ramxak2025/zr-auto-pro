@@ -434,31 +434,26 @@ function RevenueChart() {
     <div className="rounded-3xl bg-gradient-to-br from-blue-950 via-slate-900 to-blue-950 overflow-hidden shadow-xl">
       {/* Header */}
       <div className="px-5 pt-5 pb-3">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <p className="text-[11px] font-medium text-slate-400 uppercase tracking-widest">Аналитика</p>
-            <p className="text-xl font-bold text-white mt-0.5">{data ? formatMoney(data.totalRevenue) : '...'}</p>
-            {data && revChange !== 0 && (
-              <p className={`text-xs font-medium mt-0.5 ${revChange > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
-                {revChange > 0 ? '+' : ''}{revChange}% к пред. периоду
-              </p>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 bg-white/10 rounded-xl p-1 backdrop-blur-sm">
-            {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
-              <button
-                key={p}
-                type="button"
-                onClick={() => handlePeriodChange(p)}
-                className={`px-2.5 py-1.5 text-[11px] font-semibold rounded-lg transition-all ${
-                  period === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-300 hover:text-white'
-                }`}
-              >
-                {periodLabels[p]}
-              </button>
-            ))}
-          </div>
+        <p className="text-[11px] font-medium text-slate-400 uppercase tracking-widest mb-3">Аналитика</p>
+        <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1 backdrop-blur-sm mb-2">
+          {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => handlePeriodChange(p)}
+              className={`flex-1 py-2 text-[12px] font-semibold rounded-lg transition-all text-center ${
+                period === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-300 hover:text-white'
+              }`}
+            >
+              {periodLabels[p]}
+            </button>
+          ))}
         </div>
+        {data && revChange !== 0 && (
+          <p className={`text-xs font-medium text-center ${revChange > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
+            {revChange > 0 ? '+' : ''}{revChange}% к пред. периоду
+          </p>
+        )}
 
         {/* Period navigation */}
         <div className="flex items-center justify-between">

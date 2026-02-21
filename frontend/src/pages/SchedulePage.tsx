@@ -144,24 +144,20 @@ export default function SchedulePage() {
     return map;
   }, [entries]);
 
-  // All active users (merge from entries + users list)
+  // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
-    const userIds = new Set(entries.map((e) => e.userId));
-    const entryUsers = entries
-      .filter((e) => e.user)
-      .reduce((acc, e) => {
-        if (e.user && !acc.find((u) => u.id === e.userId)) {
-          acc.push(e.user);
-        }
-        return acc;
-      }, [] as User[]);
-    const allUsers = [...entryUsers];
-    users.forEach((u) => {
-      if (!userIds.has(u.id) && u.isActive) {
-        allUsers.push(u);
+    const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin' || u.role === 'director'));
+    const activeIds = new Set(activeUsers.map(u => u.id));
+
+    // Add any users from entries that aren't in the active users list (e.g., recently deactivated)
+    entries.forEach((e) => {
+      if (e.user && !activeIds.has(e.userId)) {
+        activeUsers.push(e.user as User);
+        activeIds.add(e.userId);
       }
     });
-    return allUsers;
+
+    return activeUsers;
   }, [entries, users]);
 
   // Month navigation
@@ -768,38 +764,78 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* Settings Tab — Work Mode */}
+      {/* Settings Tab — Modern Minimalist */}
       {tab === 'settings' && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Режим работы сервиса</h2>
-            <p className="text-xs text-gray-400 mb-4">
-              Создайте режимы работы (например, «Основной: Пн-Вс 9:00-19:00») и назначайте их мастерам.
-            </p>
-            {workModes.length > 0 ? (
-              <div className="space-y-3 mb-4">
-                {workModes.map((wm: any) => (
-                  <div key={wm.id} className="flex items-center justify-between p-3 rounded-xl bg-gray-50 border border-gray-100">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-800">{wm.name}</p>
-                      <p className="text-xs text-gray-500">{wm.shiftStart} — {wm.shiftEnd}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-gray-400 mb-4">Режимы работы не созданы</p>
-            )}
-            <WorkModeForm onSubmit={(data: any) => createWorkModeMutation.mutate(data)} />
+        <div className="space-y-5">
+          {/* Settings sub-tabs */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSettingsTab('masters')}
+              className={`px-4 py-2 text-sm font-medium rounded-xl transition-all ${
+                settingsTab === 'masters'
+                  ? 'bg-gray-900 text-white shadow-sm'
+                  : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              Выходные мастеров
+            </button>
+            <button
+              onClick={() => setSettingsTab('service')}
+              className={`px-4 py-2 text-sm font-medium rounded-xl transition-all ${
+                settingsTab === 'service'
+                  ? 'bg-gray-900 text-white shadow-sm'
+                  : 'bg-white text-gray-500 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              Режимы работы
+            </button>
           </div>
 
-          {/* Apply work mode to masters */}
-          {workModes.length > 0 && (
-            <ApplyWorkModeCard workModes={workModes} users={users} />
+          {/* Master Days Off tab */}
+          {settingsTab === 'masters' && (
+            <MasterDaysOffCard users={users} />
           )}
 
-          {/* Per-master days off */}
-          <MasterDaysOffCard users={users} />
+          {/* Service Work Modes tab */}
+          {settingsTab === 'service' && (
+            <div className="space-y-4">
+              {/* Work modes list + create */}
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-100">
+                  <h3 className="text-sm font-semibold text-gray-900">Режимы работы</h3>
+                </div>
+                {workModes.length > 0 ? (
+                  <div className="divide-y divide-gray-50">
+                    {workModes.map((wm: any) => (
+                      <div key={wm.id} className="flex items-center justify-between px-5 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center">
+                            <Clock className="w-4 h-4 text-blue-500" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-gray-900">{wm.name}</p>
+                            <p className="text-xs text-gray-400">{wm.shiftStart} — {wm.shiftEnd}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="px-5 py-8 text-center text-sm text-gray-400">
+                    Нет режимов работы
+                  </div>
+                )}
+                <div className="px-5 py-4 bg-gray-50/50 border-t border-gray-100">
+                  <WorkModeForm onSubmit={(data: any) => createWorkModeMutation.mutate(data)} />
+                </div>
+              </div>
+
+              {/* Apply work mode */}
+              {workModes.length > 0 && (
+                <ApplyWorkModeCard workModes={workModes} users={users} />
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -901,29 +937,21 @@ function WorkModeForm({ onSubmit }: { onSubmit: (data: any) => void }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
+    <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-2">
       <input
         type="text"
-        className="input flex-1"
+        className="input flex-1 text-sm"
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Название (напр. Основной)"
+        placeholder="Название режима"
         required
       />
-      <input
-        type="time"
-        className="input w-24"
-        value={shiftStart}
-        onChange={(e) => setShiftStart(e.target.value)}
-      />
-      <input
-        type="time"
-        className="input w-24"
-        value={shiftEnd}
-        onChange={(e) => setShiftEnd(e.target.value)}
-      />
-      <button type="submit" className="btn-primary px-4 whitespace-nowrap">
-        <Plus className="w-4 h-4" /> Создать
+      <div className="flex gap-2">
+        <input type="time" className="input w-[100px] text-sm" value={shiftStart} onChange={(e) => setShiftStart(e.target.value)} />
+        <input type="time" className="input w-[100px] text-sm" value={shiftEnd} onChange={(e) => setShiftEnd(e.target.value)} />
+      </div>
+      <button type="submit" className="btn-primary px-4 whitespace-nowrap text-sm">
+        <Plus className="w-4 h-4" /> Добавить
       </button>
     </form>
   );
@@ -941,7 +969,8 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
       usersApi.update(userId, { daysOff } as any),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      toast.success('Выходные дни обновлены');
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      toast.success('Выходные обновлены');
     },
     onError: () => toast.error('Ошибка сохранения'),
   });
@@ -955,37 +984,58 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
   if (activeUsers.length === 0) return null;
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-      <h2 className="text-lg font-semibold text-gray-900 mb-2">Выходные дни мастеров</h2>
-      <p className="text-xs text-gray-400 mb-4">
-        Отметьте дни недели, в которые у мастера выходной. При применении графика эти дни будут автоматически проставлены как выходные.
-      </p>
-      <div className="space-y-3">
-        {activeUsers.map((u) => (
-          <div key={u.id} className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-            <p className="text-sm font-semibold text-gray-800 mb-2">{u.fullName}</p>
-            <div className="flex flex-wrap gap-1.5">
-              {ORDERED_DAYS.map((day) => {
-                const isOff = (u.daysOff || []).includes(day);
-                return (
-                  <button
-                    key={day}
-                    type="button"
-                    onClick={() => toggleDay(u, day)}
-                    disabled={updateMutation.isPending}
-                    className={`w-10 h-9 rounded-lg text-xs font-bold transition-all ${
-                      isOff
-                        ? 'bg-red-500 text-white shadow-sm'
-                        : 'bg-white text-gray-500 border border-gray-200 hover:border-red-300 hover:text-red-500'
-                    } disabled:opacity-50`}
-                  >
-                    {DAY_NAMES_FULL[day]}
-                  </button>
-                );
-              })}
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-900">Выходные дни мастеров</h3>
+        <p className="text-xs text-gray-400 mt-0.5">
+          Выберите дни недели — будущие даты обновятся автоматически, прошедшие останутся без изменений
+        </p>
+      </div>
+      <div className="divide-y divide-gray-50">
+        {activeUsers.map((u) => {
+          const initials = u.fullName.split(' ').map(w => w[0]).join('').slice(0, 2);
+          const offDays = u.daysOff || [];
+          return (
+            <div key={u.id} className="px-5 py-4">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600">
+                  {initials}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{u.fullName}</p>
+                  {offDays.length > 0 && (
+                    <p className="text-[11px] text-gray-400">
+                      Выходные: {offDays.sort((a, b) => {
+                        const order = [1,2,3,4,5,6,0];
+                        return order.indexOf(a) - order.indexOf(b);
+                      }).map(d => DAY_NAMES_FULL[d]).join(', ')}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-1.5">
+                {ORDERED_DAYS.map((day) => {
+                  const isOff = offDays.includes(day);
+                  return (
+                    <button
+                      key={day}
+                      type="button"
+                      onClick={() => toggleDay(u, day)}
+                      disabled={updateMutation.isPending}
+                      className={`flex-1 h-9 rounded-lg text-xs font-semibold transition-all ${
+                        isOff
+                          ? 'bg-gray-900 text-white'
+                          : 'bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600'
+                      } disabled:opacity-50`}
+                    >
+                      {DAY_NAMES_FULL[day]}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -1023,52 +1073,38 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
   const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-      <h2 className="text-lg font-semibold text-gray-900 mb-2">Применить график</h2>
-      <p className="text-xs text-gray-400 mb-4">
-        Заполните расписание для всех мастеров или конкретного сотрудника по выбранному режиму.
-      </p>
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-gray-100">
+        <h3 className="text-sm font-semibold text-gray-900">Применить график</h3>
+      </div>
+      <div className="px-5 py-4 space-y-3">
+        <select className="input text-sm" value={selectedMode} onChange={(e) => setSelectedMode(e.target.value)}>
+          <option value="">Режим работы</option>
+          {workModes.map((wm: any) => (
+            <option key={wm.id} value={wm.id}>{wm.name} ({wm.shiftStart}–{wm.shiftEnd})</option>
+          ))}
+        </select>
 
-      <div className="space-y-3">
-        <div>
-          <label className="label">Режим работы</label>
-          <select className="input" value={selectedMode} onChange={(e) => setSelectedMode(e.target.value)}>
-            <option value="">Выберите режим</option>
-            {workModes.map((wm: any) => (
-              <option key={wm.id} value={wm.id}>{wm.name} ({wm.shiftStart}–{wm.shiftEnd})</option>
-            ))}
-          </select>
-        </div>
+        <select className="input text-sm" value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}>
+          <option value="">Все мастера</option>
+          {activeUsers.map((u) => (
+            <option key={u.id} value={u.id}>{u.fullName}</option>
+          ))}
+        </select>
 
-        <div>
-          <label className="label">Сотрудник</label>
-          <select className="input" value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}>
-            <option value="">Все мастера</option>
-            {activeUsers.map((u) => (
-              <option key={u.id} value={u.id}>{u.fullName}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">С</label>
-            <input type="date" className="input" value={applyFrom} onChange={(e) => setApplyFrom(e.target.value)} />
-          </div>
-          <div>
-            <label className="label">По</label>
-            <input type="date" className="input" value={applyTo} onChange={(e) => setApplyTo(e.target.value)} />
-          </div>
+        <div className="grid grid-cols-2 gap-2">
+          <input type="date" className="input text-sm" value={applyFrom} onChange={(e) => setApplyFrom(e.target.value)} />
+          <input type="date" className="input text-sm" value={applyTo} onChange={(e) => setApplyTo(e.target.value)} />
         </div>
 
         <button
           type="button"
           onClick={handleApply}
           disabled={applyMutation.isPending}
-          className="btn-primary w-full justify-center"
+          className="btn-primary w-full justify-center text-sm"
         >
-          {applyMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarDays className="w-4 h-4" />}
-          Применить расписание
+          {applyMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+          Применить
         </button>
       </div>
     </div>

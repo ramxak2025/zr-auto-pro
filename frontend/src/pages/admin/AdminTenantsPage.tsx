@@ -6,8 +6,8 @@ import toast from 'react-hot-toast';
 import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { tenantsApi } from '../../api/services';
-import { Tenant } from '../../types';
+import { tenantsApi, plansApi } from '../../api/services';
+import { Tenant, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -19,6 +19,7 @@ interface TenantFormData {
   address: string;
   email: string;
   description: string;
+  planId: string;
   maxUsers: number;
   isActive: boolean;
   subscriptionEnd: string;
@@ -34,6 +35,7 @@ const emptyForm: TenantFormData = {
   address: '',
   email: '',
   description: '',
+  planId: '',
   maxUsers: 5,
   isActive: true,
   subscriptionEnd: '',
@@ -74,7 +76,14 @@ export default function AdminTenantsPage() {
     select: (res) => res.data as Tenant[],
   });
 
+  const { data: plansData } = useQuery({
+    queryKey: ['plans'],
+    queryFn: () => plansApi.getAll(),
+    select: (res) => res.data as Plan[],
+  });
+
   const tenants = data ?? [];
+  const plans = (plansData ?? []).filter(p => p.isActive);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => tenantsApi.create(data),
@@ -128,6 +137,7 @@ export default function AdminTenantsPage() {
       address: tenant.address || '',
       email: tenant.email || '',
       description: tenant.description || '',
+      planId: tenant.planId || '',
       maxUsers: tenant.maxUsers,
       isActive: tenant.isActive,
       subscriptionEnd: tenant.subscriptionEnd
@@ -165,13 +175,16 @@ export default function AdminTenantsPage() {
       return;
     }
 
+    const selectedPlan = plans.find(p => p.id === form.planId);
     const payload: any = {
       name: form.name,
       phone: form.phone || undefined,
       address: form.address || undefined,
       email: form.email || undefined,
       description: form.description || undefined,
-      maxUsers: Number(form.maxUsers),
+      planId: form.planId || null,
+      maxUsers: selectedPlan ? selectedPlan.maxUsers : Number(form.maxUsers),
+      monthlyPrice: selectedPlan ? selectedPlan.monthlyPrice : 0,
       isActive: form.isActive,
       subscriptionEnd: form.subscriptionEnd || null,
       subscriptionNote: form.subscriptionNote || null,
@@ -247,6 +260,9 @@ export default function AdminTenantsPage() {
                           <span className="badge-green text-xs">Активна</span>
                         ) : (
                           <span className="badge-red text-xs">Неактивна</span>
+                        )}
+                        {tenant.plan?.name && (
+                          <span className="text-xs text-primary-600 font-medium">{tenant.plan.name}</span>
                         )}
                         <span className="flex items-center gap-1 text-xs text-gray-500">
                           <Users className="w-3 h-3" />
@@ -466,16 +482,43 @@ export default function AdminTenantsPage() {
             </div>
           )}
 
-          {/* Max Users */}
+          {/* Tariff / Plan selection */}
           <div>
-            <label className="label">Максимум пользователей</label>
-            <input
-              type="number"
-              className="input"
-              value={form.maxUsers}
-              onChange={(e) => setForm({ ...form, maxUsers: Number(e.target.value) })}
-              min={1}
-            />
+            <label className="label">Тариф</label>
+            {plans.length > 0 ? (
+              <div className="space-y-2">
+                {plans.map((plan) => {
+                  const isSelected = form.planId === plan.id;
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      onClick={() => setForm({ ...form, planId: plan.id, maxUsers: plan.maxUsers })}
+                      className={`w-full flex items-center justify-between p-3 rounded-xl border-2 text-left transition-all ${
+                        isSelected
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <div>
+                        <p className={`text-sm font-semibold ${isSelected ? 'text-primary-700' : 'text-gray-900'}`}>
+                          {plan.name}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          До {plan.maxUsers} сотрудников
+                          {plan.description && ` · ${plan.description}`}
+                        </p>
+                      </div>
+                      <span className={`text-sm font-bold ${isSelected ? 'text-primary-600' : 'text-gray-700'}`}>
+                        {plan.monthlyPrice.toLocaleString('ru-RU')} ₽/мес
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-400">Нет доступных тарифов. Создайте тариф в разделе &laquo;Тарифы&raquo;.</p>
+            )}
           </div>
 
           {/* Active Toggle */}

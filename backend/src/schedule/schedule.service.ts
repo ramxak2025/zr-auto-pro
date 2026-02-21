@@ -26,6 +26,7 @@ export class ScheduleService {
         id: row.user_id,
         fullName: row.user_full_name,
         role: row.user_role,
+        isActive: row.user_is_active !== false,
       };
     }
     return entry;
@@ -40,11 +41,11 @@ export class ScheduleService {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT se.*, u.full_name as user_full_name, u.role as user_role
+      `SELECT se.*, u.full_name as user_full_name, u.role as user_role, u.is_active as user_is_active
        FROM schedule_entries se
        JOIN users u ON u.id = se.user_id
        WHERE se.tenant_id = $1 AND se.date >= $2 AND se.date <= $3
-       ORDER BY se.date, u.full_name`,
+       ORDER BY u.full_name, se.date`,
       [tenantID, dateFrom, dateTo],
     );
     return rows.map(this.mapEntry);
@@ -221,7 +222,9 @@ export class ScheduleService {
 
     if (userRows.length === 0) return { created: 0 };
 
-    // Generate entries for each day in range
+    // Generate entries for each day in range (only today and future — past entries are preserved)
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
     const start = new Date(dateFrom);
     const end = new Date(dateTo);
     let created = 0;
@@ -232,6 +235,13 @@ export class ScheduleService {
       const cursor = new Date(start);
       while (cursor <= end) {
         const dateStr = cursor.toISOString().split('T')[0];
+
+        // Skip past days — keep existing entries unchanged
+        if (cursor < today) {
+          cursor.setDate(cursor.getDate() + 1);
+          continue;
+        }
+
         const dayOfWeek = cursor.getDay(); // 0=Sun, 6=Sat
 
         // Determine if working day based on weekDays array (if specified) + per-user days off

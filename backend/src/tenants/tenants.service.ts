@@ -33,10 +33,26 @@ export class TenantsService {
 
   async getAll() {
     const { rows } = await this.pool.query(
-      `SELECT t.*, (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as user_count
-       FROM tenants t ORDER BY t.created_at DESC`,
+      `SELECT t.*,
+              (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as user_count,
+              p.name as plan_name, p.monthly_price as plan_monthly_price, p.max_users as plan_max_users, p.description as plan_description
+       FROM tenants t
+       LEFT JOIN plans p ON p.id = t.plan_id
+       ORDER BY t.created_at DESC`,
     );
-    return rows.map(this.mapTenant);
+    return rows.map((row) => {
+      const tenant = this.mapTenant(row);
+      if (row.plan_id && row.plan_name) {
+        (tenant as any).plan = {
+          id: row.plan_id,
+          name: row.plan_name,
+          monthlyPrice: parseFloat(row.plan_monthly_price) || 0,
+          maxUsers: row.plan_max_users,
+          description: row.plan_description,
+        };
+      }
+      return tenant;
+    });
   }
 
   async getStats() {

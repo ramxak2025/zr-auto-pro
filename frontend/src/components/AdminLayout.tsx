@@ -26,7 +26,7 @@ export default function AdminLayout() {
       <aside className="hidden md:flex md:flex-col w-64 bg-white border-r border-gray-200">
         {/* Logo */}
         <div className="flex items-center h-16 px-6 border-b border-gray-200">
-          <span className="text-lg font-bold text-gray-900">ZR Auto Pro</span>
+          <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" />
         </div>
 
         {/* Navigation */}
@@ -81,7 +81,7 @@ export default function AdminLayout() {
       <div className="flex flex-1 flex-col min-w-0">
         <header className="md:hidden flex items-center justify-between h-14 px-4 bg-white border-b border-gray-200">
           <div className="flex items-center gap-2">
-            <span className="text-lg font-bold text-gray-900">ZR Auto Pro</span>
+            <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
           </div>
           <div className="flex items-center gap-2">
             <button

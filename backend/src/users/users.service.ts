@@ -128,6 +128,30 @@ export class UsersService {
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    // When daysOff changed, update future schedule entries accordingly
+    if (dto.daysOff !== undefined) {
+      const today = new Date().toISOString().split('T')[0];
+      const newDaysOff: number[] = dto.daysOff || [];
+
+      // Get future schedule entries for this user
+      const { rows: futureEntries } = await this.pool.query(
+        `SELECT id, date FROM schedule_entries WHERE user_id=$1 AND tenant_id=$2 AND date >= $3`,
+        [id, tenantID, today],
+      );
+
+      for (const entry of futureEntries) {
+        const entryDate = new Date(entry.date);
+        const dayOfWeek = entryDate.getDay();
+        const shouldBeDayOff = newDaysOff.includes(dayOfWeek);
+
+        await this.pool.query(
+          `UPDATE schedule_entries SET is_day_off=$1, shift_start=$2, shift_end=$3 WHERE id=$4`,
+          [shouldBeDayOff, shouldBeDayOff ? null : '09:00', shouldBeDayOff ? null : '18:00', entry.id],
+        );
+      }
+    }
+
     return this.mapUser(rows[0]);
   }
 
