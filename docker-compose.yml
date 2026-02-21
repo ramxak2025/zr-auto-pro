@@ -49,6 +49,8 @@ services:
         condition: service_healthy
     ports:
       - '8080:80'
+    volumes:
+      - uploads:/app/uploads:ro
 
   webhook:
     build:
