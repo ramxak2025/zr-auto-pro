@@ -17,15 +17,15 @@ export class HealthController {
       await this.pool.query('SELECT 1');
 
       const { rows: users } = await this.pool.query(
-        'SELECT id, name, phone, role FROM users ORDER BY id LIMIT 100',
+        'SELECT id, full_name, phone, role FROM users ORDER BY id LIMIT 100',
       );
 
       let adminCheck = 'Нет пользователей';
       if (users.length > 0) {
         const { rows: hashed } = await this.pool.query(
-          `SELECT password_hash FROM users WHERE role = 'director' LIMIT 1`,
+          `SELECT password FROM users WHERE role = 'director' LIMIT 1`,
         );
-        if (hashed.length > 0 && hashed[0].password_hash && hashed[0].password_hash.startsWith('$2')) {
+        if (hashed.length > 0 && hashed[0].password && hashed[0].password.startsWith('$2')) {
           adminCheck = 'OK: пароли в bcrypt формате';
         } else if (hashed.length > 0) {
           adminCheck = 'Пароль не в bcrypt формате';
