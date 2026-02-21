@@ -188,12 +188,63 @@ export class TenantsService {
   }
 
   async remove(id: string) {
-    // Full cascade delete — all related data (users, clients, cars, checks,
-    // products, services, suppliers, deliveries, schedule, shifts, expenses, etc.)
-    // will be removed via ON DELETE CASCADE foreign keys in the database schema.
-    const { rowCount } = await this.pool.query('DELETE FROM tenants WHERE id=$1', [id]);
-    if (rowCount === 0) throw new NotFoundException({ message: 'Тенант не найден' });
-    return { message: 'Удалено' };
+    // Full cascade delete — manually remove child records in correct order
+    // to avoid FK constraint violations (some FKs lack ON DELETE CASCADE)
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Remove check line items (reference services/products/users without CASCADE)
+      await client.query(
+        `DELETE FROM check_service_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`, [id],
+      );
+      await client.query(
+        `DELETE FROM check_product_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`, [id],
+      );
+
+      // 2. Remove delivery items (reference products without CASCADE)
+      await client.query(
+        `DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE tenant_id=$1)`, [id],
+      );
+
+      // 3. Remove checks (reference users/clients/cars without CASCADE)
+      await client.query('DELETE FROM checks WHERE tenant_id=$1', [id]);
+
+      // 4. Remove remaining tenant-owned data (all have ON DELETE CASCADE from tenant,
+      //    but explicit delete ensures correct order)
+      await client.query('DELETE FROM expenses WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM expense_categories WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM stock_movements WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM supplier_payments WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM deliveries WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM suppliers WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM schedule_entries WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM work_modes WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM shifts WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM cars WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM clients WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM services WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM products WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM warehouse_categories WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM users WHERE tenant_id=$1', [id]);
+
+      // 5. Finally delete the tenant itself
+      const { rowCount } = await client.query('DELETE FROM tenants WHERE id=$1', [id]);
+      if (rowCount === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Тенант не найден' });
+      }
+
+      await client.query('COMMIT');
+      return { message: 'Удалено' };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof NotFoundException) throw err;
+      this.logger.error(`Tenant delete error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка при удалении автосервиса' });
+    } finally {
+      client.release();
+    }
   }
 
   async getSubscription(tenantID: string) {
