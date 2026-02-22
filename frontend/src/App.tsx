@@ -31,6 +31,7 @@ import TariffPage from './pages/TariffPage';
 import RetailChecksPage from './pages/RetailChecksPage';
 import ExpensesPage from './pages/ExpensesPage';
 import MarketingPage from './pages/MarketingPage';
+import ReviewPublicPage from './pages/ReviewPublicPage';
 
 // Admin pages
 import AdminDashboardPage from './pages/admin/AdminDashboardPage';
@@ -61,6 +62,9 @@ export default function App() {
 
   return (
     <Routes>
+      {/* Public: Review page (no auth) */}
+      <Route path="/review/:token" element={<ReviewPublicPage />} />
+
       {/* Public: Login */}
       <Route
         path="/login"

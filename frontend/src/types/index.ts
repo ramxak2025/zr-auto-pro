@@ -378,3 +378,79 @@ export interface Expense {
   userName?: string;
   createdAt: string;
 }
+
+// ─── Marketing / Reputation Management ────────────────────────────
+
+export interface MarketingDashboard {
+  totalReviews: number;
+  avgRating: number;
+  negativeReviews: number;
+  positiveReviews: number;
+  publicRedirects: number;
+  tokensSent: number;
+  tokensResponded: number;
+  responseRate: number;
+  conversionRate: number;
+  unreadAlerts: number;
+  employeeRatings: EmployeeReviewRating[];
+}
+
+export interface EmployeeReviewRating {
+  employeeId: string;
+  employeeName: string;
+  reviewCount: number;
+  avgRating: number;
+  negativeRate: number;
+}
+
+export interface ReviewResponse {
+  id: string;
+  checkId?: string;
+  clientName?: string;
+  employeeName?: string;
+  rating: number;
+  comment?: string;
+  redirectedTo?: string;
+  createdAt: string;
+}
+
+export interface ReviewAlert {
+  id: string;
+  alertType: 'consecutive_negative' | 'churn_risk';
+  employeeName?: string;
+  clientName?: string;
+  details: Record<string, unknown>;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface MessagingIntegration {
+  id: string;
+  providerType: 'whatsapp' | 'sms' | 'email';
+  senderName?: string;
+  senderPhone?: string;
+  webhookUrl?: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface ReviewPlatformLink {
+  id: string;
+  platform: 'google' | 'yandex' | '2gis';
+  url: string;
+  isActive: boolean;
+}
+
+export interface ReviewSettings {
+  sendTime: string;
+  feedbackDelayHours: number;
+  autoSendEnabled: boolean;
+  messageTemplate: string;
+}
+
+export interface PublicReviewData {
+  tenantName: string;
+  clientName?: string;
+  employeeName?: string;
+  platformLinks: ReviewPlatformLink[];
+}

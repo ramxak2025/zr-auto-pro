@@ -24,6 +24,13 @@ import type {
   SubscriptionInfo,
   PlatformStats,
   TodayEmployeeStatus,
+  MarketingDashboard,
+  ReviewResponse,
+  ReviewAlert,
+  MessagingIntegration,
+  ReviewPlatformLink,
+  ReviewSettings,
+  PublicReviewData,
 } from '../types';
 
 // --- Request types ---
@@ -510,4 +517,24 @@ export const uploadsApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+};
+
+export const marketingApi = {
+  getDashboard: () => api.get<MarketingDashboard>('/marketing/dashboard'),
+  getReviews: (params?: { employeeId?: string; minRating?: number; maxRating?: number }) => api.get<ReviewResponse[]>('/marketing/reviews', { params }),
+  getAlerts: () => api.get<ReviewAlert[]>('/marketing/alerts'),
+  markAlertRead: (id: string) => api.patch(`/marketing/alerts/${id}/read`),
+  getIntegrations: () => api.get<MessagingIntegration[]>('/marketing/integrations'),
+  upsertIntegration: (data: { id?: string; providerType: string; apiKey: string; senderName?: string; senderPhone?: string; webhookUrl?: string; isActive?: boolean }) => api.post<MessagingIntegration[]>('/marketing/integrations', data),
+  removeIntegration: (id: string) => api.delete(`/marketing/integrations/${id}`),
+  getPlatformLinks: () => api.get<ReviewPlatformLink[]>('/marketing/platform-links'),
+  upsertPlatformLink: (data: { platform: string; url: string; isActive?: boolean }) => api.post<ReviewPlatformLink[]>('/marketing/platform-links', data),
+  removePlatformLink: (id: string) => api.delete(`/marketing/platform-links/${id}`),
+  getSettings: () => api.get<ReviewSettings>('/marketing/settings'),
+  updateSettings: (data: Partial<ReviewSettings>) => api.patch<ReviewSettings>('/marketing/settings', data),
+};
+
+export const publicReviewApi = {
+  getByToken: (token: string) => api.get<PublicReviewData>(`/marketing/review/${token}`),
+  submit: (token: string, data: { rating: number; comment?: string; redirectedTo?: string }) => api.post<{ success: boolean }>(`/marketing/review/${token}`, data),
 };
