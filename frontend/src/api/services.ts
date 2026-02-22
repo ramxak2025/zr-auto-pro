@@ -521,7 +521,7 @@ export const uploadsApi = {
 
 export const marketingApi = {
   getDashboard: () => api.get<MarketingDashboard>('/marketing/dashboard'),
-  getReviews: (params?: { employeeId?: string; minRating?: number; maxRating?: number }) => api.get<ReviewResponse[]>('/marketing/reviews', { params }),
+  getReviews: (params?: { employeeId?: string; minRating?: number; maxRating?: number; month?: string }) => api.get<ReviewResponse[]>('/marketing/reviews', { params }),
   getAlerts: () => api.get<ReviewAlert[]>('/marketing/alerts'),
   markAlertRead: (id: string) => api.patch(`/marketing/alerts/${id}/read`),
   getIntegrations: () => api.get<MessagingIntegration[]>('/marketing/integrations'),

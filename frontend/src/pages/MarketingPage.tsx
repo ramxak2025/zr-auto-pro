@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   BarChart3, Star, AlertTriangle, Bell, Settings, Link2, MessageSquare,
   Plus, Trash2, Save, ExternalLink, TrendingUp, Users,
-  Send, Eye, ThumbsUp, ThumbsDown, Loader2, X,
+  Send, Eye, ThumbsUp, ThumbsDown, Loader2, X, ChevronLeft, ChevronRight, ChevronDown,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { marketingApi } from '../api/services';
@@ -155,48 +155,141 @@ function DashboardTab({ data, alerts, onAlertRead }: { data: MarketingDashboard 
 }
 
 // ─── Reviews Tab ────────────────────────────────────────────────────
-function ReviewsTab({ reviews, loading }: { reviews: ReviewResponse[]; loading: boolean }) {
-  if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>;
-  if (reviews.length === 0) return (
-    <div className="text-center py-12">
-      <Star className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-      <p className="text-sm text-gray-500">Отзывов пока нет</p>
-      <p className="text-xs text-gray-400 mt-1">Они появятся после того, как клиенты оценят обслуживание</p>
-    </div>
-  );
+function ReviewsTab({ reviews, loading, month, onMonthChange }: {
+  reviews: ReviewResponse[]; loading: boolean; month: string; onMonthChange: (m: string) => void;
+}) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const monthLabel = (() => {
+    const [y, m] = month.split('-');
+    const d = new Date(parseInt(y), parseInt(m) - 1);
+    return d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  })();
+
+  const shiftMonth = (dir: number) => {
+    const [y, m] = month.split('-').map(Number);
+    const d = new Date(y, m - 1 + dir);
+    const ny = d.getFullYear();
+    const nm = String(d.getMonth() + 1).padStart(2, '0');
+    onMonthChange(`${ny}-${nm}`);
+  };
+
+  // Compute per-employee ratings from reviews
+  const employeeStats = (() => {
+    const map: Record<string, { name: string; total: number; sum: number; negative: number }> = {};
+    reviews.forEach(r => {
+      if (!r.employeeId || !r.employeeName) return;
+      if (!map[r.employeeId]) map[r.employeeId] = { name: r.employeeName, total: 0, sum: 0, negative: 0 };
+      map[r.employeeId].total++;
+      map[r.employeeId].sum += r.rating;
+      if (r.rating <= 3) map[r.employeeId].negative++;
+    });
+    return Object.entries(map)
+      .map(([id, s]) => ({ id, name: s.name, count: s.total, avg: s.sum / s.total, negative: s.negative }))
+      .sort((a, b) => b.avg - a.avg);
+  })();
 
   return (
-    <div className="space-y-3">
-      {reviews.map(r => (
-        <div key={r.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-          <div className="flex items-start justify-between mb-2">
-            <div>
-              <p className="text-sm font-semibold text-gray-900">{r.clientName || 'Клиент'}</p>
-              {r.employeeName && <p className="text-xs text-gray-500">Мастер: {r.employeeName}</p>}
-            </div>
-            <div className="flex items-center gap-1.5">
-              {r.rating >= 4 ? (
-                <ThumbsUp className="h-4 w-4 text-green-500" />
-              ) : (
-                <ThumbsDown className="h-4 w-4 text-red-500" />
-              )}
-              <Stars rating={r.rating} />
-            </div>
-          </div>
-          {r.comment && (
-            <p className="text-sm text-gray-700 bg-gray-50 rounded-xl p-3 mb-2">{r.comment}</p>
-          )}
-          <div className="flex items-center justify-between text-xs text-gray-400">
-            <span>{new Date(r.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-            {r.redirectedTo && (
-              <span className="flex items-center gap-1 text-green-600">
-                <ExternalLink className="h-3 w-3" />
-                {r.redirectedTo}
-              </span>
-            )}
-          </div>
+    <div className="space-y-4">
+      {/* Month picker */}
+      <div className="flex items-center justify-center gap-3">
+        <button onClick={() => shiftMonth(-1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+        <span className="text-sm font-semibold text-gray-900 capitalize min-w-[140px] text-center">{monthLabel}</span>
+        <button onClick={() => shiftMonth(1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+          <ChevronRight className="h-5 w-5" />
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>
+      ) : reviews.length === 0 ? (
+        <div className="text-center py-12">
+          <Star className="h-10 w-10 text-gray-200 mx-auto mb-3" />
+          <p className="text-sm text-gray-500">Отзывов за этот месяц нет</p>
         </div>
-      ))}
+      ) : (
+        <>
+          {/* Employee ratings */}
+          {employeeStats.length > 0 && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Users className="h-4 w-4 text-gray-400" />
+                <h3 className="text-sm font-semibold text-gray-900">Рейтинг мастеров</h3>
+              </div>
+              <div className="space-y-3">
+                {employeeStats.map(e => {
+                  const avgRounded = Math.round(e.avg * 10) / 10;
+                  const isGood = avgRounded >= 4;
+                  return (
+                    <div key={e.id} className={`flex items-center gap-3 p-3 rounded-xl ${isGood ? 'bg-green-50' : 'bg-red-50'}`}>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{e.name}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <Stars rating={Math.round(e.avg)} />
+                          <span className={`text-xs font-semibold ${isGood ? 'text-green-600' : 'text-red-600'}`}>{avgRounded}</span>
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-sm font-semibold text-gray-900">{e.count}</p>
+                        <p className="text-xs text-gray-500">отзыв{e.count === 1 ? '' : e.count < 5 ? 'а' : 'ов'}</p>
+                      </div>
+                      {e.negative > 0 && (
+                        <div className="flex-shrink-0" title={`${e.negative} негативных`}>
+                          <AlertTriangle className="h-4 w-4 text-red-500" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Reviews journal */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Последние оценки</h3>
+            <div className="space-y-1">
+              {reviews.map(r => {
+                const isGood = r.rating >= 4;
+                const isExpanded = expandedId === r.id;
+                return (
+                  <div key={r.id}>
+                    <button
+                      onClick={() => setExpandedId(isExpanded ? null : r.id)}
+                      className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-left transition-colors ${
+                        isGood ? 'hover:bg-green-50' : 'hover:bg-red-50'
+                      } ${isExpanded ? (isGood ? 'bg-green-50' : 'bg-red-50') : ''}`}
+                    >
+                      <div className={`flex-shrink-0 flex items-center justify-center h-7 w-7 rounded-full text-xs font-bold text-white ${
+                        isGood ? 'bg-green-500' : 'bg-red-500'
+                      }`}>
+                        {r.rating}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{r.clientName || 'Клиент'}</p>
+                        <p className="text-xs text-gray-400">
+                          {r.employeeName && `${r.employeeName} · `}
+                          {new Date(r.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+                        </p>
+                      </div>
+                      {r.comment && (
+                        <ChevronDown className={`h-4 w-4 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      )}
+                    </button>
+                    {isExpanded && r.comment && (
+                      <div className={`mx-3 mb-1 px-3 py-2 rounded-lg text-sm ${isGood ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+                        {r.comment}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -379,7 +472,7 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
         <div>
           <label className="text-xs font-medium text-gray-600 mb-1 block">Время отправки</label>
           <input type="time" value={form.sendTime || '20:00'} onChange={e => update({ sendTime: e.target.value })}
-            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+            className="w-36 rounded-lg border border-gray-200 px-3 py-2 text-sm" />
         </div>
 
         <div>
@@ -439,6 +532,10 @@ export default function MarketingPage() {
   const [settings, setSettings] = useState<ReviewSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [reviewsLoading, setReviewsLoading] = useState(false);
+  const [reviewMonth, setReviewMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
 
   const loadDashboard = useCallback(async () => {
     try {
@@ -451,15 +548,15 @@ export default function MarketingPage() {
     } catch { /* empty */ }
   }, []);
 
-  const loadReviews = useCallback(async () => {
+  const loadReviews = useCallback(async (month?: string) => {
     setReviewsLoading(true);
     try {
-      const res = await marketingApi.getReviews();
+      const res = await marketingApi.getReviews({ month: month || reviewMonth });
       setReviews(res.data);
     } catch { /* empty */ } finally {
       setReviewsLoading(false);
     }
-  }, []);
+  }, [reviewMonth]);
 
   const loadIntegrations = useCallback(async () => {
     try {
@@ -489,9 +586,9 @@ export default function MarketingPage() {
   }, [loadDashboard, loadSettings]);
 
   useEffect(() => {
-    if (activeTab === 'reviews') loadReviews();
+    if (activeTab === 'reviews') loadReviews(reviewMonth);
     if (activeTab === 'integrations') loadIntegrations();
-  }, [activeTab, loadReviews, loadIntegrations]);
+  }, [activeTab, reviewMonth, loadReviews, loadIntegrations]);
 
   const handleAlertRead = async (id: string) => {
     try {
@@ -574,7 +671,7 @@ export default function MarketingPage() {
 
       {/* Tab content */}
       {activeTab === 'dashboard' && <DashboardTab data={dashboard} alerts={alerts} onAlertRead={handleAlertRead} />}
-      {activeTab === 'reviews' && <ReviewsTab reviews={reviews} loading={reviewsLoading} />}
+      {activeTab === 'reviews' && <ReviewsTab reviews={reviews} loading={reviewsLoading} month={reviewMonth} onMonthChange={setReviewMonth} />}
       {activeTab === 'integrations' && (
         <IntegrationsTab
           integrations={integrations} platformLinks={platformLinks}

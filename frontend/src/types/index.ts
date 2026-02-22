@@ -407,6 +407,7 @@ export interface ReviewResponse {
   id: string;
   checkId?: string;
   clientName?: string;
+  employeeId?: string;
   employeeName?: string;
   rating: number;
   comment?: string;

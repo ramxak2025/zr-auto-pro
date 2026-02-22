@@ -307,6 +307,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     const employeeId = query.employeeId;
     const minRating = query.minRating ? parseInt(query.minRating) : null;
     const maxRating = query.maxRating ? parseInt(query.maxRating) : null;
+    const month = query.month; // format: "2026-02"
 
     let sql = `SELECT rr.*, u.full_name as employee_name, cl.full_name as client_name
                FROM review_responses rr
@@ -319,12 +320,17 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     if (employeeId) { sql += ` AND rr.employee_id=$${idx++}`; params.push(employeeId); }
     if (minRating)  { sql += ` AND rr.rating >= $${idx++}`; params.push(minRating); }
     if (maxRating)  { sql += ` AND rr.rating <= $${idx++}`; params.push(maxRating); }
+    if (month) {
+      sql += ` AND to_char(rr.created_at, 'YYYY-MM') = $${idx++}`;
+      params.push(month);
+    }
 
-    sql += ` ORDER BY rr.created_at DESC LIMIT 100`;
+    sql += ` ORDER BY rr.created_at DESC LIMIT 200`;
     const { rows } = await this.pool.query(sql, params);
     return rows.map(r => ({
       id: r.id, checkId: r.check_id, clientName: r.client_name,
-      employeeName: r.employee_name, rating: r.rating, comment: r.comment,
+      employeeName: r.employee_name, employeeId: r.employee_id,
+      rating: r.rating, comment: r.comment,
       redirectedTo: r.redirected_to, createdAt: r.created_at,
     }));
   }
