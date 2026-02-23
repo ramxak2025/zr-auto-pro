@@ -313,11 +313,11 @@ function IntegrationsTab({
   onRemovePlatformLink: (id: string) => void;
 }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ providerType: 'smsru', apiKey: '', senderName: '', senderPhone: '' });
+  const [form, setForm] = useState({ providerType: 'moizvonki', apiKey: '', senderName: '', senderPhone: '', webhookUrl: '' });
   const [linkForm, setLinkForm] = useState({ platform: 'google', url: '' });
   const [showLinkForm, setShowLinkForm] = useState(false);
 
-  const providerLabels: Record<string, string> = { smsru: 'SMS.RU', whatsapp: 'WhatsApp', sms: 'SMS', email: 'Email' };
+  const providerLabels: Record<string, string> = { moizvonki: 'Мои Звонки', smsru: 'SMS.RU', whatsapp: 'WhatsApp', sms: 'SMS', email: 'Email' };
   const platformLabels: Record<string, string> = { google: 'Google Maps', yandex: 'Яндекс', '2gis': '2ГИС' };
   const platformColors: Record<string, string> = { google: 'bg-blue-50 text-blue-600', yandex: 'bg-red-50 text-red-600', '2gis': 'bg-green-50 text-green-600' };
 
@@ -341,39 +341,81 @@ function IntegrationsTab({
               <label className="text-xs font-medium text-gray-600 mb-1 block">Тип</label>
               <select value={form.providerType} onChange={e => setForm({ ...form, providerType: e.target.value })}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm">
+                <option value="moizvonki">Мои Звонки</option>
                 <option value="smsru">SMS.RU</option>
                 <option value="whatsapp">WhatsApp</option>
                 <option value="sms">SMS (другой)</option>
                 <option value="email">Email</option>
               </select>
             </div>
-            <div>
-              <label className="text-xs font-medium text-gray-600 mb-1 block">
-                {form.providerType === 'smsru' ? 'API ID (из кабинета sms.ru)' : 'API ключ'}
-              </label>
-              <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                placeholder={form.providerType === 'smsru' ? 'XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX' : 'Ваш API ключ'} />
-              {form.providerType === 'smsru' && (
-                <p className="text-xs text-gray-400 mt-1">Скопируйте API ID из личного кабинета sms.ru → Настройки</p>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">
-                  {form.providerType === 'smsru' ? 'Имя отправителя (опц.)' : 'Имя отправителя'}
-                </label>
-                <input value={form.senderName} onChange={e => setForm({ ...form, senderName: e.target.value })}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                  placeholder={form.providerType === 'smsru' ? 'Одобренное в sms.ru' : ''} />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-gray-600 mb-1 block">Телефон</label>
-                <input value={form.senderPhone} onChange={e => setForm({ ...form, senderPhone: e.target.value })}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <button onClick={() => { onSaveIntegration(form); setShowForm(false); setForm({ providerType: 'smsru', apiKey: '', senderName: '', senderPhone: '' }); }}
+
+            {/* Мои Звонки fields */}
+            {form.providerType === 'moizvonki' && (
+              <>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Домен (поддомен в moizvonki.ru)</label>
+                  <div className="flex items-center gap-0">
+                    <input value={form.webhookUrl} onChange={e => setForm({ ...form, webhookUrl: e.target.value.toLowerCase().replace(/[^a-z0-9\-]/g, '') })}
+                      className="flex-1 rounded-l-lg border border-r-0 border-gray-200 px-3 py-2 text-sm" placeholder="mycompany" />
+                    <span className="bg-gray-100 border border-gray-200 rounded-r-lg px-3 py-2 text-xs text-gray-500">.moizvonki.ru</span>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">Например: если ваш адрес mycompany.moizvonki.ru — введите mycompany</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Email (логин в Мои Звонки)</label>
+                  <input type="email" value={form.senderName} onChange={e => setForm({ ...form, senderName: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="user@mail.ru" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Ключ API</label>
+                  <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="Скопируйте из Настройки → Интеграция" />
+                  <p className="text-xs text-gray-400 mt-1">Личный кабинет → Настройки → Интеграция → Ключ API</p>
+                </div>
+              </>
+            )}
+
+            {/* SMS.RU fields */}
+            {form.providerType === 'smsru' && (
+              <>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">API ID (из кабинета sms.ru)</label>
+                  <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" />
+                  <p className="text-xs text-gray-400 mt-1">Скопируйте API ID из sms.ru → Настройки</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Имя отправителя (опц.)</label>
+                  <input value={form.senderName} onChange={e => setForm({ ...form, senderName: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="Одобренное в sms.ru" />
+                </div>
+              </>
+            )}
+
+            {/* Generic SMS / WhatsApp / Email fields */}
+            {!['moizvonki', 'smsru'].includes(form.providerType) && (
+              <>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">API ключ</label>
+                  <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="Ваш API ключ" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">Имя отправителя</label>
+                    <input value={form.senderName} onChange={e => setForm({ ...form, senderName: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-gray-600 mb-1 block">Телефон</label>
+                    <input value={form.senderPhone} onChange={e => setForm({ ...form, senderPhone: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+                  </div>
+                </div>
+              </>
+            )}
+
+            <button onClick={() => { onSaveIntegration(form); setShowForm(false); setForm({ providerType: 'moizvonki', apiKey: '', senderName: '', senderPhone: '', webhookUrl: '' }); }}
               className="w-full bg-violet-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-violet-700 transition-colors">
               Сохранить
             </button>

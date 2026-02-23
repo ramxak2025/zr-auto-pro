@@ -65,6 +65,48 @@ class SmsRuAdapter implements MessagingProviderAdapter {
   }
 }
 
+// ─── Мои Звонки Adapter ──────────────────────────────────────────────
+class MoiZvonkiAdapter implements MessagingProviderAdapter {
+  constructor(private apiKey: string, private userName: string, private domain: string) {}
+
+  async sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const cleanPhone = phone.replace(/[\s\-\+\(\)]/g, '');
+      const apiUrl = `https://${this.domain}.moizvonki.ru/api/v1`;
+
+      const body = JSON.stringify({
+        user_name: this.userName,
+        api_key: this.apiKey,
+        action: 'calls.send_sms',
+        to: cleanPhone,
+        text: message,
+      });
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+
+      const data = await response.json();
+
+      Logger.log(`[МоиЗвонки → ${cleanPhone}] status=${response.status}, response=${JSON.stringify(data)}`, 'MoiZvonkiAdapter');
+
+      if (response.ok) {
+        return { success: true };
+      }
+
+      return {
+        success: false,
+        error: `МоиЗвонки ошибка: ${data.message || data.error || JSON.stringify(data)}`,
+      };
+    } catch (err: any) {
+      Logger.error(`[МоиЗвонки] Network error: ${err.message}`, 'MoiZvonkiAdapter');
+      return { success: false, error: `МоиЗвонки сетевая ошибка: ${err.message}` };
+    }
+  }
+}
+
 class SmsGenericAdapter implements MessagingProviderAdapter {
   constructor(private apiKey: string, private senderName: string) {}
   async sendMessage(phone: string, message: string) {
@@ -107,11 +149,12 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   // ─── Messaging Provider Factory ──────────────────────────────────
   private createAdapter(row: any): MessagingProviderAdapter {
     switch (row.provider_type) {
-      case 'whatsapp': return new WhatsAppAdapter(row.api_key, row.sender_phone || '');
-      case 'smsru':    return new SmsRuAdapter(row.api_key, row.sender_name || '');
-      case 'sms':      return new SmsGenericAdapter(row.api_key, row.sender_name || '');
-      case 'email':    return new EmailAdapter(row.api_key, row.sender_name || '');
-      default:         return new SmsGenericAdapter(row.api_key, row.sender_name || '');
+      case 'whatsapp':   return new WhatsAppAdapter(row.api_key, row.sender_phone || '');
+      case 'smsru':      return new SmsRuAdapter(row.api_key, row.sender_name || '');
+      case 'moizvonki':  return new MoiZvonkiAdapter(row.api_key, row.sender_name || '', row.webhook_url || '');
+      case 'sms':        return new SmsGenericAdapter(row.api_key, row.sender_name || '');
+      case 'email':      return new EmailAdapter(row.api_key, row.sender_name || '');
+      default:           return new SmsGenericAdapter(row.api_key, row.sender_name || '');
     }
   }
 
