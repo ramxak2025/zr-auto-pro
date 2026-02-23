@@ -17,10 +17,58 @@ class WhatsAppAdapter implements MessagingProviderAdapter {
   }
 }
 
-class SmsAdapter implements MessagingProviderAdapter {
+// ─── SMS.RU Real Adapter ─────────────────────────────────────────────
+class SmsRuAdapter implements MessagingProviderAdapter {
+  constructor(private apiId: string, private senderName: string) {}
+
+  async sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Normalize phone: remove +, spaces, dashes
+      const cleanPhone = phone.replace(/[\s\-\+\(\)]/g, '');
+
+      const params = new URLSearchParams({
+        api_id: this.apiId,
+        to: cleanPhone,
+        msg: message,
+        json: '1',
+      });
+      if (this.senderName) {
+        params.set('from', this.senderName);
+      }
+
+      const response = await fetch(`https://sms.ru/sms/send?${params.toString()}`);
+      const data = await response.json();
+
+      Logger.log(`[SMS.RU → ${cleanPhone}] status=${data.status_code}, response=${JSON.stringify(data)}`, 'SmsRuAdapter');
+
+      if (data.status === 'OK' && data.status_code === 100) {
+        // Check per-number status
+        const numberStatus = data.sms?.[cleanPhone];
+        if (numberStatus && numberStatus.status_code === 100) {
+          return { success: true };
+        }
+        // If number-level status not OK
+        return {
+          success: false,
+          error: `SMS.RU: номер ${cleanPhone} — код ${numberStatus?.status_code}: ${numberStatus?.status_text || 'Ошибка'}`,
+        };
+      }
+
+      return {
+        success: false,
+        error: `SMS.RU ошибка: код ${data.status_code} — ${data.status_text || data.status}`,
+      };
+    } catch (err: any) {
+      Logger.error(`[SMS.RU] Network error: ${err.message}`, 'SmsRuAdapter');
+      return { success: false, error: `SMS.RU сетевая ошибка: ${err.message}` };
+    }
+  }
+}
+
+class SmsGenericAdapter implements MessagingProviderAdapter {
   constructor(private apiKey: string, private senderName: string) {}
   async sendMessage(phone: string, message: string) {
-    Logger.log(`[SMS → ${phone}] ${message.substring(0, 60)}...`, 'SmsAdapter');
+    Logger.log(`[SMS → ${phone}] ${message.substring(0, 60)}...`, 'SmsGenericAdapter');
     return { success: true };
   }
 }
@@ -60,9 +108,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   private createAdapter(row: any): MessagingProviderAdapter {
     switch (row.provider_type) {
       case 'whatsapp': return new WhatsAppAdapter(row.api_key, row.sender_phone || '');
-      case 'sms':      return new SmsAdapter(row.api_key, row.sender_name || '');
+      case 'smsru':    return new SmsRuAdapter(row.api_key, row.sender_name || '');
+      case 'sms':      return new SmsGenericAdapter(row.api_key, row.sender_name || '');
       case 'email':    return new EmailAdapter(row.api_key, row.sender_name || '');
-      default:         return new SmsAdapter(row.api_key, row.sender_name || '');
+      default:         return new SmsGenericAdapter(row.api_key, row.sender_name || '');
     }
   }
 
