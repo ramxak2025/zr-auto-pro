@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
 import { Plus, FileText, Trash2, Clock, MessageSquare, TrendingUp, Car, User as UserIcon, Percent, Package, AlertTriangle, ArrowDown, ArrowUp, ClipboardCheck } from 'lucide-react';
@@ -38,6 +38,104 @@ const paymentMethodBadge: Record<string, string> = {
 const formatCurrency = (value: number): string => {
   return value.toLocaleString('ru-RU') + ' ₽';
 };
+
+// ─── Memoized mobile check card ──────────────────────────────────────────────
+const MobileCheckCard = memo(function MobileCheckCard({
+  check,
+  canDelete,
+  canViewProfit,
+  onNavigate,
+  onDelete,
+}: {
+  check: Check;
+  canDelete: boolean;
+  canViewProfit: boolean;
+  onNavigate: (id: string) => void;
+  onDelete: (e: React.MouseEvent, id: string, number: number) => void;
+}) {
+  return (
+    <div onClick={() => onNavigate(check.id)}
+      className={`rounded-2xl border shadow-sm overflow-hidden active:scale-[0.99] transition-all cursor-pointer ${
+        check.isDeferred ? 'bg-red-50/50 border-red-200' : 'bg-white border-gray-100'
+      }`}>
+      <div className="px-4 pt-3.5 pb-2.5">
+        <div className="flex items-center justify-between mb-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-base font-bold text-gray-900">#{check.number}</span>
+            {check.isDeferred && (
+              <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">Отложен</span>
+            )}
+            <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
+              {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {canDelete && (
+              <button type="button" onClick={(e) => onDelete(e, check.id, check.number)}
+                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="space-y-1 mb-3">
+          <div className="flex items-center gap-2">
+            <UserIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+            <p className="text-sm font-medium text-gray-800 truncate">{check.client?.fullName ?? 'Розничный покупатель'}</p>
+          </div>
+          {check.car && (
+            <div className="flex items-center gap-2">
+              <Car className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+              <p className="text-sm text-gray-600 truncate">
+                {check.car.makeModel}
+                <span className="text-gray-400 ml-1.5">{check.car.plateNumber}</span>
+              </p>
+            </div>
+          )}
+        </div>
+        {check.comment && (
+          <div className="flex items-start gap-2 mb-3 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100">
+            <MessageSquare className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 line-clamp-2">{check.comment}</p>
+          </div>
+        )}
+      </div>
+      <div className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 ${
+        check.isDeferred ? 'border-red-100 bg-red-50/30' : 'border-gray-50 bg-gray-50/50'
+      }`}>
+        <div className="flex items-center gap-3 text-xs text-gray-400 min-w-0">
+          <div className="flex items-center gap-1">
+            <Clock className="w-3 h-3" />
+            <span>{format(new Date(check.date), 'dd.MM.yy HH:mm', { locale: ru })}</span>
+          </div>
+          {check.master && <span className="truncate">{check.master.fullName}</span>}
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          {(check.discount ?? 0) > 0 && (
+            <div className="flex items-center gap-0.5">
+              <Percent className="w-3 h-3 text-orange-400" />
+              <span className="text-xs font-medium text-orange-500">-{formatCurrency(check.discount ?? 0)}</span>
+            </div>
+          )}
+          <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
+        </div>
+      </div>
+      {canViewProfit && (
+        <div className={`px-4 py-2 border-t flex items-center justify-between ${
+          check.isDeferred ? 'border-red-100' : 'border-gray-100'
+        }`}>
+          <div className="flex items-center gap-1.5">
+            <TrendingUp className="w-3.5 h-3.5 text-gray-400" />
+            <span className="text-xs text-gray-400">Прибыль</span>
+          </div>
+          <span className={`text-sm font-bold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+            {check.profit >= 0 ? '+' : ''}{formatCurrency(check.profit)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+});
 
 export default function ChecksPage() {
   const navigate = useNavigate();
@@ -219,105 +317,17 @@ export default function ChecksPage() {
         <EmptyState icon={FileText} title="Чеков не найдено" description="Попробуйте изменить фильтры или создайте новый чек" />
       ) : (
         <>
-          {/* Mobile cards */}
+          {/* Mobile cards (memoized) */}
           <div className="md:hidden space-y-3">
             {checks.map((check) => (
-              <div key={check.id} onClick={() => navigate(`/checks/${check.id}`)}
-                className={`rounded-2xl border shadow-sm overflow-hidden active:scale-[0.99] transition-all cursor-pointer ${
-                  check.isDeferred
-                    ? 'bg-red-50/50 border-red-200'
-                    : 'bg-white border-gray-100'
-                }`}>
-                {/* Card header */}
-                <div className="px-4 pt-3.5 pb-2.5">
-                  <div className="flex items-center justify-between mb-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-base font-bold text-gray-900">#{check.number}</span>
-                      {check.isDeferred && (
-                        <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">Отложен</span>
-                      )}
-                      <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
-                        {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {canDelete && (
-                        <button
-                          type="button"
-                          onClick={(e) => handleDelete(e, check.id, check.number)}
-                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Client & Car */}
-                  <div className="space-y-1 mb-3">
-                    <div className="flex items-center gap-2">
-                      <UserIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                      <p className="text-sm font-medium text-gray-800 truncate">{check.client?.fullName ?? 'Розничный покупатель'}</p>
-                    </div>
-                    {check.car && (
-                      <div className="flex items-center gap-2">
-                        <Car className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-                        <p className="text-sm text-gray-600 truncate">
-                          {check.car.makeModel}
-                          <span className="text-gray-400 ml-1.5">{check.car.plateNumber}</span>
-                        </p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Comment preview */}
-                  {check.comment && (
-                    <div className="flex items-start gap-2 mb-3 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100">
-                      <MessageSquare className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
-                      <p className="text-xs text-amber-700 line-clamp-2">{check.comment}</p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Card footer - financial info */}
-                <div className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 ${
-                  check.isDeferred ? 'border-red-100 bg-red-50/30' : 'border-gray-50 bg-gray-50/50'
-                }`}>
-                  <div className="flex items-center gap-3 text-xs text-gray-400 min-w-0">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      <span>{format(new Date(check.date), 'dd.MM.yy HH:mm', { locale: ru })}</span>
-                    </div>
-                    {check.master && (
-                      <span className="truncate">{check.master.fullName}</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    {(check.discount ?? 0) > 0 && (
-                      <div className="flex items-center gap-0.5">
-                        <Percent className="w-3 h-3 text-orange-400" />
-                        <span className="text-xs font-medium text-orange-500">-{formatCurrency(check.discount ?? 0)}</span>
-                      </div>
-                    )}
-                    <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
-                  </div>
-                </div>
-
-                {/* Profit bar for directors */}
-                {canViewProfit && (
-                  <div className={`px-4 py-2 border-t flex items-center justify-between ${
-                    check.isDeferred ? 'border-red-100' : 'border-gray-100'
-                  }`}>
-                    <div className="flex items-center gap-1.5">
-                      <TrendingUp className="w-3.5 h-3.5 text-gray-400" />
-                      <span className="text-xs text-gray-400">Прибыль</span>
-                    </div>
-                    <span className={`text-sm font-bold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                      {check.profit >= 0 ? '+' : ''}{formatCurrency(check.profit)}
-                    </span>
-                  </div>
-                )}
-              </div>
+              <MobileCheckCard
+                key={check.id}
+                check={check}
+                canDelete={canDelete}
+                canViewProfit={canViewProfit}
+                onNavigate={(id) => navigate(`/checks/${id}`)}
+                onDelete={handleDelete}
+              />
             ))}
           </div>
 

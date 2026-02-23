@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, useCallback, FormEvent } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback, memo, FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import {
@@ -26,6 +26,8 @@ import { UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import VirtualProductGrid from '../components/VirtualProductGrid';
+import VirtualList from '../components/VirtualList';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -570,7 +572,7 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 // Product Grid Card — vertical card for 2-col grid layout
 // ---------------------------------------------------------------------------
 
-function ProductCard({
+const ProductCard = memo(function ProductCard({
   product,
   onClick,
   selectMode,
@@ -651,7 +653,7 @@ function ProductCard({
       </div>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Folder Tile — grid tile for category folders
@@ -1092,11 +1094,12 @@ export default function ProductsPage() {
   const showingRoot = !searchText && !isInFolder;
   const currentPathStr = activePath.join('/');
 
-  // Render product grid helper
+  // Render product grid helper — uses virtual scrolling for large lists
   function renderProductGrid(products: Product[], isSearch?: boolean) {
     return (
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
-        {products.map((product) => (
+      <VirtualProductGrid
+        products={products}
+        renderItem={(product) => (
           <ProductCard
             key={product.id}
             product={product}
@@ -1105,8 +1108,8 @@ export default function ProductsPage() {
             selected={selectedProducts.has(product.id)}
             onToggleSelect={() => toggleSelect(product.id)}
           />
-        ))}
-      </div>
+        )}
+      />
     );
   }
 
@@ -1687,15 +1690,19 @@ function GlobalInventoryForm({
         Посчитано: <span className="font-bold text-primary-600">{countedIds.size}</span> / {filtered.length} товаров
       </p>
 
-      <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
-        {filtered.map(p => {
+      <VirtualList
+        items={filtered}
+        getKey={(p) => p.id}
+        estimateSize={72}
+        className="flex-1 overflow-y-auto min-h-0"
+        renderItem={(p) => {
           const entry = entries[p.id] || { actual: '', reason: '' };
           const actual = entry.actual !== '' ? parseFloat(entry.actual) || 0 : null;
           const diff = actual !== null ? actual - p.stock : null;
           const isCounted = entry.actual !== '';
 
           return (
-            <div key={p.id} className={`rounded-xl border p-3 transition-colors ${isCounted ? 'border-green-200 bg-green-50/30' : 'border-gray-100 bg-white'}`}>
+            <div className={`rounded-xl border p-3 mb-2 transition-colors ${isCounted ? 'border-green-200 bg-green-50/30' : 'border-gray-100 bg-white'}`}>
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
@@ -1723,11 +1730,11 @@ function GlobalInventoryForm({
               </div>
             </div>
           );
-        })}
-        {filtered.length === 0 && (
-          <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
-        )}
-      </div>
+        }}
+      />
+      {filtered.length === 0 && (
+        <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
+      )}
 
       <div className="flex items-center justify-between pt-3 border-t border-gray-100">
         <p className="text-xs text-gray-400">{countedIds.size} позиций</p>
@@ -1795,11 +1802,15 @@ function GlobalWriteoffForm({
           placeholder="Брак, просрочка..." className="input" />
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
-        {filtered.map(p => {
+      <VirtualList
+        items={filtered}
+        getKey={(p) => p.id}
+        estimateSize={72}
+        className="flex-1 overflow-y-auto min-h-0"
+        renderItem={(p) => {
           const entry = entries[p.id] || { quantity: '', reason: '' };
           return (
-            <div key={p.id} className="rounded-xl border border-gray-100 bg-white p-3">
+            <div className="rounded-xl border border-gray-100 bg-white p-3 mb-2">
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
@@ -1818,11 +1829,11 @@ function GlobalWriteoffForm({
               </div>
             </div>
           );
-        })}
-        {filtered.length === 0 && (
-          <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
-        )}
-      </div>
+        }}
+      />
+      {filtered.length === 0 && (
+        <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
+      )}
 
       <div className="flex items-center justify-between pt-3 border-t border-gray-100">
         <p className="text-xs text-gray-400">{count} позиций</p>
