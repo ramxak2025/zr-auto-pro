@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
+import { useRoutePrefetch } from '../hooks/useRoutePrefetch';
+import { useOfflineSync } from '../hooks/useOfflineSync';
 import type { UserPermissions } from '../types';
 
 
@@ -116,6 +118,8 @@ const DesktopSidebar = memo(function DesktopSidebar({
   hasPermission,
   onLogout,
 }: SidebarProps) {
+  const prefetch = useRoutePrefetch();
+
   return (
     <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
       <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
@@ -137,6 +141,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
                 <NavLink
                   to={item.path}
                   end={item.path === '/dashboard'}
+                  {...prefetch(item.path)}
                   className={({ isActive }) =>
                     `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
                       isActive
@@ -248,6 +253,9 @@ export default function Layout() {
 
   // Pull-to-refresh: invalidates all active React Query caches on pull down
   usePullToRefresh();
+
+  // Background sync: handle offline mutations and online/offline events
+  useOfflineSync();
 
   const breadcrumbs = getPageTitle(location.pathname);
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';

@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { ETagInterceptor } from './common/interceptors/etag.interceptor';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -11,6 +12,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
+  app.useGlobalInterceptors(new ETagInterceptor());
   app.enableCors();
 
   await app.listen(3000);

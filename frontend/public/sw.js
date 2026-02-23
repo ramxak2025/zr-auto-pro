@@ -1,16 +1,18 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v2
+//  Autexa PWA Service Worker v3
 //  - Static assets: Cache-first (immutable after build)
-//  - API GET responses: Stale-while-revalidate (instant response + background refresh)
-//  - API mutations (POST/PATCH/DELETE): Network-only (never cache writes)
+//  - API GET responses: Stale-while-revalidate (instant + background refresh)
+//  - API mutations (POST/PATCH/DELETE): Network-only with offline queue
+//  - Background Sync: Replay failed mutations when back online
+//  - ETag support: Forward If-None-Match headers for 304 responses
 //  - Offline fallback: Serve cached shell
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v2';
-const API_CACHE = 'autexa-api-v1';
+const STATIC_CACHE = 'autexa-static-v3';
+const API_CACHE = 'autexa-api-v2';
+const OFFLINE_QUEUE = 'autexa-offline-queue';
 
-// Maximum age for cached API responses (5 minutes).
-// After this, we still serve the stale response but prioritize the network version.
+// Maximum age for cached API responses (5 minutes)
 const API_MAX_AGE_MS = 5 * 60 * 1000;
 
 // Static shell assets to precache on install
@@ -20,16 +22,12 @@ const PRECACHE_ASSETS = [
   '/logo.png',
 ];
 
-// API paths that should NOT be cached (auth, mutations, uploads, real-time)
+// API paths that should NOT be cached
 const API_NOCACHE_PATHS = [
   '/api/auth/login',
   '/api/auth/register',
   '/api/uploads',
 ];
-
-// API paths that benefit from caching (read-heavy, rarely change)
-// Everything under /api that is a GET and not in NOCACHE will be cached
-// with stale-while-revalidate.
 
 // ─── Install ─────────────────────────────────────────────────────────────────
 
@@ -43,7 +41,6 @@ self.addEventListener('install', (event) => {
 // ─── Activate ────────────────────────────────────────────────────────────────
 
 self.addEventListener('activate', (event) => {
-  // Clean up old cache versions
   const keepCaches = [STATIC_CACHE, API_CACHE];
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -68,8 +65,11 @@ self.addEventListener('fetch', (event) => {
 
   // ── API requests ──
   if (url.pathname.startsWith('/api')) {
-    // Never cache non-GET requests (mutations)
-    if (request.method !== 'GET') return;
+    // Mutation requests (POST/PATCH/DELETE) — try network, queue if offline
+    if (request.method !== 'GET') {
+      event.respondWith(networkWithOfflineQueue(request));
+      return;
+    }
 
     // Don't cache auth and upload endpoints
     if (API_NOCACHE_PATHS.some((p) => url.pathname.startsWith(p))) return;
@@ -90,7 +90,6 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          // Cache the latest HTML shell
           const clone = response.clone();
           caches.open(STATIC_CACHE).then((cache) => cache.put('/', clone));
           return response;
@@ -107,28 +106,47 @@ self.addEventListener('fetch', (event) => {
 // ─── Strategies ──────────────────────────────────────────────────────────────
 
 /**
- * Stale-while-revalidate:
- * 1. Return cached response immediately (if available)
- * 2. Fetch fresh response in background
- * 3. Update cache with fresh response
- *
- * If no cache exists, wait for network response.
+ * Stale-while-revalidate with ETag support
  */
 async function staleWhileRevalidate(request) {
   const cache = await caches.open(API_CACHE);
   const cachedResponse = await cache.match(request);
 
-  // Start network fetch regardless
-  const fetchPromise = fetch(request)
-    .then((networkResponse) => {
-      if (networkResponse.ok) {
-        // Store response with timestamp
-        const cloned = networkResponse.clone();
-        const headers = new Headers(cloned.headers);
-        headers.set('x-sw-cached-at', Date.now().toString());
+  // Build fetch request with ETag If-None-Match if we have a cached version
+  let fetchRequest = request;
+  if (cachedResponse) {
+    const etag = cachedResponse.headers.get('etag');
+    if (etag) {
+      const headers = new Headers(request.headers);
+      headers.set('If-None-Match', etag);
+      fetchRequest = new Request(request, { headers });
+    }
+  }
 
-        // We need to create a new response with the timestamp header
+  // Start network fetch
+  const fetchPromise = fetch(fetchRequest)
+    .then((networkResponse) => {
+      // 304 Not Modified — data hasn't changed, reuse cache
+      if (networkResponse.status === 304 && cachedResponse) {
+        // Update the timestamp on the cached response
+        return cachedResponse.blob().then((body) => {
+          const headers = new Headers(cachedResponse.headers);
+          headers.set('x-sw-cached-at', Date.now().toString());
+          const refreshed = new Response(body, {
+            status: cachedResponse.status,
+            statusText: cachedResponse.statusText,
+            headers,
+          });
+          cache.put(request, refreshed);
+          return cachedResponse;
+        });
+      }
+
+      if (networkResponse.ok) {
+        const cloned = networkResponse.clone();
         cloned.blob().then((body) => {
+          const headers = new Headers(cloned.headers);
+          headers.set('x-sw-cached-at', Date.now().toString());
           const timedResponse = new Response(body, {
             status: cloned.status,
             statusText: cloned.statusText,
@@ -140,20 +158,16 @@ async function staleWhileRevalidate(request) {
       return networkResponse;
     })
     .catch((err) => {
-      // Network failed — if we have cache, that was already returned
-      // If no cache, propagate the error
       if (!cachedResponse) throw err;
       return null;
     });
 
   // If we have cached response, return it immediately
   if (cachedResponse) {
-    // Check if cache is stale (> API_MAX_AGE_MS)
     const cachedAt = parseInt(cachedResponse.headers.get('x-sw-cached-at') || '0', 10);
     const isStale = Date.now() - cachedAt > API_MAX_AGE_MS;
 
     if (isStale) {
-      // Still return stale data, but wait a bit for network if it's fast
       const raceResult = await Promise.race([
         fetchPromise,
         new Promise((resolve) => setTimeout(() => resolve(null), 800)),
@@ -161,17 +175,14 @@ async function staleWhileRevalidate(request) {
       return raceResult || cachedResponse;
     }
 
-    // Fresh cache — return immediately, network updates in background
     return cachedResponse;
   }
 
-  // No cache — wait for network
   return fetchPromise;
 }
 
 /**
- * Cache-first: Return cached response, fallback to network.
- * Cache the network response for future use.
+ * Cache-first strategy for static assets
  */
 async function cacheFirst(request, cacheName) {
   const cached = await caches.match(request);
@@ -185,8 +196,179 @@ async function cacheFirst(request, cacheName) {
     }
     return networkResponse;
   } catch {
-    // Last resort: return the offline shell for navigation
     return caches.match('/');
+  }
+}
+
+// ─── Background Sync: Offline Mutation Queue ─────────────────────────────────
+
+/**
+ * For mutations (POST/PATCH/DELETE): try network, queue to IndexedDB if offline.
+ * When back online, replay queued requests.
+ */
+async function networkWithOfflineQueue(request) {
+  try {
+    const response = await fetch(request.clone());
+    return response;
+  } catch (err) {
+    // Network is down — queue the mutation for later replay
+    if (request.method !== 'GET') {
+      try {
+        await queueMutation(request);
+        // Notify client that the mutation was queued
+        notifyClients({
+          type: 'MUTATION_QUEUED',
+          url: request.url,
+          method: request.method,
+        });
+        // Return a synthetic "queued" response
+        return new Response(
+          JSON.stringify({ message: 'Сохранено. Будет отправлено при восстановлении сети.', queued: true }),
+          {
+            status: 202,
+            statusText: 'Accepted (Queued)',
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      } catch {
+        // If queueing fails too, propagate the original error
+        throw err;
+      }
+    }
+    throw err;
+  }
+}
+
+/**
+ * Store a mutation request in IndexedDB for later replay
+ */
+async function queueMutation(request) {
+  const body = await request.clone().text();
+  const mutation = {
+    url: request.url,
+    method: request.method,
+    headers: Object.fromEntries(request.headers.entries()),
+    body,
+    timestamp: Date.now(),
+  };
+
+  const db = await openDB();
+  const tx = db.transaction(OFFLINE_QUEUE, 'readwrite');
+  const store = tx.objectStore(OFFLINE_QUEUE);
+  store.add(mutation);
+
+  // Register for sync event if available
+  if (self.registration && self.registration.sync) {
+    try {
+      await self.registration.sync.register('replay-mutations');
+    } catch {
+      // Sync API not available — we'll replay on 'online' event
+    }
+  }
+}
+
+/**
+ * Replay all queued mutations
+ */
+async function replayMutations() {
+  const db = await openDB();
+  const tx = db.transaction(OFFLINE_QUEUE, 'readwrite');
+  const store = tx.objectStore(OFFLINE_QUEUE);
+  const allKeys = await idbGetAllKeys(store);
+
+  let replayed = 0;
+  let failed = 0;
+
+  for (const key of allKeys) {
+    const getTx = db.transaction(OFFLINE_QUEUE, 'readonly');
+    const getStore = getTx.objectStore(OFFLINE_QUEUE);
+    const mutation = await idbGet(getStore, key);
+    if (!mutation) continue;
+
+    try {
+      const response = await fetch(mutation.url, {
+        method: mutation.method,
+        headers: mutation.headers,
+        body: mutation.body || undefined,
+      });
+
+      if (response.ok || response.status < 500) {
+        // Success or client error (4xx) — remove from queue
+        const delTx = db.transaction(OFFLINE_QUEUE, 'readwrite');
+        delTx.objectStore(OFFLINE_QUEUE).delete(key);
+        replayed++;
+      } else {
+        failed++;
+      }
+    } catch {
+      // Still offline — stop replaying
+      failed++;
+      break;
+    }
+  }
+
+  if (replayed > 0) {
+    notifyClients({
+      type: 'MUTATIONS_REPLAYED',
+      count: replayed,
+      failed,
+    });
+  }
+}
+
+// ─── Background Sync Event ───────────────────────────────────────────────────
+
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'replay-mutations') {
+    event.waitUntil(replayMutations());
+  }
+});
+
+// Fallback: listen for online event and replay
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'ONLINE') {
+    replayMutations();
+  }
+});
+
+// ─── IndexedDB Helpers ───────────────────────────────────────────────────────
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('autexa-sw', 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(OFFLINE_QUEUE)) {
+        db.createObjectStore(OFFLINE_QUEUE, { autoIncrement: true });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbGetAllKeys(store) {
+  return new Promise((resolve, reject) => {
+    const req = store.getAllKeys();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbGet(store, key) {
+  return new Promise((resolve, reject) => {
+    const req = store.get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ─── Notify Clients ──────────────────────────────────────────────────────────
+
+async function notifyClients(message) {
+  const clients = await self.clients.matchAll({ type: 'window' });
+  for (const client of clients) {
+    client.postMessage(message);
   }
 }
 
@@ -196,8 +378,7 @@ function isStaticAsset(pathname) {
   return /\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2?|ttf|eot|webp|avif)(\?.*)?$/.test(pathname);
 }
 
-// ─── Periodic cache cleanup ──────────────────────────────────────────────────
-// Clean expired API cache entries every 10 minutes
+// ─── Periodic cache cleanup (every 10 minutes) ──────────────────────────────
 
 setInterval(async () => {
   try {
@@ -209,12 +390,11 @@ setInterval(async () => {
       const response = await cache.match(request);
       if (!response) continue;
       const cachedAt = parseInt(response.headers.get('x-sw-cached-at') || '0', 10);
-      // Remove entries older than 30 minutes
       if (now - cachedAt > 30 * 60 * 1000) {
         await cache.delete(request);
       }
     }
   } catch {
-    // Silently fail — cache cleanup is best-effort
+    // Best-effort cleanup
   }
 }, 10 * 60 * 1000);
