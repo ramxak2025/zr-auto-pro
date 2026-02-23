@@ -34,7 +34,13 @@ function Stars({ rating, size = 'sm' }: { rating: number; size?: 'sm' | 'md' | '
 
 // ─── Dashboard Tab ──────────────────────────────────────────────────
 function DashboardTab({ data, alerts, onAlertRead }: { data: MarketingDashboard | null; alerts: ReviewAlert[]; onAlertRead: (id: string) => void }) {
-  if (!data) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>;
+  if (!data) return (
+    <div className="text-center py-12">
+      <BarChart3 className="h-10 w-10 text-gray-200 mx-auto mb-3" />
+      <p className="text-sm text-gray-500">Нет данных</p>
+      <p className="text-xs text-gray-400 mt-1">Данные появятся после получения первых отзывов</p>
+    </div>
+  );
 
   const statCards = [
     { label: 'Всего отзывов', value: data.totalReviews, icon: Star, color: 'text-amber-600', bg: 'bg-amber-50' },
@@ -637,14 +643,6 @@ export default function MarketingPage() {
     } catch { toast.error('Ошибка сохранения'); }
   };
 
-  if (loading) {
-    return (
-      <div className="flex justify-center items-center min-h-[50vh]">
-        <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -670,16 +668,22 @@ export default function MarketingPage() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'dashboard' && <DashboardTab data={dashboard} alerts={alerts} onAlertRead={handleAlertRead} />}
-      {activeTab === 'reviews' && <ReviewsTab reviews={reviews} loading={reviewsLoading} month={reviewMonth} onMonthChange={setReviewMonth} />}
-      {activeTab === 'integrations' && (
-        <IntegrationsTab
-          integrations={integrations} platformLinks={platformLinks}
-          onSaveIntegration={handleSaveIntegration} onRemoveIntegration={handleRemoveIntegration}
-          onSavePlatformLink={handleSavePlatformLink} onRemovePlatformLink={handleRemovePlatformLink}
-        />
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>
+      ) : (
+        <>
+          {activeTab === 'dashboard' && <DashboardTab data={dashboard} alerts={alerts} onAlertRead={handleAlertRead} />}
+          {activeTab === 'reviews' && <ReviewsTab reviews={reviews} loading={reviewsLoading} month={reviewMonth} onMonthChange={setReviewMonth} />}
+          {activeTab === 'integrations' && (
+            <IntegrationsTab
+              integrations={integrations} platformLinks={platformLinks}
+              onSaveIntegration={handleSaveIntegration} onRemoveIntegration={handleRemoveIntegration}
+              onSavePlatformLink={handleSavePlatformLink} onRemovePlatformLink={handleRemovePlatformLink}
+            />
+          )}
+          {activeTab === 'settings' && <SettingsTab settings={settings} onSave={handleSaveSettings} />}
+        </>
       )}
-      {activeTab === 'settings' && <SettingsTab settings={settings} onSave={handleSaveSettings} />}
     </div>
   );
 }

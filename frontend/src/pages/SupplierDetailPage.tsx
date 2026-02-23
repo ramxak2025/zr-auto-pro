@@ -5,11 +5,17 @@ import {
   ArrowLeft,
   Edit2,
   Plus,
+  Minus,
   Truck,
   CreditCard,
   Package,
   Phone,
   User,
+  Search,
+  X,
+  Trash2,
+  FolderOpen,
+  ChevronLeft,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
@@ -77,6 +83,130 @@ function statusBadge(status: string) {
   }
 }
 
+// ─── Product Picker (fullscreen, like checkout) ──────────────────────
+function DeliveryProductPicker({
+  isOpen, onClose, products, onSelect,
+}: {
+  isOpen: boolean; onClose: () => void; products: Product[]; onSelect: (p: Product) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [activePath, setActivePath] = useState<string[]>([]);
+
+  if (!isOpen) return null;
+
+  const prefix = activePath.join('/');
+  const subfolderMap = new Map<string, number>();
+  const currentProducts: Product[] = [];
+
+  for (const p of products) {
+    const cat = p.category || '';
+    const parts = cat ? cat.split('/') : [];
+    if (activePath.length === 0) {
+      if (!cat) currentProducts.push(p);
+      else subfolderMap.set(parts[0], (subfolderMap.get(parts[0]) || 0) + 1);
+    } else {
+      if (cat === prefix) currentProducts.push(p);
+      else if (cat.startsWith(prefix + '/')) {
+        const next = cat.slice(prefix.length + 1).split('/')[0];
+        subfolderMap.set(next, (subfolderMap.get(next) || 0) + 1);
+      }
+    }
+  }
+  const subfolders = Array.from(subfolderMap.entries())
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const searchResults = search.trim()
+    ? products.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : [];
+
+  const goBack = () => {
+    if (activePath.length > 0) setActivePath(prev => prev.slice(0, -1));
+    else onClose();
+  };
+
+  const handleSelect = (p: Product) => { onSelect(p); onClose(); };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col bg-white">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 flex-shrink-0">
+        <button type="button" onClick={goBack} className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600">
+          {activePath.length > 0 ? <ChevronLeft className="w-5 h-5" /> : <X className="w-5 h-5" />}
+        </button>
+        <h2 className="text-lg font-semibold text-gray-900 truncate">
+          {activePath.length > 0 ? activePath[activePath.length - 1] : 'Выбрать товар'}
+        </h2>
+      </div>
+      <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Поиск товара..." className="input pl-10 w-full" autoFocus />
+          {search && (
+            <button type="button" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {search.trim() ? (
+          searchResults.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+              <p className="text-sm">Ничего не найдено</p>
+            </div>
+          ) : (
+            searchResults.map(p => (
+              <button key={p.id} type="button" onClick={() => handleSelect(p)}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-left">
+                <div className="h-10 w-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                  {p.photo ? <img src={p.photo} alt="" className="h-full w-full object-cover" /> : <Package className="w-5 h-5 text-gray-300" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
+                  <p className="text-xs text-gray-400">{p.category || 'Без категории'}</p>
+                </div>
+                <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatCurrency(p.costPrice)}</span>
+              </button>
+            ))
+          )
+        ) : (
+          <>
+            {subfolders.map(f => (
+              <button key={f.name} type="button" onClick={() => setActivePath(prev => [...prev, f.name])}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50">
+                <FolderOpen className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                <span className="flex-1 text-left font-medium text-gray-900 truncate">{f.name}</span>
+                <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{f.count}</span>
+              </button>
+            ))}
+            {currentProducts.map(p => (
+              <button key={p.id} type="button" onClick={() => handleSelect(p)}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-left">
+                <div className="h-10 w-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
+                  {p.photo ? <img src={p.photo} alt="" className="h-full w-full object-cover" /> : <Package className="w-5 h-5 text-gray-300" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
+                  <p className="text-xs text-gray-400">Остаток: {p.stock} {p.unit === 'm' ? 'м' : p.unit === 'l' ? 'л' : 'шт'}</p>
+                </div>
+                <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatCurrency(p.costPrice)}</span>
+              </button>
+            ))}
+            {subfolders.length === 0 && currentProducts.length === 0 && (
+              <div className="text-center py-12 text-gray-400">
+                <Package className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="text-sm">Нет товаров</p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -86,6 +216,7 @@ export default function SupplierDetailPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [showDeliveryPicker, setShowDeliveryPicker] = useState(false);
 
   // Supplier data
   const {
@@ -194,8 +325,24 @@ export default function SupplierDetailPage() {
     });
   };
 
+  const handleDeliveryProductSelected = (product: Product) => {
+    setDeliveryForm(prev => {
+      const existing = prev.items.findIndex(i => i.productId === product.id);
+      if (existing !== -1) {
+        const updated = [...prev.items];
+        updated[existing] = { ...updated[existing], quantity: updated[existing].quantity + 1 };
+        return { ...prev, items: updated };
+      }
+      // Remove empty placeholder rows
+      const filtered = prev.items.filter(i => i.productId);
+      return {
+        ...prev,
+        items: [...filtered, { productId: product.id, quantity: 1, price: product.costPrice }],
+      };
+    });
+  };
+
   const removeDeliveryItem = (index: number) => {
-    if (deliveryForm.items.length <= 1) return;
     setDeliveryForm({
       ...deliveryForm,
       items: deliveryForm.items.filter((_, i) => i !== index),
@@ -577,7 +724,7 @@ export default function SupplierDetailPage() {
             <label className="label">Дата</label>
             <input
               type="date"
-              className="input"
+              className="input w-40"
               value={deliveryForm.date}
               onChange={(e) =>
                 setDeliveryForm({ ...deliveryForm, date: e.target.value })
@@ -586,85 +733,75 @@ export default function SupplierDetailPage() {
           </div>
 
           <div>
-            <label className="label">Товары</label>
-            <div className="space-y-3">
-              {deliveryForm.items.map((item, index) => (
-                <div
-                  key={index}
-                  className="flex items-end gap-2 p-3 bg-gray-50 rounded-lg"
-                >
-                  <div className="flex-1">
-                    <label className="label text-xs">Товар</label>
-                    <select
-                      className="input"
-                      value={item.productId}
-                      onChange={(e) =>
-                        updateDeliveryItem(index, 'productId', e.target.value)
-                      }
-                    >
-                      <option value="">Выберите товар</option>
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="w-24">
-                    <label className="label text-xs">Кол-во</label>
-                    <input
-                      type="number"
-                      className="input"
-                      min={1}
-                      value={item.quantity}
-                      onChange={(e) =>
-                        updateDeliveryItem(
-                          index,
-                          'quantity',
-                          parseInt(e.target.value) || 0
-                        )
-                      }
-                    />
-                  </div>
-                  <div className="w-32">
-                    <label className="label text-xs">Цена</label>
-                    <input
-                      type="number"
-                      className="input"
-                      min={0}
-                      value={item.price}
-                      onChange={(e) =>
-                        updateDeliveryItem(
-                          index,
-                          'price',
-                          parseFloat(e.target.value) || 0
-                        )
-                      }
-                    />
-                  </div>
-                  <div className="w-28 text-right text-sm font-medium text-gray-700 pb-2">
-                    {formatCurrency(item.quantity * item.price)}
-                  </div>
-                  {deliveryForm.items.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeDeliveryItem(index)}
-                      className="btn-secondary btn-sm text-red-500 hover:text-red-700 pb-2"
-                    >
-                      &times;
-                    </button>
-                  )}
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-2">
+              <label className="label mb-0">Товары</label>
+              <button
+                type="button"
+                onClick={() => setShowDeliveryPicker(true)}
+                className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Добавить
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={addDeliveryItem}
-              className="btn-secondary btn-sm mt-2"
-            >
-              <Plus className="w-3 h-3" />
-              Добавить товар
-            </button>
+
+            {deliveryForm.items.filter(i => i.productId).length === 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowDeliveryPicker(true)}
+                className="w-full py-8 border-2 border-dashed border-gray-200 rounded-xl text-center hover:border-primary-300 hover:bg-primary-50/30 transition-colors"
+              >
+                <Package className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                <p className="text-sm text-gray-400">Нажмите чтобы добавить товар</p>
+              </button>
+            ) : (
+              <div className="space-y-2">
+                {deliveryForm.items.map((item, index) => {
+                  if (!item.productId) return null;
+                  const product = products.find(p => p.id === item.productId);
+                  return (
+                    <div key={index} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {product?.name || 'Товар'}
+                        </p>
+                        <div className="flex items-center gap-1 mt-1">
+                          <input
+                            type="number"
+                            min={0}
+                            value={item.price || ''}
+                            onChange={(e) => updateDeliveryItem(index, 'price', parseFloat(e.target.value) || 0)}
+                            className="w-20 text-xs text-right border border-gray-200 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                            placeholder="Цена"
+                          />
+                          <span className="text-xs text-gray-400">₽/шт</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button type="button"
+                          onClick={() => { if (item.quantity > 1) updateDeliveryItem(index, 'quantity', item.quantity - 1); }}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400">
+                          <Minus className="w-3.5 h-3.5" />
+                        </button>
+                        <span className="w-8 text-center text-sm font-medium">{item.quantity}</span>
+                        <button type="button"
+                          onClick={() => updateDeliveryItem(index, 'quantity', item.quantity + 1)}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400">
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <span className="text-sm font-semibold text-gray-700 flex-shrink-0 w-20 text-right">
+                        {formatCurrency(item.quantity * item.price)}
+                      </span>
+                      <button type="button" onClick={() => removeDeliveryItem(index)}
+                        className="p-1 text-red-400 hover:text-red-600 flex-shrink-0">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div>
@@ -710,6 +847,14 @@ export default function SupplierDetailPage() {
           </div>
         </form>
       </Modal>
+
+      {/* Delivery Product Picker (fullscreen) */}
+      <DeliveryProductPicker
+        isOpen={showDeliveryPicker}
+        onClose={() => setShowDeliveryPicker(false)}
+        products={products}
+        onSelect={handleDeliveryProductSelected}
+      />
 
       {/* Create Payment Modal */}
       <Modal
