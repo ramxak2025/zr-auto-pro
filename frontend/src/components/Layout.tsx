@@ -1,3 +1,4 @@
+import { memo, useMemo } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -17,6 +18,7 @@ import {
   Megaphone,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import type { UserPermissions } from '../types';
 
 
@@ -91,72 +93,183 @@ function isTabActive(tab: TabItem & { isCenter?: boolean }, pathname: string): b
   return pathname === tab.path;
 }
 
+// ─── Memoized static components ──────────────────────────────────────────────
+// These parts of the layout don't depend on route/page data, so we memoize them
+// to avoid re-renders when the <Outlet> content changes.
+
+interface SidebarProps {
+  userName: string;
+  userAvatar?: string;
+  userInitial: string;
+  tenantName: string;
+  roleLabel: string;
+  hasPermission: (perm: keyof UserPermissions) => boolean;
+  onLogout: () => void;
+}
+
+const DesktopSidebar = memo(function DesktopSidebar({
+  userName,
+  userAvatar,
+  userInitial,
+  tenantName,
+  roleLabel,
+  hasPermission,
+  onLogout,
+}: SidebarProps) {
+  return (
+    <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
+      <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
+        <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" />
+        {tenantName && (
+          <div className="min-w-0">
+            <span className="text-sm font-semibold text-gray-900 truncate block">{tenantName}</span>
+          </div>
+        )}
+      </div>
+
+      <nav className="flex-1 overflow-y-auto px-3 py-4">
+        <ul className="space-y-1">
+          {navItems.map((item) => {
+            if (item.permission && !hasPermission(item.permission)) return null;
+            const Icon = item.icon;
+            return (
+              <li key={item.path}>
+                <NavLink
+                  to={item.path}
+                  end={item.path === '/dashboard'}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                      isActive
+                        ? 'bg-primary-50 text-primary-700'
+                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                    }`
+                  }
+                >
+                  <Icon className="h-5 w-5 flex-shrink-0" />
+                  <span>{item.label}</span>
+                </NavLink>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
+
+      <div className="border-t border-gray-200 px-4 py-3">
+        <div className="flex items-center gap-3">
+          {userAvatar ? (
+            <img src={userAvatar} alt="" className="h-8 w-8 rounded-full object-cover" />
+          ) : (
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
+              {userInitial}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-gray-900">{userName}</p>
+            <p className="truncate text-xs text-gray-500">{roleLabel}</p>
+          </div>
+          <button onClick={onLogout} className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors" title="Выход">
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+});
+
+interface MobileHeaderProps {
+  userAvatar?: string;
+  userInitial: string;
+}
+
+const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: MobileHeaderProps) {
+  return (
+    <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+      <div className="flex items-center gap-2">
+        <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
+      </div>
+      <div className="flex items-center gap-2">
+        {userAvatar ? (
+          <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" />
+        ) : (
+          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
+            {userInitial}
+          </div>
+        )}
+      </div>
+    </header>
+  );
+});
+
+interface MobileTabBarProps {
+  pathname: string;
+}
+
+const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
+  return (
+    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+      <div className="flex items-center justify-around h-[68px] px-2">
+        {mobileTabItems.map((tab) => {
+          const Icon = tab.icon;
+          const active = isTabActive(tab, pathname);
+
+          if (tab.isCenter) {
+            return (
+              <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center -mt-6">
+                <div className="relative">
+                  <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
+                  <div className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95">
+                    <Icon className="h-6 w-6" strokeWidth={2.2} />
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold mt-1 text-primary-600">{tab.label}</span>
+              </NavLink>
+            );
+          }
+
+          return (
+            <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors">
+              <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
+                <Icon className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
+              </div>
+              <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>{tab.label}</span>
+            </NavLink>
+          );
+        })}
+      </div>
+    </nav>
+  );
+});
+
+// ─── Main Layout ─────────────────────────────────────────────────────────────
+
 export default function Layout() {
   const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
 
+  // Pull-to-refresh: invalidates all active React Query caches on pull down
+  usePullToRefresh();
+
   const breadcrumbs = getPageTitle(location.pathname);
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
+  const userName = user?.fullName || 'User';
+  const userInitial = user?.fullName?.charAt(0) || 'U';
+  const tenantName = user?.tenant?.name || '';
+
+  // Memoize to prevent unnecessary re-renders of child components
+  const sidebarProps = useMemo(() => ({
+    userName,
+    userAvatar: user?.avatar,
+    userInitial,
+    tenantName,
+    roleLabel,
+    hasPermission,
+    onLogout: logout,
+  }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, logout]);
 
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
-      {/* ─── Desktop sidebar ─── */}
-      <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
-        <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
-          <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" />
-          {user?.tenant && (
-            <div className="min-w-0">
-              <span className="text-sm font-semibold text-gray-900 truncate block">{user.tenant.name || ''}</span>
-            </div>
-          )}
-        </div>
-
-        <nav className="flex-1 overflow-y-auto px-3 py-4">
-          <ul className="space-y-1">
-            {navItems.map((item) => {
-              if (item.permission && !hasPermission(item.permission)) return null;
-              const Icon = item.icon;
-              return (
-                <li key={item.path}>
-                  <NavLink
-                    to={item.path}
-                    end={item.path === '/dashboard'}
-                    className={({ isActive }) =>
-                      `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
-                        isActive
-                          ? 'bg-primary-50 text-primary-700'
-                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                      }`
-                    }
-                  >
-                    <Icon className="h-5 w-5 flex-shrink-0" />
-                    <span>{item.label}</span>
-                  </NavLink>
-                </li>
-              );
-            })}
-          </ul>
-        </nav>
-
-        <div className="border-t border-gray-200 px-4 py-3">
-          <div className="flex items-center gap-3">
-            {user?.avatar ? (
-              <img src={user.avatar} alt="" className="h-8 w-8 rounded-full object-cover" />
-            ) : (
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
-                {user?.fullName?.charAt(0) || 'U'}
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-gray-900">{user?.fullName || 'User'}</p>
-              <p className="truncate text-xs text-gray-500">{roleLabel}</p>
-            </div>
-            <button onClick={logout} className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors" title="Выход">
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </aside>
+      {/* ─── Desktop sidebar (memoized) ─── */}
+      <DesktopSidebar {...sidebarProps} />
 
       {/* ─── Main area ─── */}
       <div className="flex flex-1 flex-col md:pl-[260px] w-full min-w-0">
@@ -172,7 +285,7 @@ export default function Layout() {
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2.5">
-              <span className="text-sm font-medium text-gray-700">{user?.fullName}</span>
+              <span className="text-sm font-medium text-gray-700">{userName}</span>
               <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${roleBadgeColors[user?.role || ''] || 'bg-gray-100 text-gray-600'}`}>
                 {roleLabel}
               </span>
@@ -184,21 +297,8 @@ export default function Layout() {
           </div>
         </header>
 
-        {/* Mobile top bar */}
-        <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
-          <div className="flex items-center gap-2">
-            <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
-          </div>
-          <div className="flex items-center gap-2">
-            {user?.avatar ? (
-              <img src={user.avatar} alt="" className="h-7 w-7 rounded-full object-cover" />
-            ) : (
-              <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
-                {user?.fullName?.charAt(0) || 'U'}
-              </div>
-            )}
-          </div>
-        </header>
+        {/* Mobile top bar (memoized) */}
+        <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
         {/* Page content */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
@@ -207,38 +307,8 @@ export default function Layout() {
           </div>
         </main>
 
-        {/* ─── Mobile bottom tab bar ─── */}
-        <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
-          <div className="flex items-center justify-around h-[68px] px-2">
-            {mobileTabItems.map((tab) => {
-              const Icon = tab.icon;
-              const active = isTabActive(tab, location.pathname);
-
-              if (tab.isCenter) {
-                return (
-                  <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center -mt-6">
-                    <div className="relative">
-                      <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
-                      <div className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95">
-                        <Icon className="h-6 w-6" strokeWidth={2.2} />
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-bold mt-1 text-primary-600">{tab.label}</span>
-                  </NavLink>
-                );
-              }
-
-              return (
-                <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors">
-                  <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
-                    <Icon className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
-                  </div>
-                  <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>{tab.label}</span>
-                </NavLink>
-              );
-            })}
-          </div>
-        </nav>
+        {/* ─── Mobile bottom tab bar (memoized) ─── */}
+        <MobileTabBar pathname={location.pathname} />
       </div>
     </div>
   );
