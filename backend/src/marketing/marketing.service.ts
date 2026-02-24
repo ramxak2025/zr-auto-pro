@@ -128,6 +128,7 @@ class EmailAdapter implements MessagingProviderAdapter {
 export class MarketingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('MarketingService');
   private jobInterval: ReturnType<typeof setInterval> | null = null;
+  private scanInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
@@ -135,15 +136,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     // Process review jobs every 60 seconds
     this.jobInterval = setInterval(() => this.processReviewJobs(), 60_000);
     // Also scan for new completed checks every 5 minutes
-    const scanInterval = setInterval(() => this.scanCompletedChecks(), 300_000);
-    // Store scan interval for cleanup — assign to a class property if needed
-    (this as any)._scanInterval = scanInterval;
+    this.scanInterval = setInterval(() => this.scanCompletedChecks(), 300_000);
     this.logger.log('Review job processor started');
   }
 
   onModuleDestroy() {
     if (this.jobInterval) clearInterval(this.jobInterval);
-    if ((this as any)._scanInterval) clearInterval((this as any)._scanInterval);
+    if (this.scanInterval) clearInterval(this.scanInterval);
   }
 
   // ─── Messaging Provider Factory ──────────────────────────────────

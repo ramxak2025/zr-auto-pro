@@ -3,9 +3,8 @@ import {
   NestInterceptor,
   ExecutionContext,
   CallHandler,
-  HttpStatus,
 } from '@nestjs/common';
-import { Observable } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { map } from 'rxjs/operators';
 import { Response, Request } from 'express';
 import * as crypto from 'crypto';
@@ -15,12 +14,7 @@ import * as crypto from 'crypto';
  *
  * Generates an ETag header for GET responses by hashing the JSON body.
  * If the client sends `If-None-Match` matching the ETag, returns 304 Not Modified
- * with an empty body — saving bandwidth and reducing latency.
- *
- * This is especially effective for:
- * - List pages that rarely change (services, users, categories)
- * - Dashboard data within the same minute
- * - Any cached React Query request that refetches in background
+ * with NO body (per HTTP spec, 304 MUST NOT contain a body).
  */
 @Injectable()
 export class ETagInterceptor implements NestInterceptor {
@@ -49,19 +43,17 @@ export class ETagInterceptor implements NestInterceptor {
           const etag = `"${hash}"`;
 
           response.setHeader('ETag', etag);
-          // Allow caching but require revalidation
           response.setHeader('Cache-Control', 'private, no-cache');
 
-          // Check If-None-Match
+          // Check If-None-Match — return 304 with empty body
           const ifNoneMatch = request.headers['if-none-match'];
           if (ifNoneMatch === etag) {
-            response.status(HttpStatus.NOT_MODIFIED);
+            response.status(304).end();
             return undefined;
           }
 
           return body;
         } catch {
-          // If hashing fails, just return the body as-is
           return body;
         }
       }),

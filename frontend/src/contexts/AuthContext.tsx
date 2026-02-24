@@ -13,7 +13,10 @@ interface AuthContextType {
   isRole: (...roles: UserRole[]) => boolean;
 }
 
-const AuthContext = createContext<AuthContextType>({} as AuthContextType);
+// Use null default instead of `{} as AuthContextType` — accessing the context
+// outside of AuthProvider would silently return an empty object, causing
+// runtime crashes when calling .login(), .logout() etc.
+const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -47,7 +50,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const res = await authApi.me();
       setUser(res.data);
-    } catch {}
+    } catch (err) {
+      console.warn('Failed to refresh user:', err);
+    }
   };
 
   const logout = () => {
@@ -74,4 +79,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export const useAuth = () => useContext(AuthContext);
+export function useAuth(): AuthContextType {
+  const ctx = useContext(AuthContext);
+  if (!ctx) {
+    throw new Error('useAuth must be used within <AuthProvider>');
+  }
+  return ctx;
+}

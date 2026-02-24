@@ -1,15 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v3
-//  - Static assets: Cache-first (immutable after build)
-//  - API GET responses: Stale-while-revalidate (instant + background refresh)
+//  Autexa PWA Service Worker v4
+//  - Navigation (HTML): ALWAYS network-first (prevents stale chunk references)
+//  - Static assets: Cache-first with network fallback on 404
+//  - API GET responses: Stale-while-revalidate with ETag support
 //  - API mutations (POST/PATCH/DELETE): Network-only with offline queue
 //  - Background Sync: Replay failed mutations when back online
-//  - ETag support: Forward If-None-Match headers for 304 responses
 //  - Offline fallback: Serve cached shell
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v3';
-const API_CACHE = 'autexa-api-v2';
+const STATIC_CACHE = 'autexa-static-v4';
+const API_CACHE = 'autexa-api-v3';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 
 // Maximum age for cached API responses (5 minutes)
@@ -35,6 +35,7 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE).then((cache) => cache.addAll(PRECACHE_ASSETS))
   );
+  // Activate immediately — don't wait for existing tabs to close
   self.skipWaiting();
 });
 
@@ -51,6 +52,7 @@ self.addEventListener('activate', (event) => {
       )
     )
   );
+  // Take control of all clients immediately (important for updates)
   self.clients.claim();
 });
 
@@ -79,19 +81,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // ── Static assets (JS, CSS, images, fonts) — Cache first ──
-  if (isStaticAsset(url.pathname)) {
-    event.respondWith(cacheFirst(request, STATIC_CACHE));
-    return;
-  }
-
-  // ── Navigation / HTML — Network first with offline fallback ──
+  // ── Navigation / HTML — ALWAYS network-first ──
+  // CRITICAL: After deployment, index.html references new chunk filenames.
+  // Serving a stale cached index.html would reference non-existent JS chunks,
+  // causing a white screen. Always fetch fresh HTML from the server.
   if (request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html')) {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const clone = response.clone();
-          caches.open(STATIC_CACHE).then((cache) => cache.put('/', clone));
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(STATIC_CACHE).then((cache) => cache.put('/', clone));
+          }
           return response;
         })
         .catch(() => caches.match('/'))
@@ -99,8 +100,14 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // ── Everything else — Cache first with network fallback ──
-  event.respondWith(cacheFirst(request, STATIC_CACHE));
+  // ── Static assets (JS, CSS, images, fonts) — Cache first with 404 fallback ──
+  if (isStaticAsset(url.pathname)) {
+    event.respondWith(cacheFirstWithFallback(request, STATIC_CACHE));
+    return;
+  }
+
+  // ── Everything else — Cache first ──
+  event.respondWith(cacheFirstWithFallback(request, STATIC_CACHE));
 });
 
 // ─── Strategies ──────────────────────────────────────────────────────────────
@@ -182,11 +189,13 @@ async function staleWhileRevalidate(request) {
 }
 
 /**
- * Cache-first strategy for static assets
+ * Cache-first with network fallback.
+ * If the cached response is a 404 or error, try the network instead.
+ * This handles the case where old cache entries reference stale assets.
  */
-async function cacheFirst(request, cacheName) {
+async function cacheFirstWithFallback(request, cacheName) {
   const cached = await caches.match(request);
-  if (cached) return cached;
+  if (cached && cached.ok) return cached;
 
   try {
     const networkResponse = await fetch(request);
@@ -196,6 +205,9 @@ async function cacheFirst(request, cacheName) {
     }
     return networkResponse;
   } catch {
+    // If network also fails and we have any cached version, return it
+    if (cached) return cached;
+    // Last resort: return the offline shell
     return caches.match('/');
   }
 }

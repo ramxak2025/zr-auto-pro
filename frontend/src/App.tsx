@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, ComponentType } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { UserRole } from './types';
@@ -7,41 +7,73 @@ import { UserRole } from './types';
 import Layout from './components/Layout';
 import AdminLayout from './components/AdminLayout';
 import LoadingSpinner from './components/LoadingSpinner';
+import ErrorBoundary from './components/ErrorBoundary';
+
+// ─── Lazy loading with retry on chunk failure ────────────────────────────────
+// After a deployment, the browser may have a cached index.html that references
+// old chunk filenames that no longer exist on the server (404). The bare
+// import() promise rejects permanently on failure. This wrapper retries up to
+// 3 times with a delay, and on final failure forces a page reload to fetch
+// the fresh index.html.
+
+function lazyWithRetry<T extends ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+  retries = 3,
+): React.LazyExoticComponent<T> {
+  return lazy(() => {
+    const attempt = (remaining: number): Promise<{ default: T }> =>
+      factory().catch((err: Error) => {
+        if (remaining <= 0) {
+          // All retries failed — likely stale cache, force reload once
+          const reloadKey = 'lazy_chunk_reload';
+          if (!sessionStorage.getItem(reloadKey)) {
+            sessionStorage.setItem(reloadKey, Date.now().toString());
+            window.location.reload();
+          }
+          throw err;
+        }
+        return new Promise<{ default: T }>((resolve) =>
+          setTimeout(() => resolve(attempt(remaining - 1)), 1000),
+        );
+      });
+    return attempt(retries);
+  });
+}
 
 // ─── Lazy-loaded pages (code-split into separate chunks) ─────────────────────
 // Each page loads only when the user navigates to its route.
-// This reduces the initial JS bundle from ~700KB to ~200KB.
+// lazyWithRetry adds retry logic to handle stale-cache chunk load failures.
 
-const LoginPage = lazy(() => import('./pages/LoginPage'));
-const SubscriptionBlockedPage = lazy(() => import('./pages/SubscriptionBlockedPage'));
-const DashboardPage = lazy(() => import('./pages/DashboardPage'));
-const ChecksPage = lazy(() => import('./pages/ChecksPage'));
-const CheckCreatePage = lazy(() => import('./pages/CheckCreatePage'));
-const CheckDetailPage = lazy(() => import('./pages/CheckDetailPage'));
-const ClientsPage = lazy(() => import('./pages/ClientsPage'));
-const ClientDetailPage = lazy(() => import('./pages/ClientDetailPage'));
-const CarsPage = lazy(() => import('./pages/CarsPage'));
-const ProductsPage = lazy(() => import('./pages/ProductsPage'));
-const ServicesPage = lazy(() => import('./pages/ServicesPage'));
-const SuppliersPage = lazy(() => import('./pages/SuppliersPage'));
-const SupplierDetailPage = lazy(() => import('./pages/SupplierDetailPage'));
-const SalaryPage = lazy(() => import('./pages/SalaryPage'));
-const ReportsPage = lazy(() => import('./pages/ReportsPage'));
-const CashFlowPage = lazy(() => import('./pages/CashFlowPage'));
-const UsersPage = lazy(() => import('./pages/UsersPage'));
-const SchedulePage = lazy(() => import('./pages/SchedulePage'));
-const MorePage = lazy(() => import('./pages/MorePage'));
-const TariffPage = lazy(() => import('./pages/TariffPage'));
-const RetailChecksPage = lazy(() => import('./pages/RetailChecksPage'));
-const ExpensesPage = lazy(() => import('./pages/ExpensesPage'));
-const MarketingPage = lazy(() => import('./pages/MarketingPage'));
-const ReviewPublicPage = lazy(() => import('./pages/ReviewPublicPage'));
+const LoginPage = lazyWithRetry(() => import('./pages/LoginPage'));
+const SubscriptionBlockedPage = lazyWithRetry(() => import('./pages/SubscriptionBlockedPage'));
+const DashboardPage = lazyWithRetry(() => import('./pages/DashboardPage'));
+const ChecksPage = lazyWithRetry(() => import('./pages/ChecksPage'));
+const CheckCreatePage = lazyWithRetry(() => import('./pages/CheckCreatePage'));
+const CheckDetailPage = lazyWithRetry(() => import('./pages/CheckDetailPage'));
+const ClientsPage = lazyWithRetry(() => import('./pages/ClientsPage'));
+const ClientDetailPage = lazyWithRetry(() => import('./pages/ClientDetailPage'));
+const CarsPage = lazyWithRetry(() => import('./pages/CarsPage'));
+const ProductsPage = lazyWithRetry(() => import('./pages/ProductsPage'));
+const ServicesPage = lazyWithRetry(() => import('./pages/ServicesPage'));
+const SuppliersPage = lazyWithRetry(() => import('./pages/SuppliersPage'));
+const SupplierDetailPage = lazyWithRetry(() => import('./pages/SupplierDetailPage'));
+const SalaryPage = lazyWithRetry(() => import('./pages/SalaryPage'));
+const ReportsPage = lazyWithRetry(() => import('./pages/ReportsPage'));
+const CashFlowPage = lazyWithRetry(() => import('./pages/CashFlowPage'));
+const UsersPage = lazyWithRetry(() => import('./pages/UsersPage'));
+const SchedulePage = lazyWithRetry(() => import('./pages/SchedulePage'));
+const MorePage = lazyWithRetry(() => import('./pages/MorePage'));
+const TariffPage = lazyWithRetry(() => import('./pages/TariffPage'));
+const RetailChecksPage = lazyWithRetry(() => import('./pages/RetailChecksPage'));
+const ExpensesPage = lazyWithRetry(() => import('./pages/ExpensesPage'));
+const MarketingPage = lazyWithRetry(() => import('./pages/MarketingPage'));
+const ReviewPublicPage = lazyWithRetry(() => import('./pages/ReviewPublicPage'));
 
 // Admin pages
-const AdminDashboardPage = lazy(() => import('./pages/admin/AdminDashboardPage'));
-const AdminTenantsPage = lazy(() => import('./pages/admin/AdminTenantsPage'));
-const AdminTenantDetailPage = lazy(() => import('./pages/admin/AdminTenantDetailPage'));
-const AdminPlansPage = lazy(() => import('./pages/admin/AdminPlansPage'));
+const AdminDashboardPage = lazyWithRetry(() => import('./pages/admin/AdminDashboardPage'));
+const AdminTenantsPage = lazyWithRetry(() => import('./pages/admin/AdminTenantsPage'));
+const AdminTenantDetailPage = lazyWithRetry(() => import('./pages/admin/AdminTenantDetailPage'));
+const AdminPlansPage = lazyWithRetry(() => import('./pages/admin/AdminPlansPage'));
 
 function isSubscriptionExpired(subscriptionEnd?: string | null): boolean {
   if (!subscriptionEnd) return false; // No date set = no restriction
@@ -65,6 +97,7 @@ export default function App() {
     isSubscriptionExpired(user.tenant.subscriptionEnd);
 
   return (
+    <ErrorBoundary>
     <Suspense fallback={<LoadingSpinner />}>
       <Routes>
         {/* Public: Review page (no auth) */}
@@ -137,5 +170,6 @@ export default function App() {
         )}
       </Routes>
     </Suspense>
+    </ErrorBoundary>
   );
 }

@@ -13,6 +13,11 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Guard against multiple simultaneous 401 redirects causing race conditions.
+// Without this, parallel requests that all get 401 would each trigger
+// window.location.href = '/login', causing multiple hard reloads.
+let isRedirectingToLogin = false;
+
 api.interceptors.response.use(
   (res) => res,
   (error: AxiosError<{ message?: string }>) => {
@@ -24,11 +29,12 @@ api.interceptors.response.use(
 
     const status = error.response.status;
 
-    // Unauthorized — clear token and redirect
-    if (status === 401) {
+    // Unauthorized — clear token and redirect (only once)
+    if (status === 401 && !isRedirectingToLogin) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       if (window.location.pathname !== '/login') {
+        isRedirectingToLogin = true;
         window.location.href = '/login';
       }
     }

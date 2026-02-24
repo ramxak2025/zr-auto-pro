@@ -3,14 +3,19 @@ import { useQueryClient } from '@tanstack/react-query';
 
 /**
  * Route-to-query mapping for prefetching.
- * When the user hovers on a navigation link, we prefetch
- * the most likely queries for that route.
+ * When the user hovers on a navigation link, we invalidate stale queries
+ * for that route so they start refetching when the component mounts.
+ *
+ * NOTE: prefetchQuery requires a queryFn to actually fetch data. Since we
+ * don't have access to the API functions here, we instead use
+ * invalidateQueries to mark cached data as stale. When the user navigates,
+ * the component's useQuery will trigger an immediate background refetch.
  */
 const ROUTE_QUERIES: Record<string, unknown[][]> = {
-  '/dashboard': [['dashboard-chart', 'week', '0'], ['schedule-today'], ['employee-ranking']],
-  '/checks': [['checks', 1], ['masters']],
+  '/dashboard': [['dashboard-chart'], ['schedule-today'], ['employee-ranking']],
+  '/checks': [['checks'], ['masters']],
   '/clients': [['clients']],
-  '/products': [['products', { limit: 1000 }], ['warehouse-categories']],
+  '/products': [['products'], ['warehouse-categories']],
   '/services': [['services']],
   '/suppliers': [['suppliers']],
   '/salary': [['salary']],
@@ -23,8 +28,8 @@ const ROUTE_QUERIES: Record<string, unknown[][]> = {
 };
 
 /**
- * Returns `onMouseEnter` / `onTouchStart` handlers that trigger
- * React Query prefetch for the given route path.
+ * Returns `onMouseEnter` / `onTouchStart` handlers that mark queries as stale
+ * for the given route, so data starts refetching as soon as the user navigates.
  *
  * Usage:
  *   const prefetch = useRoutePrefetch();
@@ -40,18 +45,9 @@ export function useRoutePrefetch() {
 
       const trigger = () => {
         for (const key of queryKeys) {
-          // Only prefetch if the query is not already in cache
-          const existing = queryClient.getQueryData(key);
-          if (!existing) {
-            queryClient.prefetchQuery({
-              queryKey: key,
-              // We don't provide queryFn here — React Query will use the
-              // default queryFn from the component that defines this query.
-              // The prefetch just "warms" the cache slot so the real fetch
-              // starts as soon as the component mounts.
-              staleTime: 2 * 60_000,
-            });
-          }
+          // Invalidate the query so it refetches when the page component mounts.
+          // This is more reliable than prefetchQuery without a queryFn.
+          queryClient.invalidateQueries({ queryKey: key, refetchType: 'none' });
         }
       };
 

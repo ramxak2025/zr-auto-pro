@@ -16,27 +16,20 @@ export class HealthController {
     try {
       await this.pool.query('SELECT 1');
 
-      const { rows: users } = await this.pool.query(
-        'SELECT id, full_name, phone, role FROM users ORDER BY id LIMIT 100',
+      // Only return aggregate counts — never expose user data on unauthenticated endpoints
+      const { rows: [counts] } = await this.pool.query(
+        `SELECT
+           (SELECT COUNT(*) FROM users) as user_count,
+           (SELECT COUNT(*) FROM tenants) as tenant_count`,
       );
 
-      let adminCheck = 'Нет пользователей';
-      if (users.length > 0) {
-        const { rows: hashed } = await this.pool.query(
-          `SELECT password FROM users WHERE role = 'director' LIMIT 1`,
-        );
-        if (hashed.length > 0 && hashed[0].password && hashed[0].password.startsWith('$2')) {
-          adminCheck = 'OK: пароли в bcrypt формате';
-        } else if (hashed.length > 0) {
-          adminCheck = 'Пароль не в bcrypt формате';
-        } else {
-          adminCheck = 'OK: нет директоров, но есть пользователи';
-        }
-      }
-
-      return { db: 'OK', users, admin_check: adminCheck };
+      return {
+        db: 'OK',
+        userCount: parseInt(counts.user_count),
+        tenantCount: parseInt(counts.tenant_count),
+      };
     } catch (err) {
-      return { db: String(err), users: [], admin_check: null };
+      return { db: 'ERROR', error: 'Database connection failed' };
     }
   }
 }

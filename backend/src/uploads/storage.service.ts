@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pipeline } from 'stream/promises';
-import { Readable } from 'stream';
+import { Readable, Transform } from 'stream';
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 
@@ -21,7 +21,6 @@ export interface StoredFile {
   url: string;
   filename: string;
   size: number;
-  /** WebP version URL (if generated) */
   thumbnailUrl?: string;
 }
 
@@ -48,15 +47,15 @@ export class LocalStorageAdapter implements IStorageAdapter {
 
     const fileId = uuidv4();
 
-    // First, save the raw stream to a temp file
+    // Save the raw stream to a temp file, counting bytes along the way
     const tempFilename = fileId + '.tmp' + ext;
     const tempPath = path.join(tenantDir, tempFilename);
 
     const writeStream = fs.createWriteStream(tempPath);
     let rawSize = 0;
 
-    const counter = new (require('stream').Transform)({
-      transform(chunk: Buffer, _encoding: string, callback: Function) {
+    const counter = new Transform({
+      transform(chunk: Buffer, _encoding: string, callback) {
         rawSize += chunk.length;
         callback(null, chunk);
       },
@@ -70,7 +69,6 @@ export class LocalStorageAdapter implements IStorageAdapter {
         return await this.optimizeAndSave(tempPath, fileId, tenantId, tenantDir);
       } catch (err) {
         this.logger.warn(`Image optimization failed, saving original: ${err}`);
-        // Fall through to save unoptimized version
       }
     }
 
@@ -86,7 +84,8 @@ export class LocalStorageAdapter implements IStorageAdapter {
 
   /**
    * Optimize image: resize to max dimensions and save as WebP + JPEG fallback.
-   * Returns the WebP version as primary (smaller file size, better quality).
+   * Reads the temp file only once for metadata, then clones the pipeline
+   * for WebP and JPEG to avoid triple I/O.
    */
   private async optimizeAndSave(
     tempPath: string,
@@ -94,47 +93,37 @@ export class LocalStorageAdapter implements IStorageAdapter {
     tenantId: string,
     tenantDir: string,
   ): Promise<StoredFile> {
-    const image = sharp(tempPath);
-    const metadata = await image.metadata();
+    // Read file into buffer once to avoid reading from disk multiple times
+    const inputBuffer = fs.readFileSync(tempPath);
+    const metadata = await sharp(inputBuffer).metadata();
 
-    // Determine if resize is needed
     const needsResize =
       (metadata.width && metadata.width > MAX_IMAGE_WIDTH) ||
       (metadata.height && metadata.height > MAX_IMAGE_HEIGHT);
 
-    let transformer = sharp(tempPath).rotate(); // Auto-rotate based on EXIF
-
-    if (needsResize) {
-      transformer = transformer.resize(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT, {
-        fit: 'inside',
-        withoutEnlargement: true,
-      });
-    }
+    const resizeOptions = needsResize
+      ? { width: MAX_IMAGE_WIDTH, height: MAX_IMAGE_HEIGHT, fit: 'inside' as const, withoutEnlargement: true }
+      : undefined;
 
     // Save as WebP (primary — best compression)
     const webpFilename = fileId + '.webp';
     const webpStoredPath = path.join(tenantId, webpFilename);
     const webpFullPath = path.join(tenantDir, webpFilename);
 
-    await transformer
-      .webp({ quality: WEBP_QUALITY })
-      .toFile(webpFullPath);
+    let webpPipeline = sharp(inputBuffer).rotate();
+    if (resizeOptions) webpPipeline = webpPipeline.resize(resizeOptions);
+    await webpPipeline.webp({ quality: WEBP_QUALITY }).toFile(webpFullPath);
 
     const webpStats = fs.statSync(webpFullPath);
 
-    // Also save JPEG fallback for older browsers
+    // Also save JPEG fallback for older browsers (reuses buffer, no extra disk read)
     const jpegFilename = fileId + '.jpg';
     const jpegStoredPath = path.join(tenantId, jpegFilename);
     const jpegFullPath = path.join(tenantDir, jpegFilename);
 
-    await sharp(tempPath)
-      .rotate()
-      .resize(MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT, {
-        fit: 'inside',
-        withoutEnlargement: true,
-      })
-      .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-      .toFile(jpegFullPath);
+    let jpegPipeline = sharp(inputBuffer).rotate();
+    if (resizeOptions) jpegPipeline = jpegPipeline.resize(resizeOptions);
+    await jpegPipeline.jpeg({ quality: JPEG_QUALITY, mozjpeg: true }).toFile(jpegFullPath);
 
     // Remove temp file
     try {
@@ -160,7 +149,6 @@ export class LocalStorageAdapter implements IStorageAdapter {
   }
 
   resolve(storedPath: string): string | null {
-    // Try tenant-namespaced path first
     const fullPath = path.join(this.basePath, storedPath);
     if (fs.existsSync(fullPath)) return fullPath;
 

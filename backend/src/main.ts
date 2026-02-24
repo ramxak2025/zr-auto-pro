@@ -13,9 +13,13 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ETagInterceptor());
-  app.enableCors();
+  app.enableCors({
+    origin: process.env.CORS_ORIGIN || true,
+    credentials: true,
+  });
 
-  await app.listen(3000);
-  logger.log('Server running on port 3000');
+  const port = parseInt(process.env.PORT || '3000', 10);
+  await app.listen(port);
+  logger.log(`Server running on port ${port}`);
 }
 bootstrap();

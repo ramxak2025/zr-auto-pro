@@ -15,11 +15,8 @@ const ALLOWED_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.heic',
 @Controller('uploads')
 export class UploadsController {
   private readonly logger = new Logger('UploadsController');
-  private readonly storage: LocalStorageAdapter;
 
-  constructor() {
-    this.storage = new LocalStorageAdapter();
-  }
+  constructor(private readonly storage: LocalStorageAdapter) {}
 
   @UseGuards(JwtAuthGuard)
   @Post()
@@ -113,8 +110,11 @@ export class UploadsController {
       return res.status(404).json({ message: 'Файл не найден' });
     }
 
-    // Prevent directory traversal
-    const normalized = path.normalize(urlPath).replace(/^(\.\.[/\\])+/, '');
+    // Prevent directory traversal — reject any path containing '..'
+    const normalized = path.normalize(urlPath);
+    if (normalized.includes('..')) {
+      return res.status(400).json({ message: 'Недопустимый путь' });
+    }
 
     if (!this.storage.exists(normalized)) {
       return res.status(404).json({ message: 'Файл не найден' });
