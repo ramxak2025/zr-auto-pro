@@ -3,9 +3,12 @@ import {
   BarChart3, Star, AlertTriangle, Bell, Settings, Link2, MessageSquare,
   Plus, Trash2, Save, ExternalLink, TrendingUp, Users,
   Send, Eye, ThumbsUp, ThumbsDown, Loader2, X, ChevronLeft, ChevronRight, ChevronDown,
+  Trophy, Medal,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { marketingApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
+import { UserRole } from '../types';
 import type {
   MarketingDashboard, ReviewResponse, ReviewAlert,
   MessagingIntegration, ReviewPlatformLink, ReviewSettings,
@@ -579,8 +582,159 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
   );
 }
 
+// ─── Master Rating View (mobile-first, beautiful UX) ────────────────
+function MasterRatingView() {
+  const [reviews, setReviews] = useState<ReviewResponse[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [month, setMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const monthLabel = (() => {
+    const [y, m] = month.split('-');
+    const d = new Date(parseInt(y), parseInt(m) - 1);
+    return d.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  })();
+
+  const shiftMonth = (dir: number) => {
+    const [y, m] = month.split('-').map(Number);
+    const d = new Date(y, m - 1 + dir);
+    onMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+
+  const onMonthChange = useCallback(async (m: string) => {
+    setMonth(m);
+    setLoading(true);
+    try {
+      const res = await marketingApi.getReviews({ month: m });
+      setReviews(res.data);
+    } catch { /* empty */ } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { onMonthChange(month); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Build ranking from reviews
+  const ranking = (() => {
+    const map: Record<string, { name: string; total: number; sum: number }> = {};
+    reviews.forEach(r => {
+      if (!r.employeeId || !r.employeeName) return;
+      if (!map[r.employeeId]) map[r.employeeId] = { name: r.employeeName, total: 0, sum: 0 };
+      map[r.employeeId].total++;
+      map[r.employeeId].sum += r.rating;
+    });
+    return Object.entries(map)
+      .map(([id, s]) => ({ id, name: s.name, count: s.total, avg: Math.round(s.sum / s.total * 10) / 10 }))
+      .sort((a, b) => b.avg - a.avg || b.count - a.count);
+  })();
+
+  const placeColors = [
+    'from-amber-400 to-yellow-500',   // 1st — gold
+    'from-gray-300 to-gray-400',      // 2nd — silver
+    'from-amber-600 to-orange-500',   // 3rd — bronze
+  ];
+
+  const placeBg = [
+    'bg-gradient-to-br from-amber-50 to-yellow-50 border-amber-200',
+    'bg-gradient-to-br from-gray-50 to-slate-50 border-gray-200',
+    'bg-gradient-to-br from-orange-50 to-amber-50 border-orange-200',
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="text-center">
+        <div className="inline-flex items-center gap-2 mb-1">
+          <Trophy className="h-5 w-5 text-amber-500" />
+          <h1 className="text-xl font-bold text-gray-900">Рейтинг мастеров</h1>
+        </div>
+        <p className="text-sm text-gray-500">Оценки клиентов по месяцам</p>
+      </div>
+
+      {/* Month picker */}
+      <div className="flex items-center justify-center gap-3">
+        <button onClick={() => shiftMonth(-1)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 active:scale-95 transition-all">
+          <ChevronLeft className="h-5 w-5" />
+        </button>
+        <div className="bg-white border border-gray-200 rounded-xl px-5 py-2 shadow-sm min-w-[160px] text-center">
+          <span className="text-sm font-semibold text-gray-900 capitalize">{monthLabel}</span>
+        </div>
+        <button onClick={() => shiftMonth(1)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 active:scale-95 transition-all">
+          <ChevronRight className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Content */}
+      {loading ? (
+        <div className="flex justify-center py-16"><Loader2 className="h-7 w-7 animate-spin text-gray-300" /></div>
+      ) : ranking.length === 0 ? (
+        <div className="text-center py-16">
+          <Star className="h-12 w-12 text-gray-200 mx-auto mb-3" />
+          <p className="text-sm font-medium text-gray-500">Нет отзывов за этот месяц</p>
+          <p className="text-xs text-gray-400 mt-1">Рейтинг появится после получения отзывов от клиентов</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {ranking.map((m, idx) => {
+            const place = idx + 1;
+            const isTop3 = place <= 3;
+
+            return (
+              <div
+                key={m.id}
+                className={`rounded-2xl border p-4 transition-all ${
+                  isTop3 ? placeBg[idx] : 'bg-white border-gray-100'
+                } ${place === 1 ? 'shadow-md' : 'shadow-sm'}`}
+              >
+                <div className="flex items-center gap-3">
+                  {/* Place badge */}
+                  {isTop3 ? (
+                    <div className={`flex items-center justify-center h-10 w-10 rounded-xl bg-gradient-to-br ${placeColors[idx]} text-white font-bold text-sm shadow-sm flex-shrink-0`}>
+                      {place === 1 ? <Trophy className="h-5 w-5" /> : place === 2 ? <Medal className="h-5 w-5" /> : place}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-10 w-10 rounded-xl bg-gray-100 text-gray-500 font-bold text-sm flex-shrink-0">
+                      {place}
+                    </div>
+                  )}
+
+                  {/* Name & stars */}
+                  <div className="flex-1 min-w-0">
+                    <p className={`font-semibold truncate ${place === 1 ? 'text-base text-gray-900' : 'text-sm text-gray-800'}`}>
+                      {m.name}
+                    </p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <Stars rating={Math.round(m.avg)} size={place === 1 ? 'md' : 'sm'} />
+                      <span className={`text-xs font-bold ${m.avg >= 4 ? 'text-green-600' : m.avg >= 3 ? 'text-amber-600' : 'text-red-600'}`}>
+                        {m.avg.toFixed(1)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Review count */}
+                  <div className="text-right flex-shrink-0">
+                    <p className={`font-bold ${place === 1 ? 'text-lg text-gray-900' : 'text-base text-gray-700'}`}>{m.count}</p>
+                    <p className="text-[10px] text-gray-400 uppercase tracking-wide">
+                      отзыв{m.count === 1 ? '' : m.count < 5 ? 'а' : 'ов'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Marketing Page ────────────────────────────────────────────
 export default function MarketingPage() {
+  const { isRole } = useAuth();
+  const isMaster = isRole(UserRole.MASTER);
+
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const [dashboard, setDashboard] = useState<MarketingDashboard | null>(null);
   const [reviews, setReviews] = useState<ReviewResponse[]>([]);
@@ -694,6 +848,9 @@ export default function MarketingPage() {
       toast.success('Настройки сохранены');
     } catch { toast.error('Ошибка сохранения'); }
   };
+
+  // Masters only see the rating leaderboard
+  if (isMaster) return <MasterRatingView />;
 
   return (
     <div className="space-y-4">

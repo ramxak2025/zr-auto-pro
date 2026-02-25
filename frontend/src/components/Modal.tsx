@@ -83,7 +83,7 @@ export default function Modal({
         </div>
 
         {/* Body */}
-        <div className="px-6 py-4 overflow-y-auto flex-1 min-h-0 pb-[env(safe-area-inset-bottom)]">
+        <div className="px-6 pt-4 pb-8 overflow-y-auto flex-1 min-h-0" style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom, 0px))` }}>
           {children}
         </div>
       </div>

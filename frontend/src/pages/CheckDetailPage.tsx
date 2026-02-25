@@ -20,6 +20,7 @@ import {
   Package,
   ShieldCheck,
   Pencil,
+  Printer,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -29,6 +30,7 @@ import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ConfirmDialog from '../components/ConfirmDialog';
 import type { Check } from '../types';
+import { generateReceiptPdf } from '../utils/generateReceiptPdf';
 
 const paymentMethodLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -143,6 +145,14 @@ export default function CheckDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Print receipt */}
+          <button
+            onClick={() => generateReceiptPdf(check, user?.tenant?.name || 'Автосервис')}
+            className="p-2.5 rounded-xl text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+            title="Печать чека"
+          >
+            <Printer className="w-4 h-4" />
+          </button>
           {check.isDeferred && (
             <>
               <button
