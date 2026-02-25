@@ -11,6 +11,9 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    fs: {
+      allow: ['..'],
+    },
   },
   build: {
     outDir: 'dist',
