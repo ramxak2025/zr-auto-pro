@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -127,8 +128,8 @@ function DeliveryProductPicker({
 
   const handleSelect = (p: Product) => { onSelect(p); onClose(); };
 
-  return (
-    <div className="fixed inset-0 z-[60] flex flex-col bg-white">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex flex-col bg-white">
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 flex-shrink-0">
         <button type="button" onClick={goBack} className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600">
           {activePath.length > 0 ? <ChevronLeft className="w-5 h-5" /> : <X className="w-5 h-5" />}
@@ -203,7 +204,8 @@ function DeliveryProductPicker({
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

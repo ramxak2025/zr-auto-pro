@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
@@ -702,8 +703,8 @@ export default function SchedulePage() {
       )}
 
       {/* Quick Status Popup — simple tap to set status */}
-      {quickPopup && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setQuickPopup(null)}>
+      {quickPopup && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center" onClick={() => setQuickPopup(null)}>
           <div className="absolute inset-0 bg-black/30" />
           <div
             className="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm mx-auto shadow-2xl overflow-hidden animate-fade-in-down"
@@ -761,7 +762,8 @@ export default function SchedulePage() {
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Settings Tab — Modern Minimalist */}

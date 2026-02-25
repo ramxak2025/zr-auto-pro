@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -155,8 +156,8 @@ function ProductPickerModal({
     ? activePath[activePath.length - 1]
     : 'Товары';
 
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-white">
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex flex-col bg-white">
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
         <button type="button" onClick={goBack} className="p-2 -ml-2 rounded-lg hover:bg-gray-100 text-gray-600">
@@ -263,7 +264,8 @@ function ProductPickerModal({
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
