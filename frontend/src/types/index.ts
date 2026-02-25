@@ -57,6 +57,7 @@ export interface User {
   fullName: string;
   role: UserRole;
   salaryPercent: number;
+  productSalaryPercent?: number;
   permissions: UserPermissions;
   daysOff?: number[];
   isActive: boolean;
@@ -191,6 +192,7 @@ export interface Check {
   totalRevenue: number;
   productCostTotal: number;
   serviceSalaryTotal: number;
+  productSalaryTotal?: number;
   totalCost: number;
   profit: number;
   createdAt: string;
@@ -270,9 +272,22 @@ export interface MasterSalary {
   masterId: string;
   masterName: string;
   salaryPercent: number;
+  productSalaryPercent?: number;
+  serviceEarnings?: number;
+  productEarnings?: number;
   totalEarnings: number;
   totalRevenue: number;
   checkCount: number;
+}
+
+export interface ProductPromotion {
+  productId: string;
+  productName: string;
+  percent: number;
+  sellPrice: number;
+  costPrice: number;
+  photo?: string;
+  estimatedBonus: number;
 }
 
 export interface SalarySummary {
@@ -280,13 +295,17 @@ export interface SalarySummary {
   week: number;
   month: number;
   total: number;
+  todayService?: number;
+  todayProduct?: number;
   masterName: string;
   salaryPercent: number;
+  productSalaryPercent?: number;
   todayChecks?: number;
   monthChecks?: number;
   todayCash?: number;
   todayCard?: number;
   todayWarranty?: number;
+  productPromotions?: ProductPromotion[];
 }
 
 export interface DashboardStats {

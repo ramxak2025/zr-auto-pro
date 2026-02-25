@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Users, Loader2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Users, Loader2, Package, X, Search, Gift } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { usersApi } from '../api/services';
+import { usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { User, UserRole, UserPermissions } from '../types';
+import { User, UserRole, UserPermissions, Product, PaginatedResponse } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -82,6 +82,8 @@ export default function UsersPage() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserFormData>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [commissionModalOpen, setCommissionModalOpen] = useState(false);
+  const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['users'],
@@ -419,6 +421,35 @@ export default function UsersPage() {
             />
           </div>
 
+          {/* Product Commission — only for existing users */}
+          {editingUser && (form.role === UserRole.MASTER || form.role === UserRole.ADMIN) && (
+            <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                    <Gift className="w-4 h-4 text-green-600" />
+                    Комиссия с товаров
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {editingUser.productSalaryPercent
+                      ? `${editingUser.productSalaryPercent}% с чистой прибыли`
+                      : 'Не настроена'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCommissionUserId(editingUser.id);
+                    setCommissionModalOpen(true);
+                  }}
+                  className="text-sm font-medium text-green-700 hover:text-green-800 bg-green-100 hover:bg-green-200 px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  Настроить
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Active Toggle */}
           <div className="flex items-center gap-3">
             <label className="relative inline-flex items-center cursor-pointer">
@@ -487,6 +518,237 @@ export default function UsersPage() {
         confirmText="Удалить"
         variant="danger"
       />
+
+      {/* Product Commission Modal */}
+      {commissionUserId && (
+        <ProductCommissionModal
+          isOpen={commissionModalOpen}
+          onClose={() => { setCommissionModalOpen(false); setCommissionUserId(null); }}
+          userId={commissionUserId}
+          userName={users.find(u => u.id === commissionUserId)?.fullName || ''}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Product Commission Configuration Modal ─────────────────────────
+
+function ProductCommissionModal({
+  isOpen, onClose, userId, userName,
+}: {
+  isOpen: boolean; onClose: () => void; userId: string; userName: string;
+}) {
+  const queryClient = useQueryClient();
+  const [globalPct, setGlobalPct] = useState(0);
+  const [items, setItems] = useState<Array<{ productId: string; percent: number; productName: string }>>([]);
+  const [search, setSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Load current commissions
+  const { data: commissionData, isLoading } = useQuery({
+    queryKey: ['product-commissions', userId],
+    queryFn: () => usersApi.getProductCommissions(userId),
+    enabled: isOpen,
+  });
+
+  // Load all products
+  const { data: productsData } = useQuery({
+    queryKey: ['products-all-commission'],
+    queryFn: () => productsApi.getAll({ limit: 1000 }),
+    enabled: isOpen,
+  });
+
+  const allProducts: Product[] = (() => {
+    const d = productsData?.data;
+    if (!d) return [];
+    return Array.isArray(d) ? d : ((d as PaginatedResponse<Product>).data || []);
+  })();
+
+  useEffect(() => {
+    if (commissionData?.data) {
+      setGlobalPct(commissionData.data.productSalaryPercent || 0);
+      setItems(
+        (commissionData.data.items || []).map((i: any) => ({
+          productId: i.productId,
+          percent: i.percent,
+          productName: i.productName,
+        })),
+      );
+    }
+  }, [commissionData]);
+
+  const addProduct = useCallback((product: Product) => {
+    setItems(prev => {
+      if (prev.some(i => i.productId === product.id)) return prev;
+      return [...prev, { productId: product.id, percent: 10, productName: product.name }];
+    });
+    setSearch('');
+  }, []);
+
+  const removeProduct = useCallback((productId: string) => {
+    setItems(prev => prev.filter(i => i.productId !== productId));
+  }, []);
+
+  const updatePercent = useCallback((productId: string, pct: number) => {
+    setItems(prev => prev.map(i => i.productId === productId ? { ...i, percent: pct } : i));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await usersApi.setProductCommissions(userId, {
+        productSalaryPercent: globalPct,
+        items: items.map(i => ({ productId: i.productId, percent: i.percent })),
+      });
+      queryClient.invalidateQueries({ queryKey: ['product-commissions', userId] });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast.success('Комиссии сохранены');
+      onClose();
+    } catch {
+      toast.error('Ошибка сохранения');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const searchResults = search.trim().length >= 2
+    ? allProducts
+        .filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
+        .filter(p => !items.some(i => i.productId === p.id))
+        .slice(0, 10)
+    : [];
+
+  const formatCurrency = (v: number) =>
+    new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v);
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={`Комиссия с товаров — ${userName}`} size="lg">
+      {isLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="w-6 h-6 animate-spin text-primary-500" />
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {/* Global product commission */}
+          <div className="bg-gradient-to-r from-primary-50 to-blue-50 rounded-xl p-4 border border-primary-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Глобальный % со всех товаров</p>
+                <p className="text-xs text-gray-500 mt-0.5">С чистой прибыли каждого товара</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={globalPct}
+                  onChange={e => setGlobalPct(Math.max(0, Math.min(100, Number(e.target.value))))}
+                  className="w-20 text-right text-sm font-semibold border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500"
+                />
+                <span className="text-sm font-medium text-gray-500">%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Product-specific commissions */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Индивидуальные товары</p>
+                <p className="text-xs text-gray-500">Переопределяют глобальный процент</p>
+              </div>
+            </div>
+
+            {/* Search to add products */}
+            <div className="relative mb-3">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Найти и добавить товар..."
+                className="input pl-10 w-full"
+              />
+              {search && (
+                <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+              {searchResults.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-10 max-h-48 overflow-y-auto">
+                  {searchResults.map(p => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => addProduct(p)}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left"
+                    >
+                      <Package className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-900 truncate">{p.name}</p>
+                        <p className="text-xs text-gray-400">
+                          Прибыль: {formatCurrency(p.sellPrice - p.costPrice)}
+                        </p>
+                      </div>
+                      <Plus className="w-4 h-4 text-primary-500 flex-shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Selected products with commissions */}
+            {items.length === 0 ? (
+              <div className="text-center py-6 text-gray-400">
+                <Gift className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">Нет индивидуальных товаров</p>
+                <p className="text-xs mt-1">Будет применяться глобальный %</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {items.map(item => {
+                  const product = allProducts.find(p => p.id === item.productId);
+                  const profit = product ? product.sellPrice - product.costPrice : 0;
+                  const bonus = Math.round(profit * item.percent / 100);
+                  return (
+                    <div key={item.productId} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{item.productName}</p>
+                        <p className="text-xs text-gray-400">
+                          Прибыль: {formatCurrency(profit)} → Бонус: <span className="text-green-600 font-medium">{formatCurrency(bonus)}</span>
+                        </p>
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={1}
+                        value={item.percent}
+                        onChange={e => updatePercent(item.productId, Math.max(0, Math.min(100, Number(e.target.value))))}
+                        className="w-16 text-right text-sm font-medium border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                      />
+                      <span className="text-xs text-gray-400">%</span>
+                      <button onClick={() => removeProduct(item.productId)} className="p-1 text-red-400 hover:text-red-600">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={onClose} className="btn-secondary">Отмена</button>
+            <button onClick={handleSave} disabled={saving} className="btn-primary">
+              {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Сохранение...</> : 'Сохранить'}
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }

@@ -349,6 +349,9 @@ export const usersApi = {
   create: (data: CreateUserRequest) => api.post<User>('/users', data),
   update: (id: string, data: UpdateUserRequest) => api.patch<User>(`/users/${id}`, data),
   remove: (id: string) => api.delete(`/users/${id}`),
+  getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
+  setProductCommissions: (id: string, data: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> }) =>
+    api.post(`/users/${id}/product-commissions`, data),
 };
 
 export const tenantsApi = {

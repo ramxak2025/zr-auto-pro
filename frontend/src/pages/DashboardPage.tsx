@@ -19,6 +19,8 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  Gift,
+  Package,
 } from 'lucide-react';
 import { format, subDays, addDays, startOfWeek, addWeeks, subWeeks, startOfMonth, addMonths, subMonths, startOfYear, addYears, subYears } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -695,7 +697,10 @@ function MasterDashboard() {
           <div className="flex-1 min-w-0">
             <p className="text-xs text-white/60">{greeting}</p>
             <p className="text-lg font-bold truncate">{user?.fullName || 'Мастер'}</p>
-            <p className="text-sm text-white/70">Ставка {data.salaryPercent}%</p>
+            <p className="text-sm text-white/70">
+              Услуги {data.salaryPercent}%
+              {data.productSalaryPercent ? ` · Товары ${data.productSalaryPercent}%` : ''}
+            </p>
           </div>
         </div>
       </div>
@@ -745,6 +750,74 @@ function MasterDashboard() {
           </div>
         </div>
       </div>
+
+      {/* ── Product earning breakdown (if any) ── */}
+      {(data.todayService !== undefined || data.todayProduct !== undefined) && (data.todayService || 0) + (data.todayProduct || 0) > 0 && (
+        <div className="rounded-xl bg-white border border-gray-100 shadow-sm p-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Структура заработка сегодня</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-lg bg-blue-50 p-3">
+              <p className="text-xs text-blue-600 font-medium">С услуг</p>
+              <p className="text-lg font-bold text-gray-900">{formatMoney(data.todayService ?? 0)}</p>
+            </div>
+            <div className="rounded-lg bg-green-50 p-3">
+              <p className="text-xs text-green-600 font-medium">С товаров</p>
+              <p className="text-lg font-bold text-gray-900">{formatMoney(data.todayProduct ?? 0)}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Product promotions for master ── */}
+      {data.productPromotions && data.productPromotions.length > 0 && (
+        <div className="rounded-2xl bg-gradient-to-br from-emerald-50 to-green-50 border border-green-200 shadow-sm overflow-hidden">
+          <div className="px-4 pt-4 pb-2 flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-100">
+              <Gift className="h-5 w-5 text-green-600" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-gray-900">Бонус с товаров</p>
+              <p className="text-[11px] text-gray-500">Продавай эти товары и получай % с прибыли</p>
+            </div>
+          </div>
+          <div className="px-3 pb-3">
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {data.productPromotions.map((promo) => (
+                <div key={promo.productId} className="flex items-center gap-3 bg-white rounded-xl px-3 py-2.5 shadow-sm">
+                  {promo.photo ? (
+                    <img
+                      src={promo.photo}
+                      alt={promo.productName}
+                      className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
+                      <Package className="w-5 h-5 text-gray-300" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{promo.productName}</p>
+                    <p className="text-[11px] text-gray-400">
+                      Цена: {formatMoney(promo.sellPrice)}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-sm font-bold text-green-600">+{formatMoney(promo.estimatedBonus)}</p>
+                    <p className="text-[10px] text-gray-400">{promo.percent}% с прибыли</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {data.productSalaryPercent && data.productSalaryPercent > 0 && (
+            <div className="border-t border-green-200 px-4 py-2.5 bg-green-50/50">
+              <p className="text-xs text-green-700">
+                Также <span className="font-bold">{data.productSalaryPercent}%</span> со всех остальных товаров
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

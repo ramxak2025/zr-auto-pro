@@ -14,7 +14,7 @@ export class ReportsService {
       `SELECT
          COALESCE(SUM(total_revenue), 0) as revenue,
          COALESCE(SUM(product_cost_total), 0) as product_cost,
-         COALESCE(SUM(service_salary_total), 0) as salaries,
+         COALESCE(SUM(service_salary_total) + SUM(COALESCE(product_salary_total, 0)), 0) as salaries,
          COUNT(*) as check_count
        FROM checks
        WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false`,

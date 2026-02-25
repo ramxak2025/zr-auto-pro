@@ -37,4 +37,20 @@ export class UsersController {
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.usersService.remove(id, user.tenantID, user.userID, user.role);
   }
+
+  // ─── Product Commissions ────────────────────────────────────────────
+
+  @Get(':id/product-commissions')
+  getProductCommissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.getProductCommissions(id, user.tenantID);
+  }
+
+  @Post(':id/product-commissions')
+  setProductCommissions(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> },
+  ) {
+    return this.usersService.setProductCommissions(id, user.tenantID, dto);
+  }
 }

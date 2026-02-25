@@ -28,6 +28,7 @@ export class ChecksService {
       totalRevenue: parseFloat(row.total_revenue) || 0,
       productCostTotal: parseFloat(row.product_cost_total) || 0,
       serviceSalaryTotal: parseFloat(row.service_salary_total) || 0,
+      productSalaryTotal: parseFloat(row.product_salary_total) || 0,
       totalCost: parseFloat(row.total_cost) || 0,
       profit: parseFloat(row.profit) || 0,
       createdAt: row.created_at,
@@ -118,13 +119,14 @@ export class ChecksService {
     if (row.client_id) ch.client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
     if (row.car_id) ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
 
-    // Load service lines
+    // Load service lines (check_id already verified against tenant above)
     const { rows: svcRows } = await this.pool.query(
       `SELECT sl.*, u.full_name as master_name
        FROM check_service_lines sl
+       JOIN checks c ON c.id = sl.check_id AND c.tenant_id = $2
        LEFT JOIN users u ON u.id = sl.master_id
        WHERE sl.check_id=$1`,
-      [id],
+      [id, tenantID],
     );
     ch.services = svcRows.map((s) => ({
       id: s.id,
@@ -137,10 +139,12 @@ export class ChecksService {
       total: parseFloat(s.total) || 0,
     }));
 
-    // Load product lines
+    // Load product lines (tenant-scoped via JOIN)
     const { rows: prodRows } = await this.pool.query(
-      'SELECT * FROM check_product_lines WHERE check_id=$1',
-      [id],
+      `SELECT pl.* FROM check_product_lines pl
+       JOIN checks c ON c.id = pl.check_id AND c.tenant_id = $2
+       WHERE pl.check_id=$1`,
+      [id, tenantID],
     );
     ch.products = prodRows.map((p) => ({
       id: p.id,
@@ -203,22 +207,55 @@ export class ChecksService {
         serviceLines.push({ ...svc, total, masterId });
       }
 
-      // Calculate product totals
+      // Calculate product totals and product commission for master
       let productTotal = 0;
       let productCostTotal = 0;
+      let productSalaryTotal = 0;
       const productLines: any[] = [];
+
+      // Fetch master's product commission settings (tenant-scoped)
+      const mainMasterId = dto.masterId;
+      const { rows: masterProdRows } = await client.query(
+        'SELECT COALESCE(product_salary_percent, 0) as product_salary_percent FROM users WHERE id = $1 AND tenant_id = $2',
+        [mainMasterId, tenantID],
+      );
+      const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
+
+      // Fetch product-specific commissions for this master
+      const productCommissionMap: Record<string, number> = {};
+      if (products.length > 0) {
+        const prodIds = products.map(p => p.productId).filter(Boolean);
+        if (prodIds.length > 0) {
+          const { rows: pcRows } = await client.query(
+            `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
+            [mainMasterId, prodIds, tenantID],
+          );
+          for (const r of pcRows) {
+            productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
+          }
+        }
+      }
+
       for (const prod of products) {
         const totalSell = (prod.sellPrice || 0) * (prod.quantity || 1);
         const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
+        const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
+
+        // Product commission: specific per-product % takes priority, otherwise global %
+        const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+        if (pct > 0 && productProfit > 0) {
+          productSalaryTotal += productProfit * pct / 100;
+        }
+
         productLines.push({ ...prod, totalSell, totalCost });
       }
 
       const discount = dto.discount || 0;
       const discountedProductTotal = productTotal - discount;
       const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
-      const totalCost = productCostTotal + serviceSalaryTotal;
+      const totalCost = productCostTotal + serviceSalaryTotal + productSalaryTotal;
       const profit = totalRevenue - totalCost;
 
       // Parse date
@@ -239,15 +276,15 @@ export class ChecksService {
         `INSERT INTO checks (date, master_id, client_id, car_id, mileage, comment, discount,
          is_deferred, payment_method, cash_amount, card_amount,
          service_total, product_total, total_revenue, product_cost_total,
-         service_salary_total, total_cost, profit, tenant_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         service_salary_total, product_salary_total, total_cost, profit, tenant_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
          RETURNING *`,
         [checkDate, dto.masterId, dto.clientId || null, dto.carId || null,
          dto.mileage || null, dto.comment || null, discount,
          dto.isDeferred || false, dto.paymentMethod || 'cash',
          dto.cashAmount || 0, dto.cardAmount || 0,
          serviceTotal, productTotal, totalRevenue, productCostTotal,
-         serviceSalaryTotal, totalCost, profit, tenantID],
+         serviceSalaryTotal, productSalaryTotal, totalCost, profit, tenantID],
       );
 
       const checkId = checkRows[0].id;
@@ -275,8 +312,8 @@ export class ChecksService {
         // Decrease product stock
         if (prod.productId && !dto.isDeferred) {
           await client.query(
-            `UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2`,
-            [prod.quantity || 1, prod.productId],
+            `UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2 AND tenant_id = $3`,
+            [prod.quantity || 1, prod.productId, tenantID],
           );
         }
       }
@@ -380,22 +417,52 @@ export class ChecksService {
         serviceLines.push({ ...svc, total, masterId });
       }
 
-      // Calculate product totals
+      // Calculate product totals and product commission
       let productTotal = 0;
       let productCostTotal = 0;
+      let productSalaryTotal = 0;
       const productLines: any[] = [];
+
+      // Fetch master's product commission settings (tenant-scoped)
+      const { rows: masterProdRows } = await client.query(
+        'SELECT COALESCE(product_salary_percent, 0) as product_salary_percent FROM users WHERE id = $1 AND tenant_id = $2',
+        [primaryMasterId, tenantID],
+      );
+      const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
+
+      const productCommissionMap: Record<string, number> = {};
+      if (products.length > 0) {
+        const prodIds = products.map(p => p.productId).filter(Boolean);
+        if (prodIds.length > 0) {
+          const { rows: pcRows } = await client.query(
+            `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
+            [primaryMasterId, prodIds, tenantID],
+          );
+          for (const r of pcRows) {
+            productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
+          }
+        }
+      }
+
       for (const prod of products) {
         const totalSell = (prod.sellPrice || 0) * (prod.quantity || 1);
         const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
+        const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
+
+        const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+        if (pct > 0 && productProfit > 0) {
+          productSalaryTotal += productProfit * pct / 100;
+        }
+
         productLines.push({ ...prod, totalSell, totalCost });
       }
 
       const discount = dto.discount ?? (parseFloat(checkRows[0].discount) || 0);
       const discountedProductTotal = productTotal - discount;
       const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
-      const totalCost = productCostTotal + serviceSalaryTotal;
+      const totalCost = productCostTotal + serviceSalaryTotal + productSalaryTotal;
       const profit = totalRevenue - totalCost;
 
       // Update check record
@@ -420,6 +487,7 @@ export class ChecksService {
       updateFields.push(`total_revenue=$${ui++}`); updateVals.push(totalRevenue);
       updateFields.push(`product_cost_total=$${ui++}`); updateVals.push(productCostTotal);
       updateFields.push(`service_salary_total=$${ui++}`); updateVals.push(serviceSalaryTotal);
+      updateFields.push(`product_salary_total=$${ui++}`); updateVals.push(productSalaryTotal);
       updateFields.push(`total_cost=$${ui++}`); updateVals.push(totalCost);
       updateFields.push(`profit=$${ui++}`); updateVals.push(profit);
 

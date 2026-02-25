@@ -226,7 +226,7 @@ export class ProductsService {
           throw new BadRequestException({ message: 'Неверный тип операции' });
       }
 
-      await client.query('UPDATE products SET stock=$1 WHERE id=$2', [stockAfter, id]);
+      await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [stockAfter, id, tenantID]);
 
       await client.query(
         `INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id)

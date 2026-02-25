@@ -23,6 +23,7 @@ export class UsersService {
       avatar: row.avatar,
       role: row.role,
       salaryPercent: parseFloat(row.salary_percent) || 0,
+      productSalaryPercent: parseFloat(row.product_salary_percent) || 0,
       permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : (row.permissions || {}),
       daysOff,
       isActive: row.is_active,
@@ -35,6 +36,7 @@ export class UsersService {
     const { rows } = await this.pool.query(
       `SELECT id, phone, full_name, username, avatar, role,
               COALESCE(salary_percent, 0) as salary_percent,
+              COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
               is_active, tenant_id, created_at
@@ -48,6 +50,7 @@ export class UsersService {
     const { rows } = await this.pool.query(
       `SELECT id, phone, full_name, username, avatar, role,
               COALESCE(salary_percent, 0) as salary_percent,
+              COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
               is_active, tenant_id, created_at
@@ -63,6 +66,7 @@ export class UsersService {
     const { rows } = await this.pool.query(
       `SELECT id, phone, full_name, username, avatar, role,
               COALESCE(salary_percent, 0) as salary_percent,
+              COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
               is_active, tenant_id, created_at
@@ -97,7 +101,7 @@ export class UsersService {
       const { rows } = await this.pool.query(
         `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, true, $7)
-         RETURNING id, phone, full_name, username, avatar, role, salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
+         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
         [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, perms, tenantID],
       );
       return this.mapUser(rows[0]);
@@ -125,6 +129,7 @@ export class UsersService {
     if (dto.fullName !== undefined) { sets.push(`full_name=$${idx++}`); vals.push(dto.fullName); }
     if (dto.role !== undefined) { sets.push(`role=$${idx++}`); vals.push(dto.role); }
     if (dto.salaryPercent !== undefined) { sets.push(`salary_percent=$${idx++}`); vals.push(dto.salaryPercent); }
+    if (dto.productSalaryPercent !== undefined) { sets.push(`product_salary_percent=$${idx++}`); vals.push(dto.productSalaryPercent); }
     if (dto.permissions !== undefined) { sets.push(`permissions=$${idx++}`); vals.push(JSON.stringify(dto.permissions)); }
     if (dto.isActive !== undefined) { sets.push(`is_active=$${idx++}`); vals.push(dto.isActive); }
     if (dto.daysOff !== undefined) { sets.push(`days_off=$${idx++}`); vals.push(JSON.stringify(dto.daysOff)); }
@@ -143,7 +148,7 @@ export class UsersService {
 
     const { rows } = await this.pool.query(
       `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
+       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
@@ -191,5 +196,92 @@ export class UsersService {
 
     await this.pool.query('DELETE FROM users WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     return { message: 'Удалено' };
+  }
+
+  // ─── Product Commissions ────────────────────────────────────────────
+
+  async getProductCommissions(userId: string, tenantID: string) {
+    // Get global product salary percent
+    const { rows: userRows } = await this.pool.query(
+      'SELECT COALESCE(product_salary_percent, 0) as product_salary_percent FROM users WHERE id=$1 AND tenant_id=$2',
+      [userId, tenantID],
+    );
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    const productSalaryPercent = parseFloat(userRows[0].product_salary_percent) || 0;
+
+    // Get product-specific commissions
+    const { rows } = await this.pool.query(
+      `SELECT pc.id, pc.product_id, pc.percent, p.name as product_name, p.sell_price, p.cost_price
+       FROM product_commissions pc
+       JOIN products p ON p.id = pc.product_id
+       WHERE pc.user_id = $1 AND pc.tenant_id = $2
+       ORDER BY p.name`,
+      [userId, tenantID],
+    );
+
+    return {
+      productSalaryPercent,
+      items: rows.map(r => ({
+        id: r.id,
+        productId: r.product_id,
+        percent: parseFloat(r.percent) || 0,
+        productName: r.product_name,
+        sellPrice: parseFloat(r.sell_price) || 0,
+        costPrice: parseFloat(r.cost_price) || 0,
+      })),
+    };
+  }
+
+  async setProductCommissions(
+    userId: string,
+    tenantID: string,
+    dto: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> },
+  ) {
+    // Verify user exists
+    const { rows: userRows } = await this.pool.query(
+      'SELECT id FROM users WHERE id=$1 AND tenant_id=$2',
+      [userId, tenantID],
+    );
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Update global product salary percent
+      await client.query(
+        'UPDATE users SET product_salary_percent = $1 WHERE id = $2 AND tenant_id = $3',
+        [dto.productSalaryPercent || 0, userId, tenantID],
+      );
+
+      // Replace all product-specific commissions
+      await client.query(
+        'DELETE FROM product_commissions WHERE user_id = $1 AND tenant_id = $2',
+        [userId, tenantID],
+      );
+
+      if (dto.items && dto.items.length > 0) {
+        for (const item of dto.items) {
+          if (item.productId && item.percent > 0) {
+            await client.query(
+              `INSERT INTO product_commissions (tenant_id, user_id, product_id, percent)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (tenant_id, user_id, product_id) DO UPDATE SET percent = $4`,
+              [tenantID, userId, item.productId, item.percent],
+            );
+          }
+        }
+      }
+
+      await client.query('COMMIT');
+      return this.getProductCommissions(userId, tenantID);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`setProductCommissions error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сохранения комиссий' });
+    } finally {
+      client.release();
+    }
   }
 }

@@ -223,11 +223,14 @@ export default function SupplierDetailPage() {
     data: supplier,
     isLoading,
     isError,
+    error,
   } = useQuery({
     queryKey: ['supplier', id],
     queryFn: () => suppliersApi.getById(id!),
     select: (res) => res.data as Supplier,
     enabled: !!id,
+    retry: 2,
+    staleTime: 30_000,
   });
 
   // Deliveries
@@ -254,7 +257,7 @@ export default function SupplierDetailPage() {
   });
   const payments: SupplierPayment[] = paymentsData || [];
 
-  // Products for delivery items
+  // Products for delivery items — only load when delivery modal is open
   const { data: productsData } = useQuery({
     queryKey: ['products-all'],
     queryFn: () => productsApi.getAll({ limit: 1000 }),
@@ -262,6 +265,7 @@ export default function SupplierDetailPage() {
       const d = res.data;
       return Array.isArray(d) ? d : ((d as PaginatedResponse<Product>).data || []);
     },
+    enabled: isDeliveryModalOpen || showDeliveryPicker,
   });
   const products: Product[] = productsData || [];
 
@@ -431,6 +435,7 @@ export default function SupplierDetailPage() {
   if (isLoading) return <LoadingSpinner />;
 
   if (isError || !supplier) {
+    const is404 = (error as any)?.response?.status === 404;
     return (
       <div className="space-y-6">
         <button
@@ -442,8 +447,9 @@ export default function SupplierDetailPage() {
         </button>
         <EmptyState
           icon={Truck}
-          title="Поставщик не найден"
-          description="Возможно, он был удален"
+          title={is404 ? 'Поставщик не найден' : 'Ошибка загрузки'}
+          description={is404 ? 'Возможно, он был удалён' : 'Проверьте подключение и попробуйте ещё раз'}
+          action={!is404 ? { label: 'Повторить', onClick: () => window.location.reload() } : undefined}
         />
       </div>
     );

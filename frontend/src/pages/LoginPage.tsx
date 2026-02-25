@@ -39,17 +39,12 @@ export default function LoginPage() {
   useEffect(() => {
     const checkApi = async () => {
       try {
-        const res = await api.get('/health/db');
-        const data = res.data;
-        if (data.db === 'OK' && (data.userCount > 0 || data.tenantCount > 0)) {
+        const res = await api.get('/health');
+        if (res.data?.status === 'ok') {
           setApiStatus('ok');
-          setApiDetails(`Сервер работает. Пользователей: ${data.userCount}`);
-        } else if (data.db === 'OK') {
-          setApiStatus('db_error');
-          setApiDetails('Сервер работает, но в базе нет пользователей.');
         } else {
           setApiStatus('db_error');
-          setApiDetails(`Проблема с базой данных: ${data.db}`);
+          setApiDetails('Сервер запущен, но отвечает некорректно.');
         }
       } catch (err: any) {
         setApiStatus('error');
