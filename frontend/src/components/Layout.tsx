@@ -209,27 +209,30 @@ interface MobileTabBarProps {
 
 const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
   return (
-    <nav className="md:hidden flex-shrink-0 z-30 bg-white border-t border-gray-200 pb-[env(safe-area-inset-bottom)]">
-      <div className="flex items-end justify-around h-16 px-2">
+    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+      <div className="flex items-center justify-around h-[68px] px-2">
         {mobileTabItems.map((tab) => {
           const Icon = tab.icon;
           const active = isTabActive(tab, pathname);
 
           if (tab.isCenter) {
             return (
-              <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center -mt-4 pb-1">
-                <div className="flex h-11 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-lg active:scale-95 transition-transform">
-                  <Icon className="h-5 w-5" strokeWidth={2.2} />
+              <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center -mt-6">
+                <div className="relative">
+                  <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
+                  <div className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95">
+                    <Icon className="h-6 w-6" strokeWidth={2.2} />
+                  </div>
                 </div>
-                <span className="text-[10px] font-bold mt-0.5 text-primary-600">{tab.label}</span>
+                <span className="text-[10px] font-bold mt-1 text-primary-600">{tab.label}</span>
               </NavLink>
             );
           }
 
           return (
-            <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-14 pb-1.5 pt-2">
-              <div className={`flex items-center justify-center h-7 w-7 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
-                <Icon className={`h-5 w-5 ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
+            <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors">
+              <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
+                <Icon className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
               </div>
               <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>{tab.label}</span>
             </NavLink>
@@ -310,7 +313,7 @@ export default function Layout() {
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
         {/* Page content — sole scroll container */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-4 md:p-6 w-full min-w-0">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
           <PageContent />
         </main>
 
