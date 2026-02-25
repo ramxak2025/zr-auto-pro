@@ -38,18 +38,17 @@ window.addEventListener('load', () => {
 });
 
 // ─── Safety net: detect stuck body.overflow ──────────────────────────────────
-// If body.style.overflow is 'hidden' but no modal overlay exists in the DOM,
-// the modal's cleanup failed (e.g., navigated away while modal was open).
-// This causes a "white screen" where nothing is scrollable or clickable.
-setInterval(() => {
+// MutationObserver instead of setInterval — zero CPU cost when idle.
+const bodyOverflowObserver = new MutationObserver(() => {
   if (
     document.body.style.overflow === 'hidden' &&
-    !document.querySelector('.fixed.inset-0.z-50') && // Modal overlay
-    !document.querySelector('[class*="z-[9998]"]')    // InstallPrompt backdrop
+    !document.querySelector('.fixed.inset-0.z-50') &&
+    !document.querySelector('[class*="z-[9998]"]')
   ) {
     document.body.style.overflow = '';
   }
-}, 2000);
+});
+bodyOverflowObserver.observe(document.body, { attributes: true, attributeFilter: ['style'] });
 
 const queryClient = new QueryClient({
   defaultOptions: {

@@ -8,12 +8,12 @@
 //  - Offline fallback: Serve cached shell
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v4';
-const API_CACHE = 'autexa-api-v3';
+const STATIC_CACHE = 'autexa-static-v5';
+const API_CACHE = 'autexa-api-v4';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 
-// Maximum age for cached API responses (5 minutes)
-const API_MAX_AGE_MS = 5 * 60 * 1000;
+// Maximum age for cached API responses (3 minutes for faster perceived updates)
+const API_MAX_AGE_MS = 3 * 60 * 1000;
 
 // Static shell assets to precache on install
 const PRECACHE_ASSETS = [
@@ -42,12 +42,12 @@ self.addEventListener('install', (event) => {
 // ─── Activate ────────────────────────────────────────────────────────────────
 
 self.addEventListener('activate', (event) => {
-  const keepCaches = [STATIC_CACHE, API_CACHE];
+  const keepCaches = new Set([STATIC_CACHE, API_CACHE]);
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => !keepCaches.includes(k))
+          .filter((k) => !keepCaches.has(k))
           .map((k) => caches.delete(k))
       )
     )
@@ -177,7 +177,7 @@ async function staleWhileRevalidate(request) {
     if (isStale) {
       const raceResult = await Promise.race([
         fetchPromise,
-        new Promise((resolve) => setTimeout(() => resolve(null), 800)),
+        new Promise((resolve) => setTimeout(() => resolve(null), 400)),
       ]);
       return raceResult || cachedResponse;
     }

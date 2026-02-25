@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useCallback } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -96,8 +96,6 @@ function isTabActive(tab: TabItem & { isCenter?: boolean }, pathname: string): b
 }
 
 // ─── Memoized static components ──────────────────────────────────────────────
-// These parts of the layout don't depend on route/page data, so we memoize them
-// to avoid re-renders when the <Outlet> content changes.
 
 interface SidebarProps {
   userName: string;
@@ -123,7 +121,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
   return (
     <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
       <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
-        <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" />
+        <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" loading="eager" decoding="async" />
         {tenantName && (
           <div className="min-w-0">
             <span className="text-sm font-semibold text-gray-900 truncate block">{tenantName}</span>
@@ -143,7 +141,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
                   end={item.path === '/dashboard'}
                   {...prefetch(item.path)}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                    `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-100 ${
                       isActive
                         ? 'bg-primary-50 text-primary-700'
                         : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
@@ -162,7 +160,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
       <div className="border-t border-gray-200 px-4 py-3">
         <div className="flex items-center gap-3">
           {userAvatar ? (
-            <img src={userAvatar} alt="" className="h-8 w-8 rounded-full object-cover" />
+            <img src={userAvatar} alt="" className="h-8 w-8 rounded-full object-cover" loading="lazy" decoding="async" />
           ) : (
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
               {userInitial}
@@ -188,13 +186,13 @@ interface MobileHeaderProps {
 
 const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: MobileHeaderProps) {
   return (
-    <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+    <header className="md:hidden flex-shrink-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
       <div className="flex items-center gap-2">
-        <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
+        <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" loading="eager" decoding="async" />
       </div>
       <div className="flex items-center gap-2">
         {userAvatar ? (
-          <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" />
+          <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" loading="lazy" decoding="async" />
         ) : (
           <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
             {userInitial}
@@ -211,30 +209,27 @@ interface MobileTabBarProps {
 
 const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
   return (
-    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
-      <div className="flex items-center justify-around h-[68px] px-2">
+    <nav className="md:hidden flex-shrink-0 z-30 bg-white border-t border-gray-200 pb-[env(safe-area-inset-bottom)]">
+      <div className="flex items-end justify-around h-16 px-2">
         {mobileTabItems.map((tab) => {
           const Icon = tab.icon;
           const active = isTabActive(tab, pathname);
 
           if (tab.isCenter) {
             return (
-              <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center -mt-6">
-                <div className="relative">
-                  <div className="absolute inset-0 rounded-2xl bg-primary-400 blur-md opacity-40" />
-                  <div className="relative flex h-12 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-md transition-transform active:scale-95">
-                    <Icon className="h-6 w-6" strokeWidth={2.2} />
-                  </div>
+              <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center -mt-4 pb-1">
+                <div className="flex h-11 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-primary-500 to-primary-700 text-white shadow-lg active:scale-95 transition-transform">
+                  <Icon className="h-5 w-5" strokeWidth={2.2} />
                 </div>
-                <span className="text-[10px] font-bold mt-1 text-primary-600">{tab.label}</span>
+                <span className="text-[10px] font-bold mt-0.5 text-primary-600">{tab.label}</span>
               </NavLink>
             );
           }
 
           return (
-            <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors">
-              <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
-                <Icon className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
+            <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-14 pb-1.5 pt-2">
+              <div className={`flex items-center justify-center h-7 w-7 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
+                <Icon className={`h-5 w-5 ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
               </div>
               <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>{tab.label}</span>
             </NavLink>
@@ -245,16 +240,23 @@ const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps)
   );
 });
 
+// ─── Memoized page content to isolate re-renders ─────────────────────────────
+
+const PageContent = memo(function PageContent() {
+  return (
+    <div className="w-full min-w-0">
+      <Outlet />
+    </div>
+  );
+});
+
 // ─── Main Layout ─────────────────────────────────────────────────────────────
 
 export default function Layout() {
   const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
 
-  // Pull-to-refresh: invalidates all active React Query caches on pull down
   usePullToRefresh();
-
-  // Background sync: handle offline mutations and online/offline events
   useOfflineSync();
 
   const breadcrumbs = getPageTitle(location.pathname);
@@ -263,7 +265,6 @@ export default function Layout() {
   const userInitial = user?.fullName?.charAt(0) || 'U';
   const tenantName = user?.tenant?.name || '';
 
-  // Memoize to prevent unnecessary re-renders of child components
   const sidebarProps = useMemo(() => ({
     userName,
     userAvatar: user?.avatar,
@@ -275,14 +276,14 @@ export default function Layout() {
   }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, logout]);
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
+    <div className="layout-shell flex bg-gray-50">
       {/* ─── Desktop sidebar (memoized) ─── */}
       <DesktopSidebar {...sidebarProps} />
 
       {/* ─── Main area ─── */}
-      <div className="flex flex-1 flex-col md:pl-[260px] w-full min-w-0">
+      <div className="flex flex-1 flex-col md:pl-[260px] w-full min-w-0 min-h-0">
         {/* Desktop top bar */}
-        <header className="hidden md:flex sticky top-0 z-20 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
+        <header className="hidden md:flex flex-shrink-0 z-20 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
           <div className="flex items-center gap-1.5 text-sm">
             {breadcrumbs.map((crumb, index) => (
               <span key={index} className="flex items-center gap-1.5">
@@ -308,11 +309,9 @@ export default function Layout() {
         {/* Mobile top bar (memoized) */}
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
-        {/* Page content */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
-          <div className="w-full min-w-0">
-            <Outlet />
-          </div>
+        {/* Page content — sole scroll container */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-4 md:p-6 w-full min-w-0">
+          <PageContent />
         </main>
 
         {/* ─── Mobile bottom tab bar (memoized) ─── */}
