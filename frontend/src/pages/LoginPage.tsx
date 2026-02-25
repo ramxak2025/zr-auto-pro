@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Loader2, Phone, Lock, Eye, EyeOff, Wifi, WifiOff, AlertTriangle } from 'lucide-react';
+import { Loader2, Phone, Lock, Eye, EyeOff, WifiOff, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axios';
@@ -41,18 +41,12 @@ export default function LoginPage() {
       try {
         const res = await api.get('/health/db');
         const data = res.data;
-        if (data.db === 'OK' && data.users?.length > 0) {
-          const adminOk = data.admin_check?.includes('OK');
-          if (adminOk) {
-            setApiStatus('ok');
-            setApiDetails(`Сервер работает. Пользователей: ${data.users.length}`);
-          } else {
-            setApiStatus('db_error');
-            setApiDetails(`Сервер работает, но проблема с паролями. Подробности: ${data.admin_check || 'нет данных'}`);
-          }
+        if (data.db === 'OK' && (data.userCount > 0 || data.tenantCount > 0)) {
+          setApiStatus('ok');
+          setApiDetails(`Сервер работает. Пользователей: ${data.userCount}`);
         } else if (data.db === 'OK') {
           setApiStatus('db_error');
-          setApiDetails('Сервер работает, но в базе нет пользователей. Seed не выполнился.');
+          setApiDetails('Сервер работает, но в базе нет пользователей.');
         } else {
           setApiStatus('db_error');
           setApiDetails(`Проблема с базой данных: ${data.db}`);

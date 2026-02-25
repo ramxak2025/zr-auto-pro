@@ -3,9 +3,65 @@ import { JwtService } from '@nestjs/jwt';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
-import { transformKeys, stripFields } from '../common/transform';
+import { normalizePhone } from '../common/normalize-phone';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+
+// Shared SQL fragment for fetching user with tenant info
+const USER_WITH_TENANT_COLUMNS = `
+  u.id, u.phone, u.full_name, u.avatar, u.role,
+  COALESCE(u.salary_percent, 0) as salary_percent,
+  COALESCE(u.permissions, '{}') as permissions,
+  u.is_active, u.tenant_id, u.created_at,
+  CASE WHEN t.id IS NOT NULL THEN
+    json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
+      'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
+      'email',COALESCE(t.email,''),'isActive',t.is_active,
+      'maxUsers',t.max_users,
+      'subscriptionEnd',t.subscription_end,
+      'subscriptionNote',COALESCE(t.subscription_note,''),
+      'createdAt',t.created_at,'updatedAt',t.updated_at)::text
+  ELSE NULL END as tenant_json`;
+
+/** Map a raw DB row to a camelCase user object with parsed tenant */
+function mapUserRow(row: any) {
+  const user: any = {
+    id: row.id,
+    phone: row.phone,
+    fullName: row.full_name,
+    avatar: row.avatar,
+    role: row.role,
+    salaryPercent: parseFloat(row.salary_percent) || 0,
+    permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions,
+    isActive: row.is_active,
+    tenantId: row.tenant_id,
+    createdAt: row.created_at,
+  };
+
+  if (row.tenant_json) {
+    try {
+      user.tenant = JSON.parse(row.tenant_json);
+    } catch { /* ignore malformed tenant JSON */ }
+  }
+
+  return user;
+}
+
+// All permissions enabled by default for new directors
+const ALL_PERMISSIONS = JSON.stringify({
+  checks_view: true,
+  checks_create: true,
+  checks_edit: true,
+  checks_delete: true,
+  profit_view: true,
+  clients_view: true,
+  clients_edit: true,
+  warehouse_access: true,
+  suppliers_access: true,
+  financial_reports: true,
+  export_data: true,
+  user_management: true,
+});
 
 @Injectable()
 export class AuthService {
@@ -16,18 +72,6 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  private normalizePhone(phone: string): string {
-    let digits = '';
-    for (const c of phone) {
-      if (c >= '0' && c <= '9') digits += c;
-    }
-    if (digits.length === 11 && digits[0] === '8') {
-      digits = '7' + digits.substring(1);
-    }
-    if (digits.length > 0) return '+' + digits;
-    return phone;
-  }
-
   private generateToken(userID: string): string {
     return this.jwtService.sign({ sub: userID });
   }
@@ -37,22 +81,10 @@ export class AuthService {
       throw new BadRequestException({ message: 'Телефон и пароль обязательны' });
     }
 
-    const phone = this.normalizePhone(dto.phone);
+    const phone = normalizePhone(dto.phone);
 
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.phone, u.password, u.full_name, u.avatar, u.role,
-              COALESCE(u.salary_percent, 0) as salary_percent,
-              COALESCE(u.permissions, '{}') as permissions,
-              u.is_active, u.tenant_id, u.created_at,
-              CASE WHEN t.id IS NOT NULL THEN
-                json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
-                  'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
-                  'email',COALESCE(t.email,''),'isActive',t.is_active,
-                  'maxUsers',t.max_users,
-                  'subscriptionEnd',t.subscription_end,
-                  'subscriptionNote',COALESCE(t.subscription_note,''),
-                  'createdAt',t.created_at,'updatedAt',t.updated_at)::text
-              ELSE NULL END as tenant_json
+      `SELECT u.password, ${USER_WITH_TENANT_COLUMNS}
        FROM users u
        LEFT JOIN tenants t ON t.id = u.tenant_id
        WHERE u.phone = $1 OR u.phone = $2
@@ -78,27 +110,7 @@ export class AuthService {
     this.logger.log(`Login OK for phone=${phone} role=${row.role}`);
 
     const token = this.generateToken(row.id);
-
-    const user: any = {
-      id: row.id,
-      phone: row.phone,
-      fullName: row.full_name,
-      avatar: row.avatar,
-      role: row.role,
-      salaryPercent: parseFloat(row.salary_percent) || 0,
-      permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions,
-      isActive: row.is_active,
-      tenantId: row.tenant_id,
-      createdAt: row.created_at,
-    };
-
-    if (row.tenant_json) {
-      try {
-        user.tenant = JSON.parse(row.tenant_json);
-      } catch {}
-    }
-
-    return { token, user };
+    return { token, user: mapUserRow(row) };
   }
 
   async register(dto: RegisterDto) {
@@ -110,7 +122,7 @@ export class AuthService {
       throw new BadRequestException({ message: 'Пароль должен быть не менее 6 символов' });
     }
 
-    const phone = this.normalizePhone(dto.phone);
+    const phone = normalizePhone(dto.phone);
 
     const { rows: existsRows } = await this.pool.query(
       'SELECT EXISTS(SELECT 1 FROM users WHERE phone=$1) as exists',
@@ -133,33 +145,17 @@ export class AuthService {
       );
       const tenantID = tenantRows[0].id;
 
-      const allPerms = '{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}';
-
       const { rows: userRows } = await client.query(
         `INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions)
          VALUES ($1, $2, $3, 'director', true, $4, $5)
          RETURNING id, phone, full_name, role, salary_percent, permissions, is_active, tenant_id, created_at`,
-        [phone, hash, dto.fullName, tenantID, allPerms],
+        [phone, hash, dto.fullName, tenantID, ALL_PERMISSIONS],
       );
 
       await client.query('COMMIT');
 
-      const row = userRows[0];
-      const token = this.generateToken(row.id);
-
-      const user: any = {
-        id: row.id,
-        phone: row.phone,
-        fullName: row.full_name,
-        role: row.role,
-        salaryPercent: parseFloat(row.salary_percent) || 0,
-        permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions,
-        isActive: row.is_active,
-        tenantId: row.tenant_id,
-        createdAt: row.created_at,
-      };
-
-      return { token, user };
+      const token = this.generateToken(userRows[0].id);
+      return { token, user: mapUserRow(userRows[0]) };
     } catch (err) {
       await client.query('ROLLBACK');
       this.logger.error(`Register error: ${err}`);
@@ -171,19 +167,7 @@ export class AuthService {
 
   async me(userID: string) {
     const { rows } = await this.pool.query(
-      `SELECT u.id, u.phone, u.full_name, u.avatar, u.role,
-              COALESCE(u.salary_percent, 0) as salary_percent,
-              COALESCE(u.permissions, '{}') as permissions,
-              u.is_active, u.tenant_id, u.created_at,
-              CASE WHEN t.id IS NOT NULL THEN
-                json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
-                  'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
-                  'email',COALESCE(t.email,''),'isActive',t.is_active,
-                  'maxUsers',t.max_users,
-                  'subscriptionEnd',t.subscription_end,
-                  'subscriptionNote',COALESCE(t.subscription_note,''),
-                  'createdAt',t.created_at,'updatedAt',t.updated_at)::text
-              ELSE NULL END as tenant_json
+      `SELECT ${USER_WITH_TENANT_COLUMNS}
        FROM users u
        LEFT JOIN tenants t ON t.id = u.tenant_id
        WHERE u.id = $1`,
@@ -194,27 +178,7 @@ export class AuthService {
       throw new UnauthorizedException({ message: 'Пользователь не найден' });
     }
 
-    const row = rows[0];
-    const user: any = {
-      id: row.id,
-      phone: row.phone,
-      fullName: row.full_name,
-      avatar: row.avatar,
-      role: row.role,
-      salaryPercent: parseFloat(row.salary_percent) || 0,
-      permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions,
-      isActive: row.is_active,
-      tenantId: row.tenant_id,
-      createdAt: row.created_at,
-    };
-
-    if (row.tenant_json) {
-      try {
-        user.tenant = JSON.parse(row.tenant_json);
-      } catch {}
-    }
-
-    return user;
+    return mapUserRow(rows[0]);
   }
 
   async updateAvatar(userID: string, avatar: string) {

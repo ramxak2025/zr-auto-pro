@@ -29,7 +29,7 @@ export default function ConfirmDialog({
       <p className="text-sm text-gray-600 mb-6">{message}</p>
       <div className="flex items-center justify-end gap-3">
         <button onClick={onClose} className="btn-secondary">
-          Cancel
+          Отмена
         </button>
         <button
           onClick={handleConfirm}

@@ -4,8 +4,8 @@ import {
   ExecutionContext,
   CallHandler,
 } from '@nestjs/common';
-import { Observable, of } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { Observable, EMPTY } from 'rxjs';
+import { switchMap } from 'rxjs/operators';
 import { Response, Request } from 'express';
 import * as crypto from 'crypto';
 
@@ -13,8 +13,11 @@ import * as crypto from 'crypto';
  * ETag Interceptor
  *
  * Generates an ETag header for GET responses by hashing the JSON body.
- * If the client sends `If-None-Match` matching the ETag, returns 304 Not Modified
- * with NO body (per HTTP spec, 304 MUST NOT contain a body).
+ * If the client sends `If-None-Match` matching the ETag, returns 304 Not Modified.
+ *
+ * Uses switchMap + EMPTY for 304 responses to prevent NestJS from trying
+ * to serialize an undefined body (which caused intermittent white-screen errors
+ * when the framework attempted to JSON.stringify(undefined)).
  */
 @Injectable()
 export class ETagInterceptor implements NestInterceptor {
@@ -29,12 +32,12 @@ export class ETagInterceptor implements NestInterceptor {
     }
 
     return next.handle().pipe(
-      map((body) => {
+      switchMap((body) => {
         // Skip if response is already sent (streaming, file downloads)
-        if (response.headersSent) return body;
+        if (response.headersSent) return [body];
 
         // Skip non-JSON responses
-        if (body === undefined || body === null) return body;
+        if (body === undefined || body === null) return [body];
 
         try {
           // Generate ETag from response body hash
@@ -49,12 +52,13 @@ export class ETagInterceptor implements NestInterceptor {
           const ifNoneMatch = request.headers['if-none-match'];
           if (ifNoneMatch === etag) {
             response.status(304).end();
-            return undefined;
+            // Return EMPTY observable — NestJS won't try to send another response
+            return EMPTY;
           }
 
-          return body;
+          return [body];
         } catch {
-          return body;
+          return [body];
         }
       }),
     );

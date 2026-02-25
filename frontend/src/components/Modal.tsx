@@ -1,4 +1,4 @@
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -16,6 +16,11 @@ const sizeClasses: Record<string, string> = {
   xl: 'max-w-xl',
 };
 
+// Track how many modals are currently open to avoid premature overflow restore.
+// This prevents the white-screen bug where body.overflow stays 'hidden' after
+// a modal unmounts during navigation.
+let openModalCount = 0;
+
 export default function Modal({
   isOpen,
   onClose,
@@ -23,20 +28,34 @@ export default function Modal({
   children,
   size = 'md',
 }: ModalProps) {
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
+  const didLock = useRef(false);
 
+  useEffect(() => {
     if (isOpen) {
-      document.addEventListener('keydown', handleEscape);
+      openModalCount++;
+      didLock.current = true;
       document.body.style.overflow = 'hidden';
     }
 
     return () => {
-      document.removeEventListener('keydown', handleEscape);
-      document.body.style.overflow = '';
+      if (didLock.current) {
+        didLock.current = false;
+        openModalCount = Math.max(0, openModalCount - 1);
+        if (openModalCount === 0) {
+          document.body.style.overflow = '';
+        }
+      }
     };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;

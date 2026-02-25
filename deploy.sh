@@ -17,7 +17,7 @@ else
     REPO_DIR="/opt/zr-auto-pro"
 fi
 
-BRANCH="${DEPLOY_BRANCH:-claude/apply-code-corrections-f6vir}"
+BRANCH="${DEPLOY_BRANCH:-master}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"

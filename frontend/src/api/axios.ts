@@ -14,9 +14,9 @@ api.interceptors.request.use((config) => {
 });
 
 // Guard against multiple simultaneous 401 redirects causing race conditions.
-// Without this, parallel requests that all get 401 would each trigger
-// window.location.href = '/login', causing multiple hard reloads.
-let isRedirectingToLogin = false;
+// Uses a timestamp-based debounce instead of a permanent boolean flag
+// to avoid the bug where the flag was never reset.
+let lastRedirectTime = 0;
 
 api.interceptors.response.use(
   (res) => res,
@@ -29,12 +29,14 @@ api.interceptors.response.use(
 
     const status = error.response.status;
 
-    // Unauthorized — clear token and redirect (only once)
-    if (status === 401 && !isRedirectingToLogin) {
+    // Unauthorized — clear token and redirect (debounce 2s to avoid multiple redirects)
+    if (status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      if (window.location.pathname !== '/login') {
-        isRedirectingToLogin = true;
+
+      const now = Date.now();
+      if (window.location.pathname !== '/login' && now - lastRedirectTime > 2000) {
+        lastRedirectTime = now;
         window.location.href = '/login';
       }
     }
