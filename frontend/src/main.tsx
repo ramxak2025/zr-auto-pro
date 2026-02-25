@@ -56,8 +56,8 @@ const queryClient = new QueryClient({
       retry: 1,
       // Refetch when user returns to app (tab/window focus)
       refetchOnWindowFocus: true,
-      // Data fresh for 30 seconds — quick enough to see new checks
-      staleTime: 30_000,
+      // Data always refetched from network (no stale cache)
+      staleTime: 0,
       // Keep cached data 10 min (instant display on back-navigation)
       gcTime: 10 * 60_000,
       // Show cached data instantly, refetch in background

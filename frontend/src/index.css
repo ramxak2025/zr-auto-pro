@@ -32,13 +32,6 @@
     overflow: hidden;
   }
 
-  /* Layout shell — the root flex container */
-  .layout-shell {
-    height: 100vh;
-    height: 100dvh;
-    overflow: hidden;
-  }
-
   /* <main> is the sole scroll container */
   main {
     overflow-x: hidden !important;

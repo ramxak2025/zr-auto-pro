@@ -132,10 +132,6 @@ export function usePullToRefresh(options: PullToRefreshOptions = {}) {
         indicator.style.transform = 'translateY(12px)';
 
         try {
-          // Clear SW API cache so refetch gets truly fresh data
-          if (navigator.serviceWorker?.controller) {
-            navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_API_CACHE' });
-          }
           if (onRefresh) {
             await onRefresh();
           } else {

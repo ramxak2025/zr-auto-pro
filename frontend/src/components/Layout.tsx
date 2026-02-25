@@ -1,4 +1,4 @@
-import { memo, useMemo, useCallback } from 'react';
+import { memo, useMemo } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -121,7 +121,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
   return (
     <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
       <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
-        <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" loading="eager" decoding="async" />
+        <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" />
         {tenantName && (
           <div className="min-w-0">
             <span className="text-sm font-semibold text-gray-900 truncate block">{tenantName}</span>
@@ -160,7 +160,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
       <div className="border-t border-gray-200 px-4 py-3">
         <div className="flex items-center gap-3">
           {userAvatar ? (
-            <img src={userAvatar} alt="" className="h-8 w-8 rounded-full object-cover" loading="lazy" decoding="async" />
+            <img src={userAvatar} alt="" className="h-8 w-8 rounded-full object-cover" />
           ) : (
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">
               {userInitial}
@@ -186,13 +186,13 @@ interface MobileHeaderProps {
 
 const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: MobileHeaderProps) {
   return (
-    <header className="md:hidden flex-shrink-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+    <header className="md:hidden flex-shrink-0 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
       <div className="flex items-center gap-2">
-        <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" loading="eager" decoding="async" />
+        <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
       </div>
       <div className="flex items-center gap-2">
         {userAvatar ? (
-          <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" loading="lazy" decoding="async" />
+          <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" />
         ) : (
           <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-xs font-semibold">
             {userInitial}
@@ -209,7 +209,7 @@ interface MobileTabBarProps {
 
 const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
   return (
-    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+    <nav className="md:hidden flex-shrink-0 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center justify-around h-[68px] px-2">
         {mobileTabItems.map((tab) => {
           const Icon = tab.icon;
@@ -243,16 +243,6 @@ const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps)
   );
 });
 
-// ─── Memoized page content to isolate re-renders ─────────────────────────────
-
-const PageContent = memo(function PageContent() {
-  return (
-    <div className="w-full min-w-0">
-      <Outlet />
-    </div>
-  );
-});
-
 // ─── Main Layout ─────────────────────────────────────────────────────────────
 
 export default function Layout() {
@@ -279,14 +269,12 @@ export default function Layout() {
   }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, logout]);
 
   return (
-    <div className="layout-shell flex bg-gray-50">
-      {/* ─── Desktop sidebar (memoized) ─── */}
+    <div className="flex h-screen h-[100dvh] overflow-hidden bg-gray-50">
       <DesktopSidebar {...sidebarProps} />
 
-      {/* ─── Main area ─── */}
       <div className="flex flex-1 flex-col md:pl-[260px] w-full min-w-0 min-h-0">
         {/* Desktop top bar */}
-        <header className="hidden md:flex flex-shrink-0 z-20 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
+        <header className="hidden md:flex flex-shrink-0 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
           <div className="flex items-center gap-1.5 text-sm">
             {breadcrumbs.map((crumb, index) => (
               <span key={index} className="flex items-center gap-1.5">
@@ -309,15 +297,15 @@ export default function Layout() {
           </div>
         </header>
 
-        {/* Mobile top bar (memoized) */}
+        {/* Mobile header */}
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
         {/* Page content — sole scroll container */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
-          <PageContent />
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-4 md:p-6 w-full min-w-0">
+          <Outlet />
         </main>
 
-        {/* ─── Mobile bottom tab bar (memoized) ─── */}
+        {/* Mobile bottom tab bar — flex sibling, NOT fixed */}
         <MobileTabBar pathname={location.pathname} />
       </div>
     </div>

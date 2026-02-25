@@ -21,7 +21,7 @@ export default function AdminLayout() {
   };
 
   return (
-    <div className="layout-shell flex">
+    <div className="flex h-screen h-[100dvh] overflow-hidden">
       {/* Sidebar */}
       <aside className="hidden md:flex md:flex-col w-64 bg-white border-r border-gray-200">
         {/* Logo */}
