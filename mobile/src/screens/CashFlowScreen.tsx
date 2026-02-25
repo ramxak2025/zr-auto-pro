@@ -3,7 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { checksApi } from '../api/services';
+import { reportsApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
@@ -20,7 +20,7 @@ export default function CashFlowScreen() {
 
   const { data: cashflow, isLoading } = useQuery<any>({
     queryKey: ['cashflow', dateFrom, dateTo],
-    queryFn: async () => { const res = await checksApi.getCashFlow({ dateFrom, dateTo }); return res.data; },
+    queryFn: async () => { const res = await reportsApi.getCashFlow({ dateFrom, dateTo }); return res.data; },
   });
 
   const onRefresh = async () => {

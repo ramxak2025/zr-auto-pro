@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { checksApi, clientsApi, carsApi, usersApi, servicesApi, productsApi } from '../api/services';
+import { checksApi, clientsApi, usersApi, servicesApi, productsApi } from '../api/services';
 import Modal from '../components/Modal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Client, Car, User, Service, Product, CheckServiceLine, CheckProductLine, PaymentMethod } from '../../shared/types';
@@ -45,11 +45,12 @@ export default function CheckCreateScreen() {
     enabled: showClientPicker,
   });
 
-  const { data: clientCars } = useQuery<Car[]>({
-    queryKey: ['client-cars', clientId],
-    queryFn: async () => { const res = await carsApi.getByClient(clientId); return res.data; },
+  const { data: clientData } = useQuery<Client>({
+    queryKey: ['client-detail', clientId],
+    queryFn: async () => { const res = await clientsApi.getById(clientId); return res.data; },
     enabled: !!clientId,
   });
+  const clientCars = clientData?.cars;
 
   const { data: masters } = useQuery<User[]>({
     queryKey: ['masters'],

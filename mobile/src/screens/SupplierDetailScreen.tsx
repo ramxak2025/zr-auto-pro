@@ -25,12 +25,12 @@ export default function SupplierDetailScreen() {
 
   const { data: deliveries } = useQuery<Delivery[]>({
     queryKey: ['supplier-deliveries', id],
-    queryFn: async () => { const res = await suppliersApi.getDeliveries(id); return res.data; },
+    queryFn: async () => { const res = await suppliersApi.getDeliveries({ supplierId: id }); return res.data; },
   });
 
   const { data: payments } = useQuery<SupplierPayment[]>({
     queryKey: ['supplier-payments', id],
-    queryFn: async () => { const res = await suppliersApi.getPayments(id); return res.data; },
+    queryFn: async () => { const res = await suppliersApi.getPayments({ supplierId: id }); return res.data; },
   });
 
   const onRefresh = async () => {

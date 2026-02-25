@@ -1,8 +1,25 @@
 import axios, { AxiosError } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
-// TODO: Replace with your actual server URL
-const API_BASE_URL = 'https://your-server.com/api';
+// API URL configuration:
+// 1. Set in app.json → expo.extra.apiUrl for production
+// 2. Falls back to backend on port 3000 via Expo's debuggerHost
+// 3. Final fallback: localhost
+function getApiBaseUrl(): string {
+  const configUrl = Constants.expoConfig?.extra?.apiUrl;
+  if (configUrl) return configUrl;
+
+  // In dev, use the Expo dev server host IP (same machine where backend runs)
+  const debuggerHost = Constants.expoConfig?.hostUri || (Constants as any).debuggerHost;
+  if (debuggerHost) {
+    const host = debuggerHost.split(':')[0];
+    return `http://${host}:3000/api`;
+  }
+  return 'http://localhost:3000/api';
+}
+
+const API_BASE_URL = getApiBaseUrl();
 
 const api = axios.create({
   baseURL: API_BASE_URL,
