@@ -84,16 +84,9 @@
     overscroll-behavior-y: contain;
   }
 
-  /* GPU-accelerated scrolling for main content */
+  /* Smooth scrolling for main content */
   main {
-    will-change: scroll-position;
-    contain: strict;
-  }
-
-  /* content-visibility for off-screen cards */
-  .card, .stat-card, .table-container {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 200px;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
