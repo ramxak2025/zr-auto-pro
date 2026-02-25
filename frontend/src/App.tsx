@@ -98,7 +98,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-    <Suspense fallback={<LoadingSpinner />}>
+    <Suspense fallback={null}>
       <Routes>
         {/* Public: Review page (no auth) */}
         <Route path="/review/:token" element={<ReviewPublicPage />} />

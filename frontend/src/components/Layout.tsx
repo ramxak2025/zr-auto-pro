@@ -96,6 +96,8 @@ function isTabActive(tab: TabItem & { isCenter?: boolean }, pathname: string): b
 }
 
 // ─── Memoized static components ──────────────────────────────────────────────
+// These parts of the layout don't depend on route/page data, so we memoize them
+// to avoid re-renders when the <Outlet> content changes.
 
 interface SidebarProps {
   userName: string;
@@ -141,7 +143,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
                   end={item.path === '/dashboard'}
                   {...prefetch(item.path)}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors duration-100 ${
+                    `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
                       isActive
                         ? 'bg-primary-50 text-primary-700'
                         : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
@@ -186,7 +188,7 @@ interface MobileHeaderProps {
 
 const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: MobileHeaderProps) {
   return (
-    <header className="md:hidden flex-shrink-0 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+    <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
       <div className="flex items-center gap-2">
         <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
       </div>
@@ -209,7 +211,7 @@ interface MobileTabBarProps {
 
 const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
   return (
-    <nav className="md:hidden flex-shrink-0 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center justify-around h-[68px] px-2">
         {mobileTabItems.map((tab) => {
           const Icon = tab.icon;
@@ -249,7 +251,10 @@ export default function Layout() {
   const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
 
+  // Pull-to-refresh: invalidates all active React Query caches on pull down
   usePullToRefresh();
+
+  // Background sync: handle offline mutations and online/offline events
   useOfflineSync();
 
   const breadcrumbs = getPageTitle(location.pathname);
@@ -258,6 +263,7 @@ export default function Layout() {
   const userInitial = user?.fullName?.charAt(0) || 'U';
   const tenantName = user?.tenant?.name || '';
 
+  // Memoize to prevent unnecessary re-renders of child components
   const sidebarProps = useMemo(() => ({
     userName,
     userAvatar: user?.avatar,
@@ -269,12 +275,14 @@ export default function Layout() {
   }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, logout]);
 
   return (
-    <div className="flex h-screen h-[100dvh] overflow-hidden bg-gray-50">
+    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
+      {/* ─── Desktop sidebar (memoized) ─── */}
       <DesktopSidebar {...sidebarProps} />
 
-      <div className="flex flex-1 flex-col md:pl-[260px] w-full min-w-0 min-h-0">
+      {/* ─── Main area ─── */}
+      <div className="flex flex-1 flex-col md:pl-[260px] w-full min-w-0">
         {/* Desktop top bar */}
-        <header className="hidden md:flex flex-shrink-0 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
+        <header className="hidden md:flex sticky top-0 z-20 h-16 items-center justify-between border-b border-gray-200 bg-white px-6">
           <div className="flex items-center gap-1.5 text-sm">
             {breadcrumbs.map((crumb, index) => (
               <span key={index} className="flex items-center gap-1.5">
@@ -297,15 +305,17 @@ export default function Layout() {
           </div>
         </header>
 
-        {/* Mobile header */}
+        {/* Mobile top bar (memoized) */}
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
-        {/* Page content — sole scroll container */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 p-4 md:p-6 w-full min-w-0">
-          <Outlet />
+        {/* Page content */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
+          <div className="w-full min-w-0">
+            <Outlet />
+          </div>
         </main>
 
-        {/* Mobile bottom tab bar — flex sibling, NOT fixed */}
+        {/* ─── Mobile bottom tab bar (memoized) ─── */}
         <MobileTabBar pathname={location.pathname} />
       </div>
     </div>

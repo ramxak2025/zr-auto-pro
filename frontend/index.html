@@ -2,44 +2,26 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <link rel="icon" type="image/png" href="/logo-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <meta name="theme-color" content="#2563eb" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="Autexa" />
-    <meta name="description" content="Autexa — система управления автосервисом" />
-
-    <!-- Preconnect to API origin (same origin, helps DNS/TLS on custom domains) -->
-    <link rel="dns-prefetch" href="/" />
-
-    <!-- Icons -->
-    <link rel="icon" type="image/png" href="/logo-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="apple-touch-icon" sizes="152x152" href="/icon-152.png" />
     <link rel="apple-touch-icon" sizes="144x144" href="/icon-144.png" />
     <link rel="apple-touch-icon" sizes="192x192" href="/icon-192.png" />
-
-    <!-- PWA Manifest -->
-    <link rel="manifest" href="/manifest.json" />
-
-    <!-- Preload critical logo (above the fold) -->
-    <link rel="preload" href="/logo.png" as="image" />
-
+    <meta name="apple-mobile-web-app-title" content="Autexa" />
     <title>Autexa</title>
-
-    <!-- Critical inline styles: prevent layout flash while JS loads -->
-    <style>
-      html, body, #root { height: 100%; margin: 0; overflow: hidden; }
-      body { background: #f9fafb; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-    </style>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', function() {
+        window.addEventListener('load', () => {
           navigator.serviceWorker.register('/sw.js');
         });
       }
