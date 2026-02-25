@@ -252,6 +252,8 @@ export interface StockMovement {
   stockBefore: number;
   stockAfter: number;
   reason?: string;
+  userId?: string;
+  user?: { id: string; fullName: string } | null;
   createdAt: string;
 }
 

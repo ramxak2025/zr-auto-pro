@@ -19,8 +19,8 @@ export class ProductsController {
   }
 
   @Get('movements')
-  getMovements(@CurrentUser() user: JwtPayload) {
-    return this.productsService.getMovements(user.tenantID);
+  getMovements(@CurrentUser() user: JwtPayload, @Query() query: any) {
+    return this.productsService.getMovements(user.tenantID, query);
   }
 
   @Get('warehouse-stats')
@@ -50,6 +50,6 @@ export class ProductsController {
 
   @Post(':id/stock')
   updateStock(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.productsService.updateStock(id, user.tenantID, dto);
+    return this.productsService.updateStock(id, user.tenantID, dto, user.userID);
   }
 }

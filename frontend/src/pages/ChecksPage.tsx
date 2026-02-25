@@ -211,9 +211,13 @@ export default function ChecksPage() {
 
   // Stock movements query (write-offs, corrections, purchases)
   const { data: movements } = useQuery<StockMovement[]>({
-    queryKey: ['stock-movements-journal', dateFrom, dateTo],
+    queryKey: ['stock-movements-journal', dateFrom, dateTo, masterId],
     queryFn: async () => {
-      const res = await productsApi.getMovements({ dateFrom, dateTo } as any);
+      const params: Record<string, string> = {};
+      if (dateFrom) params.dateFrom = dateFrom;
+      if (dateTo) params.dateTo = dateTo;
+      if (masterId) params.masterId = masterId;
+      const res = await productsApi.getMovements(params as any);
       return res.data;
     },
     enabled: !!dateFrom && !!dateTo,
@@ -299,6 +303,7 @@ export default function ChecksPage() {
                   <p className="text-[10px] text-gray-400">
                     {m.quantity > 0 ? (m.type === 'income' ? '+' : '-') : ''}{Math.abs(m.quantity)} шт
                     {m.reason ? ` · ${m.reason}` : ''}
+                    {m.user?.fullName ? ` · ${m.user.fullName}` : ''}
                     {' · '}{format(new Date(m.createdAt), 'dd.MM HH:mm', { locale: ru })}
                   </p>
                 </div>

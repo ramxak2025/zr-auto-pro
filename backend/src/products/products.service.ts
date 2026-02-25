@@ -74,14 +74,35 @@ export class ProductsService {
     return rows.map(this.mapProduct);
   }
 
-  async getMovements(tenantID: string) {
+  async getMovements(tenantID: string, query?: { masterId?: string; dateFrom?: string; dateTo?: string }) {
+    let where = 'sm.tenant_id = $1';
+    const params: any[] = [tenantID];
+    let idx = 2;
+
+    if (query?.masterId) {
+      where += ` AND sm.user_id = $${idx}`;
+      params.push(query.masterId);
+      idx++;
+    }
+    if (query?.dateFrom) {
+      where += ` AND sm.created_at >= $${idx}`;
+      params.push(query.dateFrom);
+      idx++;
+    }
+    if (query?.dateTo) {
+      where += ` AND sm.created_at <= $${idx}`;
+      params.push(query.dateTo);
+      idx++;
+    }
+
     const { rows } = await this.pool.query(
-      `SELECT sm.*, p.name as product_name
+      `SELECT sm.*, p.name as product_name, u.full_name as user_name
        FROM stock_movements sm
        JOIN products p ON p.id = sm.product_id
-       WHERE sm.tenant_id = $1
-       ORDER BY sm.created_at DESC LIMIT 100`,
-      [tenantID],
+       LEFT JOIN users u ON u.id = sm.user_id
+       WHERE ${where}
+       ORDER BY sm.created_at DESC LIMIT 200`,
+      params,
     );
     return rows.map((row) => ({
       id: row.id,
@@ -92,6 +113,8 @@ export class ProductsService {
       stockBefore: parseFloat(row.stock_before) || 0,
       stockAfter: parseFloat(row.stock_after) || 0,
       reason: row.reason,
+      userId: row.user_id,
+      user: row.user_id ? { id: row.user_id, fullName: row.user_name } : null,
       createdAt: row.created_at,
     }));
   }
@@ -188,7 +211,7 @@ export class ProductsService {
     return { message: 'Удалено' };
   }
 
-  async updateStock(id: string, tenantID: string, dto: any) {
+  async updateStock(id: string, tenantID: string, dto: any, userId?: string) {
     const { type, quantity, reason } = dto;
     if (!type || quantity === undefined) {
       throw new BadRequestException({ message: 'Тип и количество обязательны' });
@@ -229,9 +252,9 @@ export class ProductsService {
       await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [stockAfter, id, tenantID]);
 
       await client.query(
-        `INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [id, type, quantity, stockBefore, stockAfter, reason, tenantID],
+        `INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id, user_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [id, type, quantity, stockBefore, stockAfter, reason, tenantID, userId || null],
       );
 
       await client.query('COMMIT');
