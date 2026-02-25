@@ -219,10 +219,10 @@ function StaffStatusCircles() {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-900">Сотрудники сегодня</h3>
         <div className="flex items-center gap-3 text-[11px] text-gray-400">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onShift.length}</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> {notArrived.length}</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {dayOff.length}</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400" /> {sick.length}</span>
+          {onShift.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onShift.length}</span>}
+          {notArrived.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> {notArrived.length}</span>}
+          {dayOff.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {dayOff.length}</span>}
+          {sick.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400" /> {sick.length}</span>}
         </div>
       </div>
 
@@ -549,7 +549,7 @@ function RevenueChart() {
           </div>
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
             <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Чеков</p>
-            <p className="text-base font-bold text-white mt-0.5">{data.totalChecks}</p>
+            <p className="text-base font-bold text-white mt-0.5">{data.totalChecks || '—'}</p>
           </div>
         </div>
       )}
@@ -714,7 +714,7 @@ function MasterDashboard() {
             </div>
             <span className="text-xs text-gray-400 font-medium">Заказов сегодня</span>
           </div>
-          <p className="text-2xl font-bold text-gray-900">{data.todayChecks ?? 0}</p>
+          <p className="text-2xl font-bold text-gray-900">{data.todayChecks || '—'}</p>
           <p className="text-[11px] text-gray-400 mt-0.5">За месяц: {data.monthChecks ?? 0}</p>
         </div>
         <div className="rounded-xl bg-white border border-gray-100 shadow-sm p-4">
@@ -724,7 +724,7 @@ function MasterDashboard() {
             </div>
             <span className="text-xs text-gray-400 font-medium">Сегодня</span>
           </div>
-          <p className="text-2xl font-bold text-gray-900">{formatMoney(data.today)}</p>
+          <p className="text-2xl font-bold text-gray-900">{data.today ? formatMoney(data.today) : '—'}</p>
           <p className="text-[11px] text-gray-400 mt-0.5">За месяц: {formatMoney(data.month)}</p>
         </div>
       </div>
@@ -769,7 +769,7 @@ function MasterDashboard() {
       )}
 
       {/* ── Product promotions for master ── */}
-      {data.productPromotions && data.productPromotions.length > 0 && (
+      {data.productPromotions && data.productPromotions.length > 0 && data.productPromotions.some((p) => p.percent > 0) && (
         <div className="rounded-2xl bg-gradient-to-br from-emerald-50 to-green-50 border border-green-200 shadow-sm overflow-hidden">
           <div className="px-4 pt-4 pb-2 flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-100">
@@ -782,7 +782,7 @@ function MasterDashboard() {
           </div>
           <div className="px-3 pb-3">
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {data.productPromotions.map((promo) => (
+              {data.productPromotions.filter((p) => p.percent > 0).map((promo) => (
                 <div key={promo.productId} className="flex items-center gap-3 bg-white rounded-xl px-3 py-2.5 shadow-sm">
                   {promo.photo ? (
                     <img

@@ -62,16 +62,16 @@ export default function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className={`w-full ${sizeClasses[size]} bg-white rounded-xl shadow-xl animate-scale-in`}
+        className={`w-full ${sizeClasses[size]} bg-white rounded-t-2xl sm:rounded-xl shadow-xl animate-scale-in max-h-[90dvh] flex flex-col`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
           <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
           <button
             onClick={onClose}
@@ -82,7 +82,7 @@ export default function Modal({
         </div>
 
         {/* Body */}
-        <div className="px-6 py-4 max-h-[70vh] overflow-y-auto">
+        <div className="px-6 py-4 overflow-y-auto flex-1 min-h-0 pb-[env(safe-area-inset-bottom)]">
           {children}
         </div>
       </div>

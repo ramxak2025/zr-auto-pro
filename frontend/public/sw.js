@@ -341,6 +341,10 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'ONLINE') {
     replayMutations();
   }
+  // Pull-to-refresh: clear API cache so React Query gets fresh data
+  if (event.data?.type === 'CLEAR_API_CACHE') {
+    caches.delete(API_CACHE);
+  }
 });
 
 // ─── IndexedDB Helpers ───────────────────────────────────────────────────────

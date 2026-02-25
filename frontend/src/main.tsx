@@ -54,15 +54,14 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      refetchOnWindowFocus: false,
-      // Data considered fresh for 2 minutes — no refetch during this window.
-      // Individual queries can override with shorter staleTime where real-time data matters.
-      staleTime: 2 * 60_000,
-      // Keep unused data in memory for 10 minutes (reduces re-fetches on back-navigation)
+      // Refetch when user returns to app (tab/window focus)
+      refetchOnWindowFocus: true,
+      // Data fresh for 30 seconds — quick enough to see new checks
+      staleTime: 30_000,
+      // Keep cached data 10 min (instant display on back-navigation)
       gcTime: 10 * 60_000,
-      // Show stale data instantly while refetching in the background
+      // Show cached data instantly, refetch in background
       refetchOnMount: 'always',
-      // On reconnect after offline, refresh stale queries
       refetchOnReconnect: 'always',
     },
     mutations: {
