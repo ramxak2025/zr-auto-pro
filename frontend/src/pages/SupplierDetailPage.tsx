@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -229,9 +229,16 @@ export default function SupplierDetailPage() {
     queryFn: () => suppliersApi.getById(id!),
     select: (res) => res.data as Supplier,
     enabled: !!id,
-    retry: 2,
+    retry: 1,
     staleTime: 30_000,
   });
+
+  // If supplier returns 404, invalidate the list cache so stale entries are removed
+  useEffect(() => {
+    if (isError && (error as any)?.response?.status === 404) {
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+    }
+  }, [isError, error, queryClient]);
 
   // Deliveries
   const { data: deliveriesData } = useQuery({
