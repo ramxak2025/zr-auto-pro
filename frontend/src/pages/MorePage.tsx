@@ -15,6 +15,7 @@ import {
   Loader2,
   CreditCard,
   Megaphone,
+  Building2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -117,6 +118,15 @@ const menuItems: MenuItem[] = [
     permission: 'user_management',
     color: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
+  },
+  {
+    label: 'Настройки компании',
+    description: 'Реквизиты и данные для чеков',
+    path: '/company-settings',
+    icon: Building2,
+    roles: ['director', 'superadmin'],
+    color: 'bg-slate-50',
+    iconColor: 'text-slate-600',
   },
   {
     label: 'Тариф и подписка',

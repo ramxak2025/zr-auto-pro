@@ -25,11 +25,11 @@ import {
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { checksApi } from '../api/services';
+import { checksApi, myCompanyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ConfirmDialog from '../components/ConfirmDialog';
-import type { Check } from '../types';
+import type { Check, Tenant } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
 
 const paymentMethodLabels: Record<string, string> = {
@@ -73,6 +73,12 @@ export default function CheckDetailPage() {
       return res.data;
     },
     enabled: !!id,
+  });
+
+  const { data: company } = useQuery<Tenant>({
+    queryKey: ['my-company'],
+    queryFn: async () => (await myCompanyApi.get()).data,
+    staleTime: 5 * 60_000,
   });
 
   const finalizeMutation = useMutation({
@@ -147,7 +153,7 @@ export default function CheckDetailPage() {
         <div className="flex items-center gap-2 flex-shrink-0">
           {/* Print receipt */}
           <button
-            onClick={() => generateReceiptPdf(check, user?.tenant?.name || 'Автосервис')}
+            onClick={() => generateReceiptPdf(check, company || user?.tenant)}
             className="p-2.5 rounded-xl text-gray-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
             title="Печать чека"
           >

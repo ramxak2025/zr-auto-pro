@@ -363,6 +363,11 @@ export const tenantsApi = {
   remove: (id: string) => api.delete(`/tenants/${id}`),
 };
 
+export const myCompanyApi = {
+  get: () => api.get<Tenant>('/my-company'),
+  update: (data: Partial<Tenant>) => api.patch<Tenant>('/my-company', data),
+};
+
 export const plansApi = {
   getAll: () => api.get<Plan[]>('/plans'),
   create: (data: CreatePlanRequest) => api.post<Plan>('/plans', data),

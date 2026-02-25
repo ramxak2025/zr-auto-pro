@@ -47,6 +47,20 @@ export class TenantsController {
     return this.tenantsService.remove(id);
   }
 
+  // ─── Director routes (own company settings) ─────────────────────
+
+  @Roles('director', 'superadmin')
+  @Get('my-company')
+  getMyCompany(@CurrentUser() user: JwtPayload) {
+    return this.tenantsService.getMyCompany(user.tenantID);
+  }
+
+  @Roles('director', 'superadmin')
+  @Patch('my-company')
+  updateMyCompany(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.tenantsService.updateMyCompany(user.tenantID, dto);
+  }
+
   // ─── Regular user route (view own subscription) ───────────────────
 
   @Get('subscription')

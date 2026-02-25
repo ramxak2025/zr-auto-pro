@@ -1,263 +1,329 @@
-import jsPDF from 'jspdf';
-import type { Check } from '../types';
+import type { Check, Tenant } from '../types';
 
 const paymentMethodLabels: Record<string, string> = {
-  cash: 'НАЛИЧНЫЕ',
-  card: 'КАРТА',
-  warranty: 'ГАРАНТИЯ',
-  cash_card: 'НАЛ/КАРТА',
+  cash: 'Наличные',
+  card: 'Карта',
+  warranty: 'Гарантия',
+  cash_card: 'Нал / Карта',
 };
 
+const fmt = (value: number): string =>
+  value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 /**
- * Generates a receipt-style PDF for a check (like a real cash register receipt).
- * Width: 80mm thermal printer style, monospaced font.
+ * Opens a new window with a styled receipt HTML and triggers the browser's
+ * print dialog. The user can then "Save as PDF" or print directly.
+ * Full Cyrillic support, beautiful thermal-receipt design.
  */
-export function generateReceiptPdf(check: Check, tenantName: string): void {
-  // Receipt width = 80mm, variable height
-  const w = 80;
-  const marginX = 4;
-  const contentW = w - marginX * 2;
+export function generateReceiptPdf(check: Check, tenant?: Partial<Tenant> | null): void {
+  const companyName = tenant?.name || 'Автосервис';
+  const legalName = tenant?.legalName || '';
+  const inn = tenant?.inn || '';
+  const kpp = tenant?.kpp || '';
+  const ogrn = tenant?.ogrn || '';
+  const companyPhone = tenant?.phone || '';
+  const companyAddress = tenant?.address || '';
+  const footer = tenant?.receiptFooter || 'Спасибо за визит!';
 
-  // Pre-calculate height
-  let estimatedH = 160; // base
-  estimatedH += (check.services?.length ?? 0) * 14;
-  estimatedH += (check.products?.length ?? 0) * 14;
-  if (check.comment) estimatedH += 20;
-
-  const doc = new jsPDF({ unit: 'mm', format: [w, Math.max(estimatedH, 160)] });
-
-  let y = 6;
-  const fontSize = {
-    header: 11,
-    subheader: 8,
-    normal: 7,
-    small: 6,
-  };
-
-  // Helpers
-  const setFont = (size: number, style: 'normal' | 'bold' = 'normal') => {
-    doc.setFontSize(size);
-    doc.setFont('helvetica', style);
-  };
-
-  const centerText = (text: string, yPos: number) => {
-    const textWidth = doc.getTextWidth(text);
-    doc.text(text, (w - textWidth) / 2, yPos);
-  };
-
-  const leftText = (text: string, yPos: number) => {
-    doc.text(text, marginX, yPos);
-  };
-
-  const rightText = (text: string, yPos: number) => {
-    const textWidth = doc.getTextWidth(text);
-    doc.text(text, w - marginX - textWidth, yPos);
-  };
-
-  const dashedLine = (yPos: number) => {
-    setFont(fontSize.small);
-    const dashes = '- '.repeat(40);
-    centerText(dashes, yPos);
-  };
-
-  const formatMoney = (value: number): string => {
-    return value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-
-  const wrapText = (text: string, maxWidth: number): string[] => {
-    const words = text.split(' ');
-    const lines: string[] = [];
-    let current = '';
-    for (const word of words) {
-      const test = current ? `${current} ${word}` : word;
-      if (doc.getTextWidth(test) > maxWidth) {
-        if (current) lines.push(current);
-        current = word;
-      } else {
-        current = test;
-      }
-    }
-    if (current) lines.push(current);
-    return lines;
-  };
-
-  // ═══ HEADER ═══
-  setFont(fontSize.header, 'bold');
-  centerText(tenantName.toUpperCase(), y);
-  y += 5;
-
-  // Date and check number
-  setFont(fontSize.subheader, 'bold');
-  centerText(`ЧЕК #${check.number}`, y);
-  y += 4;
-
-  setFont(fontSize.normal);
   const dateStr = new Date(check.date).toLocaleDateString('ru-RU', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
-  centerText(dateStr, y);
-  y += 3;
 
-  dashedLine(y);
-  y += 3;
+  // Build services rows
+  const servicesHtml = (check.services ?? []).map(svc => `
+    <tr>
+      <td class="item-name">${esc(svc.name)}${svc.master?.fullName ? `<br><span class="item-sub">${esc(svc.master.fullName)}</span>` : ''}</td>
+      <td class="item-qty">${svc.quantity}</td>
+      <td class="item-price">${fmt(svc.price)}</td>
+      <td class="item-total">${fmt(svc.total)}</td>
+    </tr>
+  `).join('');
 
-  // ═══ CLIENT / CAR INFO ═══
-  if (check.client?.fullName) {
-    setFont(fontSize.normal);
-    leftText(`Клиент: ${check.client.fullName}`, y);
-    y += 3.5;
+  // Build products rows
+  const productsHtml = (check.products ?? []).map(prod => `
+    <tr>
+      <td class="item-name">${esc(prod.name)}</td>
+      <td class="item-qty">${prod.quantity}</td>
+      <td class="item-price">${fmt(prod.sellPrice)}</td>
+      <td class="item-total">${fmt(prod.totalSell)}</td>
+    </tr>
+  `).join('');
+
+  // Requisites line
+  const requisites: string[] = [];
+  if (inn) requisites.push(`ИНН ${inn}`);
+  if (kpp) requisites.push(`КПП ${kpp}`);
+  if (ogrn) requisites.push(`ОГРН ${ogrn}`);
+  const requisitesLine = requisites.join(' | ');
+
+  const html = `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Чек #${check.number}</title>
+<style>
+  @page {
+    size: 80mm auto;
+    margin: 0;
   }
-  if (check.car?.makeModel) {
-    setFont(fontSize.normal);
-    leftText(`Авто: ${check.car.makeModel}`, y);
-    if (check.car.plateNumber) {
-      rightText(check.car.plateNumber, y);
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #000;
+    width: 80mm;
+    max-width: 80mm;
+    margin: 0 auto;
+    padding: 8px 6px;
+    background: #fff;
+  }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .bold { font-weight: bold; }
+  .company-name {
+    font-size: 16px;
+    font-weight: bold;
+    text-align: center;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+  }
+  .legal-name {
+    font-size: 9px;
+    text-align: center;
+    color: #444;
+    margin-bottom: 2px;
+  }
+  .requisites {
+    font-size: 8px;
+    text-align: center;
+    color: #666;
+    margin-bottom: 2px;
+  }
+  .contact-line {
+    font-size: 9px;
+    text-align: center;
+    color: #444;
+    margin-bottom: 4px;
+  }
+  .separator {
+    border: none;
+    border-top: 1px dashed #000;
+    margin: 6px 0;
+  }
+  .separator-double {
+    border: none;
+    border-top: 2px solid #000;
+    margin: 6px 0;
+  }
+  .check-number {
+    font-size: 14px;
+    font-weight: bold;
+    text-align: center;
+    margin: 4px 0 2px;
+  }
+  .date-line {
+    font-size: 10px;
+    text-align: center;
+    color: #333;
+    margin-bottom: 4px;
+  }
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
+  .info-label { color: #555; }
+  .info-value { font-weight: bold; }
+  .section-title {
+    font-size: 11px;
+    font-weight: bold;
+    text-align: center;
+    letter-spacing: 1px;
+    margin: 4px 0;
+    text-transform: uppercase;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 2px;
+  }
+  th {
+    font-size: 8px;
+    text-transform: uppercase;
+    color: #555;
+    border-bottom: 1px solid #ccc;
+    padding: 2px 1px;
+    text-align: left;
+  }
+  th.r { text-align: right; }
+  th.c { text-align: center; }
+  td { font-size: 10px; padding: 3px 1px; vertical-align: top; }
+  .item-name { max-width: 120px; word-wrap: break-word; }
+  .item-sub { font-size: 8px; color: #666; }
+  .item-qty { text-align: center; width: 24px; }
+  .item-price { text-align: right; width: 50px; white-space: nowrap; }
+  .item-total { text-align: right; width: 55px; font-weight: bold; white-space: nowrap; }
+  .totals-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    padding: 2px 0;
+  }
+  .grand-total {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 16px;
+    font-weight: bold;
+    padding: 4px 0;
+  }
+  .payment-badge {
+    font-size: 11px;
+    font-weight: bold;
+    text-align: center;
+    padding: 4px;
+    margin: 4px 0;
+    border: 1px solid #000;
+  }
+  .footer-text {
+    font-size: 10px;
+    text-align: center;
+    margin-top: 6px;
+    white-space: pre-wrap;
+  }
+  .footer-company {
+    font-size: 8px;
+    text-align: center;
+    color: #888;
+    margin-top: 4px;
+  }
+  .comment-box {
+    font-size: 9px;
+    color: #444;
+    background: #f5f5f5;
+    padding: 4px 6px;
+    border-radius: 2px;
+    margin: 4px 0;
+    white-space: pre-wrap;
+  }
+  @media print {
+    body { padding: 4px 4px; }
+  }
+  @media screen {
+    body {
+      margin: 20px auto;
+      box-shadow: 0 2px 20px rgba(0,0,0,0.15);
+      border-radius: 4px;
+      padding: 12px 8px;
     }
-    y += 3.5;
   }
-  if (check.master?.fullName) {
-    setFont(fontSize.normal);
-    leftText(`Мастер: ${check.master.fullName}`, y);
-    y += 3.5;
+</style>
+</head>
+<body>
+
+<!-- Company header -->
+<div class="company-name">${esc(companyName)}</div>
+${legalName ? `<div class="legal-name">${esc(legalName)}</div>` : ''}
+${requisitesLine ? `<div class="requisites">${esc(requisitesLine)}</div>` : ''}
+${companyAddress ? `<div class="contact-line">${esc(companyAddress)}</div>` : ''}
+${companyPhone ? `<div class="contact-line">тел. ${esc(companyPhone)}</div>` : ''}
+
+<hr class="separator-double">
+
+<!-- Check info -->
+<div class="check-number">ЧЕК #${check.number}</div>
+<div class="date-line">${esc(dateStr)}</div>
+
+<hr class="separator">
+
+<!-- Client / Car / Master -->
+${check.client?.fullName ? `<div class="info-row"><span class="info-label">Клиент:</span><span class="info-value">${esc(check.client.fullName)}</span></div>` : ''}
+${check.car?.makeModel ? `<div class="info-row"><span class="info-label">Авто:</span><span class="info-value">${esc(check.car.makeModel)}${check.car.plateNumber ? ` [${esc(check.car.plateNumber)}]` : ''}</span></div>` : ''}
+${check.master?.fullName ? `<div class="info-row"><span class="info-label">Мастер:</span><span class="info-value">${esc(check.master.fullName)}</span></div>` : ''}
+${check.mileage ? `<div class="info-row"><span class="info-label">Пробег:</span><span class="info-value">${check.mileage.toLocaleString('ru-RU')} км</span></div>` : ''}
+
+${(check.services?.length ?? 0) > 0 ? `
+<hr class="separator">
+<div class="section-title">Услуги</div>
+<table>
+  <thead><tr><th>Наименование</th><th class="c">Кол</th><th class="r">Цена</th><th class="r">Сумма</th></tr></thead>
+  <tbody>${servicesHtml}</tbody>
+</table>
+` : ''}
+
+${(check.products?.length ?? 0) > 0 ? `
+<hr class="separator">
+<div class="section-title">Товары</div>
+<table>
+  <thead><tr><th>Наименование</th><th class="c">Кол</th><th class="r">Цена</th><th class="r">Сумма</th></tr></thead>
+  <tbody>${productsHtml}</tbody>
+</table>
+` : ''}
+
+<hr class="separator">
+
+<!-- Subtotals -->
+${check.serviceTotal > 0 ? `<div class="totals-row"><span>Услуги:</span><span>${fmt(check.serviceTotal)} ₽</span></div>` : ''}
+${check.productTotal > 0 ? `<div class="totals-row"><span>Товары:</span><span>${fmt(check.productTotal)} ₽</span></div>` : ''}
+${(check.discount ?? 0) > 0 ? `<div class="totals-row"><span>Скидка:</span><span>-${fmt(check.discount!)} ₽</span></div>` : ''}
+
+<hr class="separator-double">
+
+<!-- Grand total -->
+<div class="grand-total">
+  <span>ИТОГО:</span>
+  <span>${fmt(check.totalRevenue)} ₽</span>
+</div>
+
+<hr class="separator-double">
+
+<!-- Payment method -->
+<div class="payment-badge">${esc(paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod)}</div>
+
+${check.paymentMethod === 'cash_card' ? `
+<div class="totals-row"><span>Наличные:</span><span>${fmt(check.cashAmount)} ₽</span></div>
+<div class="totals-row"><span>Карта:</span><span>${fmt(check.cardAmount)} ₽</span></div>
+` : ''}
+
+${check.comment ? `
+<hr class="separator">
+<div style="font-size:9px;color:#555;margin-bottom:2px;">Комментарий:</div>
+<div class="comment-box">${esc(check.comment)}</div>
+` : ''}
+
+<hr class="separator">
+
+<!-- Footer -->
+<div class="footer-text">${esc(footer)}</div>
+<div class="footer-company">${esc(companyName)}</div>
+
+</body>
+</html>`;
+
+  // Open in new window and trigger print
+  const win = window.open('', '_blank', 'width=400,height=700');
+  if (!win) {
+    alert('Пожалуйста, разрешите всплывающие окна для печати чека');
+    return;
   }
-  if (check.mileage) {
-    setFont(fontSize.normal);
-    leftText(`Пробег: ${check.mileage.toLocaleString('ru-RU')} км`, y);
-    y += 3.5;
-  }
+  win.document.write(html);
+  win.document.close();
 
-  dashedLine(y);
-  y += 3;
+  // Wait for content to render, then trigger print
+  win.onload = () => {
+    win.focus();
+    win.print();
+  };
+}
 
-  // ═══ SERVICES ═══
-  if (check.services && check.services.length > 0) {
-    setFont(fontSize.subheader, 'bold');
-    centerText('УСЛУГИ', y);
-    y += 4;
-
-    setFont(fontSize.normal);
-    for (const svc of check.services) {
-      const nameLines = wrapText(svc.name, contentW);
-      for (const line of nameLines) {
-        leftText(line, y);
-        y += 3;
-      }
-      // Quantity x Price = Total
-      const detail = svc.quantity > 1
-        ? `  ${svc.quantity} x ${formatMoney(svc.price)}`
-        : '';
-      const totalStr = formatMoney(svc.total);
-      if (detail) {
-        leftText(detail, y);
-      }
-      rightText(totalStr, y);
-      y += 4;
-    }
-
-    dashedLine(y);
-    y += 3;
-  }
-
-  // ═══ PRODUCTS ═══
-  if (check.products && check.products.length > 0) {
-    setFont(fontSize.subheader, 'bold');
-    centerText('ТОВАРЫ', y);
-    y += 4;
-
-    setFont(fontSize.normal);
-    for (const prod of check.products) {
-      const nameLines = wrapText(prod.name, contentW);
-      for (const line of nameLines) {
-        leftText(line, y);
-        y += 3;
-      }
-      const detail = prod.quantity > 1
-        ? `  ${prod.quantity} x ${formatMoney(prod.sellPrice)}`
-        : '';
-      const totalStr = formatMoney(prod.totalSell);
-      if (detail) {
-        leftText(detail, y);
-      }
-      rightText(totalStr, y);
-      y += 4;
-    }
-
-    dashedLine(y);
-    y += 3;
-  }
-
-  // ═══ TOTALS ═══
-  setFont(fontSize.normal);
-  if (check.serviceTotal > 0) {
-    leftText('Услуги:', y);
-    rightText(formatMoney(check.serviceTotal), y);
-    y += 3.5;
-  }
-  if (check.productTotal > 0) {
-    leftText('Товары:', y);
-    rightText(formatMoney(check.productTotal), y);
-    y += 3.5;
-  }
-  if ((check.discount ?? 0) > 0) {
-    leftText('Скидка:', y);
-    rightText(`-${formatMoney(check.discount!)}`, y);
-    y += 3.5;
-  }
-
-  y += 1;
-  dashedLine(y);
-  y += 3;
-
-  // Total
-  setFont(fontSize.header, 'bold');
-  leftText('ИТОГО:', y);
-  rightText(`${formatMoney(check.totalRevenue)} P`, y);
-  y += 5;
-
-  dashedLine(y);
-  y += 3;
-
-  // Payment method
-  setFont(fontSize.subheader, 'bold');
-  centerText(`Оплата: ${paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}`, y);
-  y += 4;
-
-  if (check.paymentMethod === 'cash_card') {
-    setFont(fontSize.normal);
-    leftText('Наличные:', y);
-    rightText(formatMoney(check.cashAmount), y);
-    y += 3.5;
-    leftText('Карта:', y);
-    rightText(formatMoney(check.cardAmount), y);
-    y += 3.5;
-  }
-
-  // Comment
-  if (check.comment) {
-    y += 1;
-    dashedLine(y);
-    y += 3;
-    setFont(fontSize.normal);
-    leftText('Комментарий:', y);
-    y += 3;
-    const commentLines = wrapText(check.comment, contentW);
-    for (const line of commentLines) {
-      leftText(line, y);
-      y += 3;
-    }
-  }
-
-  y += 2;
-  dashedLine(y);
-  y += 4;
-
-  // Footer
-  setFont(fontSize.small);
-  centerText('Спасибо за визит!', y);
-  y += 3;
-  centerText(`${tenantName}`, y);
-
-  // Save
-  doc.save(`check-${check.number}.pdf`);
+/** Escape HTML special characters */
+function esc(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }

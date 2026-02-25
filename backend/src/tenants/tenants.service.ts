@@ -26,6 +26,11 @@ export class TenantsService {
       monthlyPrice: parseFloat(row.monthly_price) || 0,
       subscriptionEnd: row.subscription_end,
       subscriptionNote: row.subscription_note,
+      legalName: row.legal_name,
+      inn: row.inn,
+      kpp: row.kpp,
+      ogrn: row.ogrn,
+      receiptFooter: row.receipt_footer,
       userCount: row.user_count !== undefined ? parseInt(row.user_count) : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -175,6 +180,11 @@ export class TenantsService {
     if (dto.monthlyPrice !== undefined) { sets.push(`monthly_price=$${idx++}`); vals.push(dto.monthlyPrice); }
     if (dto.subscriptionEnd !== undefined) { sets.push(`subscription_end=$${idx++}`); vals.push(dto.subscriptionEnd); }
     if (dto.subscriptionNote !== undefined) { sets.push(`subscription_note=$${idx++}`); vals.push(dto.subscriptionNote); }
+    if (dto.legalName !== undefined) { sets.push(`legal_name=$${idx++}`); vals.push(dto.legalName); }
+    if (dto.inn !== undefined) { sets.push(`inn=$${idx++}`); vals.push(dto.inn); }
+    if (dto.kpp !== undefined) { sets.push(`kpp=$${idx++}`); vals.push(dto.kpp); }
+    if (dto.ogrn !== undefined) { sets.push(`ogrn=$${idx++}`); vals.push(dto.ogrn); }
+    if (dto.receiptFooter !== undefined) { sets.push(`receipt_footer=$${idx++}`); vals.push(dto.receiptFooter); }
 
     if (sets.length === 0) return this.getById(id);
 
@@ -247,6 +257,45 @@ export class TenantsService {
     } finally {
       client.release();
     }
+  }
+
+  async getMyCompany(tenantId: string) {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM tenants WHERE id=$1',
+      [tenantId],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Компания не найдена' });
+    return this.mapTenant(rows[0]);
+  }
+
+  async updateMyCompany(tenantId: string, dto: any) {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+
+    // Only allow company-info fields (not admin fields like isActive, maxUsers)
+    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
+    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(dto.phone); }
+    if (dto.address !== undefined) { sets.push(`address=$${idx++}`); vals.push(dto.address); }
+    if (dto.email !== undefined) { sets.push(`email=$${idx++}`); vals.push(dto.email); }
+    if (dto.description !== undefined) { sets.push(`description=$${idx++}`); vals.push(dto.description); }
+    if (dto.legalName !== undefined) { sets.push(`legal_name=$${idx++}`); vals.push(dto.legalName); }
+    if (dto.inn !== undefined) { sets.push(`inn=$${idx++}`); vals.push(dto.inn); }
+    if (dto.kpp !== undefined) { sets.push(`kpp=$${idx++}`); vals.push(dto.kpp); }
+    if (dto.ogrn !== undefined) { sets.push(`ogrn=$${idx++}`); vals.push(dto.ogrn); }
+    if (dto.receiptFooter !== undefined) { sets.push(`receipt_footer=$${idx++}`); vals.push(dto.receiptFooter); }
+
+    if (sets.length === 0) return this.getMyCompany(tenantId);
+
+    sets.push(`updated_at=now()`);
+    vals.push(tenantId);
+
+    const { rows } = await this.pool.query(
+      `UPDATE tenants SET ${sets.join(', ')} WHERE id=$${idx++} RETURNING *`,
+      vals,
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Компания не найдена' });
+    return this.mapTenant(rows[0]);
   }
 
   async getSubscription(tenantID: string) {

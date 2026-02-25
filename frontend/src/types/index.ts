@@ -26,6 +26,11 @@ export interface Tenant {
   monthlyPrice: number;
   subscriptionEnd?: string | null;
   subscriptionNote?: string | null;
+  legalName?: string;
+  inn?: string;
+  kpp?: string;
+  ogrn?: string;
+  receiptFooter?: string;
   users?: User[];
   userCount?: number;
   createdAt: string;
