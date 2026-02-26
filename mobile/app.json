@@ -22,6 +22,9 @@
         "backgroundColor": "#2563eb"
       },
       "package": "com.autexa.mobile"
+    },
+    "extra": {
+      "apiUrl": "http://212.8.229.254:3000/api"
     }
   }
 }
