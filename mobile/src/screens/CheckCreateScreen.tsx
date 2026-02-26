@@ -27,6 +27,7 @@ export default function CheckCreateScreen() {
   const route = useRoute<any>();
   const queryClient = useQueryClient();
   const editId = route.params?.id;
+  const isStackScreen = !!editId; // If editing, opened from stack navigator
 
   // Client/Car selection
   const [clientId, setClientId] = useState('');
@@ -101,12 +102,24 @@ export default function CheckCreateScreen() {
 
   const selectedClient = clientData || clients?.find(c => c.id === clientId);
 
+  const resetForm = () => {
+    setClientId(''); setCarId(''); setMasterId(''); setMileage('');
+    setComment(''); setDiscount(''); setPaymentMethod('cash' as PaymentMethod);
+    setCashAmount(''); setIsDeferred(false);
+    setServiceLines([]); setProductLines([]);
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: any) => editId ? checksApi.update(editId, data) : checksApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      navigation.goBack();
+      if (isStackScreen) {
+        navigation.goBack();
+      } else {
+        resetForm();
+        Alert.alert('Готово', 'Чек успешно создан');
+      }
     },
     onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить чек'),
   });
@@ -193,9 +206,15 @@ export default function CheckCreateScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
-        </TouchableOpacity>
+        {isStackScreen ? (
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.headerIcon}>
+            <Ionicons name="calculator-outline" size={20} color={colors.primary[600]} />
+          </View>
+        )}
         <Text style={styles.headerTitle}>{editId ? 'Редактировать' : 'Новый чек'}</Text>
         <TouchableOpacity style={styles.receiptBtn}>
           <Ionicons name="receipt-outline" size={18} color={colors.gray[400]} />
@@ -478,6 +497,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
   backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
+  headerIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   receiptBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.gray[50], alignItems: 'center', justifyContent: 'center' },
   scroll: { flex: 1 },

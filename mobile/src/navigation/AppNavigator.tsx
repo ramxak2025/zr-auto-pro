@@ -63,16 +63,16 @@ export type TabParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 
-function CenterTabButton() {
+function CenterTabButton({ focused }: { focused?: boolean }) {
   return (
     <View style={styles.centerBtnOuter}>
       <LinearGradient
-        colors={[colors.primary[500], colors.primary[700]]}
+        colors={focused ? [colors.primary[500], colors.primary[700]] : [colors.gray[400], colors.gray[500]]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.centerBtn}
       >
-        <Feather name="file-plus" size={22} color={colors.white} />
+        <Ionicons name="calculator" size={26} color={colors.white} />
       </LinearGradient>
     </View>
   );
@@ -118,15 +118,9 @@ function TabNavigator() {
         component={CheckCreateScreen}
         options={{
           tabBarLabel: 'Касса',
-          tabBarIcon: () => <CenterTabButton />,
+          tabBarIcon: ({ focused }) => <CenterTabButton focused={focused} />,
           tabBarLabelStyle: [styles.tabLabel, { color: colors.primary[600], fontWeight: fontWeight.bold }],
         }}
-        listeners={({ navigation }) => ({
-          tabPress: (e: any) => {
-            e.preventDefault();
-            (navigation as any).navigate('CheckCreate');
-          },
-        })}
       />
       <Tab.Screen
         name="Checks"
@@ -225,11 +219,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50],
   },
   centerBtnOuter: {
-    marginTop: -16,
+    marginTop: -20,
   },
   centerBtn: {
-    width: 52,
-    height: 44,
+    width: 58,
+    height: 50,
     borderRadius: borderRadius['2xl'],
     alignItems: 'center',
     justifyContent: 'center',
