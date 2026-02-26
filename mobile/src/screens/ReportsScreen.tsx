@@ -6,7 +6,7 @@ import { useNavigation } from '@react-navigation/native';
 import { reportsApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { FinancialReport } from '../../shared/types';
+import type { FinancialReport } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 

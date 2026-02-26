@@ -7,7 +7,7 @@ import { usersApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { User } from '../../shared/types';
+import type { User } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = { superadmin: 'Суперадмин', director: 'Владелец', admin: 'Администратор', master: 'Мастер' };
 const roleBadgeColors: Record<string, { bg: string; text: string }> = {

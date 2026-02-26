@@ -7,7 +7,7 @@ import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { MasterSalary } from '../../shared/types';
+import type { MasterSalary } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 

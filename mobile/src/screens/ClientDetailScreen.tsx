@@ -11,7 +11,7 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Client, Car, Check } from '../../shared/types';
+import type { Client, Car, Check } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 function formatDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }); }

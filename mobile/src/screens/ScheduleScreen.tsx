@@ -6,7 +6,7 @@ import { useNavigation } from '@react-navigation/native';
 import { scheduleApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { TodayEmployeeStatus } from '../../shared/types';
+import type { TodayEmployeeStatus } from '../../../shared/types';
 
 export default function ScheduleScreen() {
   const navigation = useNavigation<any>();

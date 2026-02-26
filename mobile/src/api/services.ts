@@ -20,7 +20,7 @@ import {
   createWarehouseCategoriesApi,
   createMarketingApi,
   createPublicReviewApi,
-} from '../../shared/api/createServices';
+} from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
 export const usersApi = createUsersApi(api);

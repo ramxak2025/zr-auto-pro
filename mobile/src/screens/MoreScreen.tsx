@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { UserPermissions } from '../../shared/types';
+import type { UserPermissions } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',

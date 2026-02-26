@@ -9,7 +9,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { checksApi, clientsApi, usersApi, servicesApi, productsApi } from '../api/services';
 import Modal from '../components/Modal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Client, Car, User, Service, Product, CheckServiceLine, CheckProductLine, PaymentMethod } from '../../shared/types';
+import type { Client, Car, User, Service, Product, CheckServiceLine, CheckProductLine, PaymentMethod } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 

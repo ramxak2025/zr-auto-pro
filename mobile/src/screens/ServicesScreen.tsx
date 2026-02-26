@@ -12,7 +12,7 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Service, PaginatedResponse } from '../../shared/types';
+import type { Service, PaginatedResponse } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 

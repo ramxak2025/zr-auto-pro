@@ -12,7 +12,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Supplier } from '../../shared/types';
+import type { Supplier } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 

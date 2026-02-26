@@ -14,10 +14,14 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
 ];
 
-// When shared/ imports npm packages, resolve from mobile/node_modules
-config.resolver.extraNodeModules = new Proxy(
-  {},
-  { get: (_, name) => path.resolve(projectRoot, 'node_modules', name) },
-);
+// Enable package.json "exports" field so that packages like axios
+// resolve to their react-native/browser builds instead of Node.js builds
+config.resolver.unstable_enablePackageExports = true;
+config.resolver.unstable_conditionNames = [
+  'react-native',
+  'browser',
+  'require',
+  'import',
+];
 
 module.exports = config;

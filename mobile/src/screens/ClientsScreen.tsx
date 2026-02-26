@@ -14,7 +14,7 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Client, PaginatedResponse } from '../../shared/types';
+import type { Client, PaginatedResponse } from '../../../shared/types';
 
 export default function ClientsScreen() {
   const navigation = useNavigation<any>();

@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authApi } from '../api/services';
 import { onAuthExpired } from '../api/axios';
-import type { User, UserPermissions, UserRole } from '../../shared/types';
+import type { User, UserPermissions, UserRole } from '../../../shared/types';
 
 interface AuthContextType {
   user: User | null;

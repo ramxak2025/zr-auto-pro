@@ -14,8 +14,8 @@ import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { checksApi, salaryApi, shiftsApi, scheduleApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { SalarySummary, EmployeeRanking, TodayEmployeeStatus, Shift } from '../../shared/types';
-import { UserRole } from '../../shared/types';
+import type { SalarySummary, EmployeeRanking, TodayEmployeeStatus, Shift } from '../../../shared/types';
+import { UserRole } from '../../../shared/types';
 
 function formatMoney(value: number): string {
   const rounded = Math.round(value);

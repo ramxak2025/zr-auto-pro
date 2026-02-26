@@ -6,7 +6,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Supplier, Delivery, SupplierPayment } from '../../shared/types';
+import type { Supplier, Delivery, SupplierPayment } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 function formatDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
