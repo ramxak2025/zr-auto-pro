@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  Alert, ActivityIndicator, FlatList, KeyboardAvoidingView, Platform,
+  Alert, ActivityIndicator, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { checksApi, clientsApi, usersApi, servicesApi, productsApi } from '../api/services';
@@ -13,6 +14,13 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Client, Car, User, Service, Product, CheckServiceLine, CheckProductLine, PaymentMethod } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
+
+const paymentOptions: { key: PaymentMethod; label: string; icon: keyof typeof Ionicons.glyphMap; color: string; bg: string }[] = [
+  { key: 'cash' as PaymentMethod, label: 'Нал', icon: 'cash-outline', color: colors.green[600], bg: colors.green[50] },
+  { key: 'card' as PaymentMethod, label: 'Карта', icon: 'card-outline', color: colors.blue[600], bg: colors.blue[50] },
+  { key: 'cash_card' as PaymentMethod, label: 'Сплит', icon: 'swap-horizontal-outline', color: colors.gray[700], bg: colors.gray[100] },
+  { key: 'warranty' as PaymentMethod, label: 'Гар.', icon: 'shield-checkmark-outline', color: colors.amber[600], bg: colors.amber[50] },
+];
 
 export default function CheckCreateScreen() {
   const navigation = useNavigation<any>();
@@ -28,6 +36,7 @@ export default function CheckCreateScreen() {
   const [comment, setComment] = useState('');
   const [discount, setDiscount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash' as PaymentMethod);
+  const [cashAmount, setCashAmount] = useState('');
   const [isDeferred, setIsDeferred] = useState(false);
 
   // Line items
@@ -74,7 +83,7 @@ export default function CheckCreateScreen() {
   // Load existing check for editing
   useEffect(() => {
     if (editId) {
-      checksApi.getById(editId).then(res => {
+      checksApi.getById(editId).then((res: any) => {
         const c = res.data;
         setClientId(c.clientId || '');
         setCarId(c.carId || '');
@@ -90,7 +99,7 @@ export default function CheckCreateScreen() {
     }
   }, [editId]);
 
-  const selectedClient = clients?.find(c => c.id === clientId);
+  const selectedClient = clientData || clients?.find(c => c.id === clientId);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => editId ? checksApi.update(editId, data) : checksApi.create(data),
@@ -110,19 +119,13 @@ export default function CheckCreateScreen() {
 
   const addServiceLine = (service: Service) => {
     setServiceLines(prev => [...prev, {
-      serviceId: service.id,
-      name: service.name,
-      price: service.defaultPrice,
-      quantity: 1,
-      total: service.defaultPrice,
-      masterId: masterId || undefined,
+      serviceId: service.id, name: service.name, price: service.defaultPrice,
+      quantity: 1, total: service.defaultPrice, masterId: masterId || undefined,
     }]);
     setShowServicePicker(false);
   };
 
-  const removeServiceLine = (idx: number) => {
-    setServiceLines(prev => prev.filter((_, i) => i !== idx));
-  };
+  const removeServiceLine = (idx: number) => setServiceLines(prev => prev.filter((_, i) => i !== idx));
 
   const updateServiceLine = (idx: number, field: string, value: any) => {
     setServiceLines(prev => prev.map((line, i) => {
@@ -135,20 +138,13 @@ export default function CheckCreateScreen() {
 
   const addProductLine = (product: Product) => {
     setProductLines(prev => [...prev, {
-      productId: product.id,
-      name: product.name,
-      sellPrice: product.sellPrice,
-      costPrice: product.costPrice,
-      quantity: 1,
-      totalSell: product.sellPrice,
-      totalCost: product.costPrice,
+      productId: product.id, name: product.name, sellPrice: product.sellPrice,
+      costPrice: product.costPrice, quantity: 1, totalSell: product.sellPrice, totalCost: product.costPrice,
     }]);
     setShowProductPicker(false);
   };
 
-  const removeProductLine = (idx: number) => {
-    setProductLines(prev => prev.filter((_, i) => i !== idx));
-  };
+  const removeProductLine = (idx: number) => setProductLines(prev => prev.filter((_, i) => i !== idx));
 
   const updateProductLine = (idx: number, field: string, value: any) => {
     setProductLines(prev => prev.map((line, i) => {
@@ -176,93 +172,108 @@ export default function CheckCreateScreen() {
       comment: comment || undefined,
       discount: discountNum || undefined,
       paymentMethod,
+      cashAmount: paymentMethod === ('cash_card' as PaymentMethod) ? Number(cashAmount) || 0 : undefined,
       isDeferred: shouldDefer,
       services: serviceLines.map(l => ({
-        serviceId: l.serviceId,
-        masterId: l.masterId || masterId,
-        name: l.name,
-        price: l.price,
-        quantity: l.quantity,
+        serviceId: l.serviceId, masterId: l.masterId || masterId,
+        name: l.name, price: l.price, quantity: l.quantity,
       })),
       products: productLines.map(l => ({
-        productId: l.productId,
-        name: l.name,
-        sellPrice: l.sellPrice,
-        costPrice: l.costPrice,
-        quantity: l.quantity,
+        productId: l.productId, name: l.name,
+        sellPrice: l.sellPrice, costPrice: l.costPrice, quantity: l.quantity,
       })),
     };
     createMutation.mutate(payload);
   };
 
-  const paymentMethods: { key: PaymentMethod; label: string }[] = [
-    { key: 'cash' as PaymentMethod, label: 'Наличные' },
-    { key: 'card' as PaymentMethod, label: 'Карта' },
-    { key: 'cash_card' as PaymentMethod, label: 'Нал/Карта' },
-    { key: 'warranty' as PaymentMethod, label: 'Гарантия' },
-  ];
+  const now = new Date();
+  const dateStr = `${now.getDate()}.${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' }}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{editId ? 'Редактировать чек' : 'Новый чек'}</Text>
-        <View style={{ width: 36 }} />
+        <Text style={styles.headerTitle}>{editId ? 'Редактировать' : 'Новый чек'}</Text>
+        <TouchableOpacity style={styles.receiptBtn}>
+          <Ionicons name="receipt-outline" size={18} color={colors.gray[400]} />
+        </TouchableOpacity>
       </View>
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
 
-          {/* Client selection */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Клиент</Text>
-            <TouchableOpacity style={styles.selector} onPress={() => setShowClientPicker(true)}>
-              <Text style={clientId ? styles.selectorText : styles.selectorPlaceholder}>
-                {selectedClient?.fullName || 'Выберите клиента (или пропустите)'}
+          {/* Dark header card */}
+          <LinearGradient colors={['#1e293b', '#0f172a']} style={styles.darkCard}>
+            <Text style={styles.darkCardTitle}>ЗАКАЗ-НАРЯД</Text>
+            <Text style={styles.darkCardDate}>{dateStr}</Text>
+          </LinearGradient>
+
+          {/* Search by plate */}
+          <View style={styles.plateSearch}>
+            <Ionicons name="search-outline" size={16} color={colors.gray[400]} />
+            <TouchableOpacity style={{ flex: 1 }} onPress={() => setShowClientPicker(true)}>
+              <Text style={styles.plateSearchText}>
+                {selectedClient ? selectedClient.fullName : 'Поиск по госномеру или имени клиента'}
               </Text>
             </TouchableOpacity>
-            {clientId && (
+            {clientId ? (
               <TouchableOpacity onPress={() => { setClientId(''); setCarId(''); }}>
-                <Text style={styles.clearText}>Очистить</Text>
+                <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
               </TouchableOpacity>
-            )}
+            ) : null}
           </View>
+
+          {/* Client info */}
+          {!clientId && (
+            <View style={styles.retailBadge}>
+              <Ionicons name="person-outline" size={14} color={colors.gray[500]} />
+              <Text style={styles.retailText}>Розничный покупатель</Text>
+            </View>
+          )}
 
           {/* Car selection */}
           {clientId && clientCars && clientCars.length > 0 && (
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Автомобиль</Text>
-              {clientCars.map(car => (
-                <TouchableOpacity
-                  key={car.id}
-                  style={[styles.optionCard, carId === car.id && styles.optionCardSelected]}
-                  onPress={() => setCarId(car.id)}
-                >
-                  <Text style={styles.optionTitle}>{car.makeModel}</Text>
-                  <Text style={styles.optionSub}>{car.plateNumber}</Text>
-                </TouchableOpacity>
-              ))}
+              <Text style={styles.sectionLabel}>Автомобиль</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+                  {clientCars.map(car => (
+                    <TouchableOpacity
+                      key={car.id}
+                      style={[styles.carChip, carId === car.id && styles.carChipActive]}
+                      onPress={() => setCarId(car.id)}
+                    >
+                      <Ionicons name="car-outline" size={14} color={carId === car.id ? colors.primary[600] : colors.gray[500]} />
+                      <Text style={[styles.carChipText, carId === car.id && styles.carChipTextActive]}>{car.makeModel}</Text>
+                      {car.plateNumber && <Text style={styles.carPlate}>{car.plateNumber}</Text>}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
             </View>
           )}
 
+          {/* Mileage */}
+          <View style={styles.mileageRow}>
+            <Ionicons name="speedometer-outline" size={16} color={colors.gray[400]} />
+            <TextInput value={mileage} onChangeText={setMileage} style={styles.mileageInput} keyboardType="numeric" placeholder="Пробег, км" placeholderTextColor={colors.gray[400]} />
+          </View>
+
           {/* Master selection */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Мастер *</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -spacing[4] }}>
-              <View style={{ flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4] }}>
+            <Text style={styles.sectionLabel}>Мастер *</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <View style={{ flexDirection: 'row', gap: spacing[2] }}>
                 {(masters || []).map(master => (
                   <TouchableOpacity
                     key={master.id}
-                    style={[styles.masterChip, masterId === master.id && styles.masterChipSelected]}
+                    style={[styles.masterChip, masterId === master.id && styles.masterChipActive]}
                     onPress={() => setMasterId(master.id)}
                   >
-                    <Text style={[styles.masterChipText, masterId === master.id && styles.masterChipTextSelected]} numberOfLines={1}>
+                    <Text style={[styles.masterChipText, masterId === master.id && styles.masterChipTextActive]} numberOfLines={1}>
                       {master.fullName}
                     </Text>
                   </TouchableOpacity>
@@ -272,11 +283,18 @@ export default function CheckCreateScreen() {
           </View>
 
           {/* Services */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Услуги ({serviceLines.length})</Text>
+          <View style={styles.linesSection}>
+            <View style={styles.linesSectionHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <Ionicons name="build-outline" size={16} color={colors.gray[500]} />
+                <Text style={styles.linesSectionTitle}>Услуги</Text>
+                <View style={styles.lineBadge}>
+                  <Text style={styles.lineBadgeText}>{serviceLines.length}</Text>
+                </View>
+              </View>
               <TouchableOpacity style={styles.addLineBtn} onPress={() => setShowServicePicker(true)}>
-                <Text style={styles.addLineBtnText}>+ Добавить</Text>
+                <Ionicons name="add" size={16} color={colors.primary[600]} />
+                <Text style={styles.addLineBtnText}>Добавить</Text>
               </TouchableOpacity>
             </View>
             {serviceLines.map((line, idx) => (
@@ -284,27 +302,17 @@ export default function CheckCreateScreen() {
                 <View style={styles.lineTop}>
                   <Text style={styles.lineName} numberOfLines={1}>{line.name}</Text>
                   <TouchableOpacity onPress={() => removeServiceLine(idx)}>
-                    <Text style={{ color: colors.red[400], fontSize: 16 }}>✕</Text>
+                    <Ionicons name="close-circle" size={18} color={colors.red[400]} />
                   </TouchableOpacity>
                 </View>
                 <View style={styles.lineInputs}>
-                  <View style={styles.lineInputGroup}>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.lineInputLabel}>Цена</Text>
-                    <TextInput
-                      value={String(line.price)}
-                      onChangeText={(v) => updateServiceLine(idx, 'price', Number(v) || 0)}
-                      style={styles.lineInput}
-                      keyboardType="numeric"
-                    />
+                    <TextInput value={String(line.price)} onChangeText={(v) => updateServiceLine(idx, 'price', Number(v) || 0)} style={styles.lineInput} keyboardType="numeric" />
                   </View>
-                  <View style={styles.lineInputGroup}>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.lineInputLabel}>Кол-во</Text>
-                    <TextInput
-                      value={String(line.quantity)}
-                      onChangeText={(v) => updateServiceLine(idx, 'quantity', Number(v) || 1)}
-                      style={styles.lineInput}
-                      keyboardType="numeric"
-                    />
+                    <TextInput value={String(line.quantity)} onChangeText={(v) => updateServiceLine(idx, 'quantity', Number(v) || 1)} style={styles.lineInput} keyboardType="numeric" />
                   </View>
                   <Text style={styles.lineTotal}>{formatMoney(line.price * line.quantity)}</Text>
                 </View>
@@ -313,11 +321,18 @@ export default function CheckCreateScreen() {
           </View>
 
           {/* Products */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Товары ({productLines.length})</Text>
+          <View style={styles.linesSection}>
+            <View style={styles.linesSectionHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <Ionicons name="cube-outline" size={16} color={colors.gray[500]} />
+                <Text style={styles.linesSectionTitle}>Товары</Text>
+                <View style={styles.lineBadge}>
+                  <Text style={styles.lineBadgeText}>{productLines.length}</Text>
+                </View>
+              </View>
               <TouchableOpacity style={styles.addLineBtn} onPress={() => setShowProductPicker(true)}>
-                <Text style={styles.addLineBtnText}>+ Добавить</Text>
+                <Ionicons name="add" size={16} color={colors.primary[600]} />
+                <Text style={styles.addLineBtnText}>Добавить</Text>
               </TouchableOpacity>
             </View>
             {productLines.map((line, idx) => (
@@ -325,27 +340,17 @@ export default function CheckCreateScreen() {
                 <View style={styles.lineTop}>
                   <Text style={styles.lineName} numberOfLines={1}>{line.name}</Text>
                   <TouchableOpacity onPress={() => removeProductLine(idx)}>
-                    <Text style={{ color: colors.red[400], fontSize: 16 }}>✕</Text>
+                    <Ionicons name="close-circle" size={18} color={colors.red[400]} />
                   </TouchableOpacity>
                 </View>
                 <View style={styles.lineInputs}>
-                  <View style={styles.lineInputGroup}>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.lineInputLabel}>Цена</Text>
-                    <TextInput
-                      value={String(line.sellPrice)}
-                      onChangeText={(v) => updateProductLine(idx, 'sellPrice', Number(v) || 0)}
-                      style={styles.lineInput}
-                      keyboardType="numeric"
-                    />
+                    <TextInput value={String(line.sellPrice)} onChangeText={(v) => updateProductLine(idx, 'sellPrice', Number(v) || 0)} style={styles.lineInput} keyboardType="numeric" />
                   </View>
-                  <View style={styles.lineInputGroup}>
+                  <View style={{ flex: 1 }}>
                     <Text style={styles.lineInputLabel}>Кол-во</Text>
-                    <TextInput
-                      value={String(line.quantity)}
-                      onChangeText={(v) => updateProductLine(idx, 'quantity', Number(v) || 1)}
-                      style={styles.lineInput}
-                      keyboardType="numeric"
-                    />
+                    <TextInput value={String(line.quantity)} onChangeText={(v) => updateProductLine(idx, 'quantity', Number(v) || 1)} style={styles.lineInput} keyboardType="numeric" />
                   </View>
                   <Text style={styles.lineTotal}>{formatMoney(line.sellPrice * line.quantity)}</Text>
                 </View>
@@ -353,88 +358,62 @@ export default function CheckCreateScreen() {
             ))}
           </View>
 
-          {/* Payment method */}
+          {/* Payment method — icon buttons */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Способ оплаты</Text>
-            <View style={styles.paymentGrid}>
-              {paymentMethods.map(pm => (
-                <TouchableOpacity
-                  key={pm.key}
-                  style={[styles.paymentChip, paymentMethod === pm.key && styles.paymentChipSelected]}
-                  onPress={() => setPaymentMethod(pm.key)}
-                >
-                  <Text style={[styles.paymentChipText, paymentMethod === pm.key && styles.paymentChipTextSelected]}>
-                    {pm.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <Text style={styles.sectionLabel}>Способ оплаты</Text>
+            <View style={styles.paymentRow}>
+              {paymentOptions.map(pm => {
+                const active = paymentMethod === pm.key;
+                return (
+                  <TouchableOpacity
+                    key={pm.key}
+                    style={[styles.paymentBtn, active && { borderColor: pm.color, backgroundColor: pm.bg }]}
+                    onPress={() => setPaymentMethod(pm.key)}
+                  >
+                    <Ionicons name={pm.icon as any} size={20} color={active ? pm.color : colors.gray[400]} />
+                    <Text style={[styles.paymentBtnText, active && { color: pm.color, fontWeight: fontWeight.bold }]}>{pm.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
+
+            {/* Cash amount for split payment */}
+            {paymentMethod === ('cash_card' as PaymentMethod) && (
+              <View style={{ marginTop: spacing[3] }}>
+                <Text style={styles.lineInputLabel}>Клиент дал наличными</Text>
+                <TextInput value={cashAmount} onChangeText={setCashAmount} style={styles.formInput} keyboardType="numeric" placeholder="0 ₽" placeholderTextColor={colors.gray[400]} />
+              </View>
+            )}
           </View>
 
           {/* Extra fields */}
           <View style={styles.section}>
-            <View style={styles.extraRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.lineInputLabel}>Пробег (км)</Text>
-                <TextInput value={mileage} onChangeText={setMileage} style={styles.formInput} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.gray[400]} />
-              </View>
+            <View style={{ flexDirection: 'row', gap: spacing[3], marginBottom: spacing[3] }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.lineInputLabel}>Скидка (₽)</Text>
                 <TextInput value={discount} onChangeText={setDiscount} style={styles.formInput} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.gray[400]} />
               </View>
             </View>
-            <Text style={styles.lineInputLabel}>Комментарий</Text>
-            <TextInput value={comment} onChangeText={setComment} style={[styles.formInput, { height: 60, textAlignVertical: 'top' }]} multiline placeholder="Необязательно" placeholderTextColor={colors.gray[400]} />
-          </View>
 
-          {/* Total */}
-          <View style={styles.totalCard}>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Услуги</Text>
-              <Text style={styles.totalValue}>{formatMoney(serviceTotal)}</Text>
-            </View>
-            <View style={styles.totalRow}>
-              <Text style={styles.totalLabel}>Товары</Text>
-              <Text style={styles.totalValue}>{formatMoney(productTotal)}</Text>
-            </View>
-            {discountNum > 0 && (
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Скидка</Text>
-                <Text style={[styles.totalValue, { color: colors.orange[500] }]}>-{formatMoney(discountNum)}</Text>
+            {/* Deferred toggle */}
+            <TouchableOpacity
+              style={[styles.deferToggle, isDeferred && styles.deferToggleActive]}
+              onPress={() => setIsDeferred(!isDeferred)}
+            >
+              <Ionicons name={isDeferred ? 'checkbox' : 'square-outline'} size={20} color={isDeferred ? colors.red[600] : colors.gray[400]} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.deferLabel, isDeferred && { color: colors.red[700] }]}>Отложить чек</Text>
+                <Text style={styles.deferHint}>Сохранить как черновик</Text>
               </View>
-            )}
-            <View style={[styles.totalRow, styles.totalRowFinal]}>
-              <Text style={styles.totalFinalLabel}>Итого</Text>
-              <Text style={styles.totalFinalValue}>{formatMoney(total)}</Text>
-            </View>
-          </View>
+            </TouchableOpacity>
 
-          {/* Deferred toggle */}
-          <TouchableOpacity
-            style={[styles.deferredToggle, isDeferred && styles.deferredToggleActive]}
-            onPress={() => setIsDeferred(!isDeferred)}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.deferredCheck, isDeferred && styles.deferredCheckActive]}>
-              {isDeferred && <Ionicons name="checkmark" size={14} color={colors.white} />}
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.deferredLabel, isDeferred && styles.deferredLabelActive]}>
-                Отложить чек
-              </Text>
-              <Text style={styles.deferredHint}>
-                Сохранить как черновик. Можно продолжить позже.
-              </Text>
-            </View>
-          </TouchableOpacity>
+            <Text style={styles.lineInputLabel}>Комментарий</Text>
+            <TextInput value={comment} onChangeText={setComment} style={[styles.formInput, { minHeight: 56, textAlignVertical: 'top' }]} multiline placeholder="Необязательно" placeholderTextColor={colors.gray[400]} />
+          </View>
 
           {/* Submit */}
           <TouchableOpacity
-            style={[
-              styles.submitBtn,
-              isDeferred && styles.submitBtnDeferred,
-              createMutation.isPending && { opacity: 0.5 },
-            ]}
+            style={[styles.submitBtn, isDeferred && styles.submitBtnDeferred, createMutation.isPending && { opacity: 0.5 }]}
             onPress={() => handleSubmit()}
             disabled={createMutation.isPending}
           >
@@ -452,51 +431,41 @@ export default function CheckCreateScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Client Picker Modal */}
+      {/* Client Picker */}
       <Modal visible={showClientPicker} onClose={() => setShowClientPicker(false)} title="Выберите клиента">
-        <TextInput
-          value={clientSearch}
-          onChangeText={setClientSearch}
-          style={styles.formInput}
-          placeholder="Поиск клиента..."
-          placeholderTextColor={colors.gray[400]}
-        />
-        <View style={{ marginTop: spacing[3], maxHeight: 300 }}>
+        <TextInput value={clientSearch} onChangeText={setClientSearch} style={styles.formInput} placeholder="Поиск по имени или телефону..." placeholderTextColor={colors.gray[400]} autoFocus />
+        <View style={{ marginTop: spacing[3] }}>
           {(clients || []).map(client => (
-            <TouchableOpacity
-              key={client.id}
-              style={styles.pickerItem}
-              onPress={() => { setClientId(client.id); setCarId(''); setShowClientPicker(false); }}
-            >
-              <Text style={styles.pickerItemName}>{client.fullName}</Text>
-              <Text style={styles.pickerItemSub}>{client.phone}</Text>
+            <TouchableOpacity key={client.id} style={styles.pickerItem} onPress={() => { setClientId(client.id); setCarId(''); setShowClientPicker(false); }}>
+              <Text style={styles.pickerName}>{client.fullName}</Text>
+              <Text style={styles.pickerSub}>{client.phone}</Text>
             </TouchableOpacity>
           ))}
         </View>
       </Modal>
 
-      {/* Service Picker Modal */}
+      {/* Service Picker */}
       <Modal visible={showServicePicker} onClose={() => setShowServicePicker(false)} title="Добавить услугу">
         <ScrollView style={{ maxHeight: 400 }}>
           {(allServices || []).map(service => (
             <TouchableOpacity key={service.id} style={styles.pickerItem} onPress={() => addServiceLine(service)}>
-              <Text style={styles.pickerItemName}>{service.name}</Text>
-              <Text style={styles.pickerItemSub}>{formatMoney(service.defaultPrice)}</Text>
+              <Text style={styles.pickerName}>{service.name}</Text>
+              <Text style={styles.pickerPrice}>{formatMoney(service.defaultPrice)}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       </Modal>
 
-      {/* Product Picker Modal */}
+      {/* Product Picker */}
       <Modal visible={showProductPicker} onClose={() => setShowProductPicker(false)} title="Добавить товар">
         <ScrollView style={{ maxHeight: 400 }}>
           {(allProducts || []).map(product => (
             <TouchableOpacity key={product.id} style={styles.pickerItem} onPress={() => addProductLine(product)}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.pickerItemName}>{product.name}</Text>
-                <Text style={styles.pickerItemSub}>Остаток: {product.stock}</Text>
+                <Text style={styles.pickerName}>{product.name}</Text>
+                <Text style={styles.pickerSub}>Остаток: {product.stock}</Text>
               </View>
-              <Text style={styles.pickerItemPrice}>{formatMoney(product.sellPrice)}</Text>
+              <Text style={styles.pickerPrice}>{formatMoney(product.sellPrice)}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -507,70 +476,72 @@ export default function CheckCreateScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
-  backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
-  headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  receiptBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.gray[50], alignItems: 'center', justifyContent: 'center' },
   scroll: { flex: 1 },
-  scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[12] },
+  scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[12] },
+  // Dark card
+  darkCard: { borderRadius: borderRadius['2xl'], padding: spacing[4], alignItems: 'center' },
+  darkCardTitle: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.slate[400], letterSpacing: 3 },
+  darkCardDate: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.slate[300], marginTop: 4 },
+  // Plate search
+  plateSearch: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3.5], paddingVertical: spacing[3] },
+  plateSearchText: { fontSize: fontSize.sm, color: colors.gray[400] },
+  // Retail
+  retailBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.gray[100], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
+  retailText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[500] },
+  // Section
   section: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[3] },
-  sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], marginBottom: spacing[2] },
-  selector: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[3] },
-  selectorText: { fontSize: fontSize.sm, color: colors.gray[900] },
-  selectorPlaceholder: { fontSize: fontSize.sm, color: colors.gray[400] },
-  clearText: { fontSize: fontSize.xs, color: colors.primary[600], marginTop: spacing[1] },
-  optionCard: { borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, padding: spacing[3], marginBottom: spacing[2] },
-  optionCardSelected: { borderColor: colors.primary[600], backgroundColor: colors.primary[50] },
-  optionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  optionSub: { fontSize: fontSize.xs, color: colors.gray[500] },
+  sectionLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.gray[500], marginBottom: spacing[2], textTransform: 'uppercase', letterSpacing: 0.5 },
+  // Car
+  carChip: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
+  carChipActive: { borderColor: colors.primary[500], backgroundColor: colors.primary[50] },
+  carChipText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
+  carChipTextActive: { color: colors.primary[700] },
+  carPlate: { fontSize: 10, color: colors.gray[400], backgroundColor: colors.gray[100], paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
+  // Mileage
+  mileageRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[100], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3.5], paddingVertical: spacing[1] },
+  mileageInput: { flex: 1, fontSize: fontSize.sm, color: colors.gray[900], paddingVertical: spacing[2] },
+  // Master
   masterChip: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.xl, backgroundColor: colors.gray[100] },
-  masterChipSelected: { backgroundColor: colors.primary[600] },
+  masterChipActive: { backgroundColor: colors.primary[600] },
   masterChipText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  masterChipTextSelected: { color: colors.white },
-  addLineBtn: { backgroundColor: colors.primary[50], paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.lg },
+  masterChipTextActive: { color: colors.white },
+  // Lines
+  linesSection: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
+  linesSectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[2] },
+  linesSectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  lineBadge: { backgroundColor: colors.gray[100], paddingHorizontal: 6, paddingVertical: 1, borderRadius: borderRadius.full },
+  lineBadgeText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.gray[500] },
+  addLineBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.primary[50], paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.lg },
   addLineBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.primary[600] },
   lineItem: { backgroundColor: colors.gray[50], borderRadius: borderRadius.lg, padding: spacing[3], marginBottom: spacing[2] },
   lineTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[2] },
   lineName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900], flex: 1, marginRight: spacing[2] },
   lineInputs: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing[2] },
-  lineInputGroup: { flex: 1 },
   lineInputLabel: { fontSize: 11, color: colors.gray[500], marginBottom: 4 },
   lineInput: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[300], borderRadius: borderRadius.md, paddingHorizontal: spacing[2], paddingVertical: spacing[1.5], fontSize: fontSize.sm, color: colors.gray[900] },
-  lineTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], minWidth: 80, textAlign: 'right' },
-  paymentGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
-  paymentChip: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[300], backgroundColor: colors.white },
-  paymentChipSelected: { borderColor: colors.primary[600], backgroundColor: colors.primary[50] },
-  paymentChipText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  paymentChipTextSelected: { color: colors.primary[700] },
-  extraRow: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[3] },
-  formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
-  totalCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: spacing[1.5] },
-  totalLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
-  totalValue: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  totalRowFinal: { borderTopWidth: 1, borderTopColor: colors.gray[200], marginTop: spacing[2], paddingTop: spacing[3] },
-  totalFinalLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  totalFinalValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  lineTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], minWidth: 70, textAlign: 'right' },
+  // Payment
+  paymentRow: { flexDirection: 'row', gap: spacing[2] },
+  paymentBtn: { flex: 1, alignItems: 'center', paddingVertical: spacing[3], borderRadius: borderRadius.xl, borderWidth: 1.5, borderColor: colors.gray[200], backgroundColor: colors.white, gap: spacing[1] },
+  paymentBtnText: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[500] },
+  // Defer
+  deferToggle: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], paddingVertical: spacing[3], borderTopWidth: 1, borderTopColor: colors.gray[100], marginTop: spacing[2], marginBottom: spacing[3] },
+  deferToggleActive: {},
+  deferLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
+  deferHint: { fontSize: 11, color: colors.gray[400] },
+  // Form
+  formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
+  // Submit
   submitBtn: { backgroundColor: colors.primary[600], paddingVertical: spacing[4], borderRadius: borderRadius.xl, alignItems: 'center' },
   submitBtnDeferred: { backgroundColor: colors.red[600] },
-  submitBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
-  deferredToggle: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200],
-    borderRadius: borderRadius.xl, padding: spacing[3.5],
-  },
-  deferredToggleActive: { backgroundColor: colors.red[50], borderColor: colors.red[300] },
-  deferredCheck: {
-    width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.gray[300],
-    alignItems: 'center', justifyContent: 'center',
-  },
-  deferredCheckActive: { backgroundColor: colors.red[600], borderColor: colors.red[600] },
-  deferredLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  deferredLabelActive: { color: colors.red[700] },
-  deferredHint: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+  submitBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.bold },
   // Picker
   pickerItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
-  pickerItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  pickerItemSub: { fontSize: fontSize.xs, color: colors.gray[500] },
-  pickerItemPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  pickerName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  pickerSub: { fontSize: fontSize.xs, color: colors.gray[500] },
+  pickerPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
 });

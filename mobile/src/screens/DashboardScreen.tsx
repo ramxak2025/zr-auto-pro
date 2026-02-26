@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line } from 'react-native-svg';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
@@ -118,10 +119,43 @@ function RevenueChart() {
       const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
       return days[d.getDay()];
     }
-    const step = total > 15 ? 5 : total > 10 ? 3 : 2;
-    if (idx % step !== 0 && idx !== total - 1) return '';
+    if (period === 'month') {
+      return `${d.getDate()}`;
+    }
     return `${d.getDate()}`;
   };
+
+  /** Build smooth bezier curve path */
+  const buildWavePath = (vals: number[], w: number, h: number, maxV: number): string => {
+    if (vals.length < 2) return '';
+    const pts = vals.map((v, i) => ({
+      x: (i / (vals.length - 1)) * w,
+      y: h - (v / maxV) * (h * 0.85) - 4,
+    }));
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 1; i < pts.length; i++) {
+      const prev = pts[i - 1];
+      const curr = pts[i];
+      const cpx = (prev.x + curr.x) / 2;
+      d += ` C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`;
+    }
+    return d;
+  };
+
+  const buildAreaPath = (vals: number[], w: number, h: number, maxV: number): string => {
+    const line = buildWavePath(vals, w, h, maxV);
+    if (!line) return '';
+    return `${line} L ${w} ${h} L 0 ${h} Z`;
+  };
+
+  const svgW = chartWidth;
+  const svgH = 120;
+  const revVals = points.map((p: any) => p.revenue || 0);
+  const profVals = points.map((p: any) => p.profit || 0);
+  const maxProfit = Math.max(...profVals, 1);
+
+  // labels for month: show 1,2,3... in order
+  const labelStep = period === 'month' ? (points.length > 15 ? 5 : 3) : 1;
 
   return (
     <AnimatedCard index={0} style={styles.chartCard}>
@@ -166,25 +200,53 @@ function RevenueChart() {
 
         {isLoading ? (
           <ActivityIndicator color={colors.primary[400]} style={{ paddingVertical: spacing[8] }} />
-        ) : points.length > 0 ? (
+        ) : points.length > 1 ? (
           <View style={styles.chartBody}>
-            <View style={styles.barsContainer}>
-              {points.map((point: any, idx: number) => {
-                const value = point.revenue || 0;
-                const height = Math.max((value / maxValue) * 80, 3);
-                const label = formatLabel(point.date, idx, points.length);
-                const showLabel = period === 'week' || period === 'year' || idx % (points.length > 15 ? 5 : 3) === 0 || idx === points.length - 1;
-                return (
-                  <View key={idx} style={[styles.barGroup, { width: barWidth }]}>
-                    <LinearGradient
-                      colors={[colors.primary[400], colors.primary[600]]}
-                      style={[styles.bar, { height }]}
-                    />
-                    {showLabel && <Text style={styles.barLabel}>{label}</Text>}
-                  </View>
-                );
-              })}
+            {/* SVG Wave Chart */}
+            <View style={{ height: svgH, width: svgW }}>
+              <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
+                <Defs>
+                  <SvgGrad id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset="0%" stopColor="rgb(37,99,235)" stopOpacity="0.4" />
+                    <Stop offset="100%" stopColor="rgb(37,99,235)" stopOpacity="0" />
+                  </SvgGrad>
+                  <SvgGrad id="profGrad" x1="0" y1="0" x2="0" y2="1">
+                    <Stop offset="0%" stopColor="rgb(6,182,212)" stopOpacity="0.3" />
+                    <Stop offset="100%" stopColor="rgb(6,182,212)" stopOpacity="0" />
+                  </SvgGrad>
+                </Defs>
+                {/* Grid lines */}
+                {[0.25, 0.5, 0.75].map(pct => (
+                  <Line key={pct} x1={0} y1={svgH * (1 - pct)} x2={svgW} y2={svgH * (1 - pct)} stroke="rgba(255,255,255,0.05)" strokeWidth={1} />
+                ))}
+                {/* Revenue area + line */}
+                <Path d={buildAreaPath(revVals, svgW, svgH, maxValue)} fill="url(#revGrad)" />
+                <Path d={buildWavePath(revVals, svgW, svgH, maxValue)} stroke="rgb(59,130,246)" strokeWidth={2.5} fill="none" />
+                {/* Profit area + line */}
+                <Path d={buildAreaPath(profVals, svgW, svgH, maxProfit > maxValue ? maxProfit : maxValue)} fill="url(#profGrad)" />
+                <Path d={buildWavePath(profVals, svgW, svgH, maxProfit > maxValue ? maxProfit : maxValue)} stroke="rgb(6,182,212)" strokeWidth={1.5} fill="none" strokeDasharray="4,4" />
+              </Svg>
             </View>
+
+            {/* X-axis labels */}
+            {period !== 'today' && (
+              <View style={styles.xAxisLabels}>
+                {points.map((point: any, idx: number) => {
+                  const label = formatLabel(point.date, idx, points.length);
+                  const show = period === 'week' || period === 'year' || (idx % labelStep === 0) || idx === points.length - 1;
+                  return (
+                    <Text key={idx} style={styles.xAxisLabel}>
+                      {show ? label : ''}
+                    </Text>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        ) : points.length === 1 ? (
+          <View style={styles.todayStat}>
+            <Text style={styles.todayStatValue}>{formatMoney(totalRevenue)}</Text>
+            <Text style={styles.todayStatSub}>Выручка за период</Text>
           </View>
         ) : (
           <Text style={styles.chartEmpty}>Нет данных за период</Text>
@@ -209,7 +271,7 @@ function RevenueChart() {
         )}
 
         {/* Scrollable day details */}
-        {points.length > 0 && period !== 'today' && (
+        {points.length > 1 && period !== 'today' && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chartDetailsScroll}>
             {points.map((point: any, idx: number) => (
               <View key={idx} style={styles.chartDetailCard}>
@@ -649,11 +711,12 @@ const styles = StyleSheet.create({
   navBtn: { padding: spacing[1.5], borderRadius: borderRadius.lg, backgroundColor: 'rgba(255,255,255,0.05)' },
   navBtnDisabled: { opacity: 0.2 },
   navLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.slate[300] },
-  chartBody: { gap: spacing[3] },
-  barsContainer: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 100 },
-  barGroup: { alignItems: 'center', gap: 4 },
-  bar: { borderRadius: 3, minHeight: 3 },
-  barLabel: { fontSize: 9, color: colors.slate[500] },
+  chartBody: { gap: spacing[1] },
+  xAxisLabels: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: spacing[1] },
+  xAxisLabel: { fontSize: 9, color: colors.slate[500], textAlign: 'center', flex: 1 },
+  todayStat: { alignItems: 'center', paddingVertical: spacing[6] },
+  todayStatValue: { fontSize: fontSize['3xl'], fontWeight: fontWeight.bold, color: colors.white },
+  todayStatSub: { fontSize: fontSize.xs, color: colors.slate[400], marginTop: 4 },
   chartEmpty: { fontSize: fontSize.sm, color: colors.slate[500], textAlign: 'center', paddingVertical: spacing[8] },
   chartStats: { flexDirection: 'row', marginTop: spacing[4], backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: borderRadius.xl, overflow: 'hidden' },
   chartStatItem: { flex: 1, paddingVertical: spacing[3], alignItems: 'center' },

@@ -21,6 +21,16 @@ function getApiBaseUrl(): string {
 
 const API_BASE_URL = getApiBaseUrl();
 
+// Derive server origin for image URLs (strip /api suffix)
+export const SERVER_URL = API_BASE_URL.replace(/\/api\/?$/, '');
+
+/** Resolve a relative image path (/uploads/xxx) to full URL */
+export function getImageUrl(path?: string | null): string | undefined {
+  if (!path) return undefined;
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  return `${SERVER_URL}${path.startsWith('/') ? '' : '/'}${path}`;
+}
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,

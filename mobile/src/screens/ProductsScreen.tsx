@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { productsApi, warehouseCategoriesApi } from '../api/services';
+import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -18,6 +19,9 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Product, PaginatedResponse } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+const FOLDER_COLS = 3;
+const FOLDER_GAP = spacing[2];
+const FOLDER_WIDTH = (SCREEN_WIDTH - spacing[4] * 2 - FOLDER_GAP * (FOLDER_COLS - 1)) / FOLDER_COLS;
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 
@@ -40,6 +44,7 @@ export default function ProductsScreen() {
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [showOpsModal, setShowOpsModal] = useState(false);
 
   const { data, isLoading } = useQuery<PaginatedResponse<Product>>({
     queryKey: ['products', { search, limit }],
@@ -70,6 +75,17 @@ export default function ProductsScreen() {
   });
 
   const allProducts = data?.data || [];
+
+  // Stats
+  const warehouseStats = useMemo(() => {
+    let costTotal = 0;
+    let sellTotal = 0;
+    for (const p of allProducts) {
+      costTotal += (p.costPrice || 0) * (p.stock || 0);
+      sellTotal += (p.sellPrice || 0) * (p.stock || 0);
+    }
+    return { costTotal, sellTotal, count: allProducts.length };
+  }, [allProducts]);
 
   // Build folder structure
   const { subfolders, currentProducts } = useMemo(() => {
@@ -162,17 +178,39 @@ export default function ProductsScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      {/* Header with title + action buttons */}
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
           <Ionicons name="cube" size={20} color={colors.primary[600]} />
           <Text style={styles.title}>Склад</Text>
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>{warehouseStats.count} товаров</Text>
+          </View>
         </View>
-        {hasPermission('warehouse_access') && (
-          <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-            <Ionicons name="add" size={18} color={colors.white} />
-            <Text style={styles.addBtnText}>Новый</Text>
-          </TouchableOpacity>
-        )}
+        <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+          {hasPermission('warehouse_access') && (
+            <TouchableOpacity style={styles.opsBtn} onPress={() => setShowOpsModal(true)}>
+              <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
+            </TouchableOpacity>
+          )}
+          {hasPermission('warehouse_access') && (
+            <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+              <Ionicons name="add" size={18} color={colors.white} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* Stats cards */}
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>СЕБЕСТОИМОСТЬ СКЛАДА</Text>
+          <Text style={styles.statValue}>{formatMoney(warehouseStats.costTotal)}</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statLabel}>В РОЗН. ЦЕНАХ</Text>
+          <Text style={styles.statValue}>{formatMoney(warehouseStats.sellTotal)}</Text>
+        </View>
       </View>
 
       {/* Breadcrumb */}
@@ -217,11 +255,12 @@ export default function ProductsScreen() {
           keyExtractor={(item) => item.id}
           renderItem={({ item, index }) => {
             const lowStock = item.stock <= item.minStock && item.minStock > 0;
+            const photoUri = getImageUrl(item.photo);
             return (
               <AnimatedCard index={index} style={styles.productCard} onPress={() => openEdit(item)}>
                 <View style={styles.productRow}>
-                  {item.photo ? (
-                    <Image source={{ uri: item.photo }} style={styles.productPhoto} resizeMode="cover" />
+                  {photoUri ? (
+                    <Image source={{ uri: photoUri }} style={styles.productPhoto} resizeMode="cover" />
                   ) : (
                     <View style={styles.productPhotoPlaceholder}>
                       <Ionicons name="cube-outline" size={22} color={colors.gray[300]} />
@@ -254,13 +293,13 @@ export default function ProductsScreen() {
                 {sortedFolders.map(([folderName, info], idx) => (
                   <AnimatedCard key={folderName} index={idx} style={styles.folderCard} onPress={() => enterFolder(folderName)}>
                     <View style={styles.folderIconBox}>
-                      <Ionicons name="folder-open-outline" size={24} color={colors.primary[500]} />
+                      <Ionicons name="folder-open-outline" size={22} color={colors.primary[500]} />
                     </View>
-                    <Text style={styles.folderName} numberOfLines={1}>{folderName}</Text>
+                    <Text style={styles.folderName} numberOfLines={2}>{folderName}</Text>
                     <Text style={styles.folderCount}>{info.count} шт</Text>
                     {info.hasLow && (
                       <View style={styles.folderAlert}>
-                        <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
+                        <Ionicons name="alert-circle" size={12} color={colors.orange[500]} />
                       </View>
                     )}
                   </AnimatedCard>
@@ -321,6 +360,30 @@ export default function ProductsScreen() {
         </View>
       </Modal>
 
+      {/* Warehouse Operations Modal */}
+      <Modal visible={showOpsModal} onClose={() => setShowOpsModal(false)} title="Складские операции">
+        <TouchableOpacity style={styles.opsItem} onPress={() => { setShowOpsModal(false); Alert.alert('Инвентаризация', 'Функция в разработке'); }}>
+          <View style={[styles.opsIcon, { backgroundColor: colors.blue[50] }]}>
+            <Ionicons name="clipboard-outline" size={22} color={colors.blue[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.opsItemTitle}>Инвентаризация</Text>
+            <Text style={styles.opsItemDesc}>Пересчёт остатков на складе</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.opsItem} onPress={() => { setShowOpsModal(false); Alert.alert('Списание', 'Функция в разработке'); }}>
+          <View style={[styles.opsIcon, { backgroundColor: colors.red[50] }]}>
+            <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.opsItemTitle}>Списание</Text>
+            <Text style={styles.opsItemDesc}>Списать брак, потери, просрочку</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+        </TouchableOpacity>
+      </Modal>
+
       <ConfirmDialog
         visible={!!deleteId}
         onClose={() => setDeleteId(null)}
@@ -338,25 +401,35 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  addBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.primary[600], paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },
-  addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  countBadge: { backgroundColor: colors.gray[100], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
+  countBadgeText: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[500] },
+  opsBtn: { width: 36, height: 36, borderRadius: borderRadius.xl, backgroundColor: colors.orange[50], alignItems: 'center', justifyContent: 'center' },
+  addBtn: { width: 36, height: 36, borderRadius: borderRadius.xl, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center' },
+  // Stats
+  statsRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4], marginBottom: spacing[3] },
+  statCard: { flex: 1, backgroundColor: colors.white, borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3], alignItems: 'center' },
+  statLabel: { fontSize: 9, fontWeight: fontWeight.semibold, color: colors.gray[400], letterSpacing: 0.5 },
+  statValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: 2 },
+  // Breadcrumb
   breadcrumb: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], paddingBottom: spacing[2], flexWrap: 'wrap', gap: spacing[1] },
   breadcrumbItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingVertical: 2 },
   breadcrumbText: { fontSize: fontSize.xs, color: colors.primary[600], fontWeight: fontWeight.medium },
   breadcrumbTextActive: { color: colors.gray[900], fontWeight: fontWeight.bold },
   searchWrap: { paddingHorizontal: spacing[4] },
   list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8], gap: spacing[2], paddingTop: spacing[2] },
-  foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3], marginBottom: spacing[4], paddingHorizontal: spacing[0.5] },
+  // Folders — 3 cols
+  foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: FOLDER_GAP, marginBottom: spacing[4] },
   folderCard: {
-    width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3] - spacing[1]) / 2,
-    backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1,
-    borderColor: colors.gray[100], padding: spacing[4], alignItems: 'center',
+    width: FOLDER_WIDTH,
+    backgroundColor: colors.white, borderRadius: borderRadius.xl, borderWidth: 1,
+    borderColor: colors.gray[100], padding: spacing[3], alignItems: 'center',
     shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
   },
-  folderIconBox: { width: 48, height: 48, borderRadius: borderRadius.xl, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center', marginBottom: spacing[2] },
-  folderName: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.gray[900], textAlign: 'center' },
-  folderCount: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
-  folderAlert: { position: 'absolute', top: spacing[2], right: spacing[2] },
+  folderIconBox: { width: 40, height: 40, borderRadius: borderRadius.lg, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center', marginBottom: spacing[1.5] },
+  folderName: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[900], textAlign: 'center', lineHeight: 14 },
+  folderCount: { fontSize: 10, color: colors.gray[400], marginTop: 2 },
+  folderAlert: { position: 'absolute', top: spacing[1.5], right: spacing[1.5] },
+  // Products
   productCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3], shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 },
   productRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   productPhoto: { width: 52, height: 52, borderRadius: borderRadius.lg },
@@ -371,6 +444,7 @@ const styles = StyleSheet.create({
   productStock: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   productStockLow: { color: colors.red[500] },
   productStockLabel: { fontSize: 10, color: colors.gray[400] },
+  // Form
   formField: { marginBottom: spacing[4] },
   formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], marginBottom: spacing[1.5] },
   formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
@@ -382,4 +456,9 @@ const styles = StyleSheet.create({
   deleteFormBtn: { paddingHorizontal: spacing[3], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.red[50] },
   submitBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
+  // Ops modal
+  opsItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[4], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  opsIcon: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  opsItemTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  opsItemDesc: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 },
 });

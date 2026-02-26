@@ -8,8 +8,12 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
+  Dimensions,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+
+const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 interface ModalProps {
   visible: boolean;
@@ -20,20 +24,26 @@ interface ModalProps {
 
 export default function Modal({ visible, onClose, title, children }: ModalProps) {
   return (
-    <RNModal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.overlay}
       >
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
         <View style={styles.sheet}>
+          <View style={styles.handle} />
           <View style={styles.header}>
             <Text style={styles.title}>{title}</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Text style={styles.closeText}>✕</Text>
+              <Ionicons name="close" size={20} color={colors.gray[400]} />
             </TouchableOpacity>
           </View>
-          <ScrollView style={styles.body} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            style={styles.body}
+            contentContainerStyle={styles.bodyContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             {children}
           </ScrollView>
         </View>
@@ -45,7 +55,9 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing[4],
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -53,40 +65,52 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: borderRadius['2xl'],
-    borderTopRightRadius: borderRadius['2xl'],
-    maxHeight: '90%',
+    borderRadius: borderRadius['2xl'],
+    width: '100%',
+    maxHeight: SCREEN_HEIGHT * 0.85,
     shadowColor: colors.black,
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 20,
+  },
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.gray[200],
+    alignSelf: 'center',
+    marginTop: spacing[3],
+    marginBottom: spacing[1],
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing[6],
-    paddingVertical: spacing[4],
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[3],
     borderBottomWidth: 1,
-    borderBottomColor: colors.gray[200],
+    borderBottomColor: colors.gray[100],
   },
   title: {
     fontSize: fontSize.lg,
-    fontWeight: fontWeight.semibold,
+    fontWeight: fontWeight.bold,
     color: colors.gray[900],
   },
   closeBtn: {
-    padding: spacing[1.5],
-    borderRadius: borderRadius.lg,
-  },
-  closeText: {
-    fontSize: fontSize.lg,
-    color: colors.gray[400],
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.gray[50],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   body: {
-    paddingHorizontal: spacing[6],
+    maxHeight: SCREEN_HEIGHT * 0.65,
+  },
+  bodyContent: {
+    paddingHorizontal: spacing[5],
     paddingTop: spacing[4],
-    paddingBottom: spacing[8],
+    paddingBottom: spacing[6],
   },
 });
