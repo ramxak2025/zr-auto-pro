@@ -3,11 +3,13 @@ import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
+import AnimatedCard from '../components/AnimatedCard';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
@@ -94,19 +96,25 @@ export default function ChecksScreen() {
               onPress={() => handleDelete(check.id, check.number)}
               style={styles.deleteBtn}
             >
-              <Text style={styles.deleteBtnText}>✕</Text>
+              <Ionicons name="close" size={16} color={colors.gray[300]} />
             </TouchableOpacity>
           )}
         </View>
 
         <View style={styles.checkBody}>
-          <Text style={styles.checkClient} numberOfLines={1}>
-            👤 {check.client?.fullName ?? 'Розничный покупатель'}
-          </Text>
-          {check.car && (
-            <Text style={styles.checkCar} numberOfLines={1}>
-              🚗 {check.car.makeModel} · {check.car.plateNumber}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
+            <Ionicons name="person-outline" size={14} color={colors.gray[400]} />
+            <Text style={styles.checkClient} numberOfLines={1}>
+              {check.client?.fullName ?? 'Розничный покупатель'}
             </Text>
+          </View>
+          {check.car && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
+              <Ionicons name="car-outline" size={14} color={colors.gray[400]} />
+              <Text style={styles.checkCar} numberOfLines={1}>
+                {check.car.makeModel} · {check.car.plateNumber}
+              </Text>
+            </View>
           )}
         </View>
 
@@ -140,9 +148,13 @@ export default function ChecksScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Чеки</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+          <Ionicons name="receipt" size={20} color={colors.primary[600]} />
+          <Text style={styles.title}>Чеки</Text>
+        </View>
         <TouchableOpacity style={styles.newBtn} onPress={() => navigation.navigate('CheckCreate')}>
-          <Text style={styles.newBtnText}>+ Новый</Text>
+          <Ionicons name="add" size={18} color={colors.white} />
+          <Text style={styles.newBtnText}>Новый</Text>
         </TouchableOpacity>
       </View>
 
@@ -175,7 +187,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  newBtn: { backgroundColor: colors.primary[600], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },
+  newBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.primary[600], paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },
   newBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: spacing[4] },
   list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8], gap: spacing[3] },

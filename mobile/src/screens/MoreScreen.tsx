@@ -1,6 +1,7 @@
-import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -13,33 +14,72 @@ const roleLabels: Record<string, string> = {
   master: 'Мастер',
 };
 
+const roleBadgeColors: Record<string, { bg: string; text: string }> = {
+  superadmin: { bg: colors.red[50], text: colors.red[700] },
+  director: { bg: colors.purple[50], text: colors.purple[700] },
+  admin: { bg: colors.blue[50], text: colors.blue[600] },
+  master: { bg: colors.green[50], text: colors.green[700] },
+};
+
 interface MenuItem {
   label: string;
   description: string;
   screen: string;
-  emoji: string;
+  icon: keyof typeof Ionicons.glyphMap;
   permission?: keyof UserPermissions;
   roles?: string[];
-  bgColor: string;
+  iconBg: string;
+  iconColor: string;
 }
 
 const menuItems: MenuItem[] = [
-  { label: 'Расписание', description: 'График работы и смены', screen: 'Schedule', emoji: '📅', bgColor: colors.indigo[50] },
-  { label: 'Клиенты', description: 'База клиентов', screen: 'Clients', permission: 'clients_view', emoji: '👥', bgColor: colors.blue[50] },
-  { label: 'Услуги', description: 'Каталог услуг', screen: 'Services', emoji: '🔧', bgColor: colors.orange[50] },
-  { label: 'Поставщики', description: 'Поставки и расчёты', screen: 'Suppliers', permission: 'suppliers_access', emoji: '🚛', bgColor: colors.amber[50] },
-  { label: 'Движение денег', description: 'Касса по дням и сотрудникам', screen: 'CashFlow', emoji: '↔️', bgColor: colors.teal[50] },
-  { label: 'Зарплата', description: 'Заработок мастеров', screen: 'Salary', emoji: '💰', bgColor: colors.green[50] },
-  { label: 'Расходы', description: 'Аренда, маркетинг и др.', screen: 'Expenses', roles: ['director', 'superadmin'], emoji: '📉', bgColor: colors.rose[50] },
-  { label: 'Отчёты', description: 'Финансовые отчёты', screen: 'Reports', permission: 'financial_reports', emoji: '📊', bgColor: colors.purple[50] },
-  { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', emoji: '🛡', bgColor: colors.indigo[50] },
+  { label: 'Расписание', description: 'График работы и смены', screen: 'Schedule', icon: 'calendar-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
+  { label: 'Клиенты', description: 'База клиентов', screen: 'Clients', permission: 'clients_view', icon: 'people-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
+  { label: 'Автомобили', description: 'Все автомобили клиентов', screen: 'Cars', permission: 'clients_view', icon: 'car-sport-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
+  { label: 'Услуги', description: 'Каталог услуг', screen: 'Services', icon: 'build-outline', iconBg: colors.orange[50], iconColor: colors.orange[600] },
+  { label: 'Поставщики', description: 'Поставки и расчёты', screen: 'Suppliers', permission: 'suppliers_access', icon: 'truck-outline' as any, iconBg: colors.amber[50], iconColor: colors.amber[600] },
+  { label: 'Движение денег', description: 'Касса по дням и сотрудникам', screen: 'CashFlow', icon: 'swap-horizontal-outline', iconBg: colors.teal[50], iconColor: colors.teal[600] },
+  { label: 'Зарплата', description: 'Заработок мастеров', screen: 'Salary', icon: 'wallet-outline', iconBg: colors.green[50], iconColor: colors.green[600] },
+  { label: 'Расходы', description: 'Аренда, маркетинг и др.', screen: 'Expenses', roles: ['director', 'superadmin'], icon: 'trending-down-outline', iconBg: colors.rose[50], iconColor: colors.rose[600] },
+  { label: 'Отчёты', description: 'Финансовые отчёты', screen: 'Reports', permission: 'financial_reports', icon: 'bar-chart-outline', iconBg: colors.purple[50], iconColor: colors.purple[700] },
+  { label: 'Маркетинг', description: 'Отзывы и рассылки', screen: 'Marketing', icon: 'megaphone-outline', iconBg: colors.violet[50], iconColor: colors.violet[600] },
+  { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
 ];
+
+function AnimatedMenuItem({ item, index, onPress }: { item: MenuItem; index: number; onPress: () => void }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(24)).current;
+
+  useEffect(() => {
+    const delay = index * 40;
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 350, delay, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 350, delay, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  return (
+    <Animated.View style={{ opacity: fadeAnim, transform: [{ translateX: slideAnim }] }}>
+      <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.6}>
+        <View style={[styles.menuIcon, { backgroundColor: item.iconBg }]}>
+          <Ionicons name={item.icon} size={20} color={item.iconColor} />
+        </View>
+        <View style={styles.menuTextWrap}>
+          <Text style={styles.menuLabel}>{item.label}</Text>
+          <Text style={styles.menuDesc}>{item.description}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
   const { user, logout, hasPermission } = useAuth();
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
+  const badgeColor = user?.role ? roleBadgeColors[user.role] || roleBadgeColors.master : roleBadgeColors.master;
 
   const filteredItems = menuItems.filter(item => {
     if (item.permission && !hasPermission(item.permission)) return false;
@@ -47,52 +87,51 @@ export default function MoreScreen() {
     return true;
   });
 
+  // Entrance animation for user card
+  const cardFade = useRef(new Animated.Value(0)).current;
+  const cardScale = useRef(new Animated.Value(0.95)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(cardFade, { toValue: 1, duration: 400, useNativeDriver: true }),
+      Animated.spring(cardScale, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* User card */}
-        <View style={styles.userCard}>
+        <Animated.View style={[styles.userCard, { opacity: cardFade, transform: [{ scale: cardScale }] }]}>
           <View style={styles.userRow}>
-            {user?.avatar ? (
-              <View style={styles.avatarImg}>
-                <Text style={styles.avatarText}>{userInitial}</Text>
-              </View>
-            ) : (
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{userInitial}</Text>
-              </View>
-            )}
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{userInitial}</Text>
+            </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.userName} numberOfLines={1}>{user?.fullName || 'User'}</Text>
-              <Text style={styles.userRole}>{roleLabel}</Text>
+              <View style={[styles.roleBadge, { backgroundColor: badgeColor.bg }]}>
+                <Text style={[styles.roleText, { color: badgeColor.text }]}>{roleLabel}</Text>
+              </View>
             </View>
           </View>
-        </View>
+        </Animated.View>
 
         {/* Menu items */}
         <View style={styles.menuCard}>
           {filteredItems.map((item, idx) => (
-            <TouchableOpacity
-              key={item.screen}
-              style={[styles.menuItem, idx < filteredItems.length - 1 && styles.menuItemBorder]}
-              onPress={() => navigation.navigate(item.screen)}
-              activeOpacity={0.6}
-            >
-              <View style={[styles.menuIcon, { backgroundColor: item.bgColor }]}>
-                <Text style={{ fontSize: 18 }}>{item.emoji}</Text>
-              </View>
-              <View style={styles.menuTextWrap}>
-                <Text style={styles.menuLabel}>{item.label}</Text>
-                <Text style={styles.menuDesc}>{item.description}</Text>
-              </View>
-              <Text style={styles.menuArrow}>›</Text>
-            </TouchableOpacity>
+            <React.Fragment key={item.screen}>
+              {idx > 0 && <View style={styles.separator} />}
+              <AnimatedMenuItem
+                item={item}
+                index={idx}
+                onPress={() => navigation.navigate(item.screen)}
+              />
+            </React.Fragment>
           ))}
         </View>
 
         {/* Logout */}
         <TouchableOpacity style={styles.logoutBtn} onPress={logout} activeOpacity={0.7}>
-          <Text style={{ fontSize: 16 }}>🚪</Text>
+          <Ionicons name="log-out-outline" size={18} color={colors.red[600]} />
           <Text style={styles.logoutText}>Выйти из аккаунта</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -111,25 +150,21 @@ const styles = StyleSheet.create({
     borderColor: colors.gray[100],
     padding: spacing[5],
     shadowColor: colors.black,
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
   avatar: {
-    width: 56, height: 56, borderRadius: 28,
+    width: 56, height: 56, borderRadius: borderRadius['2xl'],
     backgroundColor: colors.primary[100],
     alignItems: 'center', justifyContent: 'center',
-  },
-  avatarImg: {
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: colors.primary[100],
-    alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: colors.gray[100],
   },
   avatarText: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[700] },
-  userName: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  userRole: { fontSize: fontSize.sm, color: colors.gray[500], marginTop: 2 },
+  userName: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  roleBadge: { alignSelf: 'flex-start', paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full, marginTop: 4 },
+  roleText: { fontSize: 11, fontWeight: fontWeight.semibold },
   // Menu
   menuCard: {
     backgroundColor: colors.white,
@@ -138,20 +173,22 @@ const styles = StyleSheet.create({
     borderColor: colors.gray[100],
     overflow: 'hidden',
     shadowColor: colors.black,
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[4],
-    paddingHorizontal: spacing[5],
-    paddingVertical: spacing[4],
+    gap: spacing[3.5],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3.5],
   },
-  menuItemBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
+  separator: {
+    height: 1,
+    backgroundColor: colors.gray[50],
+    marginHorizontal: spacing[4],
   },
   menuIcon: {
     width: 40, height: 40,
@@ -160,8 +197,7 @@ const styles = StyleSheet.create({
   },
   menuTextWrap: { flex: 1, minWidth: 0 },
   menuLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  menuDesc: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 1 },
-  menuArrow: { fontSize: 20, color: colors.gray[300] },
+  menuDesc: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
   // Logout
   logoutBtn: {
     flexDirection: 'row',
@@ -174,8 +210,8 @@ const styles = StyleSheet.create({
     borderColor: colors.gray[100],
     paddingVertical: spacing[4],
     shadowColor: colors.black,
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
     elevation: 2,
   },
   logoutText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.red[600] },

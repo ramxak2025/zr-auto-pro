@@ -2,6 +2,8 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { View, StyleSheet, Platform } from 'react-native';
+import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, spacing, borderRadius } from '../theme';
 
@@ -24,25 +26,9 @@ import ExpensesScreen from '../screens/ExpensesScreen';
 import UsersScreen from '../screens/UsersScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
 import MoreScreen from '../screens/MoreScreen';
+import MarketingScreen from '../screens/MarketingScreen';
+import CarsScreen from '../screens/CarsScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
-
-// Simple SVG-less icons using Text
-function TabIcon({ name, focused }: { name: string; focused: boolean }) {
-  const icons: Record<string, string> = {
-    home: '⌂',
-    products: '▦',
-    receipt: '✎',
-    journal: '☰',
-    more: '⋯',
-  };
-  return (
-    <View style={[styles.tabIconWrap, focused && styles.tabIconActive]}>
-      <View>
-        {/* Use simple text icons */}
-      </View>
-    </View>
-  );
-}
 
 export type RootStackParamList = {
   Login: undefined;
@@ -60,6 +46,8 @@ export type RootStackParamList = {
   Expenses: undefined;
   Users: undefined;
   Schedule: undefined;
+  Marketing: undefined;
+  Cars: undefined;
 };
 
 export type TabParamList = {
@@ -72,6 +60,21 @@ export type TabParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
+
+function CenterTabButton() {
+  return (
+    <View style={styles.centerBtnOuter}>
+      <LinearGradient
+        colors={[colors.primary[500], colors.primary[700]]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.centerBtn}
+      >
+        <Feather name="file-plus" size={22} color={colors.white} />
+      </LinearGradient>
+    </View>
+  );
+}
 
 function TabNavigator() {
   return (
@@ -89,9 +92,9 @@ function TabNavigator() {
         component={DashboardScreen}
         options={{
           tabBarLabel: 'Главная',
-          tabBarIcon: ({ color, size }) => (
-            <View style={[styles.iconBox, color === colors.primary[600] && styles.iconBoxActive]}>
-              <IconText text="⌂" color={color} size={22} />
+          tabBarIcon: ({ color, focused }) => (
+            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
+              <Ionicons name={focused ? 'grid' : 'grid-outline'} size={21} color={color} />
             </View>
           ),
         }}
@@ -101,9 +104,9 @@ function TabNavigator() {
         component={ProductsScreen}
         options={{
           tabBarLabel: 'Склад',
-          tabBarIcon: ({ color }) => (
-            <View style={[styles.iconBox, color === colors.primary[600] && styles.iconBoxActive]}>
-              <IconText text="📦" color={color} size={18} />
+          tabBarIcon: ({ color, focused }) => (
+            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
+              <Ionicons name={focused ? 'cube' : 'cube-outline'} size={21} color={color} />
             </View>
           ),
         }}
@@ -113,17 +116,13 @@ function TabNavigator() {
         component={CheckCreateScreen}
         options={{
           tabBarLabel: 'Касса',
-          tabBarIcon: ({ focused }) => (
-            <View style={styles.centerBtn}>
-              <IconText text="✎" color={colors.white} size={22} />
-            </View>
-          ),
+          tabBarIcon: () => <CenterTabButton />,
           tabBarLabelStyle: [styles.tabLabel, { color: colors.primary[600], fontWeight: fontWeight.bold }],
         }}
         listeners={({ navigation }) => ({
-          tabPress: (e) => {
+          tabPress: (e: any) => {
             e.preventDefault();
-            navigation.navigate('CheckCreate');
+            (navigation as any).navigate('CheckCreate');
           },
         })}
       />
@@ -132,9 +131,9 @@ function TabNavigator() {
         component={ChecksScreen}
         options={{
           tabBarLabel: 'Журнал',
-          tabBarIcon: ({ color }) => (
-            <View style={[styles.iconBox, color === colors.primary[600] && styles.iconBoxActive]}>
-              <IconText text="📋" color={color} size={18} />
+          tabBarIcon: ({ color, focused }) => (
+            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
+              <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={21} color={color} />
             </View>
           ),
         }}
@@ -144,29 +143,14 @@ function TabNavigator() {
         component={MoreScreen}
         options={{
           tabBarLabel: 'Ещё',
-          tabBarIcon: ({ color }) => (
-            <View style={[styles.iconBox, color === colors.primary[600] && styles.iconBoxActive]}>
-              <IconText text="⋯" color={color} size={22} />
+          tabBarIcon: ({ color, focused }) => (
+            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
+              <Ionicons name={focused ? 'menu' : 'menu-outline'} size={22} color={color} />
             </View>
           ),
         }}
       />
     </Tab.Navigator>
-  );
-}
-
-function IconText({ text, color, size }: { text: string; color: string; size: number }) {
-  return (
-    <View>
-      <React.Fragment>
-        {/* Using emoji/unicode as simple icons */}
-        <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-          <View>
-            <React.Fragment />
-          </View>
-        </View>
-      </React.Fragment>
-    </View>
   );
 }
 
@@ -201,6 +185,8 @@ export default function AppNavigator() {
           <Stack.Screen name="Expenses" component={ExpensesScreen} />
           <Stack.Screen name="Users" component={UsersScreen} />
           <Stack.Screen name="Schedule" component={ScheduleScreen} />
+          <Stack.Screen name="Marketing" component={MarketingScreen} />
+          <Stack.Screen name="Cars" component={CarsScreen} />
         </>
       )}
     </Stack.Navigator>
@@ -210,13 +196,15 @@ export default function AppNavigator() {
 const styles = StyleSheet.create({
   tabBar: {
     backgroundColor: colors.white,
-    borderTopWidth: 1,
-    borderTopColor: colors.gray[100],
+    borderTopWidth: 0,
     height: Platform.OS === 'ios' ? 88 : 68,
     paddingTop: spacing[1],
     paddingBottom: Platform.OS === 'ios' ? spacing[7] : spacing[2],
-    elevation: 0,
-    shadowOpacity: 0,
+    elevation: 20,
+    shadowColor: colors.black,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
   },
   tabLabel: {
     fontSize: 10,
@@ -224,8 +212,8 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   iconBox: {
-    width: 32,
-    height: 32,
+    width: 36,
+    height: 36,
     borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
@@ -233,28 +221,19 @@ const styles = StyleSheet.create({
   iconBoxActive: {
     backgroundColor: colors.primary[50],
   },
+  centerBtnOuter: {
+    marginTop: -16,
+  },
   centerBtn: {
-    width: 56,
-    height: 40,
+    width: 52,
+    height: 44,
     borderRadius: borderRadius['2xl'],
-    backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: -12,
-    shadowColor: colors.primary[400],
+    shadowColor: colors.primary[600],
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  tabIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabIconActive: {
-    backgroundColor: colors.primary[50],
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 10,
   },
 });

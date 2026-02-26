@@ -4,6 +4,7 @@ import {
   Alert, ActivityIndicator, FlatList, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { checksApi, clientsApi, usersApi, servicesApi, productsApi } from '../api/services';
@@ -27,6 +28,7 @@ export default function CheckCreateScreen() {
   const [comment, setComment] = useState('');
   const [discount, setDiscount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash' as PaymentMethod);
+  const [isDeferred, setIsDeferred] = useState(false);
 
   // Line items
   const [serviceLines, setServiceLines] = useState<CheckServiceLine[]>([]);
@@ -81,6 +83,7 @@ export default function CheckCreateScreen() {
         setComment(c.comment || '');
         setDiscount(c.discount ? String(c.discount) : '');
         setPaymentMethod(c.paymentMethod);
+        setIsDeferred(c.isDeferred || false);
         setServiceLines(c.services || []);
         setProductLines(c.products || []);
       });
@@ -157,9 +160,10 @@ export default function CheckCreateScreen() {
     }));
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = (deferred?: boolean) => {
+    const shouldDefer = deferred !== undefined ? deferred : isDeferred;
     if (!masterId) { Alert.alert('Ошибка', 'Выберите мастера'); return; }
-    if (serviceLines.length === 0 && productLines.length === 0) {
+    if (!shouldDefer && serviceLines.length === 0 && productLines.length === 0) {
       Alert.alert('Ошибка', 'Добавьте хотя бы одну услугу или товар');
       return;
     }
@@ -172,6 +176,7 @@ export default function CheckCreateScreen() {
       comment: comment || undefined,
       discount: discountNum || undefined,
       paymentMethod,
+      isDeferred: shouldDefer,
       services: serviceLines.map(l => ({
         serviceId: l.serviceId,
         masterId: l.masterId || masterId,
@@ -201,11 +206,11 @@ export default function CheckCreateScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Назад</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>{editId ? 'Редактировать чек' : 'Новый чек'}</Text>
-        <View style={{ width: 60 }} />
+        <View style={{ width: 36 }} />
       </View>
 
       <KeyboardAvoidingView
@@ -404,16 +409,44 @@ export default function CheckCreateScreen() {
             </View>
           </View>
 
+          {/* Deferred toggle */}
+          <TouchableOpacity
+            style={[styles.deferredToggle, isDeferred && styles.deferredToggleActive]}
+            onPress={() => setIsDeferred(!isDeferred)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.deferredCheck, isDeferred && styles.deferredCheckActive]}>
+              {isDeferred && <Ionicons name="checkmark" size={14} color={colors.white} />}
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.deferredLabel, isDeferred && styles.deferredLabelActive]}>
+                Отложить чек
+              </Text>
+              <Text style={styles.deferredHint}>
+                Сохранить как черновик. Можно продолжить позже.
+              </Text>
+            </View>
+          </TouchableOpacity>
+
           {/* Submit */}
           <TouchableOpacity
-            style={[styles.submitBtn, createMutation.isPending && { opacity: 0.5 }]}
-            onPress={handleSubmit}
+            style={[
+              styles.submitBtn,
+              isDeferred && styles.submitBtnDeferred,
+              createMutation.isPending && { opacity: 0.5 },
+            ]}
+            onPress={() => handleSubmit()}
             disabled={createMutation.isPending}
           >
             {createMutation.isPending ? (
               <ActivityIndicator color={colors.white} />
             ) : (
-              <Text style={styles.submitBtnText}>{editId ? 'Сохранить' : 'Создать чек'}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <Ionicons name={isDeferred ? 'pause-circle-outline' : 'checkmark-circle-outline'} size={20} color={colors.white} />
+                <Text style={styles.submitBtnText}>
+                  {isDeferred ? 'Отложить чек' : editId ? 'Сохранить' : `Пробить чек — ${formatMoney(total)}`}
+                </Text>
+              </View>
             )}
           </TouchableOpacity>
         </ScrollView>
@@ -519,7 +552,22 @@ const styles = StyleSheet.create({
   totalFinalLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   totalFinalValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   submitBtn: { backgroundColor: colors.primary[600], paddingVertical: spacing[4], borderRadius: borderRadius.xl, alignItems: 'center' },
+  submitBtnDeferred: { backgroundColor: colors.red[600] },
   submitBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  deferredToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+    backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200],
+    borderRadius: borderRadius.xl, padding: spacing[3.5],
+  },
+  deferredToggleActive: { backgroundColor: colors.red[50], borderColor: colors.red[300] },
+  deferredCheck: {
+    width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.gray[300],
+    alignItems: 'center', justifyContent: 'center',
+  },
+  deferredCheckActive: { backgroundColor: colors.red[600], borderColor: colors.red[600] },
+  deferredLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
+  deferredLabelActive: { color: colors.red[700] },
+  deferredHint: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
   // Picker
   pickerItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
   pickerItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
