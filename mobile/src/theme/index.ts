@@ -168,13 +168,16 @@ export const borderRadius = {
 } as const;
 
 // Badge color map matching web app's tailwind badge classes
-export const badgeColors = {
+export const badgeColors: Record<string, { bg: string; text: string }> = {
   blue: { bg: colors.blue[50], text: colors.blue[700] },
   green: { bg: colors.green[50], text: colors.green[700] },
   red: { bg: colors.red[50], text: colors.red[700] },
   yellow: { bg: colors.yellow[50], text: colors.yellow[700] },
   gray: { bg: colors.gray[100], text: colors.gray[600] },
-} as const;
+  purple: { bg: colors.purple[50], text: colors.purple[700] },
+  orange: { bg: colors.orange[50], text: colors.orange[600] },
+  indigo: { bg: colors.indigo[50], text: colors.indigo[600] },
+};
 
 // Payment method badge colors
 export const paymentMethodBadgeColor: Record<string, keyof typeof badgeColors> = {

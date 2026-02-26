@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, Alert, ActivityIndicator, Image,
+  RefreshControl, Alert, ActivityIndicator, Image, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +16,8 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Product, PaginatedResponse } from '../../../shared/types';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 
@@ -344,9 +346,10 @@ const styles = StyleSheet.create({
   breadcrumbTextActive: { color: colors.gray[900], fontWeight: fontWeight.bold },
   searchWrap: { paddingHorizontal: spacing[4] },
   list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8], gap: spacing[2], paddingTop: spacing[2] },
-  foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3], marginBottom: spacing[4] },
+  foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3], marginBottom: spacing[4], paddingHorizontal: spacing[0.5] },
   folderCard: {
-    width: '47%', backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1,
+    width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3] - spacing[1]) / 2,
+    backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1,
     borderColor: colors.gray[100], padding: spacing[4], alignItems: 'center',
     shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
   },

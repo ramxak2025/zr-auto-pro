@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, RefreshControl, Animated, Dimensions,
@@ -30,39 +30,98 @@ function getGreeting(): string {
   return 'Доброй ночи';
 }
 
+// ── Period helpers ──
+type ChartPeriod = 'today' | 'week' | 'month' | 'year';
+const periodLabels: Record<ChartPeriod, string> = {
+  today: 'День',
+  week: 'Неделя',
+  month: 'Месяц',
+  year: 'Год',
+};
+
+function getOffsetLabel(period: ChartPeriod, offset: number): string {
+  const now = new Date();
+  const months = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+  const monthsFull = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+
+  switch (period) {
+    case 'today': {
+      const d = new Date(now);
+      d.setDate(d.getDate() + offset);
+      return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+    }
+    case 'week': {
+      const curr = new Date(now);
+      const dayOfWeek = curr.getDay() || 7;
+      const monday = new Date(curr);
+      monday.setDate(curr.getDate() - dayOfWeek + 1 + offset * 7);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      return `${monday.getDate()} ${months[monday.getMonth()].slice(0, 3)} — ${sunday.getDate()} ${months[sunday.getMonth()].slice(0, 3)}`;
+    }
+    case 'month': {
+      const m = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+      return `${monthsFull[m.getMonth()]} ${m.getFullYear()}`;
+    }
+    case 'year': {
+      return `${now.getFullYear() + offset}`;
+    }
+    default:
+      return '';
+  }
+}
+
 // ── Revenue Chart ──
 function RevenueChart() {
-  const [period, setPeriod] = useState<'week' | 'month'>('week');
+  const [period, setPeriod] = useState<ChartPeriod>('week');
+  const [offset, setOffset] = useState(0);
   const animWidth = useRef(new Animated.Value(0)).current;
 
   const { data, isLoading } = useQuery({
-    queryKey: ['cashflow-chart', period],
+    queryKey: ['dashboard-chart', period, offset],
     queryFn: async () => {
-      const now = new Date();
-      const from = new Date();
-      if (period === 'week') {
-        from.setDate(now.getDate() - 6);
-      } else {
-        from.setDate(now.getDate() - 29);
-      }
-      const res = await reportsApi.getCashFlow({
-        dateFrom: from.toISOString().split('T')[0],
-        dateTo: now.toISOString().split('T')[0],
-      });
+      const res = await checksApi.getDashboardChart(period, offset);
       return res.data;
     },
+    staleTime: 30_000,
   });
 
   useEffect(() => {
     Animated.timing(animWidth, { toValue: 1, duration: 800, useNativeDriver: false }).start();
   }, [data]);
 
-  const days = data?.days || data?.daily || [];
-  const totals = data?.totals || {};
-  const totalRevenue = totals.total || (Array.isArray(days) ? days.reduce((s: number, d: any) => s + (d.total || d.cash + d.card + d.warranty || 0), 0) : 0);
-  const maxValue = Array.isArray(days) ? Math.max(...days.map((d: any) => d.total || (d.cash || 0) + (d.card || 0) + (d.warranty || 0) || 0), 1) : 1;
+  const handlePeriodChange = (p: ChartPeriod) => {
+    setPeriod(p);
+    setOffset(0);
+  };
+
+  const points = data?.points || [];
+  const totalRevenue = data?.totalRevenue ?? 0;
+  const totalProfit = data?.totalProfit ?? 0;
+  const totalChecks = data?.totalChecks ?? 0;
+  const maxValue = useMemo(() => {
+    if (!points.length) return 1;
+    return Math.max(...points.map((p: any) => p.revenue), 1);
+  }, [points]);
   const chartWidth = SCREEN_WIDTH - spacing[4] * 2 - spacing[5] * 2;
-  const barWidth = Array.isArray(days) && days.length > 0 ? Math.max((chartWidth / days.length) - 4, 6) : 10;
+  const barWidth = points.length > 0 ? Math.max((chartWidth / points.length) - 4, 6) : 10;
+
+  const formatLabel = (dateStr: string, idx: number, total: number): string => {
+    if (period === 'today') return '';
+    if (period === 'year') {
+      const monthsShort = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+      const parts = dateStr.split('-');
+      return monthsShort[parseInt(parts[1]) - 1] || '';
+    }
+    const d = new Date(dateStr);
+    if (period === 'week') {
+      const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+      return days[d.getDay()];
+    }
+    const step = total > 15 ? 5 : total > 10 ? 3 : 2;
+    if (idx % step !== 0 && idx !== total - 1) return '';
+    return `${d.getDate()}`;
+  };
 
   return (
     <AnimatedCard index={0} style={styles.chartCard}>
@@ -70,39 +129,51 @@ function RevenueChart() {
         colors={['#0f172a', '#1e293b']}
         style={styles.chartGradient}
       >
-        <View style={styles.chartHeader}>
-          <View>
-            <Text style={styles.chartSubLabel}>АНАЛИТИКА</Text>
-            <Text style={styles.chartTotal}>{formatMoney(totalRevenue)}</Text>
-          </View>
-          <View style={styles.periodTabs}>
+        <Text style={styles.chartSubLabel}>АНАЛИТИКА</Text>
+
+        {/* Period tabs */}
+        <View style={styles.periodTabs}>
+          {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
             <TouchableOpacity
-              style={[styles.periodTab, period === 'week' && styles.periodTabActive]}
-              onPress={() => setPeriod('week')}
+              key={p}
+              style={[styles.periodTab, period === p && styles.periodTabActive]}
+              onPress={() => handlePeriodChange(p)}
             >
-              <Text style={[styles.periodTabText, period === 'week' && styles.periodTabTextActive]}>Неделя</Text>
+              <Text style={[styles.periodTabText, period === p && styles.periodTabTextActive]}>
+                {periodLabels[p]}
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.periodTab, period === 'month' && styles.periodTabActive]}
-              onPress={() => setPeriod('month')}
-            >
-              <Text style={[styles.periodTabText, period === 'month' && styles.periodTabTextActive]}>Месяц</Text>
-            </TouchableOpacity>
-          </View>
+          ))}
+        </View>
+
+        {/* Period navigation */}
+        <View style={styles.navRow}>
+          <TouchableOpacity
+            style={styles.navBtn}
+            onPress={() => setOffset(o => o - 1)}
+          >
+            <Ionicons name="chevron-back" size={16} color={colors.slate[400]} />
+          </TouchableOpacity>
+          <Text style={styles.navLabel}>{getOffsetLabel(period, offset)}</Text>
+          <TouchableOpacity
+            style={[styles.navBtn, offset >= 0 && styles.navBtnDisabled]}
+            onPress={() => setOffset(o => o < 0 ? o + 1 : 0)}
+            disabled={offset >= 0}
+          >
+            <Ionicons name="chevron-forward" size={16} color={offset >= 0 ? 'rgba(148,163,184,0.2)' : colors.slate[400]} />
+          </TouchableOpacity>
         </View>
 
         {isLoading ? (
           <ActivityIndicator color={colors.primary[400]} style={{ paddingVertical: spacing[8] }} />
-        ) : Array.isArray(days) && days.length > 0 ? (
+        ) : points.length > 0 ? (
           <View style={styles.chartBody}>
             <View style={styles.barsContainer}>
-              {days.map((day: any, idx: number) => {
-                const value = day.total || (day.cash || 0) + (day.card || 0) + (day.warranty || 0) || 0;
+              {points.map((point: any, idx: number) => {
+                const value = point.revenue || 0;
                 const height = Math.max((value / maxValue) * 80, 3);
-                const dateStr = day.date || '';
-                const d = dateStr ? new Date(dateStr) : null;
-                const label = d ? `${d.getDate()}` : '';
-                const showLabel = period === 'week' || idx % 5 === 0 || idx === days.length - 1;
+                const label = formatLabel(point.date, idx, points.length);
+                const showLabel = period === 'week' || period === 'year' || idx % (points.length > 15 ? 5 : 3) === 0 || idx === points.length - 1;
                 return (
                   <View key={idx} style={[styles.barGroup, { width: barWidth }]}>
                     <LinearGradient
@@ -114,20 +185,40 @@ function RevenueChart() {
                 );
               })}
             </View>
-
-            <View style={styles.chartLegend}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: colors.green[400] }]} />
-                <Text style={styles.legendText}>Нал: {formatMoney(totals.cash || 0)}</Text>
-              </View>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: colors.blue[300] }]} />
-                <Text style={styles.legendText}>Карта: {formatMoney(totals.card || 0)}</Text>
-              </View>
-            </View>
           </View>
         ) : (
           <Text style={styles.chartEmpty}>Нет данных за период</Text>
+        )}
+
+        {/* Bottom stats */}
+        {data && (
+          <View style={styles.chartStats}>
+            <View style={styles.chartStatItem}>
+              <Text style={styles.chartStatLabel}>Оборот</Text>
+              <Text style={styles.chartStatValue}>{formatMoney(totalRevenue)}</Text>
+            </View>
+            <View style={[styles.chartStatItem, styles.chartStatBorder]}>
+              <Text style={styles.chartStatLabel}>Прибыль</Text>
+              <Text style={[styles.chartStatValue, { color: colors.cyan[400] }]}>{formatMoney(totalProfit)}</Text>
+            </View>
+            <View style={[styles.chartStatItem, styles.chartStatBorder]}>
+              <Text style={styles.chartStatLabel}>Чеков</Text>
+              <Text style={styles.chartStatValue}>{totalChecks || '—'}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Scrollable day details */}
+        {points.length > 0 && period !== 'today' && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chartDetailsScroll}>
+            {points.map((point: any, idx: number) => (
+              <View key={idx} style={styles.chartDetailCard}>
+                <Text style={styles.chartDetailDate}>{formatLabel(point.date, idx, points.length)}</Text>
+                <Text style={styles.chartDetailRevenue}>{formatMoney(point.revenue)}</Text>
+                <Text style={styles.chartDetailProfit}>{formatMoney(point.profit)}</Text>
+              </View>
+            ))}
+          </ScrollView>
         )}
       </LinearGradient>
     </AnimatedCard>
@@ -450,6 +541,8 @@ function QuickActions() {
 
   if (actions.length === 0) return null;
 
+  const btnWidth = (SCREEN_WIDTH - spacing[4] * 2 - spacing[3]) / 2;
+
   return (
     <View>
       <Text style={[styles.sectionTitle, { marginBottom: spacing[3] }]}>Быстрые действия</Text>
@@ -458,7 +551,7 @@ function QuickActions() {
           <AnimatedCard
             key={action.label}
             index={idx}
-            style={styles.quickItem}
+            style={[styles.quickItem, { width: btnWidth }]}
             onPress={() => {
               if (action.tab) {
                 navigation.navigate('Main', { screen: action.tab });
@@ -470,7 +563,7 @@ function QuickActions() {
             <View style={[styles.quickIconBox, { backgroundColor: action.bg }]}>
               <Ionicons name={action.icon} size={22} color={action.color} />
             </View>
-            <Text style={styles.quickLabel}>{action.label}</Text>
+            <Text style={styles.quickLabel} numberOfLines={1}>{action.label}</Text>
           </AnimatedCard>
         ))}
       </View>
@@ -546,24 +639,32 @@ const styles = StyleSheet.create({
   // Chart
   chartCard: { borderRadius: borderRadius['3xl'], overflow: 'hidden', shadowColor: colors.black, shadowOpacity: 0.15, shadowRadius: 12, elevation: 6 },
   chartGradient: { padding: spacing[5], borderRadius: borderRadius['3xl'] },
-  chartHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing[4] },
-  chartSubLabel: { fontSize: 10, fontWeight: fontWeight.semibold, color: colors.slate[400], letterSpacing: 2 },
-  chartTotal: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, color: colors.white, marginTop: 4 },
-  periodTabs: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: borderRadius.lg, padding: 2 },
-  periodTab: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.md },
+  chartSubLabel: { fontSize: 10, fontWeight: fontWeight.semibold, color: colors.slate[400], letterSpacing: 2, marginBottom: spacing[2] },
+  periodTabs: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: borderRadius.xl, padding: 3, marginBottom: spacing[2] },
+  periodTab: { flex: 1, paddingVertical: spacing[2], borderRadius: borderRadius.lg, alignItems: 'center' },
   periodTabActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
-  periodTabText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.slate[400] },
+  periodTabText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.slate[400] },
   periodTabTextActive: { color: colors.white },
+  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[3] },
+  navBtn: { padding: spacing[1.5], borderRadius: borderRadius.lg, backgroundColor: 'rgba(255,255,255,0.05)' },
+  navBtnDisabled: { opacity: 0.2 },
+  navLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.slate[300] },
   chartBody: { gap: spacing[3] },
   barsContainer: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 100 },
   barGroup: { alignItems: 'center', gap: 4 },
   bar: { borderRadius: 3, minHeight: 3 },
   barLabel: { fontSize: 9, color: colors.slate[500] },
-  chartLegend: { flexDirection: 'row', gap: spacing[4] },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { fontSize: 11, color: colors.slate[400] },
   chartEmpty: { fontSize: fontSize.sm, color: colors.slate[500], textAlign: 'center', paddingVertical: spacing[8] },
+  chartStats: { flexDirection: 'row', marginTop: spacing[4], backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: borderRadius.xl, overflow: 'hidden' },
+  chartStatItem: { flex: 1, paddingVertical: spacing[3], alignItems: 'center' },
+  chartStatBorder: { borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.05)' },
+  chartStatLabel: { fontSize: 10, fontWeight: fontWeight.medium, color: colors.slate[500], textTransform: 'uppercase', letterSpacing: 1 },
+  chartStatValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.white, marginTop: 2 },
+  chartDetailsScroll: { marginTop: spacing[3] },
+  chartDetailCard: { backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginRight: spacing[2], minWidth: 64, alignItems: 'center' },
+  chartDetailDate: { fontSize: 9, color: colors.slate[500], fontWeight: fontWeight.medium },
+  chartDetailRevenue: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.blue[300] },
+  chartDetailProfit: { fontSize: 9, color: colors.cyan[400] },
   // Shift
   shiftRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   shiftLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
@@ -642,19 +743,20 @@ const styles = StyleSheet.create({
   // Quick actions
   quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
   quickItem: {
-    width: '47%',
     backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     borderColor: colors.gray[100],
-    padding: spacing[4],
+    paddingVertical: spacing[4],
+    paddingHorizontal: spacing[3],
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[2],
+    gap: spacing[3],
     shadowColor: colors.black,
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 2,
   },
   quickIconBox: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  quickLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], textAlign: 'center' },
+  quickLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], flexShrink: 1 },
 });

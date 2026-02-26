@@ -44,6 +44,7 @@ const menuItems: MenuItem[] = [
   { label: 'Отчёты', description: 'Финансовые отчёты', screen: 'Reports', permission: 'financial_reports', icon: 'bar-chart-outline', iconBg: colors.purple[50], iconColor: colors.purple[700] },
   { label: 'Маркетинг', description: 'Отзывы и рассылки', screen: 'Marketing', icon: 'megaphone-outline', iconBg: colors.violet[50], iconColor: colors.violet[600] },
   { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
+  { label: 'Настройки компании', description: 'Реквизиты и данные для чеков', screen: 'CompanySettings', roles: ['director', 'superadmin'], icon: 'business-outline', iconBg: colors.slate[100], iconColor: colors.slate[600] },
 ];
 
 function AnimatedMenuItem({ item, index, onPress }: { item: MenuItem; index: number; onPress: () => void }) {

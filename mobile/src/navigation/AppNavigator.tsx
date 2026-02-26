@@ -2,7 +2,7 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { View, StyleSheet, Platform } from 'react-native';
-import { Ionicons, MaterialCommunityIcons, Feather } from '@expo/vector-icons';
+import { Ionicons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, spacing, borderRadius } from '../theme';
@@ -28,6 +28,7 @@ import ScheduleScreen from '../screens/ScheduleScreen';
 import MoreScreen from '../screens/MoreScreen';
 import MarketingScreen from '../screens/MarketingScreen';
 import CarsScreen from '../screens/CarsScreen';
+import CompanySettingsScreen from '../screens/CompanySettingsScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 export type RootStackParamList = {
@@ -48,6 +49,7 @@ export type RootStackParamList = {
   Schedule: undefined;
   Marketing: undefined;
   Cars: undefined;
+  CompanySettings: undefined;
 };
 
 export type TabParamList = {
@@ -94,7 +96,7 @@ function TabNavigator() {
           tabBarLabel: 'Главная',
           tabBarIcon: ({ color, focused }) => (
             <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Ionicons name={focused ? 'grid' : 'grid-outline'} size={21} color={color} />
+              <Feather name="home" size={20} color={color} />
             </View>
           ),
         }}
@@ -106,7 +108,7 @@ function TabNavigator() {
           tabBarLabel: 'Склад',
           tabBarIcon: ({ color, focused }) => (
             <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Ionicons name={focused ? 'cube' : 'cube-outline'} size={21} color={color} />
+              <Feather name="package" size={20} color={color} />
             </View>
           ),
         }}
@@ -133,7 +135,7 @@ function TabNavigator() {
           tabBarLabel: 'Журнал',
           tabBarIcon: ({ color, focused }) => (
             <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={21} color={color} />
+              <Feather name="file-text" size={20} color={color} />
             </View>
           ),
         }}
@@ -145,7 +147,7 @@ function TabNavigator() {
           tabBarLabel: 'Ещё',
           tabBarIcon: ({ color, focused }) => (
             <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Ionicons name={focused ? 'menu' : 'menu-outline'} size={22} color={color} />
+              <Feather name="menu" size={20} color={color} />
             </View>
           ),
         }}
@@ -187,6 +189,7 @@ export default function AppNavigator() {
           <Stack.Screen name="Schedule" component={ScheduleScreen} />
           <Stack.Screen name="Marketing" component={MarketingScreen} />
           <Stack.Screen name="Cars" component={CarsScreen} />
+          <Stack.Screen name="CompanySettings" component={CompanySettingsScreen} />
         </>
       )}
     </Stack.Navigator>
