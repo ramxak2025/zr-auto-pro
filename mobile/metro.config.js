@@ -3,14 +3,21 @@ const path = require('path');
 
 const config = getDefaultConfig(__dirname);
 
-// Allow Metro to resolve files from the shared directory
+const projectRoot = __dirname;
 const sharedDir = path.resolve(__dirname, '../shared');
 
+// Allow Metro to find files in shared/
 config.watchFolders = [sharedDir];
+
+// Resolve all node_modules from mobile's directory
 config.resolver.nodeModulesPaths = [
-  path.resolve(__dirname, 'node_modules'),
+  path.resolve(projectRoot, 'node_modules'),
 ];
-// Allow imports from shared without extension
-config.resolver.sourceExts = [...config.resolver.sourceExts, 'ts', 'tsx'];
+
+// When shared/ imports npm packages, resolve from mobile/node_modules
+config.resolver.extraNodeModules = new Proxy(
+  {},
+  { get: (_, name) => path.resolve(projectRoot, 'node_modules', name) },
+);
 
 module.exports = config;
