@@ -51,6 +51,7 @@ export const colors = {
     100: '#dbeafe',
     200: '#bfdbfe',
     300: '#93c5fd',
+    500: '#3b82f6',
     600: '#2563eb',
     700: '#1d4ed8',
   },
@@ -58,6 +59,8 @@ export const colors = {
     50: '#fefce8',
     300: '#fde047',
     400: '#facc15',
+    500: '#eab308',
+    600: '#ca8a04',
     700: '#a16207',
   },
   amber: {
@@ -80,6 +83,8 @@ export const colors = {
   },
   purple: {
     50: '#faf5ff',
+    200: '#e9d5ff',
+    300: '#d8b4fe',
     700: '#7c3aed',
   },
   indigo: {
@@ -93,6 +98,7 @@ export const colors = {
   rose: {
     50: '#fff1f2',
     400: '#fb7185',
+    500: '#f43f5e',
     600: '#e11d48',
   },
   violet: {

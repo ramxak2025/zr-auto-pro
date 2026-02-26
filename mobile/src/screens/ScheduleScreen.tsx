@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert,
+  RefreshControl, ActivityIndicator, Alert, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,28 +15,229 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
 
-type TabType = 'today' | 'schedule' | 'settings';
+type TabType = 'grid' | 'today' | 'shifts' | 'settings';
 
-const DAY_ABBR = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const DAY_ABBR = ['\u041F\u043D', '\u0412\u0442', '\u0421\u0440', '\u0427\u0442', '\u041F\u0442', '\u0421\u0431', '\u0412\u0441'];
+const MONTH_NAMES = ['\u042F\u043D\u0432\u0430\u0440\u044C', '\u0424\u0435\u0432\u0440\u0430\u043B\u044C', '\u041C\u0430\u0440\u0442', '\u0410\u043F\u0440\u0435\u043B\u044C', '\u041C\u0430\u0439', '\u0418\u044E\u043D\u044C', '\u0418\u044E\u043B\u044C', '\u0410\u0432\u0433\u0443\u0441\u0442', '\u0421\u0435\u043D\u0442\u044F\u0431\u0440\u044C', '\u041E\u043A\u0442\u044F\u0431\u0440\u044C', '\u041D\u043E\u044F\u0431\u0440\u044C', '\u0414\u0435\u043A\u0430\u0431\u0440\u044C'];
 
 function formatDate(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function getDaysInMonth(year: number, month: number): Date[] {
   const days: Date[] = [];
   const count = new Date(year, month + 1, 0).getDate();
-  for (let i = 1; i <= count; i++) {
-    days.push(new Date(year, month, i));
-  }
+  for (let i = 1; i <= count; i++) days.push(new Date(year, month, i));
   return days;
 }
 
-// ── Today Tab ──
+// Cell colors
+function getCellStyle(entry?: ScheduleEntry) {
+  if (!entry) return { bg: 'transparent', text: '', textColor: colors.gray[400] };
+  const note = (entry.note || '').toLowerCase();
+  if (note.includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447')) return { bg: colors.rose[50], text: '\u0411/\u041B', textColor: colors.rose[600] };
+  if (entry.isDayOff) return { bg: colors.gray[100], text: '\u0412\u044B\u0445', textColor: colors.gray[500] };
+  if (entry.lateStatus === 'late_major') return { bg: colors.orange[50], text: entry.shiftStart || '\u2714', textColor: colors.orange[600] };
+  if (entry.lateStatus === 'late_minor') return { bg: colors.yellow[50], text: entry.shiftStart || '\u2714', textColor: colors.yellow[600] };
+  if (entry.shiftStart) return { bg: colors.green[50], text: entry.shiftStart, textColor: colors.green[700] };
+  return { bg: 'transparent', text: '', textColor: colors.gray[400] };
+}
+
+// ============== GRID TAB ==============
+function GridTab() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const [quickPopup, setQuickPopup] = useState<{ userId: string; date: string; entry?: ScheduleEntry } | null>(null);
+
+  const year = currentMonth.getFullYear();
+  const month = currentMonth.getMonth();
+  const dateFrom = formatDate(new Date(year, month, 1));
+  const dateTo = formatDate(new Date(year, month + 1, 0));
+  const today = formatDate(new Date());
+
+  const { data: entries, isLoading } = useQuery<ScheduleEntry[]>({
+    queryKey: ['schedule', dateFrom, dateTo],
+    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom, dateTo }); return res.data; },
+  });
+
+  const { data: usersData } = useQuery<User[]>({
+    queryKey: ['users'],
+    queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
+  });
+
+  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
+  const days = getDaysInMonth(year, month);
+
+  // Build a map: `userId-date` → ScheduleEntry
+  const entryMap = useMemo(() => {
+    const map = new Map<string, ScheduleEntry>();
+    (entries ?? []).forEach(e => {
+      const d = e.date?.split('T')[0] || '';
+      map.set(`${e.userId}-${d}`, e);
+    });
+    return map;
+  }, [entries]);
+
+  const createMutation = useMutation({
+    mutationFn: (d: any) => scheduleApi.create(d),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => scheduleApi.remove(id),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+  });
+
+  const quickAction = (type: string) => {
+    if (!quickPopup) return;
+    const { userId, date, entry } = quickPopup;
+    const base: any = { userId, date };
+
+    if (type === 'delete' && entry) {
+      deleteMutation.mutate(entry.id);
+      return;
+    }
+
+    if (type === 'shift') {
+      base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '';
+    } else if (type === 'dayoff') {
+      base.isDayOff = true; base.note = '';
+    } else if (type === 'sick') {
+      base.isDayOff = true; base.note = '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439';
+    } else if (type === 'late_minor') {
+      base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 <1\u0447';
+    } else if (type === 'late_major') {
+      base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 >1\u0447';
+    }
+
+    if (entry) {
+      updateMutation.mutate({ id: entry.id, data: base });
+    } else {
+      createMutation.mutate(base);
+    }
+  };
+
+  const CELL_W = 44;
+  const NAME_W = 100;
+
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Month navigation */}
+      <View style={styles.monthNav}>
+        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
+          <Ionicons name="chevron-back" size={18} color={colors.gray[600]} />
+        </TouchableOpacity>
+        <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
+        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
+          <Ionicons name="chevron-forward" size={18} color={colors.gray[600]} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Legend */}
+      <View style={styles.legendRow}>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.green[500] }]} /><Text style={styles.legendText}>{'\u0421\u043C\u0435\u043D\u0430'}</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.gray[400] }]} /><Text style={styles.legendText}>{'\u0412\u044B\u0445'}</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.rose[500] }]} /><Text style={styles.legendText}>{'\u0411/\u041B'}</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.orange[500] }]} /><Text style={styles.legendText}>{'\u041E\u043F\u043E\u0437\u0434.'}</Text></View>
+      </View>
+
+      {isLoading ? <LoadingSpinner /> : (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View>
+            {/* Day headers */}
+            <View style={{ flexDirection: 'row' }}>
+              <View style={{ width: NAME_W, paddingVertical: spacing[1], paddingHorizontal: spacing[2] }}>
+                <Text style={{ fontSize: 10, color: colors.gray[400], fontWeight: fontWeight.semibold }}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A'}</Text>
+              </View>
+              {days.map(d => {
+                const ds = formatDate(d);
+                const dow = (d.getDay() + 6) % 7;
+                const isWeekend = dow >= 5;
+                const isToday = ds === today;
+                return (
+                  <View key={ds} style={[styles.gridHeaderCell, { width: CELL_W }, isWeekend && { backgroundColor: colors.red[50] }, isToday && { backgroundColor: colors.primary[50] }]}>
+                    <Text style={[styles.gridHeaderDow, isWeekend && { color: colors.red[400] }, isToday && { color: colors.primary[600] }]}>{DAY_ABBR[dow]}</Text>
+                    <Text style={[styles.gridHeaderDay, isToday && { color: colors.primary[600], fontWeight: fontWeight.bold }]}>{d.getDate()}</Text>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Employee rows */}
+            {activeUsers.map(u => (
+              <View key={u.id} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.gray[50] }}>
+                <View style={styles.gridNameCell}>
+                  <Text style={styles.gridName} numberOfLines={1}>{u.fullName?.split(' ')[0]}</Text>
+                </View>
+                {days.map(d => {
+                  const ds = formatDate(d);
+                  const entry = entryMap.get(`${u.id}-${ds}`);
+                  const cell = getCellStyle(entry);
+                  const dow = (d.getDay() + 6) % 7;
+                  const isWeekend = dow >= 5;
+
+                  return (
+                    <TouchableOpacity
+                      key={ds}
+                      style={[styles.gridCell, { width: CELL_W, backgroundColor: cell.bg || (isWeekend ? colors.red[50] + '30' : 'transparent') }]}
+                      onPress={() => canEdit && setQuickPopup({ userId: u.id, date: ds, entry })}
+                    >
+                      <Text style={[styles.gridCellText, { color: cell.textColor }]}>{cell.text}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+        </ScrollView>
+      )}
+
+      {/* Quick Action Popup */}
+      <Modal visible={!!quickPopup} onClose={() => setQuickPopup(null)} title={'\u0411\u044B\u0441\u0442\u0440\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435'}>
+        {quickPopup && (
+          <View style={styles.quickActions}>
+            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('shift')}>
+              <View style={[styles.quickIcon, { backgroundColor: colors.green[50] }]}><Text style={{ fontSize: 16 }}>{'\u2705'}</Text></View>
+              <Text style={styles.quickLabel}>{'\u0421\u043C\u0435\u043D\u0430'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('dayoff')}>
+              <View style={[styles.quickIcon, { backgroundColor: colors.gray[100] }]}><Text style={{ fontSize: 16 }}>{'\uD83C\uDF19'}</Text></View>
+              <Text style={styles.quickLabel}>{'\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('sick')}>
+              <View style={[styles.quickIcon, { backgroundColor: colors.rose[50] }]}><Text style={{ fontSize: 16 }}>{'\uD83C\uDFE5'}</Text></View>
+              <Text style={styles.quickLabel}>{'\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('late_minor')}>
+              <View style={[styles.quickIcon, { backgroundColor: colors.yellow[50] }]}><Text style={{ fontSize: 16 }}>{'\u23F0'}</Text></View>
+              <Text style={styles.quickLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043B <1\u0447'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('late_major')}>
+              <View style={[styles.quickIcon, { backgroundColor: colors.orange[50] }]}><Text style={{ fontSize: 16 }}>{'\u26A0\uFE0F'}</Text></View>
+              <Text style={styles.quickLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043B >1\u0447'}</Text>
+            </TouchableOpacity>
+            {quickPopup.entry && (
+              <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('delete')}>
+                <View style={[styles.quickIcon, { backgroundColor: colors.red[50] }]}><Ionicons name="trash-outline" size={18} color={colors.red[600]} /></View>
+                <Text style={[styles.quickLabel, { color: colors.red[600] }]}>{'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+      </Modal>
+    </View>
+  );
+}
+
+// ============== TODAY TAB ==============
 function TodayTab() {
   const queryClient = useQueryClient();
   const [refreshing, setRefreshing] = useState(false);
@@ -54,431 +255,400 @@ function TodayTab() {
   };
 
   const statuses = todayData ?? [];
-  const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
+  const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447');
 
   const getStatusInfo = (s: TodayEmployeeStatus) => {
-    if (isSick(s)) return { label: 'Больничный', color: colors.rose[400], emoji: '🏥' };
-    if (s.isDayOff) return { label: 'Выходной', color: colors.gray[400], emoji: '🌙' };
-    if (s.lateStatus === 'late_major') return { label: 'Опоздание > 1ч', color: colors.orange[500], emoji: '⚠️' };
-    if (s.lateStatus === 'late_minor') return { label: 'Опоздание < 1ч', color: colors.yellow[400], emoji: '⏰' };
-    if (s.isWorking) return { label: 'На смене', color: colors.green[500], emoji: '✅' };
-    if (s.hasSchedule) return { label: 'Не пришёл', color: colors.gray[300], emoji: '❌' };
-    return { label: '—', color: colors.gray[200], emoji: '' };
-  };
-
-  // Group
-  const onShift = statuses.filter(s => s.isWorking && !s.isDayOff && !isSick(s));
-  const notArrived = statuses.filter(s => !s.isWorking && !s.isDayOff && s.hasSchedule && !isSick(s));
-  const dayOff = statuses.filter(s => s.isDayOff && !isSick(s));
-  const sick = statuses.filter(s => isSick(s));
-
-  const renderGroup = (title: string, icon: string, items: TodayEmployeeStatus[]) => {
-    if (items.length === 0) return null;
-    return (
-      <View style={styles.groupSection}>
-        <Text style={styles.groupTitle}>{icon} {title} ({items.length})</Text>
-        {items.map(s => {
-          const info = getStatusInfo(s);
-          return (
-            <View key={s.userId} style={styles.empCard}>
-              <View style={styles.empCardRow}>
-                <View style={[styles.statusDot, { backgroundColor: info.color }]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.empName}>{s.fullName}</Text>
-                  {s.shiftStart && s.shiftEnd && (
-                    <Text style={styles.empShift}>{s.shiftStart} — {s.shiftEnd}</Text>
-                  )}
-                </View>
-                <View style={styles.statusRight}>
-                  <Text style={{ fontSize: 16 }}>{info.emoji}</Text>
-                  <Text style={styles.statusLabel}>{info.label}</Text>
-                </View>
-              </View>
-              {s.actualArrival && (
-                <Text style={styles.arrivalText}>Пришёл: {new Date(s.actualArrival).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</Text>
-              )}
-              {s.note && <Text style={styles.noteText}>{s.note}</Text>}
-            </View>
-          );
-        })}
-      </View>
-    );
+    if (isSick(s)) return { label: '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439', color: colors.rose[400], badge: '\uD83C\uDFE5', bgColor: colors.rose[50] };
+    if (s.isDayOff) return { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439', color: colors.gray[400], badge: '\uD83C\uDF19', bgColor: colors.gray[50] };
+    if (s.lateStatus === 'late_major') return { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 >1\u0447', color: colors.orange[500], badge: '\u26A0\uFE0F', bgColor: colors.orange[50] };
+    if (s.lateStatus === 'late_minor') return { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 <1\u0447', color: colors.yellow[500], badge: '\u23F0', bgColor: colors.yellow[50] };
+    if (s.isWorking) return { label: '\u041D\u0430 \u0441\u043C\u0435\u043D\u0435', color: colors.green[500], badge: '\u2705', bgColor: colors.green[50] };
+    if (s.hasSchedule) return { label: '\u041F\u0440\u043E\u0433\u0443\u043B', color: colors.red[500], badge: '\u274C', bgColor: colors.red[50] };
+    return { label: '\u2014', color: colors.gray[200], badge: '', bgColor: colors.gray[50] };
   };
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}>
       {isLoading ? <LoadingSpinner /> : statuses.length === 0 ? (
-        <Text style={styles.empty}>Расписание не настроено</Text>
+        <Text style={styles.empty}>{'\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043E'}</Text>
       ) : (
+        statuses.map(s => {
+          const info = getStatusInfo(s);
+          return (
+            <View key={s.userId} style={styles.todayCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
+                <View style={[styles.todayStatusBadge, { backgroundColor: info.bgColor }]}>
+                  <Text style={{ fontSize: 18 }}>{info.badge}</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.todayName}>{s.fullName}</Text>
+                  {s.shiftStart && s.shiftEnd && <Text style={styles.todayShift}>{s.shiftStart} \u2014 {s.shiftEnd}</Text>}
+                  {s.actualArrival && (
+                    <Text style={styles.todayArrival}>{'\u041F\u0440\u0438\u0448\u0451\u043B: '}{new Date(s.actualArrival).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</Text>
+                  )}
+                  {s.note && <Text style={styles.todayNote}>{s.note}</Text>}
+                </View>
+                <View style={[styles.todayStatusLabel, { backgroundColor: info.bgColor }]}>
+                  <Text style={[styles.todayStatusText, { color: info.color }]}>{info.label}</Text>
+                </View>
+              </View>
+            </View>
+          );
+        })
+      )}
+    </ScrollView>
+  );
+}
+
+// ============== SHIFTS TAB (Personal stats) ==============
+function ShiftsTab() {
+  const [currentMonth, setCurrentMonth] = useState(new Date());
+  const year = currentMonth.getFullYear();
+  const month = currentMonth.getMonth();
+
+  const { data: stats, isLoading } = useQuery({
+    queryKey: ['schedule-my-stats', year, month],
+    queryFn: async () => { const res = await scheduleApi.getMyStats(); return res.data; },
+  });
+
+  const s: any = stats || {};
+
+  const statItems = [
+    { label: '\u0420\u0430\u0431\u043E\u0447\u0438\u0445 \u0434\u043D\u0435\u0439', value: s.totalWorked || 0, icon: '\uD83D\uDCC5', color: colors.primary[600] },
+    { label: '\u0412\u043E\u0432\u0440\u0435\u043C\u044F', value: s.totalOnTime || 0, icon: '\u2705', color: colors.green[600] },
+    { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439', value: s.totalLate || 0, icon: '\u23F0', color: colors.orange[600] },
+    { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0445', value: s.totalDaysOff || 0, icon: '\uD83C\uDF19', color: colors.gray[500] },
+  ];
+
+  return (
+    <ScrollView contentContainerStyle={styles.tabContent}>
+      <View style={styles.monthNav}>
+        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
+          <Ionicons name="chevron-back" size={18} color={colors.gray[600]} />
+        </TouchableOpacity>
+        <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
+        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
+          <Ionicons name="chevron-forward" size={18} color={colors.gray[600]} />
+        </TouchableOpacity>
+      </View>
+
+      {isLoading ? <LoadingSpinner /> : (
         <>
-          {renderGroup('На смене', '🟢', onShift)}
-          {renderGroup('Ещё не пришёл', '⏳', notArrived)}
-          {renderGroup('Выходной', '🌙', dayOff)}
-          {renderGroup('Больничный', '🏥', sick)}
+          <View style={styles.statsGrid}>
+            {statItems.map((item, idx) => (
+              <View key={idx} style={styles.statCard}>
+                <Text style={{ fontSize: 22 }}>{item.icon}</Text>
+                <Text style={[styles.statValue, { color: item.color }]}>{item.value}</Text>
+                <Text style={styles.statLabel}>{item.label}</Text>
+              </View>
+            ))}
+          </View>
+
+          {(s.totalLateMinor > 0 || s.totalLateMajor > 0) && (
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>{'\u0414\u0435\u0442\u0430\u043B\u0438 \u043E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439'}</Text>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u044F <1\u0447'}</Text>
+                <Text style={[styles.detailValue, { color: colors.yellow[600] }]}>{s.totalLateMinor || 0}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u044F >1\u0447'}</Text>
+                <Text style={[styles.detailValue, { color: colors.orange[600] }]}>{s.totalLateMajor || 0}</Text>
+              </View>
+              {s.avgLateMinutes > 0 && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>{'\u0421\u0440. \u043E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435'}</Text>
+                  <Text style={styles.detailValue}>{Math.round(s.avgLateMinutes)} {'\u043C\u0438\u043D'}</Text>
+                </View>
+              )}
+            </View>
+          )}
         </>
       )}
     </ScrollView>
   );
 }
 
-// ── Calendar Tab ──
-function CalendarTab() {
+// ============== SETTINGS TAB ==============
+function SettingsTab() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
-  const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editEntry, setEditEntry] = useState<ScheduleEntry | null>(null);
-  const [formUserId, setFormUserId] = useState('');
-  const [formStart, setFormStart] = useState('09:00');
-  const [formEnd, setFormEnd] = useState('18:00');
-  const [formIsDayOff, setFormIsDayOff] = useState(false);
-  const [formNote, setFormNote] = useState('');
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-
-  const year = currentMonth.getFullYear();
-  const month = currentMonth.getMonth();
-  const dateFrom = formatDate(new Date(year, month, 1));
-  const dateTo = formatDate(new Date(year, month + 1, 0));
-
-  const { data: entries, isLoading } = useQuery<ScheduleEntry[]>({
-    queryKey: ['schedule', dateFrom, dateTo],
-    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom, dateTo }); return res.data; },
-  });
+  const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes'>('daysoff');
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
     queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
   });
 
-  const createMutation = useMutation({
-    mutationFn: (d: any) => scheduleApi.create(d),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); closeModal(); },
-    onError: () => Alert.alert('Ошибка', 'Не удалось создать запись'),
+  const { data: workModes } = useQuery<any[]>({
+    queryKey: ['work-modes'],
+    queryFn: async () => { const res = await scheduleApi.getWorkModes(); return res.data; },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); closeModal(); },
-    onError: () => Alert.alert('Ошибка', 'Не удалось обновить'),
-  });
+  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => scheduleApi.remove(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }),
-    onError: () => Alert.alert('Ошибка', 'Не удалось удалить'),
-  });
-
-  const days = getDaysInMonth(year, month);
-  const firstDayOffset = (days[0].getDay() + 6) % 7; // Mon=0
-
-  const entryMap = useMemo(() => {
-    const map = new Map<string, ScheduleEntry[]>();
-    (entries ?? []).forEach(e => {
-      const d = e.date?.split('T')[0] || '';
-      if (!map.has(d)) map.set(d, []);
-      map.get(d)!.push(e);
-    });
-    return map;
-  }, [entries]);
-
-  const prevMonth = () => setCurrentMonth(new Date(year, month - 1, 1));
-  const nextMonth = () => setCurrentMonth(new Date(year, month + 1, 1));
-
-  const openAddEntry = (date: string) => {
-    setSelectedDate(date);
-    setEditEntry(null);
-    setFormUserId(usersData?.[0]?.id || '');
-    setFormStart('09:00');
-    setFormEnd('18:00');
-    setFormIsDayOff(false);
-    setFormNote('');
-    setModalOpen(true);
-  };
-
-  const openEditEntry = (entry: ScheduleEntry) => {
-    setSelectedDate(entry.date?.split('T')[0] || '');
-    setEditEntry(entry);
-    setFormUserId(entry.userId);
-    setFormStart(entry.shiftStart || '09:00');
-    setFormEnd(entry.shiftEnd || '18:00');
-    setFormIsDayOff(entry.isDayOff || false);
-    setFormNote(entry.note || '');
-    setModalOpen(true);
-  };
-
-  const closeModal = () => { setModalOpen(false); setEditEntry(null); };
-
-  const handleSubmit = () => {
-    const payload = {
-      userId: formUserId,
-      date: selectedDate,
-      shiftStart: formIsDayOff ? undefined : formStart,
-      shiftEnd: formIsDayOff ? undefined : formEnd,
-      isDayOff: formIsDayOff,
-      note: formNote || undefined,
-    };
-    if (editEntry) {
-      updateMutation.mutate({ id: editEntry.id, data: payload });
-    } else {
-      createMutation.mutate(payload);
+  // Days off toggle
+  const toggleDayOff = async (userId: string, dayOfWeek: number) => {
+    const user = activeUsers.find(u => u.id === userId);
+    if (!user) return;
+    const current: number[] = (user as any).daysOff || [];
+    const newDaysOff = current.includes(dayOfWeek)
+      ? current.filter(d => d !== dayOfWeek)
+      : [...current, dayOfWeek];
+    try {
+      await usersApi.update(userId, { daysOff: newDaysOff } as any);
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    } catch {
+      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u044C');
     }
   };
 
-  const today = formatDate(new Date());
+  // Work mode apply
+  const [applyModeId, setApplyModeId] = useState('');
+  const [applyUserId, setApplyUserId] = useState('');
+  const [applyFrom, setApplyFrom] = useState('');
+  const [applyTo, setApplyTo] = useState('');
+  const [showApplyModal, setShowApplyModal] = useState(false);
 
-  const dayEntries = selectedDate ? (entryMap.get(selectedDate) || []) : [];
+  const applyMutation = useMutation({
+    mutationFn: (data: any) => scheduleApi.applyWorkMode(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      setShowApplyModal(false);
+      Alert.alert('\u0413\u043E\u0442\u043E\u0432\u043E', '\u0420\u0435\u0436\u0438\u043C \u043F\u0440\u0438\u043C\u0435\u043D\u0451\u043D');
+    },
+    onError: (err: any) => Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', err?.response?.data?.message || '\u041E\u0448\u0438\u0431\u043A\u0430'),
+  });
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
-      {/* Month navigation */}
-      <View style={styles.monthNav}>
-        <TouchableOpacity onPress={prevMonth} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.gray[600]} />
+      {/* Sub-tabs */}
+      <View style={styles.subTabs}>
+        <TouchableOpacity style={[styles.subTabItem, settingsTab === 'daysoff' && styles.subTabActive]} onPress={() => setSettingsTab('daysoff')}>
+          <Text style={[styles.subTabText, settingsTab === 'daysoff' && styles.subTabTextActive]}>{'\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0435 \u043C\u0430\u0441\u0442\u0435\u0440\u043E\u0432'}</Text>
         </TouchableOpacity>
-        <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
-        <TouchableOpacity onPress={nextMonth} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-forward" size={20} color={colors.gray[600]} />
+        <TouchableOpacity style={[styles.subTabItem, settingsTab === 'modes' && styles.subTabActive]} onPress={() => setSettingsTab('modes')}>
+          <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>{'\u0420\u0435\u0436\u0438\u043C\u044B \u0440\u0430\u0431\u043E\u0442\u044B'}</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Day headers */}
-      <View style={styles.calRow}>
-        {DAY_ABBR.map(d => (
-          <View key={d} style={styles.calHeaderCell}>
-            <Text style={styles.calHeaderText}>{d}</Text>
-          </View>
-        ))}
-      </View>
-
-      {/* Calendar grid */}
-      {isLoading ? <ActivityIndicator style={{ marginTop: 20 }} color={colors.primary[600]} /> : (
-        <View style={styles.calGrid}>
-          {Array.from({ length: firstDayOffset }).map((_, i) => (
-            <View key={`empty-${i}`} style={styles.calCell} />
-          ))}
-          {days.map(d => {
-            const ds = formatDate(d);
-            const isToday = ds === today;
-            const dayEnts = entryMap.get(ds) || [];
-            const hasWork = dayEnts.some(e => !e.isDayOff);
-            const hasDayOff = dayEnts.some(e => e.isDayOff);
-
+      {settingsTab === 'daysoff' ? (
+        <View style={{ gap: spacing[3] }}>
+          {activeUsers.map(u => {
+            const daysOff: number[] = (u as any).daysOff || [];
             return (
-              <TouchableOpacity
-                key={ds}
-                style={[styles.calCell, isToday && styles.calCellToday]}
-                onPress={() => canEdit ? openAddEntry(ds) : setSelectedDate(ds)}
-              >
-                <Text style={[styles.calDayText, isToday && styles.calDayTextToday]}>{d.getDate()}</Text>
-                <View style={styles.calDots}>
-                  {hasWork && <View style={[styles.calDot, { backgroundColor: colors.green[500] }]} />}
-                  {hasDayOff && <View style={[styles.calDot, { backgroundColor: colors.gray[400] }]} />}
+              <View key={u.id} style={styles.daysOffCard}>
+                <Text style={styles.daysOffName}>{u.fullName}</Text>
+                <View style={styles.daysOffRow}>
+                  {DAY_ABBR.map((label, dow) => {
+                    const isOff = daysOff.includes(dow);
+                    return (
+                      <TouchableOpacity
+                        key={dow}
+                        style={[styles.dayBtn, isOff && styles.dayBtnActive]}
+                        onPress={() => toggleDayOff(u.id, dow)}
+                      >
+                        <Text style={[styles.dayBtnText, isOff && styles.dayBtnTextActive]}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
-              </TouchableOpacity>
+              </View>
             );
           })}
         </View>
-      )}
+      ) : (
+        <View style={{ gap: spacing[3] }}>
+          {(workModes || []).map((mode: any) => (
+            <View key={mode.id} style={styles.modeCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modeName}>{mode.name}</Text>
+                <Text style={styles.modeInfo}>{mode.shiftStart} \u2014 {mode.shiftEnd}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.modeApplyBtn}
+                onPress={() => {
+                  setApplyModeId(mode.id);
+                  setApplyUserId('');
+                  setApplyFrom('');
+                  setApplyTo('');
+                  setShowApplyModal(true);
+                }}
+              >
+                <Ionicons name="play-outline" size={16} color={colors.primary[600]} />
+                <Text style={styles.modeApplyText}>{'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
 
-      {/* Selected day entries */}
-      {selectedDate && (
-        <View style={styles.selectedDay}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text style={styles.selectedDayTitle}>
-              {new Date(selectedDate).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}
-            </Text>
-            {canEdit && (
-              <TouchableOpacity style={styles.addEntryBtn} onPress={() => openAddEntry(selectedDate)}>
-                <Ionicons name="add" size={16} color={colors.primary[600]} />
-                <Text style={styles.addEntryText}>Добавить</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          {dayEntries.length === 0 ? (
-            <Text style={styles.noEntries}>Нет записей</Text>
-          ) : (
-            dayEntries.map(e => (
-              <TouchableOpacity key={e.id} style={styles.entryCard} onPress={() => canEdit && openEditEntry(e)}>
-                <View style={styles.entryRow}>
-                  <View style={[styles.entryDot, { backgroundColor: e.isDayOff ? colors.gray[400] : colors.green[500] }]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.entryName}>{e.user?.fullName || 'Сотрудник'}</Text>
-                    <Text style={styles.entryInfo}>
-                      {e.isDayOff ? 'Выходной' : `${e.shiftStart} — ${e.shiftEnd}`}
-                    </Text>
-                    {e.note && <Text style={styles.entryNote}>{e.note}</Text>}
-                  </View>
-                  {canEdit && (
-                    <TouchableOpacity onPress={() => setDeleteId(e.id)} style={{ padding: spacing[1] }}>
-                      <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </TouchableOpacity>
-            ))
+          {(!workModes || workModes.length === 0) && (
+            <Text style={styles.empty}>{'\u041D\u0435\u0442 \u0440\u0435\u0436\u0438\u043C\u043E\u0432 \u0440\u0430\u0431\u043E\u0442\u044B'}</Text>
           )}
         </View>
       )}
 
-      {/* Add/Edit Modal */}
-      <Modal visible={modalOpen} onClose={closeModal} title={editEntry ? 'Редактировать' : 'Добавить в расписание'}>
+      {/* Apply Work Mode Modal */}
+      <Modal visible={showApplyModal} onClose={() => setShowApplyModal(false)} title={'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C \u0440\u0435\u0436\u0438\u043C'}>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Сотрудник</Text>
+          <Text style={styles.formLabel}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A (\u043F\u0443\u0441\u0442\u043E = \u0432\u0441\u0435)'}</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-              {(usersData || []).filter(u => u.isActive).map(u => (
-                <TouchableOpacity
-                  key={u.id}
-                  style={[styles.userChip, formUserId === u.id && styles.userChipActive]}
-                  onPress={() => setFormUserId(u.id)}
-                >
-                  <Text style={[styles.userChipText, formUserId === u.id && styles.userChipTextActive]}>{u.fullName?.split(' ')[0]}</Text>
+              <TouchableOpacity style={[styles.userChip, !applyUserId && styles.userChipActive]} onPress={() => setApplyUserId('')}>
+                <Text style={[styles.userChipText, !applyUserId && styles.userChipTextActive]}>{'\u0412\u0441\u0435'}</Text>
+              </TouchableOpacity>
+              {activeUsers.map(u => (
+                <TouchableOpacity key={u.id} style={[styles.userChip, applyUserId === u.id && styles.userChipActive]} onPress={() => setApplyUserId(u.id)}>
+                  <Text style={[styles.userChipText, applyUserId === u.id && styles.userChipTextActive]}>{u.fullName?.split(' ')[0]}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </ScrollView>
         </View>
-
-        <TouchableOpacity
-          style={[styles.dayOffToggle, formIsDayOff && styles.dayOffToggleActive]}
-          onPress={() => setFormIsDayOff(!formIsDayOff)}
-        >
-          <Ionicons name={formIsDayOff ? 'checkbox' : 'square-outline'} size={20} color={formIsDayOff ? colors.primary[600] : colors.gray[400]} />
-          <Text style={styles.dayOffToggleText}>Выходной</Text>
-        </TouchableOpacity>
-
-        {!formIsDayOff && (
-          <View style={styles.formRowFields}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.formLabel}>Начало</Text>
-              <TextInput value={formStart} onChangeText={setFormStart} style={styles.formInput} placeholder="09:00" placeholderTextColor={colors.gray[400]} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.formLabel}>Конец</Text>
-              <TextInput value={formEnd} onChangeText={setFormEnd} style={styles.formInput} placeholder="18:00" placeholderTextColor={colors.gray[400]} />
-            </View>
+        <View style={styles.formRowFields}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.formLabel}>{'\u0421 \u0434\u0430\u0442\u044B (YYYY-MM-DD)'}</Text>
+            <TextInput value={applyFrom} onChangeText={setApplyFrom} style={styles.formInput} placeholder="2026-03-01" placeholderTextColor={colors.gray[400]} />
           </View>
-        )}
-
-        <View style={styles.formField}>
-          <Text style={styles.formLabel}>Заметка</Text>
-          <TextInput value={formNote} onChangeText={setFormNote} style={styles.formInput} placeholder="Опционально" placeholderTextColor={colors.gray[400]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.formLabel}>{'\u041F\u043E \u0434\u0430\u0442\u0443'}</Text>
+            <TextInput value={applyTo} onChangeText={setApplyTo} style={styles.formInput} placeholder="2026-03-31" placeholderTextColor={colors.gray[400]} />
+          </View>
         </View>
-
         <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowApplyModal(false)}>
+            <Text style={styles.cancelBtnText}>{'\u041E\u0442\u043C\u0435\u043D\u0430'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
-            {(createMutation.isPending || updateMutation.isPending) ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <Text style={styles.submitBtnText}>{editEntry ? 'Сохранить' : 'Добавить'}</Text>
+          <TouchableOpacity style={styles.submitBtn} onPress={() => {
+            if (!applyFrom || !applyTo) { Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u0434\u0430\u0442\u044B'); return; }
+            applyMutation.mutate({ workModeId: applyModeId, userId: applyUserId || undefined, dateFrom: applyFrom, dateTo: applyTo });
+          }}>
+            {applyMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : (
+              <Text style={styles.submitBtnText}>{'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
             )}
           </TouchableOpacity>
         </View>
       </Modal>
-
-      <ConfirmDialog
-        visible={!!deleteId}
-        onClose={() => setDeleteId(null)}
-        onConfirm={() => { if (deleteId) deleteMutation.mutate(deleteId); setDeleteId(null); }}
-        title="Удалить запись"
-        message="Удалить эту запись расписания?"
-        confirmText="Удалить"
-        variant="danger"
-      />
     </ScrollView>
   );
 }
 
-// ── Main Screen ──
+// ============== MAIN SCREEN ==============
 export default function ScheduleScreen() {
   const navigation = useNavigation<any>();
-  const [tab, setTab] = useState<TabType>('today');
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  const [tab, setTab] = useState<TabType>('grid');
+
+  const tabs: { key: TabType; label: string }[] = [
+    { key: 'grid', label: '\u0413\u0440\u0430\u0444\u0438\u043A' },
+    { key: 'today', label: '\u0421\u0435\u0433\u043E\u0434\u043D\u044F' },
+    { key: 'shifts', label: '\u0421\u043C\u0435\u043D\u044B' },
+    ...(isAdmin ? [{ key: 'settings' as TabType, label: '\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438' }] : []),
+  ];
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Назад</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Расписание</Text>
-        <View style={{ width: 60 }} />
+        <Text style={styles.title}>{'\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435'}</Text>
+        <View style={{ width: 36 }} />
       </View>
 
       {/* Tabs */}
       <View style={styles.tabs}>
-        {(['today', 'schedule'] as TabType[]).map(t => (
+        {tabs.map(t => (
           <TouchableOpacity
-            key={t}
-            style={[styles.tabItem, tab === t && styles.tabItemActive]}
-            onPress={() => setTab(t)}
+            key={t.key}
+            style={[styles.tabItem, tab === t.key && styles.tabItemActive]}
+            onPress={() => setTab(t.key)}
           >
-            <Text style={[styles.tabItemText, tab === t && styles.tabItemTextActive]}>
-              {t === 'today' ? 'Сегодня' : 'Календарь'}
-            </Text>
+            <Text style={[styles.tabItemText, tab === t.key && styles.tabItemTextActive]}>{t.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      {tab === 'today' ? <TodayTab /> : <CalendarTab />}
+      {tab === 'grid' && <GridTab />}
+      {tab === 'today' && <TodayTab />}
+      {tab === 'shifts' && <ShiftsTab />}
+      {tab === 'settings' && <SettingsTab />}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
-  backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  tabs: { flexDirection: 'row', backgroundColor: colors.white, paddingHorizontal: spacing[4], paddingBottom: spacing[2], gap: spacing[1] },
-  tabItem: { flex: 1, paddingVertical: spacing[2.5], alignItems: 'center', borderRadius: borderRadius.lg, backgroundColor: colors.gray[50] },
+  tabs: { flexDirection: 'row', backgroundColor: colors.white, paddingHorizontal: spacing[3], paddingBottom: spacing[2], gap: spacing[1] },
+  tabItem: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: borderRadius.lg, backgroundColor: colors.gray[50] },
   tabItemActive: { backgroundColor: colors.primary[600] },
-  tabItemText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[500] },
+  tabItemText: { fontSize: 12, fontWeight: fontWeight.medium, color: colors.gray[500] },
   tabItemTextActive: { color: colors.white, fontWeight: fontWeight.semibold },
   tabContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
-  // Today tab
   empty: { textAlign: 'center', padding: spacing[8], color: colors.gray[400] },
-  groupSection: { gap: spacing[2] },
-  groupTitle: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.gray[400], textTransform: 'uppercase', letterSpacing: 1 },
-  empCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
-  empCardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  statusDot: { width: 12, height: 12, borderRadius: 6 },
-  empName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  empShift: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  statusRight: { alignItems: 'center', gap: 4 },
-  statusLabel: { fontSize: 10, color: colors.gray[500] },
-  arrivalText: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[2] },
-  noteText: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: spacing[1], fontStyle: 'italic' },
-  // Calendar
-  monthNav: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[3] },
+  // Month nav
+  monthNav: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
   monthNavBtn: { padding: spacing[2], borderRadius: borderRadius.lg, backgroundColor: colors.gray[100] },
   monthTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  calRow: { flexDirection: 'row' },
-  calHeaderCell: { flex: 1, alignItems: 'center', paddingVertical: spacing[1] },
-  calHeaderText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[400] },
-  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  calCell: { width: '14.28%', alignItems: 'center', paddingVertical: spacing[2], borderRadius: borderRadius.md },
-  calCellToday: { backgroundColor: colors.primary[50] },
-  calDayText: { fontSize: fontSize.sm, color: colors.gray[700] },
-  calDayTextToday: { fontWeight: fontWeight.bold, color: colors.primary[600] },
-  calDots: { flexDirection: 'row', gap: 2, marginTop: 2, height: 6 },
-  calDot: { width: 5, height: 5, borderRadius: 3 },
-  // Selected day
-  selectedDay: { marginTop: spacing[4], gap: spacing[3] },
-  selectedDayTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  addEntryBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], backgroundColor: colors.primary[50], borderRadius: borderRadius.lg },
-  addEntryText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.primary[600] },
-  noEntries: { textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[4] },
-  entryCard: { backgroundColor: colors.white, borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3] },
-  entryRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  entryDot: { width: 10, height: 10, borderRadius: 5 },
-  entryName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  entryInfo: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  entryNote: { fontSize: fontSize.xs, color: colors.gray[500], fontStyle: 'italic', marginTop: 2 },
+  // Legend
+  legendRow: { flexDirection: 'row', paddingHorizontal: spacing[4], paddingBottom: spacing[2], gap: spacing[4] },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontSize: 10, color: colors.gray[500] },
+  // Grid
+  gridHeaderCell: { alignItems: 'center', paddingVertical: spacing[1], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  gridHeaderDow: { fontSize: 9, color: colors.gray[400], fontWeight: fontWeight.medium },
+  gridHeaderDay: { fontSize: 12, color: colors.gray[700] },
+  gridNameCell: { width: 100, paddingHorizontal: spacing[2], justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.gray[100] },
+  gridName: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  gridCell: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[2], borderRightWidth: 0.5, borderRightColor: colors.gray[50], borderBottomWidth: 0.5, borderBottomColor: colors.gray[50] },
+  gridCellText: { fontSize: 10, fontWeight: fontWeight.medium },
+  // Quick actions
+  quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3], justifyContent: 'center' },
+  quickBtn: { alignItems: 'center', width: 80, gap: spacing[1] },
+  quickIcon: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  quickLabel: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[700], textAlign: 'center' },
+  // Today tab
+  todayCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
+  todayStatusBadge: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  todayName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  todayShift: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+  todayArrival: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+  todayNote: { fontSize: fontSize.xs, color: colors.gray[500], fontStyle: 'italic', marginTop: 2 },
+  todayStatusLabel: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
+  todayStatusText: { fontSize: 10, fontWeight: fontWeight.semibold },
+  // Shifts stats
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
+  statCard: { width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3]) / 2, backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], alignItems: 'center', gap: spacing[1] },
+  statValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold },
+  statLabel: { fontSize: 11, color: colors.gray[500], textAlign: 'center' },
+  detailCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], gap: spacing[3] },
+  detailTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  detailLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
+  detailValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  // Settings
+  subTabs: { flexDirection: 'row', gap: spacing[2], marginBottom: spacing[3] },
+  subTabItem: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: borderRadius.lg, backgroundColor: colors.gray[100] },
+  subTabActive: { backgroundColor: colors.primary[600] },
+  subTabText: { fontSize: 12, fontWeight: fontWeight.medium, color: colors.gray[500] },
+  subTabTextActive: { color: colors.white },
+  // Days off
+  daysOffCard: { backgroundColor: colors.white, borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3] },
+  daysOffName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900], marginBottom: spacing[2] },
+  daysOffRow: { flexDirection: 'row', gap: spacing[1.5] },
+  dayBtn: { flex: 1, alignItems: 'center', paddingVertical: spacing[2], borderRadius: borderRadius.md, backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200] },
+  dayBtnActive: { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
+  dayBtnText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[500] },
+  dayBtnTextActive: { color: colors.white },
+  // Work modes
+  modeCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.white, borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3], gap: spacing[3] },
+  modeName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  modeInfo: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+  modeApplyBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingHorizontal: spacing[3], paddingVertical: spacing[2], backgroundColor: colors.primary[50], borderRadius: borderRadius.lg },
+  modeApplyText: { fontSize: 12, fontWeight: fontWeight.medium, color: colors.primary[600] },
   // Form
   formField: { marginBottom: spacing[4] },
   formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], marginBottom: spacing[1.5] },
@@ -493,7 +663,4 @@ const styles = StyleSheet.create({
   userChipActive: { backgroundColor: colors.primary[50], borderColor: colors.primary[500] },
   userChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600] },
   userChipTextActive: { color: colors.primary[700] },
-  dayOffToggle: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[3], marginBottom: spacing[3] },
-  dayOffToggleActive: {},
-  dayOffToggleText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
 });

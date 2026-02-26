@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform, Animated } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
@@ -38,18 +38,6 @@ export type RootStackParamList = {
   CheckDetail: { id: string };
   ClientDetail: { id: string };
   SupplierDetail: { id: string };
-  Clients: undefined;
-  Services: undefined;
-  Suppliers: undefined;
-  Salary: undefined;
-  Reports: undefined;
-  CashFlow: undefined;
-  Expenses: undefined;
-  Users: undefined;
-  Schedule: undefined;
-  Marketing: undefined;
-  Cars: undefined;
-  CompanySettings: undefined;
 };
 
 export type TabParamList = {
@@ -57,24 +45,90 @@ export type TabParamList = {
   Products: undefined;
   NewCheck: undefined;
   Checks: undefined;
-  More: undefined;
+  MoreTab: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
+const MoreStack = createNativeStackNavigator();
 
 function CenterTabButton({ focused }: { focused?: boolean }) {
+  const shimmerAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    // Shimmer loop — slide highlight across the button
+    Animated.loop(
+      Animated.timing(shimmerAnim, {
+        toValue: 1,
+        duration: 2200,
+        useNativeDriver: true,
+      }),
+    ).start();
+
+    // Pulse loop — subtle scale breathing
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.06, duration: 1400, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 1400, useNativeDriver: true }),
+      ]),
+    ).start();
+  }, []);
+
+  const shimmerTranslateX = shimmerAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-90, 90],
+  });
+
   return (
     <View style={styles.centerBtnOuter}>
-      <LinearGradient
-        colors={focused ? [colors.primary[500], colors.primary[700]] : [colors.gray[400], colors.gray[500]]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.centerBtn}
-      >
-        <Ionicons name="calculator" size={26} color={colors.white} />
-      </LinearGradient>
+      <Animated.View style={[styles.centerBtn, { transform: [{ scale: pulseAnim }] }]}>
+        <LinearGradient
+          colors={focused
+            ? [colors.primary[400], colors.primary[600], colors.primary[700]]
+            : [colors.gray[400], colors.gray[500], colors.gray[400]]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFill}
+        />
+        {/* Shimmer energy effect */}
+        <Animated.View
+          style={[
+            styles.shimmerOverlay,
+            { transform: [{ translateX: shimmerTranslateX }] },
+          ]}
+        >
+          <LinearGradient
+            colors={['transparent', 'rgba(255,255,255,0.35)', 'transparent']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={{ flex: 1 }}
+          />
+        </Animated.View>
+        <Ionicons name="calculator" size={28} color={colors.white} />
+      </Animated.View>
     </View>
+  );
+}
+
+// Nested stack inside More tab — keeps bottom bar visible
+function MoreStackNavigator() {
+  return (
+    <MoreStack.Navigator screenOptions={{ headerShown: false }}>
+      <MoreStack.Screen name="MoreHome" component={MoreScreen} />
+      <MoreStack.Screen name="Schedule" component={ScheduleScreen} />
+      <MoreStack.Screen name="Clients" component={ClientsScreen} />
+      <MoreStack.Screen name="Cars" component={CarsScreen} />
+      <MoreStack.Screen name="Services" component={ServicesScreen} />
+      <MoreStack.Screen name="Suppliers" component={SuppliersScreen} />
+      <MoreStack.Screen name="CashFlow" component={CashFlowScreen} />
+      <MoreStack.Screen name="Salary" component={SalaryScreen} />
+      <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
+      <MoreStack.Screen name="Reports" component={ReportsScreen} />
+      <MoreStack.Screen name="Marketing" component={MarketingScreen} />
+      <MoreStack.Screen name="Users" component={UsersScreen} />
+      <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
+    </MoreStack.Navigator>
   );
 }
 
@@ -135,8 +189,8 @@ function TabNavigator() {
         }}
       />
       <Tab.Screen
-        name="More"
-        component={MoreScreen}
+        name="MoreTab"
+        component={MoreStackNavigator}
         options={{
           tabBarLabel: 'Ещё',
           tabBarIcon: ({ color, focused }) => (
@@ -172,18 +226,6 @@ export default function AppNavigator() {
           <Stack.Screen name="CheckDetail" component={CheckDetailScreen} />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
-          <Stack.Screen name="Clients" component={ClientsScreen} />
-          <Stack.Screen name="Services" component={ServicesScreen} />
-          <Stack.Screen name="Suppliers" component={SuppliersScreen} />
-          <Stack.Screen name="Salary" component={SalaryScreen} />
-          <Stack.Screen name="Reports" component={ReportsScreen} />
-          <Stack.Screen name="CashFlow" component={CashFlowScreen} />
-          <Stack.Screen name="Expenses" component={ExpensesScreen} />
-          <Stack.Screen name="Users" component={UsersScreen} />
-          <Stack.Screen name="Schedule" component={ScheduleScreen} />
-          <Stack.Screen name="Marketing" component={MarketingScreen} />
-          <Stack.Screen name="Cars" component={CarsScreen} />
-          <Stack.Screen name="CompanySettings" component={CompanySettingsScreen} />
         </>
       )}
     </Stack.Navigator>
@@ -219,18 +261,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50],
   },
   centerBtnOuter: {
-    marginTop: -20,
+    marginTop: -22,
   },
   centerBtn: {
-    width: 58,
-    height: 50,
+    width: 62,
+    height: 54,
     borderRadius: borderRadius['2xl'],
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
     shadowColor: colors.primary[600],
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
-    elevation: 10,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  shimmerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    width: 50,
   },
 });
