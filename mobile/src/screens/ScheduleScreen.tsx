@@ -1,7 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert, Dimensions,
+  RefreshControl, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,8 +17,8 @@ import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/t
 type TabType = 'grid' | 'today' | 'shifts' | 'settings';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const DAY_ABBR = ['\u041F\u043D', '\u0412\u0442', '\u0421\u0440', '\u0427\u0442', '\u041F\u0442', '\u0421\u0431', '\u0412\u0441'];
-const MONTH_NAMES = ['\u042F\u043D\u0432\u0430\u0440\u044C', '\u0424\u0435\u0432\u0440\u0430\u043B\u044C', '\u041C\u0430\u0440\u0442', '\u0410\u043F\u0440\u0435\u043B\u044C', '\u041C\u0430\u0439', '\u0418\u044E\u043D\u044C', '\u0418\u044E\u043B\u044C', '\u0410\u0432\u0433\u0443\u0441\u0442', '\u0421\u0435\u043D\u0442\u044F\u0431\u0440\u044C', '\u041E\u043A\u0442\u044F\u0431\u0440\u044C', '\u041D\u043E\u044F\u0431\u0440\u044C', '\u0414\u0435\u043A\u0430\u0431\u0440\u044C'];
+const DAY_ABBR = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
 function formatDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -34,10 +34,10 @@ function getDaysInMonth(year: number, month: number): Date[] {
 function getCellStyle(entry?: ScheduleEntry) {
   if (!entry) return { bg: 'transparent', text: '', textColor: colors.gray[300] };
   const note = (entry.note || '').toLowerCase();
-  if (note.includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447')) return { bg: colors.rose[50], text: '\u0411/\u041B', textColor: colors.rose[600] };
-  if (entry.isDayOff) return { bg: colors.gray[100], text: '\u0412\u044B\u0445', textColor: colors.gray[500] };
-  if (entry.lateStatus === 'late_major') return { bg: colors.orange[50], text: entry.shiftStart || '\u2714', textColor: colors.orange[600] };
-  if (entry.lateStatus === 'late_minor') return { bg: colors.yellow[50], text: entry.shiftStart || '\u2714', textColor: colors.yellow[600] };
+  if (note.includes('больнич')) return { bg: colors.rose[50], text: 'Б/Л', textColor: colors.rose[600] };
+  if (entry.isDayOff) return { bg: colors.gray[100], text: 'Вых', textColor: colors.gray[500] };
+  if (entry.lateStatus === 'late_major') return { bg: colors.orange[50], text: entry.shiftStart || '✔', textColor: colors.orange[600] };
+  if (entry.lateStatus === 'late_minor') return { bg: colors.yellow[50], text: entry.shiftStart || '✔', textColor: colors.yellow[600] };
   if (entry.shiftStart) return { bg: colors.green[50], text: entry.shiftStart, textColor: colors.green[700] };
   return { bg: 'transparent', text: '', textColor: colors.gray[300] };
 }
@@ -49,6 +49,12 @@ function GridTab() {
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [quickPopup, setQuickPopup] = useState<{ userId: string; date: string; entry?: ScheduleEntry; userName?: string } | null>(null);
+
+  // Synced vertical scroll refs
+  const leftScrollRef = useRef<ScrollView>(null);
+  const rightScrollRef = useRef<ScrollView>(null);
+  const isLeftScrolling = useRef(false);
+  const isRightScrolling = useRef(false);
 
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
@@ -115,9 +121,9 @@ function GridTab() {
     if (type === 'delete' && entry) { deleteMutation.mutate(entry.id); return; }
     if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; }
     else if (type === 'dayoff') { base.isDayOff = true; base.note = ''; }
-    else if (type === 'sick') { base.isDayOff = true; base.note = '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439'; }
-    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 <1\u0447'; }
-    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 >1\u0447'; }
+    else if (type === 'sick') { base.isDayOff = true; base.note = 'Больничный'; }
+    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание <1ч'; }
+    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание >1ч'; }
 
     if (entry) { updateMutation.mutate({ id: entry.id, data: base }); }
     else { createMutation.mutate(base); }
@@ -125,6 +131,22 @@ function GridTab() {
 
   const CELL_W = 44;
   const NAME_W = 110;
+  const ROW_H = 44;
+
+  // Sync vertical scroll between left (names) and right (cells)
+  const handleLeftScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (isRightScrolling.current) return;
+    isLeftScrolling.current = true;
+    rightScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
+    setTimeout(() => { isLeftScrolling.current = false; }, 16);
+  };
+
+  const handleRightScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (isLeftScrolling.current) return;
+    isRightScrolling.current = true;
+    leftScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
+    setTimeout(() => { isRightScrolling.current = false; }, 16);
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -142,42 +164,69 @@ function GridTab() {
       </View>
 
       <View style={styles.legendRow}>
-        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.green[500] }]} /><Text style={styles.legendText}>{'\u0421\u043C\u0435\u043D\u0430'}</Text></View>
-        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.gray[400] }]} /><Text style={styles.legendText}>{'\u0412\u044B\u0445'}</Text></View>
-        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.rose[500] }]} /><Text style={styles.legendText}>{'\u0411/\u041B'}</Text></View>
-        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.orange[500] }]} /><Text style={styles.legendText}>{'\u041E\u043F\u043E\u0437\u0434.'}</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.green[500] }]} /><Text style={styles.legendText}>Смена</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.gray[400] }]} /><Text style={styles.legendText}>Вых</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.rose[500] }]} /><Text style={styles.legendText}>Б/Л</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.orange[500] }]} /><Text style={styles.legendText}>Опозд.</Text></View>
       </View>
 
       {isLoading ? <LoadingSpinner /> : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View>
-            <View style={{ flexDirection: 'row', backgroundColor: colors.white }}>
-              <View style={[styles.gridNameCell, { width: NAME_W, borderBottomWidth: 2, borderBottomColor: colors.gray[200] }]}>
-                <Text style={styles.gridHeaderLabel}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A'}</Text>
-              </View>
-              {days.map(d => {
-                const ds = formatDate(d);
-                const dow = (d.getDay() + 6) % 7;
-                const isWeekend = dow >= 5;
-                const isToday = ds === today;
-                return (
-                  <View key={ds} style={[styles.gridHeaderCell, { width: CELL_W }, isWeekend && { backgroundColor: colors.red[50] }, isToday && { backgroundColor: colors.primary[50] }]}>
-                    <Text style={[styles.gridHeaderDow, isWeekend && { color: colors.red[400] }, isToday && { color: colors.primary[600] }]}>{DAY_ABBR[dow]}</Text>
-                    <Text style={[styles.gridHeaderDay, isToday && { color: colors.primary[600], fontWeight: fontWeight.bold }]}>{d.getDate()}</Text>
-                  </View>
-                );
-              })}
+        <View style={{ flex: 1, flexDirection: 'row' }}>
+          {/* Sticky left column — employee names */}
+          <View style={styles.stickyColumn}>
+            {/* Header cell */}
+            <View style={[styles.gridNameCell, { width: NAME_W, height: ROW_H, borderBottomWidth: 2, borderBottomColor: colors.gray[200] }]}>
+              <Text style={styles.gridHeaderLabel}>Сотрудник</Text>
             </View>
-
-            <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Name cells */}
+            <ScrollView
+              ref={leftScrollRef}
+              showsVerticalScrollIndicator={false}
+              onScroll={handleLeftScroll}
+              scrollEventThrottle={16}
+              bounces={false}
+            >
               {activeUsers.map((u, rowIdx) => {
                 const stats = userStats.get(u.id);
                 return (
-                  <View key={u.id} style={[{ flexDirection: 'row' }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '40' }]}>
-                    <View style={[styles.gridNameCell, { width: NAME_W }]}>
-                      <Text style={styles.gridName} numberOfLines={1}>{u.fullName?.split(' ')[0]}</Text>
-                      {stats && <Text style={styles.gridNameStats}>{stats.worked}{'\u0441\u043C'} / {stats.off}{'\u0432\u044B\u0445'}</Text>}
+                  <View key={u.id} style={[styles.gridNameCell, { width: NAME_W, height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '40' }]}>
+                    <Text style={styles.gridName} numberOfLines={1}>{u.fullName?.split(' ')[0]}</Text>
+                    {stats && <Text style={styles.gridNameStats}>{stats.worked}см / {stats.off}вых</Text>}
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Scrollable right section — day columns */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false}>
+            <View>
+              {/* Day headers */}
+              <View style={{ flexDirection: 'row' }}>
+                {days.map(d => {
+                  const ds = formatDate(d);
+                  const dow = (d.getDay() + 6) % 7;
+                  const isWeekend = dow >= 5;
+                  const isToday = ds === today;
+                  return (
+                    <View key={ds} style={[styles.gridHeaderCell, { width: CELL_W, height: ROW_H }, isWeekend && { backgroundColor: colors.red[50] }, isToday && { backgroundColor: colors.primary[50] }]}>
+                      <Text style={[styles.gridHeaderDow, isWeekend && { color: colors.red[400] }, isToday && { color: colors.primary[600] }]}>{DAY_ABBR[dow]}</Text>
+                      <Text style={[styles.gridHeaderDay, isToday && { color: colors.primary[600], fontWeight: fontWeight.bold }]}>{d.getDate()}</Text>
                     </View>
+                  );
+                })}
+              </View>
+
+              {/* Day cells */}
+              <ScrollView
+                ref={rightScrollRef}
+                showsVerticalScrollIndicator={false}
+                onScroll={handleRightScroll}
+                scrollEventThrottle={16}
+                bounces={false}
+              >
+                {activeUsers.map((u, rowIdx) => (
+                  <View key={u.id} style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '40' }]}>
                     {days.map(d => {
                       const ds = formatDate(d);
                       const entry = entryMap.get(`${u.id}-${ds}`);
@@ -201,22 +250,22 @@ function GridTab() {
                       );
                     })}
                   </View>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </ScrollView>
+                ))}
+              </ScrollView>
+            </View>
+          </ScrollView>
+        </View>
       )}
 
-      <Modal visible={!!quickPopup} onClose={() => setQuickPopup(null)} title={quickPopup?.userName ? `${quickPopup.userName} \u2014 ${quickPopup.date?.split('-').reverse().join('.')}` : '\u0411\u044B\u0441\u0442\u0440\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435'}>
+      <Modal visible={!!quickPopup} onClose={() => setQuickPopup(null)} title={quickPopup?.userName ? `${quickPopup.userName} — ${quickPopup.date?.split('-').reverse().join('.')}` : 'Быстрое действие'}>
         {quickPopup && (
           <View style={styles.quickActions}>
             {[
-              { type: 'shift', label: '\u0421\u043C\u0435\u043D\u0430', icon: 'checkmark-circle' as const, iconColor: colors.green[500], bg: colors.green[50] },
-              { type: 'dayoff', label: '\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439', icon: 'moon-outline' as const, iconColor: colors.gray[500], bg: colors.gray[100] },
-              { type: 'sick', label: '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439', icon: 'medkit-outline' as const, iconColor: colors.rose[500], bg: colors.rose[50] },
-              { type: 'late_minor', label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043B <1\u0447', icon: 'alarm-outline' as const, iconColor: colors.yellow[600], bg: colors.yellow[50] },
-              { type: 'late_major', label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043B >1\u0447', icon: 'warning-outline' as const, iconColor: colors.orange[500], bg: colors.orange[50] },
+              { type: 'shift', label: 'Смена', icon: 'checkmark-circle' as const, iconColor: colors.green[500], bg: colors.green[50] },
+              { type: 'dayoff', label: 'Выходной', icon: 'moon-outline' as const, iconColor: colors.gray[500], bg: colors.gray[100] },
+              { type: 'sick', label: 'Больничный', icon: 'medkit-outline' as const, iconColor: colors.rose[500], bg: colors.rose[50] },
+              { type: 'late_minor', label: 'Опоздал <1ч', icon: 'alarm-outline' as const, iconColor: colors.yellow[600], bg: colors.yellow[50] },
+              { type: 'late_major', label: 'Опоздал >1ч', icon: 'warning-outline' as const, iconColor: colors.orange[500], bg: colors.orange[50] },
             ].map(item => (
               <TouchableOpacity key={item.type} style={styles.quickBtn} onPress={() => quickAction(item.type)}>
                 <View style={[styles.quickIcon, { backgroundColor: item.bg }]}>
@@ -230,7 +279,7 @@ function GridTab() {
                 <View style={[styles.quickIcon, { backgroundColor: colors.red[50] }]}>
                   <Ionicons name="trash-outline" size={20} color={colors.red[600]} />
                 </View>
-                <Text style={[styles.quickLabel, { color: colors.red[600] }]}>{'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}</Text>
+                <Text style={[styles.quickLabel, { color: colors.red[600] }]}>Удалить</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -258,18 +307,18 @@ function TodayTab() {
   };
 
   const statuses = todayData ?? [];
-  const working = statuses.filter(s => s.isWorking && !(s.note || '').toLowerCase().includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447'));
-  const notWorking = statuses.filter(s => !s.isWorking || (s.note || '').toLowerCase().includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447'));
+  const working = statuses.filter(s => s.isWorking && !(s.note || '').toLowerCase().includes('больнич'));
+  const notWorking = statuses.filter(s => !s.isWorking || (s.note || '').toLowerCase().includes('больнич'));
 
   const getStatusInfo = (s: TodayEmployeeStatus) => {
     const note = (s.note || '').toLowerCase();
-    if (note.includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447')) return { label: '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439', color: colors.rose[500], icon: 'medkit-outline' as const, bgColor: colors.rose[50] };
-    if (s.isDayOff) return { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439', color: colors.gray[500], icon: 'moon-outline' as const, bgColor: colors.gray[100] };
-    if (s.lateStatus === 'late_major') return { label: '\u041E\u043F\u043E\u0437\u0434. >1\u0447', color: colors.orange[500], icon: 'warning-outline' as const, bgColor: colors.orange[50] };
-    if (s.lateStatus === 'late_minor') return { label: '\u041E\u043F\u043E\u0437\u0434. <1\u0447', color: colors.yellow[600], icon: 'alarm-outline' as const, bgColor: colors.yellow[50] };
-    if (s.isWorking) return { label: '\u041D\u0430 \u0441\u043C\u0435\u043D\u0435', color: colors.green[600], icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
-    if (s.hasSchedule) return { label: '\u041F\u0440\u043E\u0433\u0443\u043B', color: colors.red[500], icon: 'close-circle' as const, bgColor: colors.red[50] };
-    return { label: '\u2014', color: colors.gray[400], icon: 'remove-outline' as const, bgColor: colors.gray[50] };
+    if (note.includes('больнич')) return { label: 'Больничный', color: colors.rose[500], icon: 'medkit-outline' as const, bgColor: colors.rose[50] };
+    if (s.isDayOff) return { label: 'Выходной', color: colors.gray[500], icon: 'moon-outline' as const, bgColor: colors.gray[100] };
+    if (s.lateStatus === 'late_major') return { label: 'Опозд. >1ч', color: colors.orange[500], icon: 'warning-outline' as const, bgColor: colors.orange[50] };
+    if (s.lateStatus === 'late_minor') return { label: 'Опозд. <1ч', color: colors.yellow[600], icon: 'alarm-outline' as const, bgColor: colors.yellow[50] };
+    if (s.isWorking) return { label: 'На смене', color: colors.green[600], icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
+    if (s.hasSchedule) return { label: 'Прогул', color: colors.red[500], icon: 'close-circle' as const, bgColor: colors.red[50] };
+    return { label: '—', color: colors.gray[400], icon: 'remove-outline' as const, bgColor: colors.gray[50] };
   };
 
   const todayDate = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -284,18 +333,18 @@ function TodayTab() {
       <View style={styles.todayStatsRow}>
         <View style={[styles.todayStatCard, { borderLeftColor: colors.green[500] }]}>
           <Text style={[styles.todayStatNum, { color: colors.green[600] }]}>{working.length}</Text>
-          <Text style={styles.todayStatLabel}>{'\u041D\u0430 \u0441\u043C\u0435\u043D\u0435'}</Text>
+          <Text style={styles.todayStatLabel}>На смене</Text>
         </View>
         <View style={[styles.todayStatCard, { borderLeftColor: colors.gray[400] }]}>
           <Text style={[styles.todayStatNum, { color: colors.gray[600] }]}>{notWorking.length}</Text>
-          <Text style={styles.todayStatLabel}>{'\u041E\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044E\u0442'}</Text>
+          <Text style={styles.todayStatLabel}>Отсутствуют</Text>
         </View>
       </View>
 
       {isLoading ? <LoadingSpinner /> : statuses.length === 0 ? (
         <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
           <Ionicons name="calendar-outline" size={40} color={colors.gray[300]} />
-          <Text style={styles.empty}>{'\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043E'}</Text>
+          <Text style={styles.empty}>Расписание не настроено</Text>
         </View>
       ) : (
         statuses.map(s => {
@@ -308,8 +357,8 @@ function TodayTab() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.todayName}>{s.fullName}</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 }}>
-                  {s.shiftStart && s.shiftEnd && <Text style={styles.todayShift}>{s.shiftStart} \u2014 {s.shiftEnd}</Text>}
-                  {s.actualArrival && <Text style={styles.todayArrival}>{'\u041F\u0440\u0438\u0448\u0451\u043B '}{new Date(s.actualArrival).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</Text>}
+                  {s.shiftStart && s.shiftEnd && <Text style={styles.todayShift}>{s.shiftStart} — {s.shiftEnd}</Text>}
+                  {s.actualArrival && <Text style={styles.todayArrival}>Пришёл {new Date(s.actualArrival).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</Text>}
                 </View>
                 {s.note && <Text style={styles.todayNote}>{s.note}</Text>}
               </View>
@@ -338,10 +387,10 @@ function ShiftsTab() {
   const s: any = stats || {};
 
   const statItems = [
-    { label: '\u0420\u0430\u0431\u043E\u0447\u0438\u0445 \u0434\u043D\u0435\u0439', value: s.totalWorked || 0, icon: 'calendar' as const, color: colors.primary[600], bg: colors.primary[50] },
-    { label: '\u0412\u043E\u0432\u0440\u0435\u043C\u044F', value: s.totalOnTime || 0, icon: 'checkmark-circle' as const, color: colors.green[600], bg: colors.green[50] },
-    { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439', value: s.totalLate || 0, icon: 'alarm-outline' as const, color: colors.orange[500], bg: colors.orange[50] },
-    { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0445', value: s.totalDaysOff || 0, icon: 'moon-outline' as const, color: colors.gray[500], bg: colors.gray[100] },
+    { label: 'Рабочих дней', value: s.totalWorked || 0, icon: 'calendar' as const, color: colors.primary[600], bg: colors.primary[50] },
+    { label: 'Вовремя', value: s.totalOnTime || 0, icon: 'checkmark-circle' as const, color: colors.green[600], bg: colors.green[50] },
+    { label: 'Опозданий', value: s.totalLate || 0, icon: 'alarm-outline' as const, color: colors.orange[500], bg: colors.orange[50] },
+    { label: 'Выходных', value: s.totalDaysOff || 0, icon: 'moon-outline' as const, color: colors.gray[500], bg: colors.gray[100] },
   ];
 
   return (
@@ -377,20 +426,20 @@ function ShiftsTab() {
             <View style={styles.detailCard}>
               <View style={styles.detailCardHeader}>
                 <Ionicons name="analytics-outline" size={16} color={colors.gray[500]} />
-                <Text style={styles.detailTitle}>{'\u0414\u0435\u0442\u0430\u043B\u0438 \u043E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439'}</Text>
+                <Text style={styles.detailTitle}>Детали опозданий</Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u044F <1\u0447'}</Text>
+                <Text style={styles.detailLabel}>Опоздания {'<'}1ч</Text>
                 <Text style={[styles.detailValue, { color: colors.yellow[600] }]}>{s.totalLateMinor || 0}</Text>
               </View>
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u044F >1\u0447'}</Text>
+                <Text style={styles.detailLabel}>Опоздания {'>'}1ч</Text>
                 <Text style={[styles.detailValue, { color: colors.orange[600] }]}>{s.totalLateMajor || 0}</Text>
               </View>
               {s.avgLateMinutes > 0 && (
                 <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>{'\u0421\u0440. \u043E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435'}</Text>
-                  <Text style={styles.detailValue}>{Math.round(s.avgLateMinutes)} {'\u043C\u0438\u043D'}</Text>
+                  <Text style={styles.detailLabel}>Ср. опоздание</Text>
+                  <Text style={styles.detailValue}>{Math.round(s.avgLateMinutes)} мин</Text>
                 </View>
               )}
             </View>
@@ -427,7 +476,7 @@ function SettingsTab() {
       await usersApi.update(userId, { daysOff: newDaysOff } as any);
       queryClient.invalidateQueries({ queryKey: ['users'] });
     } catch {
-      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043E\u0431\u043D\u043E\u0432\u0438\u0442\u044C');
+      Alert.alert('Ошибка', 'Не удалось обновить');
     }
   };
 
@@ -442,9 +491,9 @@ function SettingsTab() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       setShowApplyModal(false);
-      Alert.alert('\u0413\u043E\u0442\u043E\u0432\u043E', '\u0420\u0435\u0436\u0438\u043C \u043F\u0440\u0438\u043C\u0435\u043D\u0451\u043D');
+      Alert.alert('Готово', 'Режим применён');
     },
-    onError: (err: any) => Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', err?.response?.data?.message || '\u041E\u0448\u0438\u0431\u043A\u0430'),
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка'),
   });
 
   return (
@@ -452,11 +501,11 @@ function SettingsTab() {
       <View style={styles.subTabs}>
         <TouchableOpacity style={[styles.subTabItem, settingsTab === 'daysoff' && styles.subTabActive]} onPress={() => setSettingsTab('daysoff')}>
           <Ionicons name="calendar-outline" size={14} color={settingsTab === 'daysoff' ? colors.white : colors.gray[500]} />
-          <Text style={[styles.subTabText, settingsTab === 'daysoff' && styles.subTabTextActive]}>{'\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0435'}</Text>
+          <Text style={[styles.subTabText, settingsTab === 'daysoff' && styles.subTabTextActive]}>Выходные</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.subTabItem, settingsTab === 'modes' && styles.subTabActive]} onPress={() => setSettingsTab('modes')}>
           <Ionicons name="time-outline" size={14} color={settingsTab === 'modes' ? colors.white : colors.gray[500]} />
-          <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>{'\u0420\u0435\u0436\u0438\u043C\u044B'}</Text>
+          <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>Режимы</Text>
         </TouchableOpacity>
       </View>
 
@@ -490,7 +539,7 @@ function SettingsTab() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.modeName}>{mode.name}</Text>
-                <Text style={styles.modeInfo}>{mode.shiftStart} \u2014 {mode.shiftEnd}</Text>
+                <Text style={styles.modeInfo}>{mode.shiftStart} — {mode.shiftEnd}</Text>
               </View>
               <TouchableOpacity style={styles.modeApplyBtn} onPress={() => { setApplyModeId(mode.id); setApplyUserId(''); setApplyFrom(''); setApplyTo(''); setShowApplyModal(true); }}>
                 <Ionicons name="play" size={14} color={colors.primary[600]} />
@@ -500,19 +549,19 @@ function SettingsTab() {
           {(!workModes || workModes.length === 0) && (
             <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
               <Ionicons name="time-outline" size={40} color={colors.gray[300]} />
-              <Text style={styles.empty}>{'\u041D\u0435\u0442 \u0440\u0435\u0436\u0438\u043C\u043E\u0432 \u0440\u0430\u0431\u043E\u0442\u044B'}</Text>
+              <Text style={styles.empty}>Нет режимов работы</Text>
             </View>
           )}
         </View>
       )}
 
-      <Modal visible={showApplyModal} onClose={() => setShowApplyModal(false)} title={'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C \u0440\u0435\u0436\u0438\u043C'}>
+      <Modal visible={showApplyModal} onClose={() => setShowApplyModal(false)} title="Применить режим">
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A'}</Text>
+          <Text style={styles.formLabel}>Сотрудник</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={{ flexDirection: 'row', gap: spacing[2] }}>
               <TouchableOpacity style={[styles.userChip, !applyUserId && styles.userChipActive]} onPress={() => setApplyUserId('')}>
-                <Text style={[styles.userChipText, !applyUserId && styles.userChipTextActive]}>{'\u0412\u0441\u0435'}</Text>
+                <Text style={[styles.userChipText, !applyUserId && styles.userChipTextActive]}>Все</Text>
               </TouchableOpacity>
               {activeUsers.map(u => (
                 <TouchableOpacity key={u.id} style={[styles.userChip, applyUserId === u.id && styles.userChipActive]} onPress={() => setApplyUserId(u.id)}>
@@ -524,24 +573,24 @@ function SettingsTab() {
         </View>
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>{'\u0421 \u0434\u0430\u0442\u044B'}</Text>
+            <Text style={styles.formLabel}>С даты</Text>
             <TextInput value={applyFrom} onChangeText={setApplyFrom} style={styles.formInput} placeholder="2026-03-01" placeholderTextColor={colors.gray[400]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>{'\u041F\u043E \u0434\u0430\u0442\u0443'}</Text>
+            <Text style={styles.formLabel}>По дату</Text>
             <TextInput value={applyTo} onChangeText={setApplyTo} style={styles.formInput} placeholder="2026-03-31" placeholderTextColor={colors.gray[400]} />
           </View>
         </View>
         <View style={styles.formActions}>
           <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowApplyModal(false)}>
-            <Text style={styles.cancelBtnText}>{'\u041E\u0442\u043C\u0435\u043D\u0430'}</Text>
+            <Text style={styles.cancelBtnText}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.applyBtn} onPress={() => {
-            if (!applyFrom || !applyTo) { Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u0434\u0430\u0442\u044B'); return; }
+            if (!applyFrom || !applyTo) { Alert.alert('Ошибка', 'Укажите даты'); return; }
             applyMutation.mutate({ workModeId: applyModeId, userId: applyUserId || undefined, dateFrom: applyFrom, dateTo: applyTo });
           }}>
             {applyMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : (
-              <Text style={styles.applyBtnText}>{'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
+              <Text style={styles.applyBtnText}>Применить</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -565,10 +614,10 @@ export default function ScheduleScreen() {
   };
 
   const tabs: { key: TabType; label: string }[] = [
-    { key: 'grid', label: '\u0413\u0440\u0430\u0444\u0438\u043A' },
-    { key: 'today', label: '\u0421\u0435\u0433\u043E\u0434\u043D\u044F' },
-    { key: 'shifts', label: '\u0421\u043C\u0435\u043D\u044B' },
-    ...(isAdmin ? [{ key: 'settings' as TabType, label: '\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438' }] : []),
+    { key: 'grid', label: 'График' },
+    { key: 'today', label: 'Сегодня' },
+    { key: 'shifts', label: 'Смены' },
+    ...(isAdmin ? [{ key: 'settings' as TabType, label: 'Настройки' }] : []),
   ];
 
   return (
@@ -577,7 +626,7 @@ export default function ScheduleScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
-        <Text style={styles.title}>{'\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435'}</Text>
+        <Text style={styles.title}>Расписание</Text>
         <View style={{ width: 36 }} />
       </View>
 
@@ -624,12 +673,25 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { fontSize: 10, color: colors.gray[500] },
+  // Sticky column
+  stickyColumn: {
+    width: 110,
+    backgroundColor: colors.white,
+    zIndex: 2,
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 2, height: 0 },
+    elevation: 4,
+    borderRightWidth: 1,
+    borderRightColor: colors.gray[200],
+  },
   // Grid
   gridHeaderCell: { alignItems: 'center', paddingVertical: spacing[1.5], borderBottomWidth: 2, borderBottomColor: colors.gray[200] },
   gridHeaderDow: { fontSize: 9, color: colors.gray[400], fontWeight: fontWeight.medium },
   gridHeaderDay: { fontSize: 12, color: colors.gray[700] },
   gridHeaderLabel: { fontSize: 10, color: colors.gray[400], fontWeight: fontWeight.semibold },
-  gridNameCell: { paddingHorizontal: spacing[2], justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.gray[100], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
+  gridNameCell: { paddingHorizontal: spacing[2], justifyContent: 'center', borderBottomWidth: 0.5, borderBottomColor: colors.gray[50] },
   gridName: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   gridNameStats: { fontSize: 9, color: colors.gray[400], marginTop: 1 },
   gridCell: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[2.5], borderRightWidth: 0.5, borderRightColor: colors.gray[50], borderBottomWidth: 0.5, borderBottomColor: colors.gray[50] },

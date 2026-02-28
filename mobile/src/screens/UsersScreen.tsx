@@ -1,13 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert, Switch, Image,
+  RefreshControl, ActivityIndicator, Alert, Switch, Image, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { usersApi } from '../api/services';
+import { usersApi, productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -15,8 +15,10 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
-import type { User, UserPermissions } from '../../../shared/types';
+import type { User, UserPermissions, Product } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
+
+const SCREEN_WIDTH = Dimensions.get('window').width;
 
 const roleBadgeMap: Record<string, string> = {
   director: 'purple',
@@ -32,27 +34,60 @@ const roleLabels: Record<string, string> = {
   master: 'Мастер',
 };
 
-const permissionLabels: Record<keyof UserPermissions, string> = {
-  checks_view: 'Просмотр заказ-нарядов',
-  checks_create: 'Создание заказ-нарядов',
-  checks_edit: 'Редактирование заказ-нарядов',
-  checks_delete: 'Удаление заказ-нарядов',
-  profit_view: 'Просмотр прибыли',
-  clients_view: 'Просмотр клиентов',
-  clients_edit: 'Редактирование клиентов',
-  warehouse_access: 'Доступ к складу',
-  suppliers_access: 'Доступ к поставщикам',
-  financial_reports: 'Финансовые отчёты',
-  export_data: 'Экспорт данных',
-  user_management: 'Управление сотрудниками',
-};
+// Grouped permissions for better UX
+const permissionGroups: { title: string; icon: keyof typeof Ionicons.glyphMap; items: { key: keyof UserPermissions; label: string }[] }[] = [
+  {
+    title: 'Заказ-наряды',
+    icon: 'receipt-outline',
+    items: [
+      { key: 'checks_view', label: 'Просмотр' },
+      { key: 'checks_create', label: 'Создание' },
+      { key: 'checks_edit', label: 'Редактирование' },
+      { key: 'checks_delete', label: 'Удаление' },
+      { key: 'checks_change_datetime', label: 'Изменять дату/время' },
+    ],
+  },
+  {
+    title: 'Финансы',
+    icon: 'wallet-outline',
+    items: [
+      { key: 'profit_view', label: 'Просмотр прибыли' },
+      { key: 'financial_reports', label: 'Финансовые отчёты' },
+      { key: 'salary_view', label: 'Просмотр зарплат' },
+      { key: 'export_data', label: 'Экспорт данных' },
+    ],
+  },
+  {
+    title: 'Клиенты и склад',
+    icon: 'people-outline',
+    items: [
+      { key: 'clients_view', label: 'Просмотр клиентов' },
+      { key: 'clients_edit', label: 'Редактирование клиентов' },
+      { key: 'warehouse_access', label: 'Доступ к складу' },
+      { key: 'suppliers_access', label: 'Доступ к поставщикам' },
+    ],
+  },
+  {
+    title: 'Управление',
+    icon: 'settings-outline',
+    items: [
+      { key: 'user_management', label: 'Управление сотрудниками' },
+      { key: 'schedule_view', label: 'Расписание' },
+      { key: 'marketing_access', label: 'Маркетинг' },
+    ],
+  },
+];
 
 const defaultPermissions: UserPermissions = {
   checks_view: true, checks_create: true, checks_edit: false, checks_delete: false,
+  checks_change_datetime: false,
   profit_view: false, clients_view: true, clients_edit: false,
   warehouse_access: false, suppliers_access: false, financial_reports: false,
   export_data: false, user_management: false,
+  schedule_view: false, salary_view: false, marketing_access: false,
 };
+
+function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 
 interface UserForm {
   fullName: string;
@@ -71,6 +106,14 @@ const emptyForm: UserForm = {
   permissions: { ...defaultPermissions },
 };
 
+interface CommissionItem {
+  productId: string;
+  productName: string;
+  percent: number;
+  sellPrice: number;
+  costPrice: number;
+}
+
 export default function UsersScreen() {
   const navigation = useNavigation<any>();
   const { hasPermission, user: currentUser } = useAuth();
@@ -82,10 +125,24 @@ export default function UsersScreen() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Commission modal
+  const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
+  const [commissionUserName, setCommissionUserName] = useState('');
+  const [globalProductPercent, setGlobalProductPercent] = useState(0);
+  const [commissionItems, setCommissionItems] = useState<CommissionItem[]>([]);
+  const [showAddProduct, setShowAddProduct] = useState(false);
+  const [productSearchText, setProductSearchText] = useState('');
+
   const { data, isLoading } = useQuery({
     queryKey: ['users'],
     queryFn: () => usersApi.getAll(),
     select: (res) => res.data as User[],
+  });
+
+  const { data: allProducts } = useQuery<Product[]>({
+    queryKey: ['all-products-commissions'],
+    queryFn: async () => { const res = await productsApi.getAll({ limit: 500 }); return res.data.data || res.data; },
+    enabled: !!commissionUserId,
   });
 
   const users = data ?? [];
@@ -119,6 +176,16 @@ export default function UsersScreen() {
     onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка удаления'),
   });
 
+  const saveCommissionsMutation = useMutation({
+    mutationFn: ({ userId, data }: { userId: string; data: any }) => usersApi.setProductCommissions(userId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      Alert.alert('Готово', 'Настройки комиссий сохранены');
+      setCommissionUserId(null);
+    },
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка сохранения'),
+  });
+
   if (!hasPermission('user_management')) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -146,6 +213,20 @@ export default function UsersScreen() {
       permissions: { ...defaultPermissions, ...user.permissions },
     });
     setModalOpen(true);
+  };
+
+  const openCommissions = async (user: User) => {
+    setCommissionUserId(user.id);
+    setCommissionUserName(user.fullName);
+    try {
+      const res = await usersApi.getProductCommissions(user.id);
+      const data = res.data;
+      setGlobalProductPercent(data.productSalaryPercent || 0);
+      setCommissionItems(data.items || []);
+    } catch {
+      setGlobalProductPercent(user.productSalaryPercent || 0);
+      setCommissionItems([]);
+    }
   };
 
   const closeModal = () => { setModalOpen(false); setEditingUser(null); setForm({ ...emptyForm }); };
@@ -197,6 +278,47 @@ export default function UsersScreen() {
     return badge;
   };
 
+  // Product search for commission modal
+  const filteredProducts = useMemo(() => {
+    const products = allProducts || [];
+    const alreadyAdded = new Set(commissionItems.map(c => c.productId));
+    const available = products.filter(p => !alreadyAdded.has(p.id));
+    if (!productSearchText) return available;
+    const q = productSearchText.toLowerCase();
+    return available.filter(p => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)));
+  }, [allProducts, commissionItems, productSearchText]);
+
+  const addCommissionProduct = (product: Product) => {
+    setCommissionItems(prev => [...prev, {
+      productId: product.id,
+      productName: product.name,
+      percent: 10,
+      sellPrice: product.sellPrice,
+      costPrice: product.costPrice,
+    }]);
+    setShowAddProduct(false);
+    setProductSearchText('');
+  };
+
+  const removeCommissionItem = (productId: string) => {
+    setCommissionItems(prev => prev.filter(c => c.productId !== productId));
+  };
+
+  const updateCommissionPercent = (productId: string, percent: number) => {
+    setCommissionItems(prev => prev.map(c => c.productId === productId ? { ...c, percent } : c));
+  };
+
+  const handleSaveCommissions = () => {
+    if (!commissionUserId) return;
+    saveCommissionsMutation.mutate({
+      userId: commissionUserId,
+      data: {
+        productSalaryPercent: globalProductPercent,
+        items: commissionItems.map(c => ({ productId: c.productId, percent: c.percent })),
+      },
+    });
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
@@ -214,18 +336,14 @@ export default function UsersScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
       >
         {users.length === 0 ? (
-          <EmptyState
-            title="Нет сотрудников"
-            description="Добавьте первого сотрудника"
-            action={{ label: 'Добавить', onPress: openCreate }}
-          />
+          <EmptyState title="Нет сотрудников" description="Добавьте первого сотрудника" action={{ label: 'Добавить', onPress: openCreate }} />
         ) : (
           users.map(user => {
             const badge = getRoleBadge(user.role);
             const canDelete = user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director';
             return (
-              <TouchableOpacity key={user.id} style={styles.userCard} onPress={() => openEdit(user)} activeOpacity={0.7}>
-                <View style={styles.userRow}>
+              <View key={user.id} style={styles.userCard}>
+                <TouchableOpacity style={styles.userRow} onPress={() => openEdit(user)} activeOpacity={0.7}>
                   {getImageUrl(user.avatar) ? (
                     <Image source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
                   ) : (
@@ -252,18 +370,25 @@ export default function UsersScreen() {
                       )}
                     </View>
                   </View>
-                  <View style={{ flexDirection: 'row', gap: spacing[1] }}>
-                    <TouchableOpacity style={styles.actionBtn} onPress={() => openEdit(user)}>
-                      <Ionicons name="pencil-outline" size={16} color={colors.gray[400]} />
+                </TouchableOpacity>
+
+                {/* Action buttons row */}
+                <View style={styles.actionRow}>
+                  <TouchableOpacity style={styles.actionChip} onPress={() => openEdit(user)}>
+                    <Ionicons name="pencil-outline" size={14} color={colors.primary[600]} />
+                    <Text style={styles.actionChipText}>Права</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.actionChip, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]} onPress={() => openCommissions(user)}>
+                    <Ionicons name="gift-outline" size={14} color={colors.green[600]} />
+                    <Text style={[styles.actionChipText, { color: colors.green[700] }]}>Комиссии</Text>
+                  </TouchableOpacity>
+                  {canDelete && (
+                    <TouchableOpacity style={[styles.actionChip, { backgroundColor: colors.red[50], borderColor: colors.red[200] }]} onPress={() => setDeleteId(user.id)}>
+                      <Ionicons name="trash-outline" size={14} color={colors.red[500]} />
                     </TouchableOpacity>
-                    {canDelete && (
-                      <TouchableOpacity style={styles.actionBtn} onPress={() => setDeleteId(user.id)}>
-                        <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
+                  )}
                 </View>
-              </TouchableOpacity>
+              </View>
             );
           })
         )}
@@ -274,109 +399,74 @@ export default function UsersScreen() {
         <ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
           <View style={styles.formField}>
             <Text style={styles.formLabel}>ФИО</Text>
-            <TextInput
-              value={form.fullName}
-              onChangeText={v => setForm({ ...form, fullName: v })}
-              style={styles.formInput}
-              placeholder="Иванов Иван Иванович"
-              placeholderTextColor={colors.gray[400]}
-            />
+            <TextInput value={form.fullName} onChangeText={v => setForm({ ...form, fullName: v })} style={styles.formInput}
+              placeholder="Иванов Иван Иванович" placeholderTextColor={colors.gray[400]} />
           </View>
 
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Телефон (логин)</Text>
-            <TextInput
-              value={form.phone}
-              onChangeText={v => setForm({ ...form, phone: v })}
-              style={styles.formInput}
-              placeholder="+7 (XXX) XXX-XX-XX"
-              placeholderTextColor={colors.gray[400]}
-              keyboardType="phone-pad"
-            />
+            <TextInput value={form.phone} onChangeText={v => setForm({ ...form, phone: v })} style={styles.formInput}
+              placeholder="+7 (XXX) XXX-XX-XX" placeholderTextColor={colors.gray[400]} keyboardType="phone-pad" />
           </View>
 
           <View style={styles.formField}>
             <Text style={styles.formLabel}>{editingUser ? 'Новый пароль (пустой = не менять)' : 'Пароль'}</Text>
-            <TextInput
-              value={form.password}
-              onChangeText={v => setForm({ ...form, password: v })}
-              style={styles.formInput}
-              placeholder={editingUser ? 'Новый пароль' : 'Введите пароль'}
-              placeholderTextColor={colors.gray[400]}
-              secureTextEntry
-            />
+            <TextInput value={form.password} onChangeText={v => setForm({ ...form, password: v })} style={styles.formInput}
+              placeholder={editingUser ? 'Новый пароль' : 'Введите пароль'} placeholderTextColor={colors.gray[400]} secureTextEntry />
           </View>
 
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Роль</Text>
             <View style={styles.roleRow}>
               {[UserRole.DIRECTOR, UserRole.ADMIN, UserRole.MASTER].map(r => (
-                <TouchableOpacity
-                  key={r}
-                  style={[styles.roleChip, form.role === r && styles.roleChipActive]}
-                  onPress={() => setForm({ ...form, role: r })}
-                >
-                  <Text style={[styles.roleChipText, form.role === r && styles.roleChipTextActive]}>
-                    {roleLabels[r] || r}
-                  </Text>
+                <TouchableOpacity key={r} style={[styles.roleChip, form.role === r && styles.roleChipActive]}
+                  onPress={() => setForm({ ...form, role: r })}>
+                  <Text style={[styles.roleChipText, form.role === r && styles.roleChipTextActive]}>{roleLabels[r] || r}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
 
-          <View style={styles.formField}>
-            <Text style={styles.formLabel}>% ставка от услуг</Text>
-            <TextInput
-              value={String(form.salaryPercent)}
-              onChangeText={v => setForm({ ...form, salaryPercent: Number(v) || 0 })}
-              style={styles.formInput}
-              keyboardType="numeric"
-              placeholder="0"
-              placeholderTextColor={colors.gray[400]}
-            />
-          </View>
-
-          <View style={styles.formField}>
-            <Text style={styles.formLabel}>% с чистой прибыли товаров</Text>
-            <TextInput
-              value={String(form.productSalaryPercent)}
-              onChangeText={v => setForm({ ...form, productSalaryPercent: Number(v) || 0 })}
-              style={styles.formInput}
-              keyboardType="numeric"
-              placeholder="0"
-              placeholderTextColor={colors.gray[400]}
-            />
+          <View style={{ flexDirection: 'row', gap: spacing[3] }}>
+            <View style={[styles.formField, { flex: 1 }]}>
+              <Text style={styles.formLabel}>% от услуг</Text>
+              <TextInput value={String(form.salaryPercent)} onChangeText={v => setForm({ ...form, salaryPercent: Number(v) || 0 })}
+                style={styles.formInput} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.gray[400]} />
+            </View>
+            <View style={[styles.formField, { flex: 1 }]}>
+              <Text style={styles.formLabel}>% от товаров</Text>
+              <TextInput value={String(form.productSalaryPercent)} onChangeText={v => setForm({ ...form, productSalaryPercent: Number(v) || 0 })}
+                style={styles.formInput} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.gray[400]} />
+            </View>
           </View>
 
           <View style={styles.switchRow}>
             <Text style={styles.formLabel}>Активен</Text>
-            <Switch
-              value={form.isActive}
-              onValueChange={v => setForm({ ...form, isActive: v })}
-              trackColor={{ false: colors.gray[300], true: colors.primary[400] }}
-              thumbColor={form.isActive ? colors.primary[600] : colors.gray[100]}
-            />
+            <Switch value={form.isActive} onValueChange={v => setForm({ ...form, isActive: v })}
+              trackColor={{ false: colors.gray[300], true: colors.primary[400] }} thumbColor={form.isActive ? colors.primary[600] : colors.gray[100]} />
           </View>
 
-          {/* Permissions */}
+          {/* Permissions — grouped */}
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Права доступа</Text>
-            <View style={styles.permGrid}>
-              {(Object.keys(permissionLabels) as (keyof UserPermissions)[]).map(key => (
-                <TouchableOpacity
-                  key={key}
-                  style={styles.permRow}
-                  onPress={() => togglePermission(key)}
-                >
-                  <Ionicons
-                    name={form.permissions[key] ? 'checkbox' : 'square-outline'}
-                    size={20}
-                    color={form.permissions[key] ? colors.primary[600] : colors.gray[400]}
-                  />
-                  <Text style={styles.permLabel}>{permissionLabels[key]}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <Text style={[styles.formLabel, { marginBottom: spacing[3] }]}>Права доступа</Text>
+            {permissionGroups.map(group => (
+              <View key={group.title} style={styles.permGroup}>
+                <View style={styles.permGroupHeader}>
+                  <Ionicons name={group.icon} size={14} color={colors.gray[500]} />
+                  <Text style={styles.permGroupTitle}>{group.title}</Text>
+                </View>
+                {group.items.map(item => (
+                  <TouchableOpacity key={item.key} style={styles.permRow} onPress={() => togglePermission(item.key)}>
+                    <Ionicons
+                      name={form.permissions[item.key] ? 'checkbox' : 'square-outline'}
+                      size={20}
+                      color={form.permissions[item.key] ? colors.primary[600] : colors.gray[400]}
+                    />
+                    <Text style={styles.permLabel}>{item.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ))}
           </View>
 
           <View style={styles.formActions}>
@@ -384,14 +474,126 @@ export default function UsersScreen() {
               <Text style={styles.cancelBtnText}>Отмена</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={isSaving}>
-              {isSaving ? (
-                <ActivityIndicator color={colors.white} size="small" />
-              ) : (
+              {isSaving ? <ActivityIndicator color={colors.white} size="small" /> : (
                 <Text style={styles.submitBtnText}>{editingUser ? 'Сохранить' : 'Создать'}</Text>
               )}
             </TouchableOpacity>
           </View>
         </ScrollView>
+      </Modal>
+
+      {/* Product Commission Modal */}
+      <Modal visible={!!commissionUserId} onClose={() => setCommissionUserId(null)} title={`Комиссии — ${commissionUserName?.split(' ')[0]}`}>
+        <ScrollView contentContainerStyle={{ gap: spacing[4], paddingBottom: spacing[4] }} showsVerticalScrollIndicator={false}>
+          {/* Global product percent */}
+          <View style={styles.commGlobalCard}>
+            <View style={styles.commGlobalHeader}>
+              <Ionicons name="layers-outline" size={18} color={colors.blue[600]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.commGlobalTitle}>% со всех товаров</Text>
+                <Text style={styles.commGlobalSub}>Процент с чистой прибыли от продажи любого товара</Text>
+              </View>
+            </View>
+            <View style={styles.commPercentRow}>
+              <TextInput
+                value={String(globalProductPercent)}
+                onChangeText={v => setGlobalProductPercent(Number(v) || 0)}
+                style={styles.commPercentInput}
+                keyboardType="numeric"
+                placeholder="0"
+                placeholderTextColor={colors.gray[400]}
+              />
+              <Text style={styles.commPercentSign}>%</Text>
+            </View>
+          </View>
+
+          {/* Individual products */}
+          <View style={styles.commSection}>
+            <View style={styles.commSectionHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.commSectionTitle}>Акционные товары</Text>
+                <Text style={styles.commSectionSub}>Отдельный % с прибыли для конкретных товаров</Text>
+              </View>
+              <TouchableOpacity style={styles.commAddBtn} onPress={() => { setProductSearchText(''); setShowAddProduct(true); }}>
+                <Ionicons name="add" size={18} color={colors.primary[600]} />
+              </TouchableOpacity>
+            </View>
+
+            {commissionItems.length === 0 ? (
+              <TouchableOpacity style={styles.commEmptyAdd} onPress={() => { setProductSearchText(''); setShowAddProduct(true); }}>
+                <Ionicons name="gift-outline" size={20} color={colors.gray[400]} />
+                <Text style={styles.commEmptyText}>Добавить акционный товар</Text>
+              </TouchableOpacity>
+            ) : (
+              commissionItems.map(item => {
+                const profit = item.sellPrice - item.costPrice;
+                const bonus = Math.round(profit * (item.percent / 100));
+                return (
+                  <View key={item.productId} style={styles.commItem}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.commItemName} numberOfLines={1}>{item.productName}</Text>
+                      <Text style={styles.commItemInfo}>
+                        Цена: {formatMoney(item.sellPrice)} · Прибыль: {formatMoney(profit)}
+                      </Text>
+                    </View>
+                    <View style={styles.commItemRight}>
+                      <View style={styles.commItemPercentRow}>
+                        <TextInput
+                          value={String(item.percent)}
+                          onChangeText={v => updateCommissionPercent(item.productId, Number(v) || 0)}
+                          style={styles.commItemPercentInput}
+                          keyboardType="numeric"
+                        />
+                        <Text style={styles.commItemPercentSign}>%</Text>
+                      </View>
+                      <Text style={styles.commItemBonus}>+{formatMoney(bonus)}</Text>
+                    </View>
+                    <TouchableOpacity style={styles.commItemDelete} onPress={() => removeCommissionItem(item.productId)}>
+                      <Ionicons name="close-circle" size={18} color={colors.red[400]} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })
+            )}
+          </View>
+
+          {/* Save */}
+          <View style={styles.formActions}>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => setCommissionUserId(null)}>
+              <Text style={styles.cancelBtnText}>Отмена</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.submitBtn} onPress={handleSaveCommissions} disabled={saveCommissionsMutation.isPending}>
+              {saveCommissionsMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : (
+                <Text style={styles.submitBtnText}>Сохранить</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+
+        {/* Add product sub-modal */}
+        <Modal visible={showAddProduct} onClose={() => setShowAddProduct(false)} title="Выбрать товар">
+          <TextInput
+            value={productSearchText} onChangeText={setProductSearchText}
+            style={[styles.formInput, { marginBottom: spacing[3] }]}
+            placeholder="Поиск товара..." placeholderTextColor={colors.gray[400]} autoFocus
+          />
+          <ScrollView style={{ maxHeight: 300 }}>
+            {filteredProducts.map(p => (
+              <TouchableOpacity key={p.id} style={styles.productPickerItem} onPress={() => addCommissionProduct(p)}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.productPickerName} numberOfLines={1}>{p.name}</Text>
+                  <Text style={styles.productPickerPrice}>
+                    {formatMoney(p.sellPrice)} · Прибыль: {formatMoney(p.sellPrice - p.costPrice)}
+                  </Text>
+                </View>
+                <Ionicons name="add-circle" size={24} color={colors.primary[500]} />
+              </TouchableOpacity>
+            ))}
+            {productSearchText && filteredProducts.length === 0 && (
+              <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[4] }}>Ничего не найдено</Text>
+            )}
+          </ScrollView>
+        </Modal>
       </Modal>
 
       <ConfirmDialog
@@ -410,11 +612,11 @@ export default function UsersScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
-  backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   addBtn: { width: 36, height: 36, borderRadius: borderRadius.xl, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center' },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
-  userCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], shadowColor: colors.black, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2 },
+  // User card
+  userCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], shadowColor: colors.black, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2, gap: spacing[3] },
   userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   avatarImage: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: colors.gray[100] },
@@ -425,7 +627,10 @@ const styles = StyleSheet.create({
   userPhone: { fontSize: fontSize.sm, color: colors.gray[500] },
   userDivider: { color: colors.gray[300] },
   statusText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
-  actionBtn: { padding: spacing[1.5] },
+  // Action row
+  actionRow: { flexDirection: 'row', gap: spacing[2], borderTopWidth: 1, borderTopColor: colors.gray[100], paddingTop: spacing[3] },
+  actionChip: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: borderRadius.lg, backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
+  actionChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.primary[700] },
   // Form
   formContent: { gap: spacing[1], paddingBottom: spacing[4] },
   formField: { marginBottom: spacing[4] },
@@ -437,12 +642,43 @@ const styles = StyleSheet.create({
   roleChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
   roleChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[4] },
-  permGrid: { gap: spacing[2], marginTop: spacing[1] },
-  permRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  // Permissions — grouped
+  permGroup: { marginBottom: spacing[3], backgroundColor: colors.gray[50], borderRadius: borderRadius.xl, padding: spacing[3], borderWidth: 1, borderColor: colors.gray[100] },
+  permGroupHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[2], paddingBottom: spacing[1.5], borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  permGroupTitle: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.gray[600], textTransform: 'uppercase', letterSpacing: 0.5 },
+  permRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[1.5] },
   permLabel: { fontSize: fontSize.sm, color: colors.gray[700] },
   formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[3], paddingTop: spacing[4], borderTopWidth: 1, borderTopColor: colors.gray[200] },
   cancelBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.gray[300] },
   cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
   submitBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
+  // Commission modal
+  commGlobalCard: { backgroundColor: colors.blue[50], borderRadius: borderRadius.xl, padding: spacing[4], borderWidth: 1, borderColor: colors.blue[200], gap: spacing[3] },
+  commGlobalHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2.5] },
+  commGlobalTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  commGlobalSub: { fontSize: 11, color: colors.gray[500], marginTop: 2 },
+  commPercentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  commPercentInput: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.blue[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], width: 80, textAlign: 'center' },
+  commPercentSign: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[500] },
+  commSection: { gap: spacing[2] },
+  commSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  commSectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  commSectionSub: { fontSize: 11, color: colors.gray[500] },
+  commAddBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
+  commEmptyAdd: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], paddingVertical: spacing[4], borderWidth: 1, borderStyle: 'dashed', borderColor: colors.gray[200], borderRadius: borderRadius.xl },
+  commEmptyText: { fontSize: fontSize.sm, color: colors.gray[400] },
+  commItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.white, borderRadius: borderRadius.xl, padding: spacing[3], borderWidth: 1, borderColor: colors.gray[100] },
+  commItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  commItemInfo: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
+  commItemRight: { alignItems: 'flex-end' },
+  commItemPercentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  commItemPercentInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.md, paddingHorizontal: spacing[2], paddingVertical: spacing[1], fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], width: 50, textAlign: 'center' },
+  commItemPercentSign: { fontSize: fontSize.sm, color: colors.gray[500] },
+  commItemBonus: { fontSize: 12, fontWeight: fontWeight.bold, color: colors.green[600], marginTop: 2 },
+  commItemDelete: { padding: spacing[1] },
+  // Product picker for commissions
+  productPickerItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  productPickerName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  productPickerPrice: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
 });

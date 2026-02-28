@@ -87,6 +87,7 @@ export interface UserPermissions {
   checks_create: boolean;
   checks_edit: boolean;
   checks_delete: boolean;
+  checks_change_datetime: boolean;
   profit_view: boolean;
   clients_view: boolean;
   clients_edit: boolean;
@@ -95,6 +96,9 @@ export interface UserPermissions {
   financial_reports: boolean;
   export_data: boolean;
   user_management: boolean;
+  schedule_view: boolean;
+  salary_view: boolean;
+  marketing_access: boolean;
 }
 
 export interface Client {

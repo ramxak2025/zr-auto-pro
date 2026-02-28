@@ -21,7 +21,7 @@ function formatDateTime(d: string) { const dt = new Date(d); return formatDate(d
 function formatShortDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
 function formatTime(d: string) { return new Date(d).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); }
 
-const paymentLabels: Record<string, string> = { cash: '\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435', card: '\u041A\u0430\u0440\u0442\u0430', warranty: '\u0413\u0430\u0440\u0430\u043D\u0442\u0438\u044F', cash_card: '\u041D\u0430\u043B/\u041A\u0430\u0440\u0442\u0430' };
+const paymentLabels: Record<string, string> = { cash: 'Наличные', card: 'Карта', warranty: 'Гарантия', cash_card: 'Нал/Карта' };
 const paymentIcons: Record<string, keyof typeof Ionicons.glyphMap> = { cash: 'cash-outline', card: 'card-outline', warranty: 'shield-checkmark-outline', cash_card: 'swap-horizontal-outline' };
 
 export default function CheckDetailScreen() {

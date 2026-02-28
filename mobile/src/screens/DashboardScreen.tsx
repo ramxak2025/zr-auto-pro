@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  ActivityIndicator, RefreshControl, Animated, Dimensions,
+  ActivityIndicator, RefreshControl, Animated, Dimensions, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { checksApi, salaryApi, shiftsApi, scheduleApi, reportsApi } from '../api/services';
+import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import AnimatedCard from '../components/AnimatedCard';
 import type { SalarySummary, EmployeeRanking, TodayEmployeeStatus, Shift } from '../../../shared/types';
@@ -547,28 +548,49 @@ function MasterDashboard() {
         </AnimatedCard>
       ) : null}
 
-      {/* Product promotions */}
+      {/* Product promotions — enhanced with photos */}
       {data.productPromotions && data.productPromotions.length > 0 && data.productPromotions.some(p => p.percent > 0) && (
         <AnimatedCard index={5} style={styles.promoCard}>
           <View style={styles.promoHeader}>
-            <Ionicons name="gift-outline" size={20} color={colors.emerald[700]} />
-            <View>
+            <View style={styles.promoIconBox}>
+              <Ionicons name="gift-outline" size={22} color={colors.green[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.promoTitle}>Бонус с товаров</Text>
               <Text style={styles.promoSub}>Продавай эти товары и получай % с прибыли</Text>
             </View>
           </View>
-          {data.productPromotions.filter(p => p.percent > 0).map(promo => (
-            <View key={promo.productId} style={styles.promoItem}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.promoName} numberOfLines={1}>{promo.productName}</Text>
-                <Text style={styles.promoPrice}>Цена: {formatMoney(promo.sellPrice)}</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.promoBonus}>+{formatMoney(promo.estimatedBonus)}</Text>
-                <Text style={styles.promoPercent}>{promo.percent}% с прибыли</Text>
-              </View>
+          <View style={{ paddingHorizontal: spacing[3], paddingBottom: spacing[3], gap: spacing[2] }}>
+            {data.productPromotions.filter(p => p.percent > 0).map(promo => {
+              const photoUrl = promo.photo ? getImageUrl(promo.photo) : null;
+              return (
+                <View key={promo.productId} style={styles.promoItem}>
+                  {photoUrl ? (
+                    <Image source={{ uri: photoUrl }} style={styles.promoPhoto} />
+                  ) : (
+                    <View style={[styles.promoPhoto, styles.promoPhotoPlaceholder]}>
+                      <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
+                    </View>
+                  )}
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.promoName} numberOfLines={1}>{promo.productName}</Text>
+                    <Text style={styles.promoPrice}>Цена: {formatMoney(promo.sellPrice)}</Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end', flexShrink: 0 }}>
+                    <Text style={styles.promoBonus}>+{formatMoney(promo.estimatedBonus)}</Text>
+                    <Text style={styles.promoPercent}>{promo.percent}% с прибыли</Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+          {data.productSalaryPercent && data.productSalaryPercent > 0 && (
+            <View style={styles.promoFooter}>
+              <Text style={styles.promoFooterText}>
+                Также <Text style={{ fontWeight: fontWeight.bold }}>{data.productSalaryPercent}%</Text> со всех остальных товаров
+              </Text>
             </View>
-          ))}
+          )}
         </AnimatedCard>
       )}
     </View>
@@ -793,14 +815,19 @@ const styles = StyleSheet.create({
   earningValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: 4 },
   // Promo
   promoCard: { backgroundColor: colors.emerald[50], borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.green[200], overflow: 'hidden' },
-  promoHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], padding: spacing[4] },
+  promoHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], padding: spacing[4], paddingBottom: spacing[2] },
+  promoIconBox: { width: 40, height: 40, borderRadius: borderRadius.xl, backgroundColor: colors.green[100], alignItems: 'center', justifyContent: 'center' },
   promoTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   promoSub: { fontSize: 11, color: colors.gray[500] },
-  promoItem: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.white, marginHorizontal: spacing[3], marginBottom: spacing[2], borderRadius: borderRadius.xl, padding: spacing[3], shadowColor: colors.black, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  promoItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], backgroundColor: colors.white, borderRadius: borderRadius.xl, padding: spacing[3], shadowColor: colors.black, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  promoPhoto: { width: 40, height: 40, borderRadius: borderRadius.lg },
+  promoPhotoPlaceholder: { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
   promoName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   promoPrice: { fontSize: 11, color: colors.gray[400] },
   promoBonus: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.green[600] },
   promoPercent: { fontSize: 10, color: colors.gray[400] },
+  promoFooter: { borderTopWidth: 1, borderTopColor: colors.green[200], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], backgroundColor: 'rgba(236,253,245,0.5)' },
+  promoFooterText: { fontSize: fontSize.xs, color: colors.green[700] },
   // Error
   errorBanner: { backgroundColor: colors.red[50], borderRadius: borderRadius.xl, padding: spacing[4], fontSize: fontSize.sm, color: colors.red[700], textAlign: 'center', margin: spacing[4] },
   // Quick actions

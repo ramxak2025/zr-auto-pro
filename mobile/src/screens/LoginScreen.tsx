@@ -42,24 +42,18 @@ export default function LoginScreen() {
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
 
-  // Entrance animations
-  const logoFade = useRef(new Animated.Value(0)).current;
-  const logoScale = useRef(new Animated.Value(0.8)).current;
-  const formSlide = useRef(new Animated.Value(30)).current;
+  // Entrance animations — logo shows instantly, form animates quickly
+  const logoFade = useRef(new Animated.Value(1)).current;
+  const logoScale = useRef(new Animated.Value(1)).current;
+  const formSlide = useRef(new Animated.Value(20)).current;
   const formFade = useRef(new Animated.Value(0)).current;
   const demoFade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.sequence([
-      Animated.parallel([
-        Animated.timing(logoFade, { toValue: 1, duration: 500, useNativeDriver: true }),
-        Animated.spring(logoScale, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }),
-      ]),
-      Animated.parallel([
-        Animated.timing(formFade, { toValue: 1, duration: 400, useNativeDriver: true }),
-        Animated.timing(formSlide, { toValue: 0, duration: 400, useNativeDriver: true }),
-      ]),
-      Animated.timing(demoFade, { toValue: 1, duration: 300, useNativeDriver: true }),
+    Animated.parallel([
+      Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
+      Animated.timing(formSlide, { toValue: 0, duration: 250, useNativeDriver: true }),
+      Animated.timing(demoFade, { toValue: 1, duration: 350, useNativeDriver: true }),
     ]).start();
   }, []);
 
