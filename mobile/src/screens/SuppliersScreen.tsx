@@ -31,7 +31,7 @@ export default function SuppliersScreen() {
 
   const { data: suppliers, isLoading } = useQuery<Supplier[]>({
     queryKey: ['suppliers', search],
-    queryFn: async () => { const res = await suppliersApi.getAll({ search }); return res.data; },
+    queryFn: async () => { const res = await suppliersApi.getAll({ search }); return res.data?.data || res.data; },
   });
 
   const createMutation = useMutation({

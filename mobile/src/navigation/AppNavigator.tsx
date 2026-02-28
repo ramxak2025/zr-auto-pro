@@ -29,7 +29,66 @@ import MoreScreen from '../screens/MoreScreen';
 import MarketingScreen from '../screens/MarketingScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
+import SubscriptionScreen from '../screens/SubscriptionScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
+import FeatureGate from '../components/FeatureGate';
+
+// Feature descriptions for lock screens
+const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
+  schedule_view: {
+    title: 'Расписание',
+    description: 'Управляйте графиком работы мастеров и планируйте загрузку автосервиса',
+    benefits: ['График работы мастеров', 'Планирование смен', 'Контроль загрузки'],
+  },
+  clients_view: {
+    title: 'Клиенты',
+    description: 'Ведите базу клиентов с историей обращений и автомобилей',
+    benefits: ['База клиентов', 'История обращений', 'Привязка автомобилей'],
+  },
+  services_view: {
+    title: 'Услуги',
+    description: 'Каталог услуг с ценами для быстрого оформления заказ-нарядов',
+    benefits: ['Каталог услуг', 'Быстрое добавление в чек', 'Гибкие цены'],
+  },
+  suppliers_view: {
+    title: 'Поставщики',
+    description: 'Управляйте закупками, поставками и долгами перед поставщиками',
+    benefits: ['Учёт поставок и закупок', 'Контроль долгов', 'История платежей'],
+  },
+  cashflow_view: {
+    title: 'Движение денег',
+    description: 'Отслеживайте все денежные потоки по дням и сотрудникам',
+    benefits: ['Касса по дням', 'Разбивка по сотрудникам', 'Наличные и безналичные'],
+  },
+  salary_view: {
+    title: 'Зарплата',
+    description: 'Автоматический расчёт зарплат мастеров на основе выполненных работ',
+    benefits: ['Автоматический расчёт', 'Процент от услуг', 'История выплат'],
+  },
+  reports_view: {
+    title: 'Отчёты',
+    description: 'Финансовые отчёты с анализом прибыли, расходов и маржинальности',
+    benefits: ['Выручка и прибыль', 'Анализ расходов', 'Средний чек'],
+  },
+  users_manage: {
+    title: 'Пользователи',
+    description: 'Управляйте сотрудниками, ролями и правами доступа',
+    benefits: ['Роли и права', 'Управление доступом', 'Контроль сотрудников'],
+  },
+};
+
+// Wrapper that applies feature gate to a screen
+function gated(featureKey: string, ScreenComponent: React.ComponentType<any>) {
+  const gate = FEATURE_GATES[featureKey];
+  if (!gate) return ScreenComponent;
+  return function GatedWrapper(props: any) {
+    return (
+      <FeatureGate featureKey={featureKey} title={gate.title} description={gate.description} benefits={gate.benefits}>
+        <ScreenComponent {...props} />
+      </FeatureGate>
+    );
+  };
+}
 
 export type RootStackParamList = {
   Login: undefined;
@@ -149,17 +208,18 @@ function MoreStackNavigator() {
   return (
     <MoreStack.Navigator screenOptions={{ headerShown: false }}>
       <MoreStack.Screen name="MoreHome" component={MoreScreen} />
-      <MoreStack.Screen name="Schedule" component={ScheduleScreen} />
-      <MoreStack.Screen name="Clients" component={ClientsScreen} />
-      <MoreStack.Screen name="Cars" component={CarsScreen} />
-      <MoreStack.Screen name="Services" component={ServicesScreen} />
-      <MoreStack.Screen name="Suppliers" component={SuppliersScreen} />
-      <MoreStack.Screen name="CashFlow" component={CashFlowScreen} />
-      <MoreStack.Screen name="Salary" component={SalaryScreen} />
+      <MoreStack.Screen name="Subscription" component={SubscriptionScreen} />
+      <MoreStack.Screen name="Schedule" component={gated('schedule_view', ScheduleScreen)} />
+      <MoreStack.Screen name="Clients" component={gated('clients_view', ClientsScreen)} />
+      <MoreStack.Screen name="Cars" component={gated('clients_view', CarsScreen)} />
+      <MoreStack.Screen name="Services" component={gated('services_view', ServicesScreen)} />
+      <MoreStack.Screen name="Suppliers" component={gated('suppliers_view', SuppliersScreen)} />
+      <MoreStack.Screen name="CashFlow" component={gated('cashflow_view', CashFlowScreen)} />
+      <MoreStack.Screen name="Salary" component={gated('salary_view', SalaryScreen)} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
-      <MoreStack.Screen name="Reports" component={ReportsScreen} />
+      <MoreStack.Screen name="Reports" component={gated('reports_view', ReportsScreen)} />
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
-      <MoreStack.Screen name="Users" component={UsersScreen} />
+      <MoreStack.Screen name="Users" component={gated('users_manage', UsersScreen)} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
     </MoreStack.Navigator>
   );

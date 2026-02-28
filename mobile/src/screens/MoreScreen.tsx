@@ -3,12 +3,13 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Image, 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
-import { uploadsApi, authApi } from '../api/services';
+import { uploadsApi, authApi, subscriptionApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { UserPermissions } from '../../../shared/types';
+import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
@@ -31,26 +32,28 @@ interface MenuItem {
   icon: keyof typeof Ionicons.glyphMap;
   permission?: keyof UserPermissions;
   roles?: string[];
+  featureKey?: string;
   iconBg: string;
   iconColor: string;
 }
 
 const menuItems: MenuItem[] = [
-  { label: 'Расписание', description: 'График работы и смены', screen: 'Schedule', icon: 'calendar-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
-  { label: 'Клиенты', description: 'База клиентов', screen: 'Clients', permission: 'clients_view', icon: 'people-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
-  { label: 'Автомобили', description: 'Все автомобили клиентов', screen: 'Cars', permission: 'clients_view', icon: 'car-sport-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
-  { label: 'Услуги', description: 'Каталог услуг', screen: 'Services', icon: 'build-outline', iconBg: colors.orange[50], iconColor: colors.orange[600] },
-  { label: 'Поставщики', description: 'Поставки и расчёты', screen: 'Suppliers', permission: 'suppliers_access', icon: 'truck-outline' as any, iconBg: colors.amber[50], iconColor: colors.amber[600] },
-  { label: 'Движение денег', description: 'Касса по дням и сотрудникам', screen: 'CashFlow', icon: 'swap-horizontal-outline', iconBg: colors.teal[50], iconColor: colors.teal[600] },
-  { label: 'Зарплата', description: 'Заработок мастеров', screen: 'Salary', icon: 'wallet-outline', iconBg: colors.green[50], iconColor: colors.green[600] },
+  { label: 'Подписка', description: 'Тариф и оплата', screen: 'Subscription', roles: ['director', 'superadmin'], icon: 'card-outline', iconBg: colors.primary[50], iconColor: colors.primary[600] },
+  { label: 'Расписание', description: 'График работы и смены', screen: 'Schedule', featureKey: 'schedule_view', icon: 'calendar-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
+  { label: 'Клиенты', description: 'База клиентов', screen: 'Clients', permission: 'clients_view', featureKey: 'clients_view', icon: 'people-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
+  { label: 'Автомобили', description: 'Все автомобили клиентов', screen: 'Cars', permission: 'clients_view', featureKey: 'clients_view', icon: 'car-sport-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
+  { label: 'Услуги', description: 'Каталог услуг', screen: 'Services', featureKey: 'services_view', icon: 'build-outline', iconBg: colors.orange[50], iconColor: colors.orange[600] },
+  { label: 'Поставщики', description: 'Поставки и расчёты', screen: 'Suppliers', permission: 'suppliers_access', featureKey: 'suppliers_view', icon: 'truck-outline' as any, iconBg: colors.amber[50], iconColor: colors.amber[600] },
+  { label: 'Движение денег', description: 'Касса по дням и сотрудникам', screen: 'CashFlow', featureKey: 'cashflow_view', icon: 'swap-horizontal-outline', iconBg: colors.teal[50], iconColor: colors.teal[600] },
+  { label: 'Зарплата', description: 'Заработок мастеров', screen: 'Salary', featureKey: 'salary_view', icon: 'wallet-outline', iconBg: colors.green[50], iconColor: colors.green[600] },
   { label: 'Расходы', description: 'Аренда, маркетинг и др.', screen: 'Expenses', roles: ['director', 'superadmin'], icon: 'trending-down-outline', iconBg: colors.rose[50], iconColor: colors.rose[600] },
-  { label: 'Отчёты', description: 'Финансовые отчёты', screen: 'Reports', permission: 'financial_reports', icon: 'bar-chart-outline', iconBg: colors.purple[50], iconColor: colors.purple[700] },
+  { label: 'Отчёты', description: 'Финансовые отчёты', screen: 'Reports', permission: 'financial_reports', featureKey: 'reports_view', icon: 'bar-chart-outline', iconBg: colors.purple[50], iconColor: colors.purple[700] },
   { label: 'Маркетинг', description: 'Отзывы и рассылки', screen: 'Marketing', icon: 'megaphone-outline', iconBg: colors.violet[50], iconColor: colors.violet[600] },
-  { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
+  { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', featureKey: 'users_manage', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
   { label: 'Настройки компании', description: 'Реквизиты и данные для чеков', screen: 'CompanySettings', roles: ['director', 'superadmin'], icon: 'business-outline', iconBg: colors.slate[100], iconColor: colors.slate[600] },
 ];
 
-function AnimatedMenuItem({ item, index, onPress }: { item: MenuItem; index: number; onPress: () => void }) {
+function AnimatedMenuItem({ item, index, onPress, locked }: { item: MenuItem; index: number; onPress: () => void; locked?: boolean }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(24)).current;
 
@@ -66,13 +69,17 @@ function AnimatedMenuItem({ item, index, onPress }: { item: MenuItem; index: num
     <Animated.View style={{ opacity: fadeAnim, transform: [{ translateX: slideAnim }] }}>
       <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.6}>
         <View style={[styles.menuIcon, { backgroundColor: item.iconBg }]}>
-          <Ionicons name={item.icon} size={20} color={item.iconColor} />
+          <Ionicons name={item.icon} size={20} color={locked ? colors.gray[400] : item.iconColor} />
         </View>
         <View style={styles.menuTextWrap}>
-          <Text style={styles.menuLabel}>{item.label}</Text>
+          <Text style={[styles.menuLabel, locked && { color: colors.gray[400] }]}>{item.label}</Text>
           <Text style={styles.menuDesc}>{item.description}</Text>
         </View>
-        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+        {locked ? (
+          <Ionicons name="lock-closed" size={14} color={colors.gray[300]} />
+        ) : (
+          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+        )}
       </TouchableOpacity>
     </Animated.View>
   );
@@ -86,6 +93,22 @@ export default function MoreScreen() {
   const userInitial = user?.fullName?.charAt(0) || 'U';
   const badgeColor = user?.role ? roleBadgeColors[user.role] || roleBadgeColors.master : roleBadgeColors.master;
   const avatarUrl = getImageUrl(user?.avatar);
+
+  // Fetch subscription for feature gating
+  const { data: sub } = useQuery<SubscriptionInfo>({
+    queryKey: ['subscription'],
+    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const currentPlan = sub?.plans?.find(p => p.name === sub?.planName);
+  const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
+  const isBypass = user?.role === 'superadmin' || user?.role === 'director';
+
+  const isFeatureLocked = (featureKey?: string) => {
+    if (!featureKey || isBypass || !sub) return false;
+    return !planFeatures.includes(featureKey);
+  };
 
   const filteredItems = menuItems.filter(item => {
     if (item.permission && !hasPermission(item.permission)) return false;
@@ -164,6 +187,7 @@ export default function MoreScreen() {
               <AnimatedMenuItem
                 item={item}
                 index={idx}
+                locked={isFeatureLocked(item.featureKey)}
                 onPress={() => navigation.navigate(item.screen)}
               />
             </React.Fragment>
