@@ -1,9 +1,18 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { View, StyleSheet, Platform, Animated } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withRepeat,
+  withTiming,
+  Easing,
+  type SharedValue,
+} from 'react-native-reanimated';
+import Svg, { Defs, RadialGradient, Stop, Circle } from 'react-native-svg';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, spacing, borderRadius } from '../theme';
 
@@ -52,66 +61,201 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
 
-function CenterTabButton({ focused }: { focused?: boolean }) {
-  const shimmerAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Plasma Energy Ball — animated center button
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  useEffect(() => {
-    // Shimmer loop — slide highlight across the button
-    Animated.loop(
-      Animated.timing(shimmerAnim, {
-        toValue: 1,
-        duration: 2200,
-        useNativeDriver: true,
-      }),
-    ).start();
+const PLASMA_SIZE = 64;
 
-    // Pulse loop — subtle scale breathing
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.06, duration: 1400, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 1, duration: 1400, useNativeDriver: true }),
-      ]),
-    ).start();
-  }, []);
+interface BlobConfig {
+  color: string;
+  size: number;
+  /** x-axis frequency multiplier (integer for seamless loop) */
+  ax: number;
+  /** y-axis frequency multiplier */
+  ay: number;
+  /** x orbit radius */
+  rx: number;
+  /** y orbit radius */
+  ry: number;
+  /** x phase offset */
+  px: number;
+  /** y phase offset */
+  py: number;
+}
 
-  const shimmerTranslateX = shimmerAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-90, 90],
+const PLASMA_BLOBS: BlobConfig[] = [
+  { color: 'rgba(34, 211, 238, 0.6)',  size: 28, ax: 1, ay: 2, rx: 13, ry: 10, px: 0,               py: 0 },
+  { color: 'rgba(96, 165, 250, 0.55)', size: 24, ax: 2, ay: 3, rx: 10, ry: 8,  px: Math.PI / 4,     py: Math.PI / 3 },
+  { color: 'rgba(167, 139, 250, 0.5)', size: 26, ax: 3, ay: 1, rx: 8,  ry: 13, px: Math.PI / 2,     py: Math.PI / 6 },
+  { color: 'rgba(192, 132, 252, 0.45)',size: 22, ax: 2, ay: 1, rx: 11, ry: 9,  px: Math.PI,         py: Math.PI / 2 },
+  { color: 'rgba(165, 243, 252, 0.5)', size: 30, ax: 1, ay: 3, rx: 9,  ry: 11, px: Math.PI * 2 / 3, py: Math.PI / 4 },
+  { color: 'rgba(129, 140, 248, 0.4)', size: 20, ax: 3, ay: 2, rx: 7,  ry: 12, px: Math.PI * 5 / 6, py: Math.PI * 2 / 3 },
+];
+
+function PlasmaBlob({ time, cfg }: { time: SharedValue<number>; cfg: BlobConfig }) {
+  const style = useAnimatedStyle(() => {
+    'worklet';
+    return {
+      transform: [
+        { translateX: Math.sin(time.value * cfg.ax + cfg.px) * cfg.rx },
+        { translateY: Math.cos(time.value * cfg.ay + cfg.py) * cfg.ry },
+      ],
+    };
   });
 
   return (
-    <View style={styles.centerBtnOuter}>
-      <Animated.View style={[styles.centerBtn, { transform: [{ scale: pulseAnim }] }]}>
+    <Animated.View
+      style={[
+        {
+          position: 'absolute' as const,
+          width: cfg.size,
+          height: cfg.size,
+          borderRadius: cfg.size / 2,
+          backgroundColor: cfg.color,
+        },
+        style,
+      ]}
+    />
+  );
+}
+
+function PlasmaButton({ focused }: { focused?: boolean }) {
+  const time = useSharedValue(0);
+  const focus = useSharedValue(focused ? 1 : 0);
+
+  useEffect(() => {
+    time.value = withRepeat(
+      withTiming(Math.PI * 2, { duration: 8000, easing: Easing.linear }),
+      -1,
+      false,
+    );
+  }, []);
+
+  useEffect(() => {
+    focus.value = withTiming(focused ? 1 : 0, { duration: 300 });
+  }, [focused]);
+
+  // Outer glow — brighter when focused
+  const glowStyle = useAnimatedStyle(() => {
+    'worklet';
+    const base = 0.1 + focus.value * 0.3;
+    const amp = 0.06 + focus.value * 0.1;
+    return { opacity: base + Math.sin(time.value * 2) * amp };
+  });
+
+  // Energy ring — subtle pulsing border
+  const ringStyle = useAnimatedStyle(() => {
+    'worklet';
+    return { opacity: 0.2 + Math.sin(time.value * 3) * 0.2 + focus.value * 0.2 };
+  });
+
+  // Core glow — breathes slowly
+  const coreStyle = useAnimatedStyle(() => {
+    'worklet';
+    const scale = 1 + Math.sin(time.value * 1.5) * 0.15;
+    return {
+      opacity: 0.2 + focus.value * 0.1 + Math.sin(time.value * 1.5) * 0.08,
+      transform: [{ scale }],
+    };
+  });
+
+  return (
+    <View style={plasma.outer}>
+      {/* Soft outer glow */}
+      <Animated.View style={[plasma.glow, glowStyle]} />
+
+      {/* Energy ring */}
+      <Animated.View style={[plasma.ring, ringStyle]} />
+
+      {/* Button body */}
+      <View style={plasma.body}>
+        {/* Deep space base gradient */}
         <LinearGradient
-          colors={focused
-            ? [colors.primary[400], colors.primary[600], colors.primary[700]]
-            : [colors.gray[400], colors.gray[500], colors.gray[400]]}
+          colors={['#1a0a3e', '#0d1b4f', '#0a1628']}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
-        {/* Shimmer energy effect */}
-        <Animated.View
-          style={[
-            styles.shimmerOverlay,
-            { transform: [{ translateX: shimmerTranslateX }] },
-          ]}
-        >
-          <LinearGradient
-            colors={['transparent', 'rgba(255,255,255,0.35)', 'transparent']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={{ flex: 1 }}
-          />
-        </Animated.View>
-        <Ionicons name="calculator" size={28} color={colors.white} />
-      </Animated.View>
+
+        {/* Animated plasma blobs */}
+        <View style={plasma.blobBox}>
+          {PLASMA_BLOBS.map((cfg, i) => (
+            <PlasmaBlob key={i} time={time} cfg={cfg} />
+          ))}
+        </View>
+
+        {/* Vignette — darkens edges for glass-sphere depth */}
+        <Svg width={PLASMA_SIZE} height={PLASMA_SIZE} style={StyleSheet.absoluteFill}>
+          <Defs>
+            <RadialGradient id="vig" cx="50%" cy="50%" rx="50%" ry="50%">
+              <Stop offset="0%" stopColor="transparent" />
+              <Stop offset="55%" stopColor="transparent" />
+              <Stop offset="100%" stopColor="rgba(8,8,28,0.6)" />
+            </RadialGradient>
+          </Defs>
+          <Circle cx={PLASMA_SIZE / 2} cy={PLASMA_SIZE / 2} r={PLASMA_SIZE / 2} fill="url(#vig)" />
+        </Svg>
+
+        {/* Hot core glow */}
+        <Animated.View style={[plasma.core, coreStyle]} />
+
+        {/* Icon */}
+        <Ionicons name="calculator" size={26} color={colors.white} style={{ zIndex: 10 }} />
+      </View>
     </View>
   );
 }
 
-// Nested stack inside More tab — keeps bottom bar visible
+const plasma = StyleSheet.create({
+  outer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: PLASMA_SIZE + 24,
+    height: PLASMA_SIZE + 24,
+    marginTop: -28,
+  },
+  glow: {
+    position: 'absolute',
+    width: PLASMA_SIZE + 22,
+    height: PLASMA_SIZE + 22,
+    borderRadius: (PLASMA_SIZE + 22) / 2,
+    backgroundColor: '#6366f1',
+  },
+  ring: {
+    position: 'absolute',
+    width: PLASMA_SIZE + 10,
+    height: PLASMA_SIZE + 10,
+    borderRadius: (PLASMA_SIZE + 10) / 2,
+    borderWidth: 1.5,
+    borderColor: '#818cf8',
+  },
+  body: {
+    width: PLASMA_SIZE,
+    height: PLASMA_SIZE,
+    borderRadius: PLASMA_SIZE / 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blobBox: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  core: {
+    position: 'absolute',
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+  },
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Navigation
+// ═══════════════════════════════════════════════════════════════════════════════
+
 function MoreStackNavigator() {
   return (
     <MoreStack.Navigator screenOptions={{ headerShown: false }}>
@@ -149,8 +293,9 @@ function TabNavigator() {
         options={{
           tabBarLabel: 'Главная',
           tabBarIcon: ({ color, focused }) => (
-            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Feather name="home" size={20} color={color} />
+            <View style={styles.tabIconWrap}>
+              <Feather name="home" size={22} color={color} />
+              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -161,8 +306,9 @@ function TabNavigator() {
         options={{
           tabBarLabel: 'Склад',
           tabBarIcon: ({ color, focused }) => (
-            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Feather name="package" size={20} color={color} />
+            <View style={styles.tabIconWrap}>
+              <Feather name="package" size={22} color={color} />
+              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -172,7 +318,7 @@ function TabNavigator() {
         component={CheckCreateScreen}
         options={{
           tabBarLabel: 'Касса',
-          tabBarIcon: ({ focused }) => <CenterTabButton focused={focused} />,
+          tabBarIcon: ({ focused }) => <PlasmaButton focused={focused} />,
           tabBarLabelStyle: [styles.tabLabel, { color: colors.primary[600], fontWeight: fontWeight.bold }],
         }}
       />
@@ -182,8 +328,9 @@ function TabNavigator() {
         options={{
           tabBarLabel: 'Журнал',
           tabBarIcon: ({ color, focused }) => (
-            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Feather name="file-text" size={20} color={color} />
+            <View style={styles.tabIconWrap}>
+              <Feather name="file-text" size={22} color={color} />
+              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -194,8 +341,9 @@ function TabNavigator() {
         options={{
           tabBarLabel: 'Ещё',
           tabBarIcon: ({ color, focused }) => (
-            <View style={[styles.iconBox, focused && styles.iconBoxActive]}>
-              <Feather name="menu" size={20} color={color} />
+            <View style={styles.tabIconWrap}>
+              <Feather name="menu" size={22} color={color} />
+              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -239,45 +387,27 @@ const styles = StyleSheet.create({
     height: Platform.OS === 'ios' ? 88 : 68,
     paddingTop: spacing[1],
     paddingBottom: Platform.OS === 'ios' ? spacing[7] : spacing[2],
-    elevation: 20,
-    shadowColor: colors.black,
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
+    elevation: 24,
+    shadowColor: '#1e293b',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
   },
   tabLabel: {
     fontSize: 10,
     fontWeight: fontWeight.medium,
     marginTop: 2,
   },
-  iconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: borderRadius.xl,
+  tabIconWrap: {
     alignItems: 'center',
     justifyContent: 'center',
+    height: 34,
   },
-  iconBoxActive: {
-    backgroundColor: colors.primary[50],
-  },
-  centerBtnOuter: {
-    marginTop: -22,
-  },
-  centerBtn: {
-    width: 62,
-    height: 54,
-    borderRadius: borderRadius['2xl'],
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    shadowColor: colors.primary[600],
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 12,
-  },
-  shimmerOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    width: 50,
+  activeDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: colors.primary[600],
+    marginTop: 3,
   },
 });
