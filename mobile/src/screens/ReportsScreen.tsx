@@ -79,7 +79,7 @@ export default function ReportsScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Text style={styles.backText}>← Назад</Text>
+            <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
           </TouchableOpacity>
           <Text style={styles.title}>Отчёты</Text>
           <View style={{ width: 60 }} />
@@ -107,7 +107,7 @@ export default function ReportsScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Назад</Text>
+          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
         <Text style={styles.title}>Отчёты</Text>
         <View style={{ width: 60 }} />

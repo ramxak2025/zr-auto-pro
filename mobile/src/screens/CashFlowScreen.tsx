@@ -7,6 +7,7 @@ import { useNavigation } from '@react-navigation/native';
 import { reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
@@ -143,29 +144,29 @@ export default function CashFlowScreen() {
           <>
             {/* Summary cards */}
             <View style={styles.summaryRow}>
-              <View style={[styles.summaryCard, { backgroundColor: colors.green[50] }]}>
+              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.green[50] }]} index={0}>
                 <Ionicons name="cash-outline" size={20} color={colors.green[600]} />
                 <Text style={styles.summaryLabel}>Наличные</Text>
                 <Text style={[styles.summaryValue, { color: colors.green[700] }]}>{formatMoney(totals.cash)}</Text>
-              </View>
-              <View style={[styles.summaryCard, { backgroundColor: colors.blue[50] }]}>
+              </AnimatedCard>
+              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.blue[50] }]} index={1}>
                 <Ionicons name="card-outline" size={20} color={colors.blue[600]} />
                 <Text style={styles.summaryLabel}>Карта</Text>
                 <Text style={[styles.summaryValue, { color: colors.blue[700] }]}>{formatMoney(totals.card)}</Text>
-              </View>
+              </AnimatedCard>
             </View>
 
             <View style={styles.summaryRow}>
-              <View style={[styles.summaryCard, { backgroundColor: colors.yellow[50] }]}>
+              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.yellow[50] }]} index={2}>
                 <Ionicons name="shield-outline" size={20} color={colors.yellow[600]} />
                 <Text style={styles.summaryLabel}>Гарантия</Text>
                 <Text style={[styles.summaryValue, { color: colors.yellow[700] }]}>{formatMoney(totals.warranty)}</Text>
-              </View>
-              <View style={[styles.summaryCard, { backgroundColor: colors.primary[50] }]}>
+              </AnimatedCard>
+              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.primary[50] }]} index={3}>
                 <Ionicons name="wallet-outline" size={20} color={colors.primary[600]} />
                 <Text style={styles.summaryLabel}>Итого</Text>
                 <Text style={[styles.summaryValue, { color: colors.gray[900] }]}>{formatMoney(totals.total)}</Text>
-              </View>
+              </AnimatedCard>
             </View>
 
             {/* Daily breakdown */}
@@ -175,8 +176,8 @@ export default function CashFlowScreen() {
                 <Ionicons name="document-text-outline" size={32} color={colors.gray[300]} />
                 <Text style={styles.emptyCardText}>Нет данных за выбранный период</Text>
               </View>
-            ) : (cashflow.days || []).map((day: any) => (
-              <View key={day.date} style={styles.dayCard}>
+            ) : (cashflow.days || []).map((day: any, idx: number) => (
+              <AnimatedCard key={day.date} style={styles.dayCard} index={idx + 4}>
                 <View style={styles.dayHeader}>
                   <Text style={styles.dayDate}>
                     {new Date(day.date).toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' })}
@@ -203,7 +204,7 @@ export default function CashFlowScreen() {
                     </View>
                   )}
                 </View>
-              </View>
+              </AnimatedCard>
             ))}
           </>
         )}

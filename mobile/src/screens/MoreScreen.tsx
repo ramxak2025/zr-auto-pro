@@ -38,7 +38,6 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
-  { label: 'Подписка', description: 'Тариф и оплата', screen: 'Subscription', roles: ['director', 'superadmin'], icon: 'card-outline', iconBg: colors.primary[50], iconColor: colors.primary[600] },
   { label: 'Расписание', description: 'График работы и смены', screen: 'Schedule', featureKey: 'schedule_view', icon: 'calendar-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
   { label: 'Клиенты', description: 'База клиентов', screen: 'Clients', permission: 'clients_view', featureKey: 'clients_view', icon: 'people-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
   { label: 'Автомобили', description: 'Все автомобили клиентов', screen: 'Cars', permission: 'clients_view', featureKey: 'clients_view', icon: 'car-sport-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
@@ -51,6 +50,7 @@ const menuItems: MenuItem[] = [
   { label: 'Маркетинг', description: 'Отзывы и рассылки', screen: 'Marketing', icon: 'megaphone-outline', iconBg: colors.violet[50], iconColor: colors.violet[600] },
   { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', featureKey: 'users_manage', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
   { label: 'Настройки компании', description: 'Реквизиты и данные для чеков', screen: 'CompanySettings', roles: ['director', 'superadmin'], icon: 'business-outline', iconBg: colors.slate[100], iconColor: colors.slate[600] },
+  { label: 'Подписка', description: 'Тариф и оплата', screen: 'Subscription', roles: ['director', 'superadmin'], icon: 'card-outline', iconBg: colors.primary[50], iconColor: colors.primary[600] },
 ];
 
 function AnimatedMenuItem({ item, index, onPress, locked }: { item: MenuItem; index: number; onPress: () => void; locked?: boolean }) {

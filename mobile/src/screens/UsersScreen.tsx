@@ -60,13 +60,14 @@ interface UserForm {
   password: string;
   role: UserRole;
   salaryPercent: number;
+  productSalaryPercent: number;
   isActive: boolean;
   permissions: UserPermissions;
 }
 
 const emptyForm: UserForm = {
   fullName: '', phone: '', password: '',
-  role: UserRole.MASTER, salaryPercent: 0, isActive: true,
+  role: UserRole.MASTER, salaryPercent: 0, productSalaryPercent: 0, isActive: true,
   permissions: { ...defaultPermissions },
 };
 
@@ -140,6 +141,7 @@ export default function UsersScreen() {
       password: '',
       role: user.role,
       salaryPercent: user.salaryPercent,
+      productSalaryPercent: user.productSalaryPercent || 0,
       isActive: user.isActive,
       permissions: { ...defaultPermissions, ...user.permissions },
     });
@@ -158,6 +160,7 @@ export default function UsersScreen() {
       phone: form.phone,
       role: form.role,
       salaryPercent: Number(form.salaryPercent),
+      productSalaryPercent: Number(form.productSalaryPercent) || 0,
       isActive: form.isActive,
       permissions: form.permissions,
     };
@@ -198,7 +201,7 @@ export default function UsersScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Назад</Text>
+          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
         <Text style={styles.title}>Сотрудники</Text>
         <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
@@ -240,7 +243,7 @@ export default function UsersScreen() {
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 4 }}>
                       <Text style={styles.userPhone}>{user.phone}</Text>
                       <Text style={styles.userDivider}>|</Text>
-                      <Text style={styles.userPhone}>{user.salaryPercent}%</Text>
+                      <Text style={styles.userPhone}>{user.salaryPercent}%{user.productSalaryPercent ? ` / ${user.productSalaryPercent}%` : ''}</Text>
                       <Text style={styles.userDivider}>|</Text>
                       {user.isActive ? (
                         <Text style={[styles.statusText, { color: colors.green[600] }]}>Активен</Text>
@@ -328,6 +331,20 @@ export default function UsersScreen() {
               onChangeText={v => setForm({ ...form, salaryPercent: Number(v) || 0 })}
               style={styles.formInput}
               keyboardType="numeric"
+              placeholder="0"
+              placeholderTextColor={colors.gray[400]}
+            />
+          </View>
+
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>% с чистой прибыли товаров</Text>
+            <TextInput
+              value={String(form.productSalaryPercent)}
+              onChangeText={v => setForm({ ...form, productSalaryPercent: Number(v) || 0 })}
+              style={styles.formInput}
+              keyboardType="numeric"
+              placeholder="0"
+              placeholderTextColor={colors.gray[400]}
             />
           </View>
 

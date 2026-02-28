@@ -11,6 +11,7 @@ import { expensesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -145,8 +146,8 @@ export default function ExpensesScreen() {
     setRefreshing(false);
   };
 
-  const renderExpense = ({ item }: { item: any }) => (
-    <View style={styles.card}>
+  const renderExpense = ({ item, index }: { item: any; index: number }) => (
+    <AnimatedCard style={styles.card} index={index}>
       <View style={styles.cardTop}>
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
@@ -169,14 +170,14 @@ export default function ExpensesScreen() {
         <Text style={styles.cardDate}>{formatDate(item.date)}</Text>
         {item.userName && <Text style={styles.cardUser}>{item.userName}</Text>}
       </View>
-    </View>
+    </AnimatedCard>
   );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Назад</Text>
+          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
         <Text style={styles.title}>Расходы</Text>
         {isDirector && (

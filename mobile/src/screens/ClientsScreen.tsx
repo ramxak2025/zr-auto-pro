@@ -4,6 +4,7 @@ import {
   RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi } from '../api/services';
@@ -11,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -97,33 +99,37 @@ export default function ClientsScreen() {
   const total = data?.total || 0;
   const hasMore = page * limit < total;
 
-  const renderClient = ({ item }: { item: Client }) => (
-    <TouchableOpacity
+  const renderClient = ({ item, index }: { item: Client; index: number }) => (
+    <AnimatedCard
       style={styles.clientCard}
+      index={index}
       onPress={() => navigation.navigate('ClientDetail', { id: item.id })}
-      activeOpacity={0.7}
     >
       <View style={styles.clientTop}>
         <Text style={styles.clientName} numberOfLines={1}>{item.fullName}</Text>
         <View style={styles.clientActions}>
           <TouchableOpacity onPress={() => openEditModal(item)} style={styles.actionBtn}>
-            <Text style={styles.actionIcon}>✎</Text>
+            <Ionicons name="create-outline" size={16} color={colors.gray[400]} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => { setDeleteId(item.id); setConfirmOpen(true); }}
             style={styles.actionBtn}
           >
-            <Text style={[styles.actionIcon, { color: colors.red[400] }]}>✕</Text>
+            <Ionicons name="close" size={16} color={colors.red[400]} />
           </TouchableOpacity>
         </View>
       </View>
       <View style={styles.clientBottom}>
-        <Text style={styles.clientPhone}>📞 {item.phone}</Text>
+        <View style={styles.phoneRow}>
+          <Ionicons name="call-outline" size={13} color={colors.gray[400]} />
+          <Text style={styles.clientPhone}>{item.phone}</Text>
+        </View>
         <View style={styles.carsBadge}>
+          <Ionicons name="car-outline" size={12} color={colors.blue[700]} />
           <Text style={styles.carsBadgeText}>{item.cars?.length || 0} авто</Text>
         </View>
       </View>
-    </TouchableOpacity>
+    </AnimatedCard>
   );
 
   return (
@@ -226,8 +232,9 @@ const styles = StyleSheet.create({
   actionBtn: { padding: spacing[1.5] },
   actionIcon: { fontSize: 14, color: colors.gray[400] },
   clientBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   clientPhone: { fontSize: fontSize.sm, color: colors.gray[500] },
-  carsBadge: { backgroundColor: colors.blue[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.sm },
+  carsBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.blue[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.sm },
   carsBadgeText: { fontSize: 11, color: colors.blue[700], fontWeight: fontWeight.medium },
   // Form
   formField: { marginBottom: spacing[4] },

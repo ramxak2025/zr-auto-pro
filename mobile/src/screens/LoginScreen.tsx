@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,8 +11,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
@@ -39,6 +41,27 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
+
+  // Entrance animations
+  const logoFade = useRef(new Animated.Value(0)).current;
+  const logoScale = useRef(new Animated.Value(0.8)).current;
+  const formSlide = useRef(new Animated.Value(30)).current;
+  const formFade = useRef(new Animated.Value(0)).current;
+  const demoFade = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.sequence([
+      Animated.parallel([
+        Animated.timing(logoFade, { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.spring(logoScale, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }),
+      ]),
+      Animated.parallel([
+        Animated.timing(formFade, { toValue: 1, duration: 400, useNativeDriver: true }),
+        Animated.timing(formSlide, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]),
+      Animated.timing(demoFade, { toValue: 1, duration: 300, useNativeDriver: true }),
+    ]).start();
+  }, []);
 
   const handlePhoneChange = (raw: string) => {
     const digits = raw.replace(/\D/g, '');
@@ -102,13 +125,13 @@ export default function LoginScreen() {
         >
           <View style={styles.container}>
             {/* Logo */}
-            <View style={styles.logoWrap}>
+            <Animated.View style={[styles.logoWrap, { opacity: logoFade, transform: [{ scale: logoScale }] }]}>
               <Image source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
-            </View>
-            <Text style={styles.subtitle}>Система управления сервисом</Text>
+            </Animated.View>
+            <Animated.Text style={[styles.subtitle, { opacity: logoFade }]}>Система управления сервисом</Animated.Text>
 
             {/* Phone */}
-            <View style={styles.fieldWrap}>
+            <Animated.View style={[styles.fieldWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
               <Text style={styles.label}>ТЕЛЕФОН</Text>
               <TextInput
                 value={phone}
@@ -120,10 +143,10 @@ export default function LoginScreen() {
                 style={[styles.input, phoneError ? styles.inputError : null]}
               />
               {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
-            </View>
+            </Animated.View>
 
             {/* Password */}
-            <View style={styles.fieldWrap}>
+            <Animated.View style={[styles.fieldWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
               <Text style={styles.label}>ПАРОЛЬ</Text>
               <View style={styles.passwordWrap}>
                 <TextInput
@@ -142,13 +165,14 @@ export default function LoginScreen() {
                   style={styles.eyeBtn}
                   onPress={() => setShowPassword(!showPassword)}
                 >
-                  <Text style={styles.eyeText}>{showPassword ? '◉' : '◎'}</Text>
+                  <Ionicons name={showPassword ? 'eye' : 'eye-off'} size={20} color={colors.gray[400]} />
                 </TouchableOpacity>
               </View>
               {passwordError ? <Text style={styles.errorText}>{passwordError}</Text> : null}
-            </View>
+            </Animated.View>
 
             {/* Submit */}
+            <Animated.View style={{ opacity: formFade, transform: [{ translateY: formSlide }] }}>
             <TouchableOpacity
               style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
               onPress={handleSubmit}
@@ -161,9 +185,10 @@ export default function LoginScreen() {
                 <Text style={styles.submitText}>Войти</Text>
               )}
             </TouchableOpacity>
+            </Animated.View>
 
             {/* Demo access */}
-            <View style={styles.demoSection}>
+            <Animated.View style={[styles.demoSection, { opacity: demoFade }]}>
               <View style={styles.dividerRow}>
                 <View style={styles.dividerLine} />
                 <Text style={styles.dividerText}>ДЕМО-ДОСТУП</Text>
@@ -185,7 +210,7 @@ export default function LoginScreen() {
                   <Text style={styles.demoBtnMasterText}>Мастер</Text>
                 </TouchableOpacity>
               </View>
-            </View>
+            </Animated.View>
           </View>
 
           {/* Footer */}

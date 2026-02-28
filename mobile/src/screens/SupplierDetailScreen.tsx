@@ -9,6 +9,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { suppliersApi, productsApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
+import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Supplier, Delivery, SupplierPayment, Product } from '../../../shared/types';
@@ -144,27 +145,30 @@ export default function SupplierDetailScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Назад</Text>
+          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{supplier.name}</Text>
-        <View style={{ width: 60 }} />
+        <View style={{ width: 22 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}>
         {/* Stats cards */}
         <View style={styles.statsRow}>
-          <View style={[styles.statCard, { backgroundColor: colors.blue[50] }]}>
+          <AnimatedCard style={[styles.statCard, { backgroundColor: colors.blue[50] }]} index={0}>
+            <Ionicons name="cart-outline" size={16} color={colors.blue[600]} style={{ marginBottom: 2 }} />
             <Text style={[styles.statLabel, { color: colors.blue[600] }]}>Закупки</Text>
             <Text style={[styles.statValue, { color: colors.blue[800] }]}>{formatMoney(supplier.totalPurchases)}</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: colors.green[50] }]}>
+          </AnimatedCard>
+          <AnimatedCard style={[styles.statCard, { backgroundColor: colors.green[50] }]} index={1}>
+            <Ionicons name="checkmark-circle-outline" size={16} color={colors.green[600]} style={{ marginBottom: 2 }} />
             <Text style={[styles.statLabel, { color: colors.green[600] }]}>Оплачено</Text>
             <Text style={[styles.statValue, { color: colors.green[800] }]}>{formatMoney(supplier.totalPaid)}</Text>
-          </View>
-          <View style={[styles.statCard, { backgroundColor: supplier.currentDebt > 0 ? colors.red[50] : colors.gray[50] }]}>
+          </AnimatedCard>
+          <AnimatedCard style={[styles.statCard, { backgroundColor: supplier.currentDebt > 0 ? colors.red[50] : colors.gray[50] }]} index={2}>
+            <Ionicons name="alert-circle-outline" size={16} color={supplier.currentDebt > 0 ? colors.red[600] : colors.gray[500]} style={{ marginBottom: 2 }} />
             <Text style={[styles.statLabel, { color: supplier.currentDebt > 0 ? colors.red[600] : colors.gray[500] }]}>Долг</Text>
             <Text style={[styles.statValue, { color: supplier.currentDebt > 0 ? colors.red[700] : colors.gray[700] }]}>{formatMoney(supplier.currentDebt)}</Text>
-          </View>
+          </AnimatedCard>
         </View>
 
         {/* Info */}

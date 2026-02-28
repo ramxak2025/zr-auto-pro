@@ -4,12 +4,14 @@ import {
   RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Supplier } from '../../../shared/types';
@@ -70,12 +72,11 @@ export default function SuppliersScreen() {
     setRefreshing(false);
   };
 
-  const renderSupplier = ({ item }: { item: Supplier }) => (
-    <TouchableOpacity
+  const renderSupplier = ({ item, index }: { item: Supplier; index: number }) => (
+    <AnimatedCard
       style={styles.card}
+      index={index}
       onPress={() => navigation.navigate('SupplierDetail', { id: item.id })}
-      onLongPress={() => openEdit(item)}
-      activeOpacity={0.7}
     >
       <View style={styles.cardTop}>
         <Text style={styles.cardName} numberOfLines={1}>{item.name}</Text>
@@ -85,20 +86,30 @@ export default function SuppliersScreen() {
           </View>
         )}
       </View>
-      {item.contactPerson && <Text style={styles.cardSub}>{item.contactPerson}</Text>}
-      {item.phone && <Text style={styles.cardSub}>📞 {item.phone}</Text>}
+      {item.contactPerson && (
+        <View style={styles.contactRow}>
+          <Ionicons name="person-outline" size={13} color={colors.gray[400]} />
+          <Text style={styles.cardSub}>{item.contactPerson}</Text>
+        </View>
+      )}
+      {item.phone && (
+        <View style={styles.contactRow}>
+          <Ionicons name="call-outline" size={13} color={colors.gray[400]} />
+          <Text style={styles.cardSub}>{item.phone}</Text>
+        </View>
+      )}
       <View style={styles.cardStats}>
         <Text style={styles.cardStatLabel}>Покупки: {formatMoney(item.totalPurchases)}</Text>
         <Text style={styles.cardStatLabel}>Оплачено: {formatMoney(item.totalPaid)}</Text>
       </View>
-    </TouchableOpacity>
+    </AnimatedCard>
   );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.backText}>← Назад</Text>
+          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
         <Text style={styles.title}>Поставщики</Text>
         <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
@@ -146,7 +157,8 @@ const styles = StyleSheet.create({
   cardName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900], flex: 1 },
   debtBadge: { backgroundColor: colors.red[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
   debtBadgeText: { fontSize: 11, color: colors.red[600], fontWeight: fontWeight.medium },
-  cardSub: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 },
+  contactRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  cardSub: { fontSize: fontSize.xs, color: colors.gray[500] },
   cardStats: { flexDirection: 'row', gap: spacing[4], marginTop: spacing[2], paddingTop: spacing[2], borderTopWidth: 1, borderTopColor: colors.gray[50] },
   cardStatLabel: { fontSize: fontSize.xs, color: colors.gray[400] },
   formField: { marginBottom: spacing[4] },

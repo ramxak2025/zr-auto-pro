@@ -4,11 +4,14 @@ import {
   RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigation } from '@react-navigation/native';
 import { servicesApi } from '../api/services';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -86,21 +89,21 @@ export default function ServicesScreen() {
   const total = data?.total || 0;
   const hasMore = page * limit < total;
 
-  const renderService = ({ item }: { item: Service }) => (
-    <TouchableOpacity style={styles.serviceCard} onPress={() => openEdit(item)} activeOpacity={0.7}>
+  const renderService = ({ item, index }: { item: Service; index: number }) => (
+    <AnimatedCard style={styles.serviceCard} index={index} onPress={() => openEdit(item)}>
       <View style={styles.serviceInfo}>
         <Text style={styles.serviceName} numberOfLines={1}>{item.name}</Text>
         {item.category && <Text style={styles.serviceCategory}>{item.category}</Text>}
       </View>
       <Text style={styles.servicePrice}>{formatMoney(item.defaultPrice)}</Text>
-    </TouchableOpacity>
+    </AnimatedCard>
   );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => {}}>
-          <Text style={{ fontSize: fontSize.sm, color: colors.primary[600] }}>← Назад</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
         <Text style={styles.title}>Услуги</Text>
         <TouchableOpacity style={styles.addBtn} onPress={openCreate}>

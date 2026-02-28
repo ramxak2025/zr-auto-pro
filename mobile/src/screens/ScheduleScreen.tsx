@@ -11,7 +11,6 @@ import { scheduleApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
-import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
 
@@ -32,16 +31,15 @@ function getDaysInMonth(year: number, month: number): Date[] {
   return days;
 }
 
-// Cell colors
 function getCellStyle(entry?: ScheduleEntry) {
-  if (!entry) return { bg: 'transparent', text: '', textColor: colors.gray[400] };
+  if (!entry) return { bg: 'transparent', text: '', textColor: colors.gray[300] };
   const note = (entry.note || '').toLowerCase();
   if (note.includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447')) return { bg: colors.rose[50], text: '\u0411/\u041B', textColor: colors.rose[600] };
   if (entry.isDayOff) return { bg: colors.gray[100], text: '\u0412\u044B\u0445', textColor: colors.gray[500] };
   if (entry.lateStatus === 'late_major') return { bg: colors.orange[50], text: entry.shiftStart || '\u2714', textColor: colors.orange[600] };
   if (entry.lateStatus === 'late_minor') return { bg: colors.yellow[50], text: entry.shiftStart || '\u2714', textColor: colors.yellow[600] };
   if (entry.shiftStart) return { bg: colors.green[50], text: entry.shiftStart, textColor: colors.green[700] };
-  return { bg: 'transparent', text: '', textColor: colors.gray[400] };
+  return { bg: 'transparent', text: '', textColor: colors.gray[300] };
 }
 
 // ============== GRID TAB ==============
@@ -50,7 +48,7 @@ function GridTab() {
   const { user } = useAuth();
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [quickPopup, setQuickPopup] = useState<{ userId: string; date: string; entry?: ScheduleEntry } | null>(null);
+  const [quickPopup, setQuickPopup] = useState<{ userId: string; date: string; entry?: ScheduleEntry; userName?: string } | null>(null);
 
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
@@ -71,7 +69,6 @@ function GridTab() {
   const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
   const days = getDaysInMonth(year, month);
 
-  // Build a map: `userId-date` → ScheduleEntry
   const entryMap = useMemo(() => {
     const map = new Map<string, ScheduleEntry>();
     (entries ?? []).forEach(e => {
@@ -80,6 +77,20 @@ function GridTab() {
     });
     return map;
   }, [entries]);
+
+  const userStats = useMemo(() => {
+    const stats = new Map<string, { worked: number; off: number }>();
+    activeUsers.forEach(u => {
+      let worked = 0, off = 0;
+      days.forEach(d => {
+        const entry = entryMap.get(`${u.id}-${formatDate(d)}`);
+        if (entry?.shiftStart && !entry.isDayOff) worked++;
+        if (entry?.isDayOff) off++;
+      });
+      stats.set(u.id, { worked, off });
+    });
+    return stats;
+  }, [activeUsers, days, entryMap]);
 
   const createMutation = useMutation({
     mutationFn: (d: any) => scheduleApi.create(d),
@@ -101,47 +112,35 @@ function GridTab() {
     const { userId, date, entry } = quickPopup;
     const base: any = { userId, date };
 
-    if (type === 'delete' && entry) {
-      deleteMutation.mutate(entry.id);
-      return;
-    }
+    if (type === 'delete' && entry) { deleteMutation.mutate(entry.id); return; }
+    if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; }
+    else if (type === 'dayoff') { base.isDayOff = true; base.note = ''; }
+    else if (type === 'sick') { base.isDayOff = true; base.note = '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439'; }
+    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 <1\u0447'; }
+    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 >1\u0447'; }
 
-    if (type === 'shift') {
-      base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '';
-    } else if (type === 'dayoff') {
-      base.isDayOff = true; base.note = '';
-    } else if (type === 'sick') {
-      base.isDayOff = true; base.note = '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439';
-    } else if (type === 'late_minor') {
-      base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 <1\u0447';
-    } else if (type === 'late_major') {
-      base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 >1\u0447';
-    }
-
-    if (entry) {
-      updateMutation.mutate({ id: entry.id, data: base });
-    } else {
-      createMutation.mutate(base);
-    }
+    if (entry) { updateMutation.mutate({ id: entry.id, data: base }); }
+    else { createMutation.mutate(base); }
   };
 
   const CELL_W = 44;
-  const NAME_W = 100;
+  const NAME_W = 110;
 
   return (
     <View style={{ flex: 1 }}>
-      {/* Month navigation */}
       <View style={styles.monthNav}>
         <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
           <Ionicons name="chevron-back" size={18} color={colors.gray[600]} />
         </TouchableOpacity>
-        <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={styles.monthTitle}>{MONTH_NAMES[month]}</Text>
+          <Text style={styles.monthYear}>{year}</Text>
+        </View>
         <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
           <Ionicons name="chevron-forward" size={18} color={colors.gray[600]} />
         </TouchableOpacity>
       </View>
 
-      {/* Legend */}
       <View style={styles.legendRow}>
         <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.green[500] }]} /><Text style={styles.legendText}>{'\u0421\u043C\u0435\u043D\u0430'}</Text></View>
         <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: colors.gray[400] }]} /><Text style={styles.legendText}>{'\u0412\u044B\u0445'}</Text></View>
@@ -152,10 +151,9 @@ function GridTab() {
       {isLoading ? <LoadingSpinner /> : (
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <View>
-            {/* Day headers */}
-            <View style={{ flexDirection: 'row' }}>
-              <View style={{ width: NAME_W, paddingVertical: spacing[1], paddingHorizontal: spacing[2] }}>
-                <Text style={{ fontSize: 10, color: colors.gray[400], fontWeight: fontWeight.semibold }}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A'}</Text>
+            <View style={{ flexDirection: 'row', backgroundColor: colors.white }}>
+              <View style={[styles.gridNameCell, { width: NAME_W, borderBottomWidth: 2, borderBottomColor: colors.gray[200] }]}>
+                <Text style={styles.gridHeaderLabel}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A'}</Text>
               </View>
               {days.map(d => {
                 const ds = formatDate(d);
@@ -171,62 +169,67 @@ function GridTab() {
               })}
             </View>
 
-            {/* Employee rows */}
-            {activeUsers.map(u => (
-              <View key={u.id} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.gray[50] }}>
-                <View style={styles.gridNameCell}>
-                  <Text style={styles.gridName} numberOfLines={1}>{u.fullName?.split(' ')[0]}</Text>
-                </View>
-                {days.map(d => {
-                  const ds = formatDate(d);
-                  const entry = entryMap.get(`${u.id}-${ds}`);
-                  const cell = getCellStyle(entry);
-                  const dow = (d.getDay() + 6) % 7;
-                  const isWeekend = dow >= 5;
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {activeUsers.map((u, rowIdx) => {
+                const stats = userStats.get(u.id);
+                return (
+                  <View key={u.id} style={[{ flexDirection: 'row' }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '40' }]}>
+                    <View style={[styles.gridNameCell, { width: NAME_W }]}>
+                      <Text style={styles.gridName} numberOfLines={1}>{u.fullName?.split(' ')[0]}</Text>
+                      {stats && <Text style={styles.gridNameStats}>{stats.worked}{'\u0441\u043C'} / {stats.off}{'\u0432\u044B\u0445'}</Text>}
+                    </View>
+                    {days.map(d => {
+                      const ds = formatDate(d);
+                      const entry = entryMap.get(`${u.id}-${ds}`);
+                      const cell = getCellStyle(entry);
+                      const dow = (d.getDay() + 6) % 7;
+                      const isWeekend = dow >= 5;
 
-                  return (
-                    <TouchableOpacity
-                      key={ds}
-                      style={[styles.gridCell, { width: CELL_W, backgroundColor: cell.bg || (isWeekend ? colors.red[50] + '30' : 'transparent') }]}
-                      onPress={() => canEdit && setQuickPopup({ userId: u.id, date: ds, entry })}
-                    >
-                      <Text style={[styles.gridCellText, { color: cell.textColor }]}>{cell.text}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ))}
+                      return (
+                        <TouchableOpacity
+                          key={ds}
+                          style={[styles.gridCell, { width: CELL_W, backgroundColor: cell.bg || (isWeekend ? colors.red[50] + '30' : 'transparent') }]}
+                          onPress={() => canEdit && setQuickPopup({ userId: u.id, date: ds, entry, userName: u.fullName?.split(' ')[0] })}
+                          activeOpacity={canEdit ? 0.5 : 1}
+                        >
+                          {cell.text ? (
+                            <Text style={[styles.gridCellText, { color: cell.textColor }]}>{cell.text}</Text>
+                          ) : (
+                            canEdit && <View style={styles.gridCellEmpty} />
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                );
+              })}
+            </ScrollView>
           </View>
         </ScrollView>
       )}
 
-      {/* Quick Action Popup */}
-      <Modal visible={!!quickPopup} onClose={() => setQuickPopup(null)} title={'\u0411\u044B\u0441\u0442\u0440\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435'}>
+      <Modal visible={!!quickPopup} onClose={() => setQuickPopup(null)} title={quickPopup?.userName ? `${quickPopup.userName} \u2014 ${quickPopup.date?.split('-').reverse().join('.')}` : '\u0411\u044B\u0441\u0442\u0440\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435'}>
         {quickPopup && (
           <View style={styles.quickActions}>
-            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('shift')}>
-              <View style={[styles.quickIcon, { backgroundColor: colors.green[50] }]}><Text style={{ fontSize: 16 }}>{'\u2705'}</Text></View>
-              <Text style={styles.quickLabel}>{'\u0421\u043C\u0435\u043D\u0430'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('dayoff')}>
-              <View style={[styles.quickIcon, { backgroundColor: colors.gray[100] }]}><Text style={{ fontSize: 16 }}>{'\uD83C\uDF19'}</Text></View>
-              <Text style={styles.quickLabel}>{'\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('sick')}>
-              <View style={[styles.quickIcon, { backgroundColor: colors.rose[50] }]}><Text style={{ fontSize: 16 }}>{'\uD83C\uDFE5'}</Text></View>
-              <Text style={styles.quickLabel}>{'\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('late_minor')}>
-              <View style={[styles.quickIcon, { backgroundColor: colors.yellow[50] }]}><Text style={{ fontSize: 16 }}>{'\u23F0'}</Text></View>
-              <Text style={styles.quickLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043B <1\u0447'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('late_major')}>
-              <View style={[styles.quickIcon, { backgroundColor: colors.orange[50] }]}><Text style={{ fontSize: 16 }}>{'\u26A0\uFE0F'}</Text></View>
-              <Text style={styles.quickLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043B >1\u0447'}</Text>
-            </TouchableOpacity>
+            {[
+              { type: 'shift', label: '\u0421\u043C\u0435\u043D\u0430', icon: 'checkmark-circle' as const, iconColor: colors.green[500], bg: colors.green[50] },
+              { type: 'dayoff', label: '\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439', icon: 'moon-outline' as const, iconColor: colors.gray[500], bg: colors.gray[100] },
+              { type: 'sick', label: '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439', icon: 'medkit-outline' as const, iconColor: colors.rose[500], bg: colors.rose[50] },
+              { type: 'late_minor', label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043B <1\u0447', icon: 'alarm-outline' as const, iconColor: colors.yellow[600], bg: colors.yellow[50] },
+              { type: 'late_major', label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043B >1\u0447', icon: 'warning-outline' as const, iconColor: colors.orange[500], bg: colors.orange[50] },
+            ].map(item => (
+              <TouchableOpacity key={item.type} style={styles.quickBtn} onPress={() => quickAction(item.type)}>
+                <View style={[styles.quickIcon, { backgroundColor: item.bg }]}>
+                  <Ionicons name={item.icon} size={20} color={item.iconColor} />
+                </View>
+                <Text style={styles.quickLabel}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
             {quickPopup.entry && (
               <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('delete')}>
-                <View style={[styles.quickIcon, { backgroundColor: colors.red[50] }]}><Ionicons name="trash-outline" size={18} color={colors.red[600]} /></View>
+                <View style={[styles.quickIcon, { backgroundColor: colors.red[50] }]}>
+                  <Ionicons name="trash-outline" size={20} color={colors.red[600]} />
+                </View>
                 <Text style={[styles.quickLabel, { color: colors.red[600] }]}>{'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}</Text>
               </TouchableOpacity>
             )}
@@ -255,42 +258,63 @@ function TodayTab() {
   };
 
   const statuses = todayData ?? [];
-  const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447');
+  const working = statuses.filter(s => s.isWorking && !(s.note || '').toLowerCase().includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447'));
+  const notWorking = statuses.filter(s => !s.isWorking || (s.note || '').toLowerCase().includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447'));
 
   const getStatusInfo = (s: TodayEmployeeStatus) => {
-    if (isSick(s)) return { label: '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439', color: colors.rose[400], badge: '\uD83C\uDFE5', bgColor: colors.rose[50] };
-    if (s.isDayOff) return { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439', color: colors.gray[400], badge: '\uD83C\uDF19', bgColor: colors.gray[50] };
-    if (s.lateStatus === 'late_major') return { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 >1\u0447', color: colors.orange[500], badge: '\u26A0\uFE0F', bgColor: colors.orange[50] };
-    if (s.lateStatus === 'late_minor') return { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0435 <1\u0447', color: colors.yellow[500], badge: '\u23F0', bgColor: colors.yellow[50] };
-    if (s.isWorking) return { label: '\u041D\u0430 \u0441\u043C\u0435\u043D\u0435', color: colors.green[500], badge: '\u2705', bgColor: colors.green[50] };
-    if (s.hasSchedule) return { label: '\u041F\u0440\u043E\u0433\u0443\u043B', color: colors.red[500], badge: '\u274C', bgColor: colors.red[50] };
-    return { label: '\u2014', color: colors.gray[200], badge: '', bgColor: colors.gray[50] };
+    const note = (s.note || '').toLowerCase();
+    if (note.includes('\u0431\u043E\u043B\u044C\u043D\u0438\u0447')) return { label: '\u0411\u043E\u043B\u044C\u043D\u0438\u0447\u043D\u044B\u0439', color: colors.rose[500], icon: 'medkit-outline' as const, bgColor: colors.rose[50] };
+    if (s.isDayOff) return { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u043E\u0439', color: colors.gray[500], icon: 'moon-outline' as const, bgColor: colors.gray[100] };
+    if (s.lateStatus === 'late_major') return { label: '\u041E\u043F\u043E\u0437\u0434. >1\u0447', color: colors.orange[500], icon: 'warning-outline' as const, bgColor: colors.orange[50] };
+    if (s.lateStatus === 'late_minor') return { label: '\u041E\u043F\u043E\u0437\u0434. <1\u0447', color: colors.yellow[600], icon: 'alarm-outline' as const, bgColor: colors.yellow[50] };
+    if (s.isWorking) return { label: '\u041D\u0430 \u0441\u043C\u0435\u043D\u0435', color: colors.green[600], icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
+    if (s.hasSchedule) return { label: '\u041F\u0440\u043E\u0433\u0443\u043B', color: colors.red[500], icon: 'close-circle' as const, bgColor: colors.red[50] };
+    return { label: '\u2014', color: colors.gray[400], icon: 'remove-outline' as const, bgColor: colors.gray[50] };
   };
+
+  const todayDate = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}>
+      <View style={styles.todayDateHeader}>
+        <Ionicons name="today-outline" size={18} color={colors.primary[600]} />
+        <Text style={styles.todayDateText}>{todayDate}</Text>
+      </View>
+
+      <View style={styles.todayStatsRow}>
+        <View style={[styles.todayStatCard, { borderLeftColor: colors.green[500] }]}>
+          <Text style={[styles.todayStatNum, { color: colors.green[600] }]}>{working.length}</Text>
+          <Text style={styles.todayStatLabel}>{'\u041D\u0430 \u0441\u043C\u0435\u043D\u0435'}</Text>
+        </View>
+        <View style={[styles.todayStatCard, { borderLeftColor: colors.gray[400] }]}>
+          <Text style={[styles.todayStatNum, { color: colors.gray[600] }]}>{notWorking.length}</Text>
+          <Text style={styles.todayStatLabel}>{'\u041E\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044E\u0442'}</Text>
+        </View>
+      </View>
+
       {isLoading ? <LoadingSpinner /> : statuses.length === 0 ? (
-        <Text style={styles.empty}>{'\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043E'}</Text>
+        <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
+          <Ionicons name="calendar-outline" size={40} color={colors.gray[300]} />
+          <Text style={styles.empty}>{'\u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u043D\u0435 \u043D\u0430\u0441\u0442\u0440\u043E\u0435\u043D\u043E'}</Text>
+        </View>
       ) : (
         statuses.map(s => {
           const info = getStatusInfo(s);
           return (
             <View key={s.userId} style={styles.todayCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
-                <View style={[styles.todayStatusBadge, { backgroundColor: info.bgColor }]}>
-                  <Text style={{ fontSize: 18 }}>{info.badge}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.todayName}>{s.fullName}</Text>
+              <View style={[styles.todayStatusIcon, { backgroundColor: info.bgColor }]}>
+                <Ionicons name={info.icon} size={20} color={info.color} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.todayName}>{s.fullName}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 }}>
                   {s.shiftStart && s.shiftEnd && <Text style={styles.todayShift}>{s.shiftStart} \u2014 {s.shiftEnd}</Text>}
-                  {s.actualArrival && (
-                    <Text style={styles.todayArrival}>{'\u041F\u0440\u0438\u0448\u0451\u043B: '}{new Date(s.actualArrival).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</Text>
-                  )}
-                  {s.note && <Text style={styles.todayNote}>{s.note}</Text>}
+                  {s.actualArrival && <Text style={styles.todayArrival}>{'\u041F\u0440\u0438\u0448\u0451\u043B '}{new Date(s.actualArrival).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</Text>}
                 </View>
-                <View style={[styles.todayStatusLabel, { backgroundColor: info.bgColor }]}>
-                  <Text style={[styles.todayStatusText, { color: info.color }]}>{info.label}</Text>
-                </View>
+                {s.note && <Text style={styles.todayNote}>{s.note}</Text>}
+              </View>
+              <View style={[styles.todayStatusBadge, { backgroundColor: info.bgColor }]}>
+                <Text style={[styles.todayStatusText, { color: info.color }]}>{info.label}</Text>
               </View>
             </View>
           );
@@ -300,7 +324,7 @@ function TodayTab() {
   );
 }
 
-// ============== SHIFTS TAB (Personal stats) ==============
+// ============== SHIFTS TAB ==============
 function ShiftsTab() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const year = currentMonth.getFullYear();
@@ -314,10 +338,10 @@ function ShiftsTab() {
   const s: any = stats || {};
 
   const statItems = [
-    { label: '\u0420\u0430\u0431\u043E\u0447\u0438\u0445 \u0434\u043D\u0435\u0439', value: s.totalWorked || 0, icon: '\uD83D\uDCC5', color: colors.primary[600] },
-    { label: '\u0412\u043E\u0432\u0440\u0435\u043C\u044F', value: s.totalOnTime || 0, icon: '\u2705', color: colors.green[600] },
-    { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439', value: s.totalLate || 0, icon: '\u23F0', color: colors.orange[600] },
-    { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0445', value: s.totalDaysOff || 0, icon: '\uD83C\uDF19', color: colors.gray[500] },
+    { label: '\u0420\u0430\u0431\u043E\u0447\u0438\u0445 \u0434\u043D\u0435\u0439', value: s.totalWorked || 0, icon: 'calendar' as const, color: colors.primary[600], bg: colors.primary[50] },
+    { label: '\u0412\u043E\u0432\u0440\u0435\u043C\u044F', value: s.totalOnTime || 0, icon: 'checkmark-circle' as const, color: colors.green[600], bg: colors.green[50] },
+    { label: '\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439', value: s.totalLate || 0, icon: 'alarm-outline' as const, color: colors.orange[500], bg: colors.orange[50] },
+    { label: '\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0445', value: s.totalDaysOff || 0, icon: 'moon-outline' as const, color: colors.gray[500], bg: colors.gray[100] },
   ];
 
   return (
@@ -326,7 +350,10 @@ function ShiftsTab() {
         <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
           <Ionicons name="chevron-back" size={18} color={colors.gray[600]} />
         </TouchableOpacity>
-        <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={styles.monthTitle}>{MONTH_NAMES[month]}</Text>
+          <Text style={styles.monthYear}>{year}</Text>
+        </View>
         <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
           <Ionicons name="chevron-forward" size={18} color={colors.gray[600]} />
         </TouchableOpacity>
@@ -337,7 +364,9 @@ function ShiftsTab() {
           <View style={styles.statsGrid}>
             {statItems.map((item, idx) => (
               <View key={idx} style={styles.statCard}>
-                <Text style={{ fontSize: 22 }}>{item.icon}</Text>
+                <View style={[styles.statIcon, { backgroundColor: item.bg }]}>
+                  <Ionicons name={item.icon} size={18} color={item.color} />
+                </View>
                 <Text style={[styles.statValue, { color: item.color }]}>{item.value}</Text>
                 <Text style={styles.statLabel}>{item.label}</Text>
               </View>
@@ -346,7 +375,10 @@ function ShiftsTab() {
 
           {(s.totalLateMinor > 0 || s.totalLateMajor > 0) && (
             <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>{'\u0414\u0435\u0442\u0430\u043B\u0438 \u043E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439'}</Text>
+              <View style={styles.detailCardHeader}>
+                <Ionicons name="analytics-outline" size={16} color={colors.gray[500]} />
+                <Text style={styles.detailTitle}>{'\u0414\u0435\u0442\u0430\u043B\u0438 \u043E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u0439'}</Text>
+              </View>
               <View style={styles.detailRow}>
                 <Text style={styles.detailLabel}>{'\u041E\u043F\u043E\u0437\u0434\u0430\u043D\u0438\u044F <1\u0447'}</Text>
                 <Text style={[styles.detailValue, { color: colors.yellow[600] }]}>{s.totalLateMinor || 0}</Text>
@@ -386,14 +418,11 @@ function SettingsTab() {
 
   const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
 
-  // Days off toggle
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
     const user = activeUsers.find(u => u.id === userId);
     if (!user) return;
     const current: number[] = (user as any).daysOff || [];
-    const newDaysOff = current.includes(dayOfWeek)
-      ? current.filter(d => d !== dayOfWeek)
-      : [...current, dayOfWeek];
+    const newDaysOff = current.includes(dayOfWeek) ? current.filter(d => d !== dayOfWeek) : [...current, dayOfWeek];
     try {
       await usersApi.update(userId, { daysOff: newDaysOff } as any);
       queryClient.invalidateQueries({ queryKey: ['users'] });
@@ -402,7 +431,6 @@ function SettingsTab() {
     }
   };
 
-  // Work mode apply
   const [applyModeId, setApplyModeId] = useState('');
   const [applyUserId, setApplyUserId] = useState('');
   const [applyFrom, setApplyFrom] = useState('');
@@ -421,13 +449,14 @@ function SettingsTab() {
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
-      {/* Sub-tabs */}
       <View style={styles.subTabs}>
         <TouchableOpacity style={[styles.subTabItem, settingsTab === 'daysoff' && styles.subTabActive]} onPress={() => setSettingsTab('daysoff')}>
-          <Text style={[styles.subTabText, settingsTab === 'daysoff' && styles.subTabTextActive]}>{'\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0435 \u043C\u0430\u0441\u0442\u0435\u0440\u043E\u0432'}</Text>
+          <Ionicons name="calendar-outline" size={14} color={settingsTab === 'daysoff' ? colors.white : colors.gray[500]} />
+          <Text style={[styles.subTabText, settingsTab === 'daysoff' && styles.subTabTextActive]}>{'\u0412\u044B\u0445\u043E\u0434\u043D\u044B\u0435'}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[styles.subTabItem, settingsTab === 'modes' && styles.subTabActive]} onPress={() => setSettingsTab('modes')}>
-          <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>{'\u0420\u0435\u0436\u0438\u043C\u044B \u0440\u0430\u0431\u043E\u0442\u044B'}</Text>
+          <Ionicons name="time-outline" size={14} color={settingsTab === 'modes' ? colors.white : colors.gray[500]} />
+          <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>{'\u0420\u0435\u0436\u0438\u043C\u044B'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -442,11 +471,7 @@ function SettingsTab() {
                   {DAY_ABBR.map((label, dow) => {
                     const isOff = daysOff.includes(dow);
                     return (
-                      <TouchableOpacity
-                        key={dow}
-                        style={[styles.dayBtn, isOff && styles.dayBtnActive]}
-                        onPress={() => toggleDayOff(u.id, dow)}
-                      >
+                      <TouchableOpacity key={dow} style={[styles.dayBtn, isOff && styles.dayBtnActive]} onPress={() => toggleDayOff(u.id, dow)}>
                         <Text style={[styles.dayBtnText, isOff && styles.dayBtnTextActive]}>{label}</Text>
                       </TouchableOpacity>
                     );
@@ -460,36 +485,30 @@ function SettingsTab() {
         <View style={{ gap: spacing[3] }}>
           {(workModes || []).map((mode: any) => (
             <View key={mode.id} style={styles.modeCard}>
+              <View style={styles.modeIconWrap}>
+                <Ionicons name="time-outline" size={18} color={colors.primary[600]} />
+              </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.modeName}>{mode.name}</Text>
                 <Text style={styles.modeInfo}>{mode.shiftStart} \u2014 {mode.shiftEnd}</Text>
               </View>
-              <TouchableOpacity
-                style={styles.modeApplyBtn}
-                onPress={() => {
-                  setApplyModeId(mode.id);
-                  setApplyUserId('');
-                  setApplyFrom('');
-                  setApplyTo('');
-                  setShowApplyModal(true);
-                }}
-              >
-                <Ionicons name="play-outline" size={16} color={colors.primary[600]} />
-                <Text style={styles.modeApplyText}>{'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
+              <TouchableOpacity style={styles.modeApplyBtn} onPress={() => { setApplyModeId(mode.id); setApplyUserId(''); setApplyFrom(''); setApplyTo(''); setShowApplyModal(true); }}>
+                <Ionicons name="play" size={14} color={colors.primary[600]} />
               </TouchableOpacity>
             </View>
           ))}
-
           {(!workModes || workModes.length === 0) && (
-            <Text style={styles.empty}>{'\u041D\u0435\u0442 \u0440\u0435\u0436\u0438\u043C\u043E\u0432 \u0440\u0430\u0431\u043E\u0442\u044B'}</Text>
+            <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
+              <Ionicons name="time-outline" size={40} color={colors.gray[300]} />
+              <Text style={styles.empty}>{'\u041D\u0435\u0442 \u0440\u0435\u0436\u0438\u043C\u043E\u0432 \u0440\u0430\u0431\u043E\u0442\u044B'}</Text>
+            </View>
           )}
         </View>
       )}
 
-      {/* Apply Work Mode Modal */}
       <Modal visible={showApplyModal} onClose={() => setShowApplyModal(false)} title={'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C \u0440\u0435\u0436\u0438\u043C'}>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A (\u043F\u0443\u0441\u0442\u043E = \u0432\u0441\u0435)'}</Text>
+          <Text style={styles.formLabel}>{'\u0421\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A'}</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={{ flexDirection: 'row', gap: spacing[2] }}>
               <TouchableOpacity style={[styles.userChip, !applyUserId && styles.userChipActive]} onPress={() => setApplyUserId('')}>
@@ -505,7 +524,7 @@ function SettingsTab() {
         </View>
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>{'\u0421 \u0434\u0430\u0442\u044B (YYYY-MM-DD)'}</Text>
+            <Text style={styles.formLabel}>{'\u0421 \u0434\u0430\u0442\u044B'}</Text>
             <TextInput value={applyFrom} onChangeText={setApplyFrom} style={styles.formInput} placeholder="2026-03-01" placeholderTextColor={colors.gray[400]} />
           </View>
           <View style={{ flex: 1 }}>
@@ -517,12 +536,12 @@ function SettingsTab() {
           <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowApplyModal(false)}>
             <Text style={styles.cancelBtnText}>{'\u041E\u0442\u043C\u0435\u043D\u0430'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.submitBtn} onPress={() => {
+          <TouchableOpacity style={styles.applyBtn} onPress={() => {
             if (!applyFrom || !applyTo) { Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u0434\u0430\u0442\u044B'); return; }
             applyMutation.mutate({ workModeId: applyModeId, userId: applyUserId || undefined, dateFrom: applyFrom, dateTo: applyTo });
           }}>
             {applyMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : (
-              <Text style={styles.submitBtnText}>{'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
+              <Text style={styles.applyBtnText}>{'\u041F\u0440\u0438\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -537,6 +556,13 @@ export default function ScheduleScreen() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [tab, setTab] = useState<TabType>('grid');
+
+  const tabIcons: Record<TabType, keyof typeof Ionicons.glyphMap> = {
+    grid: 'grid-outline',
+    today: 'today-outline',
+    shifts: 'stats-chart-outline',
+    settings: 'settings-outline',
+  };
 
   const tabs: { key: TabType; label: string }[] = [
     { key: 'grid', label: '\u0413\u0440\u0430\u0444\u0438\u043A' },
@@ -555,7 +581,6 @@ export default function ScheduleScreen() {
         <View style={{ width: 36 }} />
       </View>
 
-      {/* Tabs */}
       <View style={styles.tabs}>
         {tabs.map(t => (
           <TouchableOpacity
@@ -563,6 +588,7 @@ export default function ScheduleScreen() {
             style={[styles.tabItem, tab === t.key && styles.tabItemActive]}
             onPress={() => setTab(t.key)}
           >
+            <Ionicons name={tabIcons[t.key]} size={16} color={tab === t.key ? colors.white : colors.gray[500]} />
             <Text style={[styles.tabItemText, tab === t.key && styles.tabItemTextActive]}>{t.label}</Text>
           </TouchableOpacity>
         ))}
@@ -578,60 +604,72 @@ export default function ScheduleScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
   backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  tabs: { flexDirection: 'row', backgroundColor: colors.white, paddingHorizontal: spacing[3], paddingBottom: spacing[2], gap: spacing[1] },
-  tabItem: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: borderRadius.lg, backgroundColor: colors.gray[50] },
+  tabs: { flexDirection: 'row', backgroundColor: colors.white, paddingHorizontal: spacing[3], paddingBottom: spacing[2], paddingTop: spacing[1], gap: spacing[1.5] },
+  tabItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1], paddingVertical: spacing[2], borderRadius: borderRadius.lg, backgroundColor: colors.gray[50] },
   tabItemActive: { backgroundColor: colors.primary[600] },
   tabItemText: { fontSize: 12, fontWeight: fontWeight.medium, color: colors.gray[500] },
   tabItemTextActive: { color: colors.white, fontWeight: fontWeight.semibold },
   tabContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
-  empty: { textAlign: 'center', padding: spacing[8], color: colors.gray[400] },
+  empty: { textAlign: 'center', padding: spacing[4], color: colors.gray[400], fontSize: fontSize.sm },
   // Month nav
   monthNav: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
-  monthNavBtn: { padding: spacing[2], borderRadius: borderRadius.lg, backgroundColor: colors.gray[100] },
+  monthNavBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
   monthTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  monthYear: { fontSize: fontSize.xs, color: colors.gray[400] },
   // Legend
   legendRow: { flexDirection: 'row', paddingHorizontal: spacing[4], paddingBottom: spacing[2], gap: spacing[4] },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { fontSize: 10, color: colors.gray[500] },
   // Grid
-  gridHeaderCell: { alignItems: 'center', paddingVertical: spacing[1], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  gridHeaderCell: { alignItems: 'center', paddingVertical: spacing[1.5], borderBottomWidth: 2, borderBottomColor: colors.gray[200] },
   gridHeaderDow: { fontSize: 9, color: colors.gray[400], fontWeight: fontWeight.medium },
   gridHeaderDay: { fontSize: 12, color: colors.gray[700] },
-  gridNameCell: { width: 100, paddingHorizontal: spacing[2], justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.gray[100] },
+  gridHeaderLabel: { fontSize: 10, color: colors.gray[400], fontWeight: fontWeight.semibold },
+  gridNameCell: { paddingHorizontal: spacing[2], justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.gray[100], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
   gridName: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  gridCell: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[2], borderRightWidth: 0.5, borderRightColor: colors.gray[50], borderBottomWidth: 0.5, borderBottomColor: colors.gray[50] },
-  gridCellText: { fontSize: 10, fontWeight: fontWeight.medium },
+  gridNameStats: { fontSize: 9, color: colors.gray[400], marginTop: 1 },
+  gridCell: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[2.5], borderRightWidth: 0.5, borderRightColor: colors.gray[50], borderBottomWidth: 0.5, borderBottomColor: colors.gray[50] },
+  gridCellText: { fontSize: 9, fontWeight: fontWeight.semibold },
+  gridCellEmpty: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.gray[200] },
   // Quick actions
   quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3], justifyContent: 'center' },
-  quickBtn: { alignItems: 'center', width: 80, gap: spacing[1] },
-  quickIcon: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  quickBtn: { alignItems: 'center', width: 80, gap: spacing[1.5] },
+  quickIcon: { width: 48, height: 48, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   quickLabel: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[700], textAlign: 'center' },
   // Today tab
-  todayCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
-  todayStatusBadge: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  todayDateHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  todayDateText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[600], textTransform: 'capitalize' },
+  todayStatsRow: { flexDirection: 'row', gap: spacing[3] },
+  todayStatCard: { flex: 1, backgroundColor: colors.white, borderRadius: borderRadius.xl, borderLeftWidth: 3, padding: spacing[3], borderWidth: 1, borderColor: colors.gray[100] },
+  todayStatNum: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold },
+  todayStatLabel: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 },
+  todayCard: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3.5] },
+  todayStatusIcon: { width: 40, height: 40, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
   todayName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  todayShift: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  todayArrival: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+  todayShift: { fontSize: fontSize.xs, color: colors.gray[400] },
+  todayArrival: { fontSize: fontSize.xs, color: colors.primary[600] },
   todayNote: { fontSize: fontSize.xs, color: colors.gray[500], fontStyle: 'italic', marginTop: 2 },
-  todayStatusLabel: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
+  todayStatusBadge: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
   todayStatusText: { fontSize: 10, fontWeight: fontWeight.semibold },
   // Shifts stats
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
-  statCard: { width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3]) / 2, backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], alignItems: 'center', gap: spacing[1] },
+  statCard: { width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3]) / 2, backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], alignItems: 'center', gap: spacing[1.5] },
+  statIcon: { width: 40, height: 40, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
   statValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold },
   statLabel: { fontSize: 11, color: colors.gray[500], textAlign: 'center' },
   detailCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], gap: spacing[3] },
+  detailCardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   detailTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   detailLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
   detailValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   // Settings
   subTabs: { flexDirection: 'row', gap: spacing[2], marginBottom: spacing[3] },
-  subTabItem: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: borderRadius.lg, backgroundColor: colors.gray[100] },
+  subTabItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1.5], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.gray[100] },
   subTabActive: { backgroundColor: colors.primary[600] },
   subTabText: { fontSize: 12, fontWeight: fontWeight.medium, color: colors.gray[500] },
   subTabTextActive: { color: colors.white },
@@ -645,21 +683,21 @@ const styles = StyleSheet.create({
   dayBtnTextActive: { color: colors.white },
   // Work modes
   modeCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.white, borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3], gap: spacing[3] },
+  modeIconWrap: { width: 40, height: 40, borderRadius: borderRadius.lg, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
   modeName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   modeInfo: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  modeApplyBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingHorizontal: spacing[3], paddingVertical: spacing[2], backgroundColor: colors.primary[50], borderRadius: borderRadius.lg },
-  modeApplyText: { fontSize: 12, fontWeight: fontWeight.medium, color: colors.primary[600] },
+  modeApplyBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
   // Form
   formField: { marginBottom: spacing[4] },
   formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], marginBottom: spacing[1.5] },
-  formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
+  formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
   formRowFields: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[4] },
-  formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[3], paddingTop: spacing[4], borderTopWidth: 1, borderTopColor: colors.gray[200] },
-  cancelBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.gray[300] },
+  formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[3], paddingTop: spacing[4], borderTopWidth: 1, borderTopColor: colors.gray[100] },
+  cancelBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.gray[200] },
   cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  submitBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
-  submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
-  userChip: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: borderRadius.full, backgroundColor: colors.gray[100], borderWidth: 1, borderColor: colors.gray[200] },
+  applyBtn: { paddingHorizontal: spacing[5], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
+  applyBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
+  userChip: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: borderRadius.full, backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200] },
   userChipActive: { backgroundColor: colors.primary[50], borderColor: colors.primary[500] },
   userChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600] },
   userChipTextActive: { color: colors.primary[700] },

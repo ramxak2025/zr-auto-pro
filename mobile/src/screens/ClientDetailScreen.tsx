@@ -4,12 +4,14 @@ import {
   Alert, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi, checksApi } from '../api/services';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
+import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Client, Car, Check } from '../../../shared/types';
 
@@ -103,10 +105,10 @@ export default function ClientDetailScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Text style={styles.backText}>← Назад</Text>
+          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{client.fullName}</Text>
-        <View style={{ width: 60 }} />
+        <View style={{ width: 22 }} />
       </View>
 
       <ScrollView
@@ -115,23 +117,26 @@ export default function ClientDetailScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
       >
         {/* Client info card */}
-        <View style={styles.card}>
+        <AnimatedCard style={styles.card} index={0}>
           <Text style={styles.cardTitle}>Информация</Text>
           <View style={styles.infoRow}>
+            <Ionicons name="call-outline" size={15} color={colors.gray[400]} />
             <Text style={styles.infoLabel}>Телефон</Text>
             <Text style={styles.infoValue}>{client.phone}</Text>
           </View>
           {client.comment && (
             <View style={styles.infoRow}>
+              <Ionicons name="chatbubble-outline" size={15} color={colors.gray[400]} />
               <Text style={styles.infoLabel}>Комментарий</Text>
               <Text style={styles.infoValue}>{client.comment}</Text>
             </View>
           )}
           <View style={styles.infoRow}>
+            <Ionicons name="calendar-outline" size={15} color={colors.gray[400]} />
             <Text style={styles.infoLabel}>Дата</Text>
             <Text style={styles.infoValue}>{formatDate(client.createdAt)}</Text>
           </View>
-        </View>
+        </AnimatedCard>
 
         {/* Cars */}
         <View style={styles.sectionHeader}>
@@ -141,34 +146,38 @@ export default function ClientDetailScreen() {
           </TouchableOpacity>
         </View>
 
-        {(client.cars || []).map(car => (
-          <View key={car.id} style={styles.carCard}>
+        {(client.cars || []).map((car, idx) => (
+          <AnimatedCard key={car.id} style={styles.carCard} index={idx + 1}>
             <View style={styles.carTop}>
-              <View>
-                <Text style={styles.carModel}>{car.makeModel}</Text>
-                <Text style={styles.carPlate}>{car.plateNumber}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <Ionicons name="car-sport-outline" size={18} color={colors.primary[500]} />
+                <View>
+                  <Text style={styles.carModel}>{car.makeModel}</Text>
+                  <Text style={styles.carPlate}>{car.plateNumber}</Text>
+                </View>
               </View>
               <View style={styles.carActions}>
                 <TouchableOpacity onPress={() => openEditCar(car)} style={styles.iconBtn}>
-                  <Text style={styles.iconBtnText}>✎</Text>
+                  <Ionicons name="create-outline" size={16} color={colors.gray[400]} />
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setDeleteCarId(car.id)} style={styles.iconBtn}>
-                  <Text style={[styles.iconBtnText, { color: colors.red[400] }]}>✕</Text>
+                  <Ionicons name="close" size={16} color={colors.red[400]} />
                 </TouchableOpacity>
               </View>
             </View>
             {car.comment && <Text style={styles.carComment}>{car.comment}</Text>}
-          </View>
+          </AnimatedCard>
         ))}
 
         {/* Recent checks */}
         <Text style={[styles.sectionTitle, { marginTop: spacing[6] }]}>
           Последние чеки ({checks?.length || 0})
         </Text>
-        {(checks || []).slice(0, 20).map(check => (
-          <TouchableOpacity
+        {(checks || []).slice(0, 20).map((check, idx) => (
+          <AnimatedCard
             key={check.id}
             style={styles.checkCard}
+            index={idx + (client.cars?.length || 0) + 2}
             onPress={() => navigation.navigate('CheckDetail', { id: check.id })}
           >
             <View style={styles.checkTop}>
@@ -182,7 +191,7 @@ export default function ClientDetailScreen() {
             {check.car && (
               <Text style={styles.checkCar}>{check.car.makeModel} · {check.car.plateNumber}</Text>
             )}
-          </TouchableOpacity>
+          </AnimatedCard>
         ))}
       </ScrollView>
 
