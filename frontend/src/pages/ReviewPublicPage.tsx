@@ -31,8 +31,8 @@ export default function ReviewPublicPage() {
   useEffect(() => {
     if (!token) return;
     publicReviewApi.getByToken(token)
-      .then(res => setData(res.data))
-      .catch(err => {
+      .then((res: any) => setData(res.data))
+      .catch((err: any) => {
         const msg = err.response?.data?.message || 'Ссылка недействительна';
         setError(msg);
       })

@@ -477,7 +477,7 @@ export default function CheckCreatePage() {
   // Mutation
   const createMutation = useMutation({
     mutationFn: (data: any) => checksApi.create(data),
-    onSuccess: (res) => {
+    onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });

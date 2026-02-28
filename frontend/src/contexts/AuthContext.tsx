@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (token) {
       authApi
         .me()
-        .then((res) => setUser(res.data))
+        .then((res: any) => setUser(res.data))
         .catch(() => {
           localStorage.removeItem('token');
           setToken(null);
