@@ -1,17 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform, Animated, Easing } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withRepeat,
-  withTiming,
-  Easing,
-  type SharedValue,
-} from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Stop, Circle } from 'react-native-svg';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, spacing, borderRadius } from '../theme';
@@ -62,111 +54,65 @@ const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Plasma Energy Ball — animated center button
+//  Plasma Energy Ball — animated center button (built-in Animated API)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const PLASMA_SIZE = 64;
 
-interface BlobConfig {
-  color: string;
-  size: number;
-  /** x-axis frequency multiplier (integer for seamless loop) */
-  ax: number;
-  /** y-axis frequency multiplier */
-  ay: number;
-  /** x orbit radius */
-  rx: number;
-  /** y orbit radius */
-  ry: number;
-  /** x phase offset */
-  px: number;
-  /** y phase offset */
-  py: number;
-}
-
-const PLASMA_BLOBS: BlobConfig[] = [
-  { color: 'rgba(34, 211, 238, 0.6)',  size: 28, ax: 1, ay: 2, rx: 13, ry: 10, px: 0,               py: 0 },
-  { color: 'rgba(96, 165, 250, 0.55)', size: 24, ax: 2, ay: 3, rx: 10, ry: 8,  px: Math.PI / 4,     py: Math.PI / 3 },
-  { color: 'rgba(167, 139, 250, 0.5)', size: 26, ax: 3, ay: 1, rx: 8,  ry: 13, px: Math.PI / 2,     py: Math.PI / 6 },
-  { color: 'rgba(192, 132, 252, 0.45)',size: 22, ax: 2, ay: 1, rx: 11, ry: 9,  px: Math.PI,         py: Math.PI / 2 },
-  { color: 'rgba(165, 243, 252, 0.5)', size: 30, ax: 1, ay: 3, rx: 9,  ry: 11, px: Math.PI * 2 / 3, py: Math.PI / 4 },
-  { color: 'rgba(129, 140, 248, 0.4)', size: 20, ax: 3, ay: 2, rx: 7,  ry: 12, px: Math.PI * 5 / 6, py: Math.PI * 2 / 3 },
+const PLASMA_BLOB_COLORS = [
+  'rgba(34, 211, 238, 0.6)',
+  'rgba(96, 165, 250, 0.55)',
+  'rgba(167, 139, 250, 0.5)',
+  'rgba(192, 132, 252, 0.45)',
+  'rgba(165, 243, 252, 0.5)',
+  'rgba(129, 140, 248, 0.4)',
 ];
 
-function PlasmaBlob({ time, cfg }: { time: SharedValue<number>; cfg: BlobConfig }) {
-  const style = useAnimatedStyle(() => {
-    'worklet';
-    return {
-      transform: [
-        { translateX: Math.sin(time.value * cfg.ax + cfg.px) * cfg.rx },
-        { translateY: Math.cos(time.value * cfg.ay + cfg.py) * cfg.ry },
-      ],
-    };
-  });
-
-  return (
-    <Animated.View
-      style={[
-        {
-          position: 'absolute' as const,
-          width: cfg.size,
-          height: cfg.size,
-          borderRadius: cfg.size / 2,
-          backgroundColor: cfg.color,
-        },
-        style,
-      ]}
-    />
-  );
-}
-
 function PlasmaButton({ focused }: { focused?: boolean }) {
-  const time = useSharedValue(0);
-  const focus = useSharedValue(focused ? 1 : 0);
+  const pulse = useRef(new Animated.Value(0)).current;
+  const rotate = useRef(new Animated.Value(0)).current;
+  const glowAnim = useRef(new Animated.Value(focused ? 1 : 0)).current;
 
   useEffect(() => {
-    time.value = withRepeat(
-      withTiming(Math.PI * 2, { duration: 8000, easing: Easing.linear }),
-      -1,
-      false,
-    );
+    // Pulsing glow
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ]),
+    ).start();
+
+    // Slow rotation for blobs
+    Animated.loop(
+      Animated.timing(rotate, { toValue: 1, duration: 8000, easing: Easing.linear, useNativeDriver: true }),
+    ).start();
   }, []);
 
   useEffect(() => {
-    focus.value = withTiming(focused ? 1 : 0, { duration: 300 });
+    Animated.timing(glowAnim, { toValue: focused ? 1 : 0, duration: 300, useNativeDriver: true }).start();
   }, [focused]);
 
-  // Outer glow — brighter when focused
-  const glowStyle = useAnimatedStyle(() => {
-    'worklet';
-    const base = 0.1 + focus.value * 0.3;
-    const amp = 0.06 + focus.value * 0.1;
-    return { opacity: base + Math.sin(time.value * 2) * amp };
-  });
+  const glowOpacity = Animated.add(
+    Animated.add(new Animated.Value(0.15), Animated.multiply(glowAnim, new Animated.Value(0.25))),
+    Animated.multiply(pulse, new Animated.Value(0.15)),
+  );
 
-  // Energy ring — subtle pulsing border
-  const ringStyle = useAnimatedStyle(() => {
-    'worklet';
-    return { opacity: 0.2 + Math.sin(time.value * 3) * 0.2 + focus.value * 0.2 };
-  });
+  const ringOpacity = Animated.add(
+    new Animated.Value(0.25),
+    Animated.multiply(pulse, new Animated.Value(0.2)),
+  );
 
-  // Core glow — breathes slowly
-  const coreStyle = useAnimatedStyle(() => {
-    'worklet';
-    const scale = 1 + Math.sin(time.value * 1.5) * 0.15;
-    return {
-      opacity: 0.2 + focus.value * 0.1 + Math.sin(time.value * 1.5) * 0.08,
-      transform: [{ scale }],
-    };
-  });
+  const coreScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1.15] });
+  const coreOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.3] });
+  const spin = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   return (
     <View style={plasma.outer}>
       {/* Soft outer glow */}
-      <Animated.View style={[plasma.glow, glowStyle]} />
+      <Animated.View style={[plasma.glow, { opacity: glowOpacity }]} />
 
       {/* Energy ring */}
-      <Animated.View style={[plasma.ring, ringStyle]} />
+      <Animated.View style={[plasma.ring, { opacity: ringOpacity }]} />
 
       {/* Button body */}
       <View style={plasma.body}>
@@ -178,12 +124,29 @@ function PlasmaButton({ focused }: { focused?: boolean }) {
           style={StyleSheet.absoluteFill}
         />
 
-        {/* Animated plasma blobs */}
-        <View style={plasma.blobBox}>
-          {PLASMA_BLOBS.map((cfg, i) => (
-            <PlasmaBlob key={i} time={time} cfg={cfg} />
-          ))}
-        </View>
+        {/* Rotating plasma blobs */}
+        <Animated.View style={[plasma.blobBox, { transform: [{ rotate: spin }] }]}>
+          {PLASMA_BLOB_COLORS.map((color, i) => {
+            const angle = (i / PLASMA_BLOB_COLORS.length) * Math.PI * 2;
+            const size = 20 + (i % 3) * 5;
+            return (
+              <View
+                key={i}
+                style={{
+                  position: 'absolute',
+                  width: size,
+                  height: size,
+                  borderRadius: size / 2,
+                  backgroundColor: color,
+                  transform: [
+                    { translateX: Math.cos(angle) * 12 },
+                    { translateY: Math.sin(angle) * 12 },
+                  ],
+                }}
+              />
+            );
+          })}
+        </Animated.View>
 
         {/* Vignette — darkens edges for glass-sphere depth */}
         <Svg width={PLASMA_SIZE} height={PLASMA_SIZE} style={StyleSheet.absoluteFill}>
@@ -198,7 +161,7 @@ function PlasmaButton({ focused }: { focused?: boolean }) {
         </Svg>
 
         {/* Hot core glow */}
-        <Animated.View style={[plasma.core, coreStyle]} />
+        <Animated.View style={[plasma.core, { opacity: coreOpacity, transform: [{ scale: coreScale }] }]} />
 
         {/* Icon */}
         <Ionicons name="calculator" size={26} color={colors.white} style={{ zIndex: 10 }} />
