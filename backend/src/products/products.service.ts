@@ -211,6 +211,73 @@ export class ProductsService {
     return { message: 'Удалено' };
   }
 
+  async exportCsv(tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT name, category, cost_price, sell_price, stock, min_stock, unit
+       FROM products WHERE tenant_id = $1 ORDER BY category, name`,
+      [tenantID],
+    );
+    const header = 'Название;Категория;Закупочная цена;Розничная цена;Остаток;Мин. остаток;Единица';
+    const lines = rows.map(r => {
+      const vals = [
+        r.name || '',
+        r.category || '',
+        parseFloat(r.cost_price) || 0,
+        parseFloat(r.sell_price) || 0,
+        parseFloat(r.stock) || 0,
+        parseFloat(r.min_stock) || 0,
+        r.unit || 'pcs',
+      ];
+      return vals.join(';');
+    });
+    return [header, ...lines].join('\n');
+  }
+
+  async importCsv(tenantID: string, items: any[]) {
+    if (!items || items.length === 0) {
+      throw new BadRequestException({ message: 'Нет данных для импорта' });
+    }
+
+    let created = 0;
+    let updated = 0;
+
+    for (const item of items) {
+      if (!item.name) continue;
+
+      // Try to find existing product by name
+      const { rows: existing } = await this.pool.query(
+        `SELECT id FROM products WHERE tenant_id = $1 AND name = $2 LIMIT 1`,
+        [tenantID, item.name],
+      );
+
+      if (existing.length > 0) {
+        // Update existing
+        await this.pool.query(
+          `UPDATE products SET
+            category = COALESCE($3, category),
+            cost_price = COALESCE($4, cost_price),
+            sell_price = COALESCE($5, sell_price),
+            stock = COALESCE($6, stock),
+            min_stock = COALESCE($7, min_stock),
+            unit = COALESCE($8, unit)
+          WHERE id = $1 AND tenant_id = $2`,
+          [existing[0].id, tenantID, item.category || null, item.costPrice ?? null, item.sellPrice ?? null, item.stock ?? null, item.minStock ?? null, item.unit || null],
+        );
+        updated++;
+      } else {
+        // Create new
+        await this.pool.query(
+          `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [item.name, item.category || null, item.costPrice || 0, item.sellPrice || 0, item.stock || 0, item.minStock || 0, item.unit || 'pcs', tenantID],
+        );
+        created++;
+      }
+    }
+
+    return { created, updated, total: created + updated };
+  }
+
   async updateStock(id: string, tenantID: string, dto: any, userId?: string) {
     const { type, quantity, reason } = dto;
     if (!type || quantity === undefined) {

@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Wallet, Banknote, CreditCard, Shield } from 'lucide-react';
+import { Wallet, Banknote, CreditCard, Shield, Users } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { reportsApi } from '../api/services';
+import { reportsApi, usersApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import type { User } from '../../../shared/types';
 
 interface CashFlowDay {
   date: string;
@@ -34,13 +36,22 @@ function formatCurrency(value: number): string {
 export default function CashFlowPage() {
   const today = format(new Date(), 'yyyy-MM-dd');
   const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+  const { user } = useAuth();
+  const canFilterByMaster = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
 
   const [dateFrom, setDateFrom] = useState(monthStart);
   const [dateTo, setDateTo] = useState(today);
+  const [masterId, setMasterId] = useState('');
+
+  const { data: mastersData } = useQuery<User[]>({
+    queryKey: ['masters'],
+    queryFn: async () => { const res = await usersApi.getMasters(); return res.data; },
+    enabled: canFilterByMaster,
+  });
 
   const { data: cashFlow, isLoading } = useQuery({
-    queryKey: ['cashflow', dateFrom, dateTo],
-    queryFn: () => reportsApi.getCashFlow({ dateFrom, dateTo }),
+    queryKey: ['cashflow', dateFrom, dateTo, masterId],
+    queryFn: () => reportsApi.getCashFlow({ dateFrom, dateTo, ...(masterId ? { masterId } : {}) }),
     select: (res) => res.data as CashFlowData,
   });
 
@@ -57,15 +68,32 @@ export default function CashFlowPage() {
         <h1 className="text-2xl font-bold text-gray-900">Движение денег</h1>
       </div>
 
-      {/* Date picker */}
-      <DatePeriodPicker
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        onChange={(from, to) => {
-          setDateFrom(from);
-          setDateTo(to);
-        }}
-      />
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+        <DatePeriodPicker
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onChange={(from, to) => {
+            setDateFrom(from);
+            setDateTo(to);
+          }}
+        />
+        {canFilterByMaster && mastersData && mastersData.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-gray-400" />
+            <select
+              value={masterId}
+              onChange={(e) => setMasterId(e.target.value)}
+              className="input py-2 pr-8 min-w-[180px]"
+            >
+              <option value="">Все мастера</option>
+              {mastersData.map((m) => (
+                <option key={m.id} value={m.id}>{m.fullName}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

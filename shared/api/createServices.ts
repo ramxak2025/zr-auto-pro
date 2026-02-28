@@ -15,7 +15,7 @@ import type {
 } from '../types';
 import type {
   LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams,
-  DateRangeParams, CreateUserRequest, UpdateUserRequest, CreateClientRequest,
+  DateRangeParams, CashFlowParams, CreateUserRequest, UpdateUserRequest, CreateClientRequest,
   UpdateClientRequest, CreateCarRequest, UpdateCarRequest, CreateProductRequest,
   UpdateProductRequest, StockUpdateRequest, CreateServiceRequest, UpdateServiceRequest,
   CreateCheckRequest, UpdateCheckRequest, CreateSupplierRequest, UpdateSupplierRequest,
@@ -112,6 +112,9 @@ export function createProductsApi(api: AxiosInstance) {
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
     remove: (id: string) => api.delete(`/products/${id}`),
     updateStock: (id: string, data: StockUpdateRequest) => api.post<{ stock: number }>(`/products/${id}/stock`, data),
+    exportCsv: () => api.get('/products/export-csv', { responseType: 'blob' }),
+    importCsv: (items: Array<{ name: string; category?: string; costPrice?: number; sellPrice?: number; stock?: number; minStock?: number; unit?: string }>) =>
+      api.post<{ created: number; updated: number; total: number }>('/products/import-csv', { items }),
   };
 }
 
@@ -163,7 +166,7 @@ export function createSalaryApi(api: AxiosInstance) {
 export function createReportsApi(api: AxiosInstance) {
   return {
     getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
-    getCashFlow: (params: DateRangeParams) => api.get<{ days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>; totals: { cash: number; card: number; warranty: number; total: number } }>('/reports/cashflow', { params }),
+    getCashFlow: (params: CashFlowParams) => api.get<{ days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>; totals: { cash: number; card: number; warranty: number; total: number } }>('/reports/cashflow', { params }),
   };
 }
 

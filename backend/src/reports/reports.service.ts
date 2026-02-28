@@ -52,6 +52,14 @@ export class ReportsService {
   async getCashFlow(tenantID: string, query: any) {
     const dateFrom = query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
+    const masterId = query.masterId || null;
+
+    const params: any[] = [tenantID, dateFrom, dateTo];
+    let masterFilter = '';
+    if (masterId) {
+      params.push(masterId);
+      masterFilter = ` AND master_id = $${params.length}`;
+    }
 
     const { rows } = await this.pool.query(
       `SELECT date::date as day,
@@ -60,10 +68,10 @@ export class ReportsService {
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN total_revenue ELSE 0 END), 0) as warranty,
               COALESCE(SUM(total_revenue), 0) as total
        FROM checks
-       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
+       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false${masterFilter}
        GROUP BY date::date
        ORDER BY day`,
-      [tenantID, dateFrom, dateTo],
+      params,
     );
 
     const days = rows.map((r) => ({

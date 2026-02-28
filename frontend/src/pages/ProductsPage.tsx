@@ -19,6 +19,8 @@ import {
   Move,
   FolderPlus,
   Warehouse,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse } from '../types';
@@ -832,6 +834,12 @@ export default function ProductsPage() {
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
 
+  // Import/Export
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importData, setImportData] = useState<any[] | null>(null);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // ---- History-based back navigation for folders ----
   const activePathRef = useRef(activePath);
   activePathRef.current = activePath;
@@ -1076,6 +1084,72 @@ export default function ProductsPage() {
     }
   }
 
+  async function handleExport() {
+    try {
+      const res = await productsApi.exportCsv();
+      const blob = new Blob([res.data as any], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'products.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success('Файл экспортирован');
+    } catch {
+      toast.error('Ошибка экспорта');
+    }
+  }
+
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const lines = text.split('\n').filter((l) => l.trim());
+      if (lines.length < 2) {
+        toast.error('Файл пустой или содержит только заголовок');
+        return;
+      }
+      // Detect separator (semicolon or comma)
+      const sep = lines[0].includes(';') ? ';' : ',';
+      const rows = lines.slice(1).map((line) => {
+        const cols = line.split(sep).map((c) => c.trim());
+        return {
+          name: cols[0] || '',
+          category: cols[1] || '',
+          costPrice: parseFloat(cols[2]) || 0,
+          sellPrice: parseFloat(cols[3]) || 0,
+          stock: parseFloat(cols[4]) || 0,
+          minStock: parseFloat(cols[5]) || 0,
+          unit: cols[6] || 'pcs',
+        };
+      }).filter((r) => r.name);
+      setImportData(rows);
+      setShowImportModal(true);
+    };
+    reader.readAsText(file);
+    // Reset input so same file can be selected again
+    e.target.value = '';
+  }
+
+  async function handleImportConfirm() {
+    if (!importData || importData.length === 0) return;
+    setImporting(true);
+    try {
+      const res = await productsApi.importCsv(importData);
+      const result = res.data;
+      toast.success(`Импортировано: ${result.created} новых, ${result.updated} обновлено`);
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      setShowImportModal(false);
+      setImportData(null);
+    } catch {
+      toast.error('Ошибка импорта');
+    } finally {
+      setImporting(false);
+    }
+  }
+
   function toggleSelect(id: string) {
     setSelectedProducts((prev) => {
       const next = new Set(prev);
@@ -1123,6 +1197,23 @@ export default function ProductsPage() {
         </div>
         {canManageWarehouse && (
           <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={handleExport}
+              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+              title="Экспорт CSV"
+            >
+              <Download className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+              title="Импорт CSV"
+            >
+              <Upload className="h-4 w-4" />
+            </button>
+            <input ref={fileInputRef} type="file" accept=".csv,.txt" onChange={handleImportFile} className="hidden" />
             <button
               type="button"
               onClick={() => setWarehouseOpsOpen(true)}
@@ -1616,6 +1707,68 @@ export default function ProductsPage() {
                 className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-40"
               >
                 Создать
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Import preview modal */}
+      {showImportModal && importData && (
+        <Modal isOpen onClose={() => { setShowImportModal(false); setImportData(null); }} title="Импорт товаров" size="lg">
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Найдено <span className="font-bold text-gray-900">{importData.length}</span> товаров для импорта.
+              Товары с совпадающими названиями будут обновлены.
+            </p>
+
+            <div className="max-h-80 overflow-auto rounded-xl border border-gray-200">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">Название</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">Категория</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Закупка</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Розница</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Кол-во</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {importData.slice(0, 50).map((item, idx) => (
+                    <tr key={idx} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 font-medium text-gray-900">{item.name}</td>
+                      <td className="px-3 py-2 text-gray-500">{item.category || '—'}</td>
+                      <td className="px-3 py-2 text-right text-gray-700">{item.costPrice}</td>
+                      <td className="px-3 py-2 text-right text-gray-700">{item.sellPrice}</td>
+                      <td className="px-3 py-2 text-right text-gray-700">{item.stock}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {importData.length > 50 && (
+                <p className="text-center text-xs text-gray-400 py-2">
+                  ... и ещё {importData.length - 50} товаров
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => { setShowImportModal(false); setImportData(null); }}
+                disabled={importing}
+                className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleImportConfirm}
+                disabled={importing}
+                className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+              >
+                {importing && <Loader2 className="h-4 w-4 animate-spin" />}
+                Импортировать
               </button>
             </div>
           </div>

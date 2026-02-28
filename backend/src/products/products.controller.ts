@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Res } from '@nestjs/common';
+import { Response } from 'express';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -26,6 +27,19 @@ export class ProductsController {
   @Get('warehouse-stats')
   getWarehouseStats(@CurrentUser() user: JwtPayload) {
     return this.productsService.getWarehouseStats(user.tenantID);
+  }
+
+  @Get('export-csv')
+  async exportCsv(@CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const csv = await this.productsService.exportCsv(user.tenantID);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="products.csv"');
+    res.send('\uFEFF' + csv);
+  }
+
+  @Post('import-csv')
+  importCsv(@CurrentUser() user: JwtPayload, @Body() dto: { items: any[] }) {
+    return this.productsService.importCsv(user.tenantID, dto.items);
   }
 
   @Get(':id')

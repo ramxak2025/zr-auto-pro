@@ -41,6 +41,10 @@ export interface DateRangeParams {
   dateTo?: string;
 }
 
+export interface CashFlowParams extends DateRangeParams {
+  masterId?: string;
+}
+
 export interface CreateUserRequest {
   phone: string;
   password: string;
