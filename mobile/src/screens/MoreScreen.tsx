@@ -1,9 +1,12 @@
-import React, { useRef, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated } from 'react-native';
+import React, { useRef, useEffect, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Image, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
+import { uploadsApi, authApi } from '../api/services';
+import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { UserPermissions } from '../../../shared/types';
 
@@ -77,16 +80,40 @@ function AnimatedMenuItem({ item, index, onPress }: { item: MenuItem; index: num
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
-  const { user, logout, hasPermission } = useAuth();
+  const { user, logout, hasPermission, refreshUser } = useAuth();
+  const [uploading, setUploading] = useState(false);
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
   const badgeColor = user?.role ? roleBadgeColors[user.role] || roleBadgeColors.master : roleBadgeColors.master;
+  const avatarUrl = getImageUrl(user?.avatar);
 
   const filteredItems = menuItems.filter(item => {
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
     return true;
   });
+
+  const handleAvatarUpload = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+
+      const asset = result.assets[0];
+      setUploading(true);
+      const uploadRes = await uploadsApi.upload(asset.uri, asset.fileName || 'avatar.jpg');
+      await authApi.updateAvatar(uploadRes.data.url);
+      await refreshUser();
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось загрузить аватарку');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   // Entrance animation for user card
   const cardFade = useRef(new Animated.Value(0)).current;
@@ -104,8 +131,21 @@ export default function MoreScreen() {
         {/* User card */}
         <Animated.View style={[styles.userCard, { opacity: cardFade, transform: [{ scale: cardScale }] }]}>
           <View style={styles.userRow}>
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{userInitial}</Text>
+            <View style={styles.avatarWrap}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+              ) : (
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{userInitial}</Text>
+                </View>
+              )}
+              <TouchableOpacity style={styles.avatarEditBtn} onPress={handleAvatarUpload} disabled={uploading}>
+                {uploading ? (
+                  <ActivityIndicator size="small" color={colors.gray[500]} />
+                ) : (
+                  <Ionicons name="camera" size={14} color={colors.gray[500]} />
+                )}
+              </TouchableOpacity>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.userName} numberOfLines={1}>{user?.fullName || 'User'}</Text>
@@ -157,12 +197,24 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
+  avatarWrap: { position: 'relative' },
   avatar: {
     width: 56, height: 56, borderRadius: borderRadius['2xl'],
     backgroundColor: colors.primary[100],
     alignItems: 'center', justifyContent: 'center',
   },
+  avatarImage: {
+    width: 56, height: 56, borderRadius: borderRadius['2xl'],
+    borderWidth: 2, borderColor: colors.gray[100],
+  },
   avatarText: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[700] },
+  avatarEditBtn: {
+    position: 'absolute', bottom: -4, right: -4,
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: colors.white, borderWidth: 2, borderColor: colors.gray[200],
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: colors.black, shadowOpacity: 0.08, shadowRadius: 2, elevation: 2,
+  },
   userName: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   roleBadge: { alignSelf: 'flex-start', paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full, marginTop: 4 },
   roleText: { fontSize: 11, fontWeight: fontWeight.semibold },

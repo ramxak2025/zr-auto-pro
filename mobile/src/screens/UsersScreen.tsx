@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert, Switch,
+  RefreshControl, ActivityIndicator, Alert, Switch, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { usersApi } from '../api/services';
+import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -222,9 +223,13 @@ export default function UsersScreen() {
             return (
               <TouchableOpacity key={user.id} style={styles.userCard} onPress={() => openEdit(user)} activeOpacity={0.7}>
                 <View style={styles.userRow}>
-                  <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
-                    <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
-                  </View>
+                  {getImageUrl(user.avatar) ? (
+                    <Image source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
+                  ) : (
+                    <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
+                      <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
+                    </View>
+                  )}
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                       <Text style={styles.userName} numberOfLines={1}>{user.fullName}</Text>
@@ -395,6 +400,7 @@ const styles = StyleSheet.create({
   userCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], shadowColor: colors.black, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2 },
   userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  avatarImage: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: colors.gray[100] },
   avatarText: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
   userName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900], flexShrink: 1 },
   roleBadge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },

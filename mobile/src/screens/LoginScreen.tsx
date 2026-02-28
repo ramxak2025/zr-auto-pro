@@ -10,6 +10,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
@@ -102,7 +103,7 @@ export default function LoginScreen() {
           <View style={styles.container}>
             {/* Logo */}
             <View style={styles.logoWrap}>
-              <Text style={styles.logoText}>Autexa</Text>
+              <Image source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
             </View>
             <Text style={styles.subtitle}>Система управления сервисом</Text>
 
@@ -218,10 +219,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing[3],
   },
-  logoText: {
-    fontSize: fontSize['3xl'],
-    fontWeight: fontWeight.bold,
-    color: colors.primary[600],
+  logoImage: {
+    width: 180,
+    height: 64,
   },
   subtitle: {
     textAlign: 'center',

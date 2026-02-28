@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { View, Text, StyleSheet, Platform, Animated, Easing } from 'react-native';
+import { View, StyleSheet, Platform, Animated, Easing } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../contexts/AuthContext';
@@ -56,7 +56,7 @@ const MoreStack = createNativeStackNavigator();
 //  Касса — branded blue gradient center button
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const KASSA_SIZE = 58;
+const KASSA_SIZE = 66;
 
 function KassaButton({ focused }: { focused?: boolean }) {
   const pulse = useRef(new Animated.Value(0)).current;
@@ -71,7 +71,7 @@ function KassaButton({ focused }: { focused?: boolean }) {
   }, []);
 
   const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
-  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.55] });
+  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.5] });
 
   return (
     <View style={kassa.outer}>
@@ -95,9 +95,8 @@ function KassaButton({ focused }: { focused?: boolean }) {
         {/* Subtle shine overlay at top-left */}
         <View style={kassa.shine} />
 
-        {/* Icon + Label */}
-        <Ionicons name="calculator-outline" size={22} color={colors.white} style={kassa.icon} />
-        <Text style={kassa.label}>Касса</Text>
+        {/* Icon only */}
+        <Ionicons name="calculator-outline" size={28} color={colors.white} />
       </View>
     </View>
   );
@@ -107,15 +106,15 @@ const kassa = StyleSheet.create({
   outer: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: KASSA_SIZE + 20,
-    height: KASSA_SIZE + 20,
-    marginTop: -26,
+    width: KASSA_SIZE + 22,
+    height: KASSA_SIZE + 22,
+    marginTop: -30,
   },
   glow: {
     position: 'absolute',
-    width: KASSA_SIZE + 18,
-    height: KASSA_SIZE + 18,
-    borderRadius: (KASSA_SIZE + 18) / 2,
+    width: KASSA_SIZE + 20,
+    height: KASSA_SIZE + 20,
+    borderRadius: (KASSA_SIZE + 20) / 2,
     backgroundColor: colors.primary[400],
   },
   body: {
@@ -125,29 +124,20 @@ const kassa = StyleSheet.create({
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 8,
+    elevation: 10,
     shadowColor: colors.primary[700],
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 10,
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
   },
   shine: {
     position: 'absolute',
-    top: -KASSA_SIZE * 0.15,
-    left: -KASSA_SIZE * 0.15,
-    width: KASSA_SIZE * 0.7,
-    height: KASSA_SIZE * 0.7,
-    borderRadius: KASSA_SIZE * 0.35,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-  },
-  icon: {
-    marginBottom: 1,
-  },
-  label: {
-    color: colors.white,
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.5,
+    top: -KASSA_SIZE * 0.12,
+    left: -KASSA_SIZE * 0.12,
+    width: KASSA_SIZE * 0.65,
+    height: KASSA_SIZE * 0.65,
+    borderRadius: KASSA_SIZE * 0.325,
+    backgroundColor: 'rgba(255,255,255,0.13)',
   },
 });
 
