@@ -28,8 +28,6 @@
     "extra": {
       "apiUrl": "http://212.8.229.254:3000/api"
     },
-    "plugins": [
-      "@react-native-community/datetimepicker"
-    ]
+    "plugins": []
   }
 }
