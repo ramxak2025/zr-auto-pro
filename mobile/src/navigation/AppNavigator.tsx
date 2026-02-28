@@ -1,10 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { View, StyleSheet, Platform, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, Platform, Animated, Easing } from 'react-native';
 import { Ionicons, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Svg, { Defs, RadialGradient, Stop, Circle } from 'react-native-svg';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, spacing, borderRadius } from '../theme';
 
@@ -54,164 +53,101 @@ const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Plasma Energy Ball — animated center button (built-in Animated API)
+//  Касса — branded blue gradient center button
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PLASMA_SIZE = 64;
+const KASSA_SIZE = 58;
 
-const PLASMA_BLOB_COLORS = [
-  'rgba(34, 211, 238, 0.6)',
-  'rgba(96, 165, 250, 0.55)',
-  'rgba(167, 139, 250, 0.5)',
-  'rgba(192, 132, 252, 0.45)',
-  'rgba(165, 243, 252, 0.5)',
-  'rgba(129, 140, 248, 0.4)',
-];
-
-function PlasmaButton({ focused }: { focused?: boolean }) {
+function KassaButton({ focused }: { focused?: boolean }) {
   const pulse = useRef(new Animated.Value(0)).current;
-  const rotate = useRef(new Animated.Value(0)).current;
-  const glowAnim = useRef(new Animated.Value(focused ? 1 : 0)).current;
 
   useEffect(() => {
-    // Pulsing glow
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ]),
-    ).start();
-
-    // Slow rotation for blobs
-    Animated.loop(
-      Animated.timing(rotate, { toValue: 1, duration: 8000, easing: Easing.linear, useNativeDriver: true }),
     ).start();
   }, []);
 
-  useEffect(() => {
-    Animated.timing(glowAnim, { toValue: focused ? 1 : 0, duration: 300, useNativeDriver: true }).start();
-  }, [focused]);
-
-  const glowOpacity = Animated.add(
-    Animated.add(new Animated.Value(0.15), Animated.multiply(glowAnim, new Animated.Value(0.25))),
-    Animated.multiply(pulse, new Animated.Value(0.15)),
-  );
-
-  const ringOpacity = Animated.add(
-    new Animated.Value(0.25),
-    Animated.multiply(pulse, new Animated.Value(0.2)),
-  );
-
-  const coreScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1.15] });
-  const coreOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.3] });
-  const spin = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
+  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.55] });
 
   return (
-    <View style={plasma.outer}>
-      {/* Soft outer glow */}
-      <Animated.View style={[plasma.glow, { opacity: glowOpacity }]} />
+    <View style={kassa.outer}>
+      {/* Soft pulsing glow behind the button */}
+      <Animated.View
+        style={[
+          kassa.glow,
+          { opacity: glowOpacity, transform: [{ scale: glowScale }] },
+        ]}
+      />
 
-      {/* Energy ring */}
-      <Animated.View style={[plasma.ring, { opacity: ringOpacity }]} />
-
-      {/* Button body */}
-      <View style={plasma.body}>
-        {/* Deep space base gradient */}
+      {/* Main button body */}
+      <View style={kassa.body}>
         <LinearGradient
-          colors={['#1a0a3e', '#0d1b4f', '#0a1628']}
+          colors={[colors.primary[400], colors.primary[600], colors.primary[800]]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
 
-        {/* Rotating plasma blobs */}
-        <Animated.View style={[plasma.blobBox, { transform: [{ rotate: spin }] }]}>
-          {PLASMA_BLOB_COLORS.map((color, i) => {
-            const angle = (i / PLASMA_BLOB_COLORS.length) * Math.PI * 2;
-            const size = 20 + (i % 3) * 5;
-            return (
-              <View
-                key={i}
-                style={{
-                  position: 'absolute',
-                  width: size,
-                  height: size,
-                  borderRadius: size / 2,
-                  backgroundColor: color,
-                  transform: [
-                    { translateX: Math.cos(angle) * 12 },
-                    { translateY: Math.sin(angle) * 12 },
-                  ],
-                }}
-              />
-            );
-          })}
-        </Animated.View>
+        {/* Subtle shine overlay at top-left */}
+        <View style={kassa.shine} />
 
-        {/* Vignette — darkens edges for glass-sphere depth */}
-        <Svg width={PLASMA_SIZE} height={PLASMA_SIZE} style={StyleSheet.absoluteFill}>
-          <Defs>
-            <RadialGradient id="vig" cx="50%" cy="50%" rx="50%" ry="50%">
-              <Stop offset="0%" stopColor="transparent" />
-              <Stop offset="55%" stopColor="transparent" />
-              <Stop offset="100%" stopColor="rgba(8,8,28,0.6)" />
-            </RadialGradient>
-          </Defs>
-          <Circle cx={PLASMA_SIZE / 2} cy={PLASMA_SIZE / 2} r={PLASMA_SIZE / 2} fill="url(#vig)" />
-        </Svg>
-
-        {/* Hot core glow */}
-        <Animated.View style={[plasma.core, { opacity: coreOpacity, transform: [{ scale: coreScale }] }]} />
-
-        {/* Icon */}
-        <Ionicons name="calculator" size={26} color={colors.white} style={{ zIndex: 10 }} />
+        {/* Icon + Label */}
+        <Ionicons name="calculator-outline" size={22} color={colors.white} style={kassa.icon} />
+        <Text style={kassa.label}>Касса</Text>
       </View>
     </View>
   );
 }
 
-const plasma = StyleSheet.create({
+const kassa = StyleSheet.create({
   outer: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: PLASMA_SIZE + 24,
-    height: PLASMA_SIZE + 24,
-    marginTop: -28,
+    width: KASSA_SIZE + 20,
+    height: KASSA_SIZE + 20,
+    marginTop: -26,
   },
   glow: {
     position: 'absolute',
-    width: PLASMA_SIZE + 22,
-    height: PLASMA_SIZE + 22,
-    borderRadius: (PLASMA_SIZE + 22) / 2,
-    backgroundColor: '#6366f1',
-  },
-  ring: {
-    position: 'absolute',
-    width: PLASMA_SIZE + 10,
-    height: PLASMA_SIZE + 10,
-    borderRadius: (PLASMA_SIZE + 10) / 2,
-    borderWidth: 1.5,
-    borderColor: '#818cf8',
+    width: KASSA_SIZE + 18,
+    height: KASSA_SIZE + 18,
+    borderRadius: (KASSA_SIZE + 18) / 2,
+    backgroundColor: colors.primary[400],
   },
   body: {
-    width: PLASMA_SIZE,
-    height: PLASMA_SIZE,
-    borderRadius: PLASMA_SIZE / 2,
+    width: KASSA_SIZE,
+    height: KASSA_SIZE,
+    borderRadius: KASSA_SIZE / 2,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
+    elevation: 8,
+    shadowColor: colors.primary[700],
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
   },
-  blobBox: {
-    ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  core: {
+  shine: {
     position: 'absolute',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    top: -KASSA_SIZE * 0.15,
+    left: -KASSA_SIZE * 0.15,
+    width: KASSA_SIZE * 0.7,
+    height: KASSA_SIZE * 0.7,
+    borderRadius: KASSA_SIZE * 0.35,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  icon: {
+    marginBottom: 1,
+  },
+  label: {
+    color: colors.white,
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });
 
@@ -255,10 +191,9 @@ function TabNavigator() {
         component={DashboardScreen}
         options={{
           tabBarLabel: 'Главная',
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ color }) => (
             <View style={styles.tabIconWrap}>
               <Feather name="home" size={22} color={color} />
-              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -268,10 +203,9 @@ function TabNavigator() {
         component={ProductsScreen}
         options={{
           tabBarLabel: 'Склад',
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ color }) => (
             <View style={styles.tabIconWrap}>
               <Feather name="package" size={22} color={color} />
-              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -280,9 +214,8 @@ function TabNavigator() {
         name="NewCheck"
         component={CheckCreateScreen}
         options={{
-          tabBarLabel: 'Касса',
-          tabBarIcon: ({ focused }) => <PlasmaButton focused={focused} />,
-          tabBarLabelStyle: [styles.tabLabel, { color: colors.primary[600], fontWeight: fontWeight.bold }],
+          tabBarLabel: () => null,
+          tabBarIcon: ({ focused }) => <KassaButton focused={focused} />,
         }}
       />
       <Tab.Screen
@@ -290,10 +223,9 @@ function TabNavigator() {
         component={ChecksScreen}
         options={{
           tabBarLabel: 'Журнал',
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ color }) => (
             <View style={styles.tabIconWrap}>
               <Feather name="file-text" size={22} color={color} />
-              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -303,10 +235,9 @@ function TabNavigator() {
         component={MoreStackNavigator}
         options={{
           tabBarLabel: 'Ещё',
-          tabBarIcon: ({ color, focused }) => (
+          tabBarIcon: ({ color }) => (
             <View style={styles.tabIconWrap}>
               <Feather name="menu" size={22} color={color} />
-              {focused && <View style={styles.activeDot} />}
             </View>
           ),
         }}
@@ -365,12 +296,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: 34,
-  },
-  activeDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.primary[600],
-    marginTop: 3,
   },
 });
