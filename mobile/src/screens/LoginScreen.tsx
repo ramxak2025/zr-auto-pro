@@ -208,7 +208,7 @@ export default function LoginScreen() {
           </View>
 
           {/* Footer */}
-          <Text style={styles.footer}>Autexa v1.8 © 2026</Text>
+          <Text style={styles.footer}>Autexa v1.9 © 2026</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
