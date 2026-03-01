@@ -348,6 +348,20 @@ export default function ProductsScreen() {
     ? allProducts.filter(p => p.name.toLowerCase().includes(inventoryPickerSearch.toLowerCase()))
     : allProducts;
 
+  const addInventoryProduct = (p: Product) => {
+    // Only add if not already in the list
+    if (!inventoryItems.find(item => item.productId === p.id)) {
+      setInventoryItems(prev => [...prev, {
+        productId: p.id,
+        name: p.name,
+        currentStock: p.stock,
+        actualStock: String(p.stock),
+      }]);
+    }
+    setShowInventoryPicker(false);
+    setInventoryPickerSearch('');
+  };
+
   // Photo display helper
   const getDisplayPhotoUri = (photo: string | null | undefined): string | undefined => {
     if (!photo) return undefined;
@@ -617,10 +631,18 @@ export default function ProductsScreen() {
           />
         </View>
 
+        <TouchableOpacity
+          style={styles.addProductBtn}
+          onPress={() => { setInventoryPickerSearch(''); setShowInventoryPicker(true); }}
+        >
+          <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
+          <Text style={styles.addProductBtnText}>{'Добавить товар'}</Text>
+        </TouchableOpacity>
+
         <View style={styles.invHeader}>
-          <Text style={[styles.invHeaderText, { flex: 1 }]}>{'\u0422\u043E\u0432\u0430\u0440'}</Text>
-          <Text style={[styles.invHeaderText, { width: 55, textAlign: 'center' }]}>{'\u0411\u044B\u043B\u043E'}</Text>
-          <Text style={[styles.invHeaderText, { width: 70, textAlign: 'center' }]}>{'\u0424\u0430\u043A\u0442'}</Text>
+          <Text style={[styles.invHeaderText, { flex: 1 }]}>{'Товар'}</Text>
+          <Text style={[styles.invHeaderText, { width: 55, textAlign: 'center' }]}>{'Было'}</Text>
+          <Text style={[styles.invHeaderText, { width: 70, textAlign: 'center' }]}>{'Факт'}</Text>
         </View>
 
         {filteredInventoryItems.map((item, idx) => {
@@ -653,80 +675,124 @@ export default function ProductsScreen() {
         </View>
       </Modal>
 
-      {/* Writeoff Modal */}
-      <Modal visible={showWriteoffModal} onClose={() => setShowWriteoffModal(false)} title={'\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435 \u0442\u043E\u0432\u0430\u0440\u0430'}>
-        {writeoffStep === 'select' ? (
-          <>
-            <View style={styles.formField}>
+      {/* Inventory Product Picker - 80% bottom sheet */}
+      <RNModal visible={showInventoryPicker} transparent animationType="fade" onRequestClose={() => setShowInventoryPicker(false)}>
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowInventoryPicker(false)} />
+          <View style={styles.bottomSheet}>
+            <View style={styles.bottomSheetHandle} />
+            <Text style={styles.bottomSheetTitle}>{'Добавить товар в инвентаризацию'}</Text>
+            <View style={{ paddingHorizontal: spacing[4], marginBottom: spacing[3] }}>
               <TextInput
-                value={writeoffSearch}
-                onChangeText={setWriteoffSearch}
+                value={inventoryPickerSearch}
+                onChangeText={setInventoryPickerSearch}
                 style={styles.formInput}
-                placeholder={'\u041F\u043E\u0438\u0441\u043A \u0442\u043E\u0432\u0430\u0440\u0430...'}
+                placeholder={'Поиск товара...'}
                 placeholderTextColor={colors.gray[400]}
                 autoFocus
               />
             </View>
-            <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+              {filteredInventoryPickerProducts.map(p => {
+                const alreadyAdded = inventoryItems.some(item => item.productId === p.id);
+                return (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={[styles.bottomSheetItem, alreadyAdded && { opacity: 0.5 }]}
+                    onPress={() => addInventoryProduct(p)}
+                    disabled={alreadyAdded}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.writeoffItemName}>{p.name}</Text>
+                      <Text style={styles.writeoffItemStock}>{'Остаток: '}{p.stock} {'шт'}{alreadyAdded ? ' (уже добавлен)' : ''}</Text>
+                    </View>
+                    {!alreadyAdded && <Ionicons name="add-circle-outline" size={20} color={colors.primary[600]} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </RNModal>
+
+      {/* Writeoff Product Picker - 80% bottom sheet */}
+      <RNModal visible={showWriteoffPicker} transparent animationType="fade" onRequestClose={() => setShowWriteoffPicker(false)}>
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowWriteoffPicker(false)} />
+          <View style={styles.bottomSheet}>
+            <View style={styles.bottomSheetHandle} />
+            <Text style={styles.bottomSheetTitle}>{'Выберите товар для списания'}</Text>
+            <View style={{ paddingHorizontal: spacing[4], marginBottom: spacing[3] }}>
+              <TextInput
+                value={writeoffSearch}
+                onChangeText={setWriteoffSearch}
+                style={styles.formInput}
+                placeholder={'Поиск товара...'}
+                placeholderTextColor={colors.gray[400]}
+                autoFocus
+              />
+            </View>
+            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
               {filteredWriteoffProducts.map(p => (
-                <TouchableOpacity key={p.id} style={styles.writeoffItem} onPress={() => selectWriteoffProduct(p)}>
+                <TouchableOpacity key={p.id} style={styles.bottomSheetItem} onPress={() => selectWriteoffProduct(p)}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.writeoffItemName}>{p.name}</Text>
-                    <Text style={styles.writeoffItemStock}>{'\u041E\u0441\u0442\u0430\u0442\u043E\u043A: '}{p.stock} {'\u0448\u0442'}</Text>
+                    <Text style={styles.writeoffItemStock}>{'Остаток: '}{p.stock} {'шт'}</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
                 </TouchableOpacity>
               ))}
             </ScrollView>
-          </>
-        ) : (
-          <>
-            <View style={styles.writeoffSelectedProduct}>
-              <Ionicons name="cube-outline" size={20} color={colors.primary[600]} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.writeoffSelectedName}>{writeoffProductName}</Text>
-                <Text style={styles.writeoffSelectedStock}>{'\u041D\u0430 \u0441\u043A\u043B\u0430\u0434\u0435: '}{writeoffProductStock} {'\u0448\u0442'}</Text>
-              </View>
-              <TouchableOpacity onPress={() => setWriteoffStep('select')}>
-                <Text style={{ fontSize: fontSize.xs, color: colors.primary[600] }}>{'\u0418\u0437\u043C\u0435\u043D\u0438\u0442\u044C'}</Text>
-              </TouchableOpacity>
-            </View>
+          </View>
+        </View>
+      </RNModal>
 
-            <View style={styles.formField}>
-              <Text style={styles.formLabel}>{'\u041A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E \u043A \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044E'}</Text>
-              <TextInput
-                value={writeoffQty}
-                onChangeText={setWriteoffQty}
-                style={styles.formInput}
-                keyboardType="numeric"
-                placeholder={`\u041C\u0430\u043A\u0441: ${writeoffProductStock}`}
-                placeholderTextColor={colors.gray[400]}
-                autoFocus
-              />
-            </View>
+      {/* Writeoff Form Modal */}
+      <Modal visible={showWriteoffModal} onClose={() => setShowWriteoffModal(false)} title={'Списание товара'}>
+        <View style={styles.writeoffSelectedProduct}>
+          <Ionicons name="cube-outline" size={20} color={colors.primary[600]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.writeoffSelectedName}>{writeoffProductName}</Text>
+            <Text style={styles.writeoffSelectedStock}>{'На складе: '}{writeoffProductStock} {'шт'}</Text>
+          </View>
+          <TouchableOpacity onPress={() => { setShowWriteoffModal(false); setWriteoffSearch(''); setShowWriteoffPicker(true); }}>
+            <Text style={{ fontSize: fontSize.xs, color: colors.primary[600] }}>{'Изменить'}</Text>
+          </TouchableOpacity>
+        </View>
 
-            <View style={styles.formField}>
-              <Text style={styles.formLabel}>{'\u041F\u0440\u0438\u0447\u0438\u043D\u0430 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F *'}</Text>
-              <TextInput
-                value={writeoffReason}
-                onChangeText={setWriteoffReason}
-                style={[styles.formInput, { minHeight: 56, textAlignVertical: 'top' }]}
-                multiline
-                placeholder={'\u0411\u0440\u0430\u043A, \u043F\u043E\u0440\u0447\u0430, \u043F\u0440\u043E\u0441\u0440\u043E\u0447\u043A\u0430...'}
-                placeholderTextColor={colors.gray[400]}
-              />
-            </View>
+        <View style={styles.formField}>
+          <Text style={styles.formLabel}>{'Количество к списанию'}</Text>
+          <TextInput
+            value={writeoffQty}
+            onChangeText={setWriteoffQty}
+            style={styles.formInput}
+            keyboardType="numeric"
+            placeholder={`Макс: ${writeoffProductStock}`}
+            placeholderTextColor={colors.gray[400]}
+            autoFocus
+          />
+        </View>
 
-            <View style={styles.formActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowWriteoffModal(false)}>
-                <Text style={styles.cancelBtnText}>{'\u041E\u0442\u043C\u0435\u043D\u0430'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.submitBtn, { backgroundColor: colors.red[600] }]} onPress={handleWriteoffSubmit}>
-                <Text style={styles.submitBtnText}>{'\u0421\u043F\u0438\u0441\u0430\u0442\u044C'}</Text>
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
+        <View style={styles.formField}>
+          <Text style={styles.formLabel}>{'Причина списания *'}</Text>
+          <TextInput
+            value={writeoffReason}
+            onChangeText={setWriteoffReason}
+            style={[styles.formInput, { minHeight: 56, textAlignVertical: 'top' }]}
+            multiline
+            placeholder={'Брак, порча, просрочка...'}
+            placeholderTextColor={colors.gray[400]}
+          />
+        </View>
+
+        <View style={styles.formActions}>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowWriteoffModal(false)}>
+            <Text style={styles.cancelBtnText}>{'Отмена'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.submitBtn, { backgroundColor: colors.red[600] }]} onPress={handleWriteoffSubmit}>
+            <Text style={styles.submitBtnText}>{'Списать'}</Text>
+          </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* Fullscreen Photo Viewer */}
@@ -847,6 +913,14 @@ const styles = StyleSheet.create({
   writeoffSelectedProduct: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.primary[50], borderRadius: borderRadius.lg, padding: spacing[3], marginBottom: spacing[4] },
   writeoffSelectedName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   writeoffSelectedStock: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 },
+  // Bottom sheet (80% product picker)
+  bottomSheet: { height: SCREEN_HEIGHT * 0.8, backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  bottomSheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.gray[200], alignSelf: 'center', marginTop: 12, marginBottom: 8 },
+  bottomSheetTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], paddingHorizontal: spacing[4], marginBottom: spacing[3] },
+  bottomSheetItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], paddingHorizontal: spacing[4], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  // Add product button (inventory)
+  addProductBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[2.5], paddingHorizontal: spacing[3], marginBottom: spacing[3], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.primary[200], borderStyle: 'dashed', backgroundColor: colors.primary[50] },
+  addProductBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.primary[600] },
   // Fullscreen photo
   fullscreenOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' },
   fullscreenClose: { position: 'absolute', top: 50, right: 20, zIndex: 10, width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
