@@ -70,7 +70,6 @@ export default function ProductsScreen() {
   const [writeoffQty, setWriteoffQty] = useState('');
   const [writeoffReason, setWriteoffReason] = useState('');
   const [writeoffSearch, setWriteoffSearch] = useState('');
-  const [writeoffStep, setWriteoffStep] = useState<'select' | 'form'>('select');
   const [showWriteoffPicker, setShowWriteoffPicker] = useState(false);
 
   const { data, isLoading } = useQuery<PaginatedResponse<Product>>({
@@ -290,7 +289,6 @@ export default function ProductsScreen() {
   // --- Writeoff handlers ---
   const openWriteoff = () => {
     setShowOpsModal(false);
-    setWriteoffStep('select');
     setWriteoffSearch('');
     setWriteoffProductId('');
     setWriteoffProductName('');
@@ -307,7 +305,6 @@ export default function ProductsScreen() {
     setWriteoffQty('');
     setWriteoffReason('');
     setShowWriteoffPicker(false);
-    setWriteoffStep('form');
     setShowWriteoffModal(true);
   };
 

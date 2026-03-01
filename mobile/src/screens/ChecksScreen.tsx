@@ -6,14 +6,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { checksApi, usersApi } from '../api/services';
+import { checksApi, usersApi, productsApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Check, PaginatedResponse, User } from '../../../shared/types';
+import type { Check, PaginatedResponse, User, StockMovement, Delivery } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = { cash: 'Наличные', card: 'Карта', warranty: 'Гарантия', cash_card: 'Нал/Карта' };
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
@@ -31,6 +31,34 @@ function formatDateGroup(d: string) {
   return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
 }
 
+const paymentStatusLabels: Record<string, string> = { paid: 'Оплачено', partial: 'Частично', unpaid: 'Не оплачено' };
+const paymentStatusColors: Record<string, { bg: string; text: string }> = {
+  paid: { bg: colors.green[50], text: colors.green[700] },
+  partial: { bg: colors.amber[50], text: colors.amber[600] },
+  unpaid: { bg: colors.red[50], text: colors.red[700] },
+};
+
+const movementTypeLabels: Record<string, string> = {
+  inventory: 'Инвентаризация',
+  writeoff: 'Списание',
+  income: 'Приход',
+  expense: 'Расход',
+};
+
+const movementTypeIcons: Record<string, { name: keyof typeof Ionicons.glyphMap; color: string; accentColor: string }> = {
+  inventory: { name: 'clipboard-outline', color: colors.blue[600], accentColor: colors.blue[500] },
+  writeoff: { name: 'trash-outline', color: colors.red[600], accentColor: colors.red[500] },
+  income: { name: 'arrow-down-outline', color: colors.green[600], accentColor: colors.green[500] },
+  expense: { name: 'arrow-up-outline', color: colors.orange[500], accentColor: colors.orange[500] },
+};
+
+type ActiveTab = 'checks' | 'warehouse';
+
+// Unified warehouse document item for the list
+type WarehouseDoc =
+  | { kind: 'movement'; data: StockMovement; sortDate: string }
+  | { kind: 'delivery'; data: Delivery; sortDate: string };
+
 export default function ChecksScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -38,6 +66,7 @@ export default function ChecksScreen() {
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
 
+  const [activeTab, setActiveTab] = useState<ActiveTab>('checks');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const limit = 20;
@@ -78,6 +107,37 @@ export default function ChecksScreen() {
     staleTime: 30_000,
   });
 
+  // Warehouse documents queries
+  const { data: movementsData, isLoading: movementsLoading } = useQuery<StockMovement[]>({
+    queryKey: ['stock-movements'],
+    queryFn: async () => { const res = await productsApi.getMovements(); return res.data; },
+    staleTime: 60_000,
+    enabled: activeTab === 'warehouse',
+  });
+
+  const { data: deliveriesData, isLoading: deliveriesLoading } = useQuery<Delivery[]>({
+    queryKey: ['supplier-deliveries'],
+    queryFn: async () => { const res = await suppliersApi.getDeliveries(); return res.data; },
+    staleTime: 60_000,
+    enabled: activeTab === 'warehouse',
+  });
+
+  const warehouseDocs = useMemo<WarehouseDoc[]>(() => {
+    const docs: WarehouseDoc[] = [];
+    if (movementsData) {
+      for (const m of movementsData) {
+        docs.push({ kind: 'movement', data: m, sortDate: m.createdAt });
+      }
+    }
+    if (deliveriesData) {
+      for (const d of deliveriesData) {
+        docs.push({ kind: 'delivery', data: d, sortDate: d.date });
+      }
+    }
+    docs.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
+    return docs;
+  }, [movementsData, deliveriesData]);
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => checksApi.remove(id),
     onSuccess: () => {
@@ -96,7 +156,14 @@ export default function ChecksScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries({ queryKey: ['checks'] });
+    if (activeTab === 'checks') {
+      await queryClient.invalidateQueries({ queryKey: ['checks'] });
+    } else {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
+        queryClient.invalidateQueries({ queryKey: ['supplier-deliveries'] }),
+      ]);
+    }
     setRefreshing(false);
   };
 
@@ -161,7 +228,7 @@ export default function ChecksScreen() {
               </View>
             </View>
 
-            {/* Client & car — compact single row */}
+            {/* Client & car -- compact single row */}
             <View style={styles.checkInfoRow}>
               {check.client?.fullName ? (
                 <View style={styles.infoChip}>
@@ -201,39 +268,185 @@ export default function ChecksScreen() {
     );
   };
 
+  const renderWarehouseDoc = ({ item }: { item: WarehouseDoc }) => {
+    if (item.kind === 'movement') {
+      const m = item.data;
+      const typeInfo = movementTypeIcons[m.type] || movementTypeIcons.income;
+      return (
+        <View style={styles.warehouseCard}>
+          <View style={[styles.warehouseAccent, { backgroundColor: typeInfo.accentColor }]} />
+          <View style={styles.warehouseCardContent}>
+            <View style={styles.warehouseCardHeader}>
+              <View style={[styles.warehouseIconWrap, { backgroundColor: typeInfo.accentColor + '18' }]}>
+                <Ionicons name={typeInfo.name as any} size={18} color={typeInfo.color} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.warehouseCardTitle} numberOfLines={1}>
+                  {m.product?.name || 'Товар'}
+                </Text>
+                <Text style={styles.warehouseCardSubtitle}>
+                  {movementTypeLabels[m.type]}
+                </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={[styles.warehouseQty, { color: m.type === 'writeoff' || m.type === 'expense' ? colors.red[600] : colors.green[600] }]}>
+                  {m.type === 'writeoff' || m.type === 'expense' ? '-' : '+'}{m.quantity} шт
+                </Text>
+                <Text style={styles.warehouseDate}>
+                  {formatDate(m.createdAt)}
+                </Text>
+              </View>
+            </View>
+            {(m.reason || m.user) && (
+              <View style={styles.warehouseCardFooter}>
+                {m.reason ? (
+                  <Text style={styles.warehouseReason} numberOfLines={1}>
+                    {m.reason}
+                  </Text>
+                ) : null}
+                {m.user ? (
+                  <Text style={styles.warehouseUser}>
+                    {m.user.fullName}
+                  </Text>
+                ) : null}
+              </View>
+            )}
+          </View>
+        </View>
+      );
+    }
+
+    // Delivery
+    const d = item.data;
+    const statusStyle = paymentStatusColors[d.paymentStatus] || paymentStatusColors.unpaid;
+    return (
+      <View style={styles.warehouseCard}>
+        <View style={[styles.warehouseAccent, { backgroundColor: colors.green[500] }]} />
+        <View style={styles.warehouseCardContent}>
+          <View style={styles.warehouseCardHeader}>
+            <View style={[styles.warehouseIconWrap, { backgroundColor: colors.green[500] + '18' }]}>
+              <Ionicons name="bus-outline" size={18} color={colors.green[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.warehouseCardTitle} numberOfLines={1}>
+                {d.supplier?.name || 'Поставщик'}
+              </Text>
+              <Text style={styles.warehouseCardSubtitle}>
+                Поставка  {d.items?.length || 0} поз.
+              </Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[styles.warehouseQty, { color: colors.gray[900] }]}>
+                {formatMoney(d.totalAmount)}
+              </Text>
+              <Text style={styles.warehouseDate}>
+                {formatDate(d.date)}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.warehouseCardFooter}>
+            <View style={[styles.paymentStatusBadge, { backgroundColor: statusStyle.bg }]}>
+              <Text style={[styles.paymentStatusText, { color: statusStyle.text }]}>
+                {paymentStatusLabels[d.paymentStatus] || d.paymentStatus}
+              </Text>
+            </View>
+            {d.comment ? (
+              <Text style={styles.warehouseReason} numberOfLines={1}>
+                {d.comment}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   // Reset lastDateGroup when data changes
   lastDateGroup = '';
+
+  const isWarehouseLoading = movementsLoading || deliveriesLoading;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Ionicons name="receipt" size={20} color={colors.primary[600]} />
+        <View style={styles.headerLeft}>
+          <Ionicons name="receipt" size={22} color={colors.primary[600]} />
           <Text style={styles.title}>Журнал чеков</Text>
-          {total > 0 && <Text style={styles.totalCount}>{total}</Text>}
+          {total > 0 && activeTab === 'checks' && (
+            <View style={styles.totalBadge}>
+              <Text style={styles.totalBadgeText}>{total}</Text>
+            </View>
+          )}
         </View>
-        <TouchableOpacity style={styles.newBtn} onPress={() => navigation.navigate('CheckCreate')}>
-          <Ionicons name="add" size={18} color={colors.white} />
+        <TouchableOpacity style={styles.newBtn} onPress={() => navigation.navigate('CheckCreate')} activeOpacity={0.8}>
+          <Ionicons name="add" size={17} color={colors.white} />
           <Text style={styles.newBtnText}>Новый</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Search + Filter toggle */}
-      <View style={styles.searchWrap}>
-        <View style={{ flex: 1 }}>
+      {/* Search + Filter pill */}
+      <View style={styles.searchRow}>
+        <View style={styles.searchInputWrap}>
           <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); lastDateGroup = ''; }} placeholder="Поиск по клиенту, авто, номеру..." />
         </View>
-        <TouchableOpacity style={[styles.filterToggle, activeFilterCount > 0 && styles.filterToggleActive]} onPress={() => setShowFilters(!showFilters)}>
-          <Ionicons name="options-outline" size={18} color={activeFilterCount > 0 ? colors.primary[600] : colors.gray[500]} />
+        <TouchableOpacity
+          style={[styles.filterPill, activeFilterCount > 0 && styles.filterPillActive]}
+          onPress={() => setShowFilters(!showFilters)}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="options-outline"
+            size={16}
+            color={activeFilterCount > 0 ? colors.primary[600] : colors.gray[500]}
+          />
+          <Text style={[styles.filterPillText, activeFilterCount > 0 && styles.filterPillTextActive]}>
+            Фильтр
+          </Text>
           {activeFilterCount > 0 && (
-            <View style={styles.filterBadge}><Text style={styles.filterBadgeText}>{activeFilterCount}</Text></View>
+            <View style={styles.filterCountBadge}>
+              <Text style={styles.filterCountBadgeText}>{activeFilterCount}</Text>
+            </View>
           )}
         </TouchableOpacity>
       </View>
 
-      {/* Filters panel */}
-      {showFilters && (
+      {/* Segmented control: Checks | Warehouse documents */}
+      <View style={styles.segmentedWrap}>
+        <View style={styles.segmentedControl}>
+          <TouchableOpacity
+            style={[styles.segmentBtn, activeTab === 'checks' && styles.segmentBtnActive]}
+            onPress={() => setActiveTab('checks')}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="receipt-outline"
+              size={15}
+              color={activeTab === 'checks' ? colors.primary[700] : colors.gray[500]}
+            />
+            <Text style={[styles.segmentBtnText, activeTab === 'checks' && styles.segmentBtnTextActive]}>
+              Чеки
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.segmentBtn, activeTab === 'warehouse' && styles.segmentBtnActive]}
+            onPress={() => setActiveTab('warehouse')}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="cube-outline"
+              size={15}
+              color={activeTab === 'warehouse' ? colors.primary[700] : colors.gray[500]}
+            />
+            <Text style={[styles.segmentBtnText, activeTab === 'warehouse' && styles.segmentBtnTextActive]}>
+              Склад. документы
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Filters panel (only for checks tab) */}
+      {showFilters && activeTab === 'checks' && (
         <View style={styles.filtersPanel}>
           {/* Date range */}
           <View style={styles.filterRow}>
@@ -311,21 +524,42 @@ export default function ChecksScreen() {
       />
 
       {/* Content */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : checks.length === 0 ? (
-        <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
+      {activeTab === 'checks' ? (
+        <>
+          {isLoading ? (
+            <LoadingSpinner />
+          ) : checks.length === 0 ? (
+            <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
+          ) : (
+            <FlatList
+              data={checks}
+              keyExtractor={(item) => item.id}
+              renderItem={renderCheck}
+              contentContainerStyle={styles.list}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+              onEndReached={() => { if (hasMore) setPage(p => p + 1); }}
+              onEndReachedThreshold={0.5}
+              ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
+            />
+          )}
+        </>
       ) : (
-        <FlatList
-          data={checks}
-          keyExtractor={(item) => item.id}
-          renderItem={renderCheck}
-          contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
-          onEndReached={() => { if (hasMore) setPage(p => p + 1); }}
-          onEndReachedThreshold={0.5}
-          ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
-        />
+        <>
+          {isWarehouseLoading ? (
+            <LoadingSpinner />
+          ) : warehouseDocs.length === 0 ? (
+            <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
+          ) : (
+            <FlatList
+              data={warehouseDocs}
+              keyExtractor={(item) => item.kind === 'movement' ? `m-${item.data.id}` : `d-${item.data.id}`}
+              renderItem={renderWarehouseDoc}
+              contentContainerStyle={styles.list}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+              ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
+            />
+          )}
+        </>
       )}
     </SafeAreaView>
   );
@@ -333,16 +567,148 @@ export default function ChecksScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  totalCount: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600], backgroundColor: colors.primary[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full, overflow: 'hidden' },
-  newBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.primary[600], paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },
-  newBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[4], marginBottom: spacing[1] },
-  filterToggle: { width: 40, height: 40, borderRadius: borderRadius.lg, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
-  filterToggleActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
-  filterBadge: { position: 'absolute', top: -2, right: -2, width: 16, height: 16, borderRadius: 8, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center' },
-  filterBadgeText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.white },
+
+  // ── Header ──────────────────────────────────────────────────────
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[2],
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  title: {
+    fontSize: fontSize.xl,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[900],
+  },
+  totalBadge: {
+    backgroundColor: colors.primary[50],
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: colors.primary[100],
+  },
+  totalBadgeText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.primary[600],
+  },
+  newBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    backgroundColor: colors.primary[600],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.full,
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  newBtnText: {
+    color: colors.white,
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+  },
+
+  // ── Search + Filter row ─────────────────────────────────────────
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    marginBottom: spacing[1],
+  },
+  searchInputWrap: {
+    flex: 1,
+  },
+  filterPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    height: 44,
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.gray[100],
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+  },
+  filterPillActive: {
+    backgroundColor: colors.primary[50],
+    borderColor: colors.primary[200],
+  },
+  filterPillText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[500],
+  },
+  filterPillTextActive: {
+    color: colors.primary[600],
+  },
+  filterCountBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    marginLeft: 2,
+  },
+  filterCountBadgeText: {
+    fontSize: 10,
+    fontWeight: fontWeight.bold,
+    color: colors.white,
+  },
+
+  // ── Segmented Control ───────────────────────────────────────────
+  segmentedWrap: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[2],
+  },
+  segmentedControl: {
+    flexDirection: 'row',
+    backgroundColor: colors.gray[100],
+    borderRadius: borderRadius.xl,
+    padding: 3,
+  },
+  segmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.lg,
+  },
+  segmentBtnActive: {
+    backgroundColor: colors.white,
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  segmentBtnText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[500],
+  },
+  segmentBtnTextActive: {
+    color: colors.primary[700],
+    fontWeight: fontWeight.semibold,
+  },
+
+  // ── Filters panel ───────────────────────────────────────────────
   filtersPanel: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   filterDateBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
@@ -353,6 +719,8 @@ const styles = StyleSheet.create({
   empChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
   clearFiltersBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1.5], marginTop: spacing[2], paddingVertical: spacing[1.5] },
   clearFiltersBtnText: { fontSize: fontSize.xs, color: colors.red[500], fontWeight: fontWeight.medium },
+
+  // ── List ────────────────────────────────────────────────────────
   list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8] },
 
   // Date group headers
@@ -360,7 +728,7 @@ const styles = StyleSheet.create({
   dateGroupLine: { flex: 1, height: 1, backgroundColor: colors.gray[200] },
   dateGroupText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[400], textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  // Check card — compact with left accent
+  // Check card -- compact with left accent
   checkCard: {
     flexDirection: 'row',
     backgroundColor: colors.white,
@@ -405,4 +773,86 @@ const styles = StyleSheet.create({
   footerProfit: { fontSize: 11, fontWeight: fontWeight.bold },
   profitPositive: { color: colors.green[600] },
   profitNegative: { color: colors.red[500] },
+
+  // ── Warehouse document cards ────────────────────────────────────
+  warehouseCard: {
+    flexDirection: 'row',
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.xl,
+    overflow: 'hidden',
+    shadowColor: colors.black,
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+  },
+  warehouseAccent: {
+    width: 3.5,
+  },
+  warehouseCardContent: {
+    flex: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+  },
+  warehouseCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+  },
+  warehouseIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  warehouseCardTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+    marginBottom: 1,
+  },
+  warehouseCardSubtitle: {
+    fontSize: fontSize.xs,
+    color: colors.gray[400],
+  },
+  warehouseQty: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+  },
+  warehouseDate: {
+    fontSize: 11,
+    color: colors.gray[400],
+    marginTop: 1,
+  },
+  warehouseCardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginTop: spacing[2],
+    paddingTop: spacing[1.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.gray[100],
+  },
+  warehouseReason: {
+    flex: 1,
+    fontSize: 11,
+    color: colors.gray[500],
+    fontStyle: 'italic',
+  },
+  warehouseUser: {
+    fontSize: 11,
+    color: colors.gray[400],
+  },
+  paymentStatusBadge: {
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  paymentStatusText: {
+    fontSize: 10,
+    fontWeight: fontWeight.semibold,
+  },
 });
