@@ -120,9 +120,9 @@ export default function LoginScreen() {
           <View style={styles.container}>
             {/* Logo */}
             <Animated.View style={[styles.logoWrap, { opacity: logoFade, transform: [{ scale: logoScale }] }]}>
-              <Image source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
+              <Image source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" defaultSource={require('../../assets/logo.png')} />
             </Animated.View>
-            <Animated.Text style={[styles.subtitle, { opacity: logoFade }]}>Система управления сервисом</Animated.Text>
+            <Animated.Text style={[styles.subtitle, { opacity: logoFade }]}>Система управления автосервисом</Animated.Text>
 
             {/* Phone */}
             <Animated.View style={[styles.fieldWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
@@ -239,8 +239,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing[4],
   },
   logoImage: {
-    width: 260,
-    height: 72,
+    width: 240,
+    height: 58,
   },
   subtitle: {
     textAlign: 'center',

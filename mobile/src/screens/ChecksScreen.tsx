@@ -387,27 +387,24 @@ export default function ChecksScreen() {
         </View>
       </View>
 
-      {/* Search + Filter pill */}
+      {/* Search + Filter */}
       <View style={styles.searchRow}>
         <View style={styles.searchInputWrap}>
           <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); lastDateGroup = ''; }} placeholder="Поиск по клиенту, авто, номеру..." />
         </View>
         <TouchableOpacity
-          style={[styles.filterPill, activeFilterCount > 0 && styles.filterPillActive]}
+          style={[styles.filterBtn, activeFilterCount > 0 && styles.filterBtnActive]}
           onPress={() => setShowFilters(!showFilters)}
           activeOpacity={0.7}
         >
           <Ionicons
-            name="options-outline"
-            size={16}
+            name={activeFilterCount > 0 ? 'funnel' : 'funnel-outline'}
+            size={18}
             color={activeFilterCount > 0 ? colors.primary[600] : colors.gray[500]}
           />
-          <Text style={[styles.filterPillText, activeFilterCount > 0 && styles.filterPillTextActive]}>
-            Фильтр
-          </Text>
           {activeFilterCount > 0 && (
-            <View style={styles.filterCountBadge}>
-              <Text style={styles.filterCountBadgeText}>{activeFilterCount}</Text>
+            <View style={styles.filterCountDot}>
+              <Text style={styles.filterCountDotText}>{activeFilterCount}</Text>
             </View>
           )}
         </TouchableOpacity>
@@ -728,37 +725,28 @@ const styles = StyleSheet.create({
   searchInputWrap: {
     flex: 1,
   },
-  filterPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[1.5],
-    height: 44,
-    paddingHorizontal: spacing[3.5],
+  filterBtn: {
+    width: 42,
+    height: 42,
     borderRadius: borderRadius.xl,
     backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.gray[200],
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: colors.black,
     shadowOpacity: 0.04,
     shadowRadius: 3,
     elevation: 1,
   },
-  filterPillActive: {
+  filterBtnActive: {
     backgroundColor: colors.primary[50],
     borderColor: colors.primary[300],
-    shadowColor: colors.primary[400],
-    shadowOpacity: 0.15,
   },
-  filterPillText: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-    color: colors.gray[500],
-  },
-  filterPillTextActive: {
-    color: colors.primary[700],
-    fontWeight: fontWeight.semibold,
-  },
-  filterCountBadge: {
+  filterCountDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
     minWidth: 18,
     height: 18,
     borderRadius: 9,
@@ -766,9 +754,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4,
-    marginLeft: 2,
+    borderWidth: 2,
+    borderColor: colors.white,
   },
-  filterCountBadgeText: {
+  filterCountDotText: {
     fontSize: 10,
     fontWeight: fontWeight.bold,
     color: colors.white,

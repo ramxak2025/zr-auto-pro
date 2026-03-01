@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { subscriptionApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
+import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { SubscriptionInfo, Plan } from '../../../shared/types';
 
@@ -69,136 +70,150 @@ export default function SubscriptionScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Подписка</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="diamond-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Подписка</Text>
+        </View>
         <View style={{ width: 60 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}>
         {/* Current plan info */}
-        <View style={styles.card}>
-          <View style={styles.planHeader}>
-            <View style={styles.planIconWrap}>
-              <Ionicons name="card-outline" size={24} color={colors.primary[600]} />
+        <AnimatedCard index={0}>
+          <View style={styles.card}>
+            <View style={styles.planHeader}>
+              <View style={styles.planIconWrap}>
+                <Ionicons name="card-outline" size={24} color={colors.primary[600]} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.planOrgName}>{sub?.tenantName || 'Организация'}</Text>
+                <Text style={styles.planName}>Тариф: {sub?.planName || 'Не назначен'}</Text>
+              </View>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.planOrgName}>{sub?.tenantName || 'Организация'}</Text>
-              <Text style={styles.planName}>Тариф: {sub?.planName || 'Не назначен'}</Text>
-            </View>
-          </View>
 
-          {/* End date & price */}
-          <View style={styles.infoGrid}>
-            <View style={styles.infoBlock}>
-              <Ionicons name="calendar-outline" size={18} color={colors.gray[400]} />
-              <View>
-                <Text style={styles.infoLabel}>Оплачено до</Text>
-                {sub?.subscriptionEnd ? (
-                  <Text style={[styles.infoValue, isExpired && { color: colors.red[600] }]}>
-                    {formatDate(sub.subscriptionEnd)}
-                    {isExpired ? '  (истекла)' : ''}
+            {/* End date & price */}
+            <View style={styles.infoGrid}>
+              <View style={styles.infoBlock}>
+                <Ionicons name="calendar-outline" size={18} color={colors.gray[400]} />
+                <View>
+                  <Text style={styles.infoLabel}>Оплачено до</Text>
+                  {sub?.subscriptionEnd ? (
+                    <Text style={[styles.infoValue, isExpired && { color: colors.red[600] }]}>
+                      {formatDate(sub.subscriptionEnd)}
+                      {isExpired ? '  (истекла)' : ''}
+                    </Text>
+                  ) : (
+                    <Text style={[styles.infoValue, { color: colors.gray[400] }]}>Не указано</Text>
+                  )}
+                </View>
+              </View>
+
+              <View style={styles.infoBlock}>
+                <Ionicons name="card-outline" size={18} color={colors.gray[400]} />
+                <View>
+                  <Text style={styles.infoLabel}>Стоимость</Text>
+                  <Text style={styles.infoValue}>
+                    {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
                   </Text>
-                ) : (
-                  <Text style={[styles.infoValue, { color: colors.gray[400] }]}>Не указано</Text>
-                )}
+                </View>
               </View>
             </View>
 
-            <View style={styles.infoBlock}>
-              <Ionicons name="card-outline" size={18} color={colors.gray[400]} />
-              <View>
-                <Text style={styles.infoLabel}>Стоимость</Text>
-                <Text style={styles.infoValue}>
-                  {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
-                </Text>
+            {/* Users */}
+            {sub && (
+              <View style={styles.usersRow}>
+                <View style={styles.usersLeft}>
+                  <Ionicons name="people-outline" size={16} color={colors.gray[400]} />
+                  <Text style={styles.usersLabel}>Сотрудников</Text>
+                </View>
+                <Text style={styles.usersValue}>{sub.currentUsers} / {sub.maxUsers}</Text>
               </View>
-            </View>
+            )}
+
+            {/* Note */}
+            {sub?.subscriptionNote && (
+              <View style={styles.noteBlock}>
+                <Ionicons name="information-circle-outline" size={18} color={colors.blue[500]} />
+                <Text style={styles.noteText}>{sub.subscriptionNote}</Text>
+              </View>
+            )}
+
+            {/* WhatsApp button */}
+            <TouchableOpacity style={styles.whatsappBtn} onPress={openWhatsApp} activeOpacity={0.8}>
+              <Ionicons name="logo-whatsapp" size={20} color={colors.white} />
+              <Text style={styles.whatsappText}>Связаться для оплаты</Text>
+            </TouchableOpacity>
           </View>
-
-          {/* Users */}
-          {sub && (
-            <View style={styles.usersRow}>
-              <View style={styles.usersLeft}>
-                <Ionicons name="people-outline" size={16} color={colors.gray[400]} />
-                <Text style={styles.usersLabel}>Сотрудников</Text>
-              </View>
-              <Text style={styles.usersValue}>{sub.currentUsers} / {sub.maxUsers}</Text>
-            </View>
-          )}
-
-          {/* Note */}
-          {sub?.subscriptionNote && (
-            <View style={styles.noteBlock}>
-              <Ionicons name="information-circle-outline" size={18} color={colors.blue[500]} />
-              <Text style={styles.noteText}>{sub.subscriptionNote}</Text>
-            </View>
-          )}
-
-          {/* WhatsApp button */}
-          <TouchableOpacity style={styles.whatsappBtn} onPress={openWhatsApp} activeOpacity={0.8}>
-            <Ionicons name="logo-whatsapp" size={20} color={colors.white} />
-            <Text style={styles.whatsappText}>Связаться для оплаты</Text>
-          </TouchableOpacity>
-        </View>
+        </AnimatedCard>
 
         {/* Available plans */}
         {sub?.plans && sub.plans.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>Доступные тарифы</Text>
-            {sub.plans.map((plan) => {
+            {sub.plans.map((plan, idx) => {
               const isCurrent = sub.planName === plan.name;
               const features: string[] = Array.isArray(plan.features) ? plan.features : [];
               return (
-                <View key={plan.id} style={[styles.planCard, isCurrent && styles.planCardCurrent]}>
-                  {isCurrent && (
-                    <LinearGradient
-                      colors={[colors.primary[500], colors.primary[600]]}
-                      style={styles.currentBanner}
-                    >
-                      <Text style={styles.currentBannerText}>Ваш тариф</Text>
-                    </LinearGradient>
-                  )}
-
-                  <View style={styles.planCardBody}>
-                    <Text style={styles.planCardName}>{plan.name}</Text>
-                    {plan.description && <Text style={styles.planCardDesc}>{plan.description}</Text>}
-
-                    <View style={styles.priceRow}>
-                      <Text style={styles.priceValue}>{plan.monthlyPrice.toLocaleString('ru-RU')}</Text>
-                      <Text style={styles.priceSuffix}> ₽/мес</Text>
-                    </View>
-
-                    <View style={styles.maxUsersRow}>
-                      <Ionicons name="people" size={16} color={colors.primary[600]} />
-                      <Text style={styles.maxUsersText}>До {plan.maxUsers} сотрудников</Text>
-                    </View>
-
-                    {/* Features list */}
-                    <View style={styles.featuresList}>
-                      {ALL_FEATURES.map(feat => {
-                        const included = features.includes(feat.key);
-                        return (
-                          <View key={feat.key} style={styles.featureRow}>
-                            <Ionicons
-                              name={included ? 'checkmark-circle' : 'close-circle'}
-                              size={18}
-                              color={included ? colors.green[500] : colors.gray[300]}
-                            />
-                            <Text style={[styles.featureText, !included && styles.featureTextDisabled]}>
-                              {feat.label}
-                            </Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-
-                    {!isCurrent && (
-                      <TouchableOpacity style={styles.connectBtn} onPress={() => openWhatsAppForPlan(plan.name)}>
-                        <Ionicons name="logo-whatsapp" size={16} color={colors.white} />
-                        <Text style={styles.connectBtnText}>Подключить</Text>
-                      </TouchableOpacity>
+                <AnimatedCard key={plan.id} index={idx + 1}>
+                  <View style={[styles.planCard, isCurrent && styles.planCardCurrent]}>
+                    {isCurrent && (
+                      <LinearGradient
+                        colors={[colors.primary[500], colors.primary[600]]}
+                        style={styles.currentBanner}
+                      >
+                        <Text style={styles.currentBannerText}>Ваш тариф</Text>
+                      </LinearGradient>
                     )}
+
+                    <View style={styles.planCardBody}>
+                      <Text style={styles.planCardName}>{plan.name}</Text>
+                      {plan.description && <Text style={styles.planCardDesc}>{plan.description}</Text>}
+
+                      <View style={styles.priceRow}>
+                        <Text style={styles.priceValue}>{plan.monthlyPrice.toLocaleString('ru-RU')}</Text>
+                        <Text style={styles.priceSuffix}> ₽/мес</Text>
+                      </View>
+
+                      <View style={styles.maxUsersRow}>
+                        <Ionicons name="people" size={16} color={colors.primary[600]} />
+                        <Text style={styles.maxUsersText}>До {plan.maxUsers} сотрудников</Text>
+                      </View>
+
+                      {/* Features list */}
+                      <View style={styles.featuresList}>
+                        {ALL_FEATURES.map(feat => {
+                          const included = features.includes(feat.key);
+                          return (
+                            <View key={feat.key} style={styles.featureRow}>
+                              <Ionicons
+                                name={included ? 'checkmark-circle' : 'close-circle'}
+                                size={18}
+                                color={included ? colors.green[500] : colors.gray[300]}
+                              />
+                              <Text style={[styles.featureText, !included && styles.featureTextDisabled]}>
+                                {feat.label}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+
+                      {!isCurrent && (
+                        <TouchableOpacity style={styles.connectBtn} onPress={() => openWhatsAppForPlan(plan.name)}>
+                          <Ionicons name="logo-whatsapp" size={16} color={colors.white} />
+                          <Text style={styles.connectBtnText}>Подключить</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
                   </View>
-                </View>
+                </AnimatedCard>
               );
             })}
           </>
@@ -211,6 +226,8 @@ export default function SubscriptionScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },

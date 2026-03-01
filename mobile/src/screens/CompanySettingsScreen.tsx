@@ -5,9 +5,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { myCompanyApi } from '../api/services';
+import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Tenant } from '../../../shared/types';
 
@@ -101,162 +103,178 @@ export default function CompanySettingsScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Настройки компании</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.gray[600], colors.gray[800]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="business-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Настройки компании</Text>
+        </View>
         <View style={{ width: 22 }} />
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.scrollContent}>
           {/* Basic info */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="business-outline" size={16} color={colors.gray[400]} />
-              <Text style={styles.cardTitle}>Основные данные</Text>
-            </View>
+          <AnimatedCard index={0}>
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Ionicons name="business-outline" size={16} color={colors.gray[400]} />
+                <Text style={styles.cardTitle}>Основные данные</Text>
+              </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Название компании</Text>
-              <TextInput
-                value={form.name}
-                onChangeText={v => update({ name: v })}
-                style={styles.input}
-                placeholder="Автосервис «Мастер»"
-                placeholderTextColor={colors.gray[400]}
-              />
-            </View>
-
-            <View style={styles.rowFields}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Телефон</Text>
+              <View style={styles.field}>
+                <Text style={styles.label}>Название компании</Text>
                 <TextInput
-                  value={form.phone}
-                  onChangeText={v => update({ phone: v })}
+                  value={form.name}
+                  onChangeText={v => update({ name: v })}
                   style={styles.input}
-                  placeholder="+7 (999) 123-45-67"
+                  placeholder="Автосервис «Мастер»"
                   placeholderTextColor={colors.gray[400]}
-                  keyboardType="phone-pad"
                 />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>Email</Text>
+
+              <View style={styles.rowFields}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Телефон</Text>
+                  <TextInput
+                    value={form.phone}
+                    onChangeText={v => update({ phone: v })}
+                    style={styles.input}
+                    placeholder="+7 (999) 123-45-67"
+                    placeholderTextColor={colors.gray[400]}
+                    keyboardType="phone-pad"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Email</Text>
+                  <TextInput
+                    value={form.email}
+                    onChangeText={v => update({ email: v })}
+                    style={styles.input}
+                    placeholder="info@autoservice.ru"
+                    placeholderTextColor={colors.gray[400]}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.field}>
+                <Text style={styles.label}>Адрес</Text>
                 <TextInput
-                  value={form.email}
-                  onChangeText={v => update({ email: v })}
+                  value={form.address}
+                  onChangeText={v => update({ address: v })}
                   style={styles.input}
-                  placeholder="info@autoservice.ru"
+                  placeholder="г. Москва, ул. Примерная, д. 1"
                   placeholderTextColor={colors.gray[400]}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.field}>
+                <Text style={styles.label}>Описание</Text>
+                <TextInput
+                  value={form.description}
+                  onChangeText={v => update({ description: v })}
+                  style={[styles.input, styles.textarea]}
+                  placeholder="Краткое описание автосервиса"
+                  placeholderTextColor={colors.gray[400]}
+                  multiline
+                  numberOfLines={2}
                 />
               </View>
             </View>
-
-            <View style={styles.field}>
-              <Text style={styles.label}>Адрес</Text>
-              <TextInput
-                value={form.address}
-                onChangeText={v => update({ address: v })}
-                style={styles.input}
-                placeholder="г. Москва, ул. Примерная, д. 1"
-                placeholderTextColor={colors.gray[400]}
-              />
-            </View>
-
-            <View style={styles.field}>
-              <Text style={styles.label}>Описание</Text>
-              <TextInput
-                value={form.description}
-                onChangeText={v => update({ description: v })}
-                style={[styles.input, styles.textarea]}
-                placeholder="Краткое описание автосервиса"
-                placeholderTextColor={colors.gray[400]}
-                multiline
-                numberOfLines={2}
-              />
-            </View>
-          </View>
+          </AnimatedCard>
 
           {/* Receipt / Legal */}
-          <View style={styles.card}>
-            <View style={styles.cardHeader}>
-              <Ionicons name="receipt-outline" size={16} color={colors.gray[400]} />
-              <Text style={styles.cardTitle}>Реквизиты для чеков</Text>
-            </View>
+          <AnimatedCard index={1}>
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Ionicons name="receipt-outline" size={16} color={colors.gray[400]} />
+                <Text style={styles.cardTitle}>Реквизиты для чеков</Text>
+              </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Юридическое название</Text>
-              <TextInput
-                value={form.legalName}
-                onChangeText={v => update({ legalName: v })}
-                style={styles.input}
-                placeholder='ИП Иванов И.И. или ООО «Мастер»'
-                placeholderTextColor={colors.gray[400]}
-              />
-            </View>
-
-            <View style={styles.rowFields3}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>ИНН</Text>
+              <View style={styles.field}>
+                <Text style={styles.label}>Юридическое название</Text>
                 <TextInput
-                  value={form.inn}
-                  onChangeText={v => update({ inn: v.replace(/\D/g, '').slice(0, 12) })}
+                  value={form.legalName}
+                  onChangeText={v => update({ legalName: v })}
                   style={styles.input}
-                  placeholder="1234567890"
+                  placeholder='ИП Иванов И.И. или ООО «Мастер»'
                   placeholderTextColor={colors.gray[400]}
-                  keyboardType="numeric"
                 />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>КПП</Text>
-                <TextInput
-                  value={form.kpp}
-                  onChangeText={v => update({ kpp: v.replace(/\D/g, '').slice(0, 9) })}
-                  style={styles.input}
-                  placeholder="123456789"
-                  placeholderTextColor={colors.gray[400]}
-                  keyboardType="numeric"
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.label}>ОГРН</Text>
-                <TextInput
-                  value={form.ogrn}
-                  onChangeText={v => update({ ogrn: v.replace(/\D/g, '').slice(0, 15) })}
-                  style={styles.input}
-                  placeholder="1234567890123"
-                  placeholderTextColor={colors.gray[400]}
-                  keyboardType="numeric"
-                />
-              </View>
-            </View>
 
-            <View style={styles.field}>
-              <Text style={styles.label}>Текст внизу чека</Text>
-              <TextInput
-                value={form.receiptFooter}
-                onChangeText={v => update({ receiptFooter: v })}
-                style={[styles.input, styles.textarea]}
-                placeholder="Спасибо за визит! Ждём вас снова!"
-                placeholderTextColor={colors.gray[400]}
-                multiline
-                numberOfLines={2}
-              />
-              <Text style={styles.hint}>Этот текст печатается внизу каждого чека</Text>
+              <View style={styles.rowFields3}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>ИНН</Text>
+                  <TextInput
+                    value={form.inn}
+                    onChangeText={v => update({ inn: v.replace(/\D/g, '').slice(0, 12) })}
+                    style={styles.input}
+                    placeholder="1234567890"
+                    placeholderTextColor={colors.gray[400]}
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>КПП</Text>
+                  <TextInput
+                    value={form.kpp}
+                    onChangeText={v => update({ kpp: v.replace(/\D/g, '').slice(0, 9) })}
+                    style={styles.input}
+                    placeholder="123456789"
+                    placeholderTextColor={colors.gray[400]}
+                    keyboardType="numeric"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>ОГРН</Text>
+                  <TextInput
+                    value={form.ogrn}
+                    onChangeText={v => update({ ogrn: v.replace(/\D/g, '').slice(0, 15) })}
+                    style={styles.input}
+                    placeholder="1234567890123"
+                    placeholderTextColor={colors.gray[400]}
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
+
+              <View style={styles.field}>
+                <Text style={styles.label}>Текст внизу чека</Text>
+                <TextInput
+                  value={form.receiptFooter}
+                  onChangeText={v => update({ receiptFooter: v })}
+                  style={[styles.input, styles.textarea]}
+                  placeholder="Спасибо за визит! Ждём вас снова!"
+                  placeholderTextColor={colors.gray[400]}
+                  multiline
+                  numberOfLines={2}
+                />
+                <Text style={styles.hint}>Этот текст печатается внизу каждого чека</Text>
+              </View>
             </View>
-          </View>
+          </AnimatedCard>
 
           {/* Save */}
           {dirty && (
-            <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={mutation.isPending}>
-              {mutation.isPending ? (
-                <ActivityIndicator color={colors.white} size="small" />
-              ) : (
-                <>
-                  <Ionicons name="checkmark-circle-outline" size={18} color={colors.white} />
-                  <Text style={styles.saveBtnText}>Сохранить настройки</Text>
-                </>
-              )}
-            </TouchableOpacity>
+            <AnimatedCard index={2}>
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={mutation.isPending}>
+                {mutation.isPending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle-outline" size={18} color={colors.white} />
+                    <Text style={styles.saveBtnText}>Сохранить настройки</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </AnimatedCard>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
@@ -267,6 +285,8 @@ export default function CompanySettingsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   title: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },

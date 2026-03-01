@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
@@ -14,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
+import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
 import type { User, UserPermissions, Product } from '../../../shared/types';
@@ -345,15 +347,31 @@ export default function UsersScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
+      <LinearGradient
+        colors={[colors.white, colors.gray[50]] as [string, string]}
+        style={styles.header}
+      >
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Сотрудники</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="people-outline" size={16} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Сотрудники</Text>
+          <View style={styles.countBadge}>
+            <Text style={styles.countBadgeText}>{users.length}</Text>
+          </View>
+        </View>
         <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
           <Ionicons name="add" size={20} color={colors.white} />
         </TouchableOpacity>
-      </View>
+      </LinearGradient>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -362,11 +380,11 @@ export default function UsersScreen() {
         {users.length === 0 ? (
           <EmptyState title="Нет сотрудников" description="Добавьте первого сотрудника" action={{ label: 'Добавить', onPress: openCreate }} />
         ) : (
-          users.map(user => {
+          users.map((user, idx) => {
             const badge = getRoleBadge(user.role);
             const canDelete = user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director';
             return (
-              <View key={user.id} style={styles.userCard}>
+              <AnimatedCard key={user.id} index={idx} style={styles.userCard}>
                 <TouchableOpacity style={styles.userRow} onPress={() => openEdit(user)} activeOpacity={0.7}>
                   <View style={styles.avatarWrap}>
                     {getImageUrl(user.avatar) ? (
@@ -419,7 +437,7 @@ export default function UsersScreen() {
                     </TouchableOpacity>
                   )}
                 </View>
-              </View>
+              </AnimatedCard>
             );
           })
         )}
@@ -642,8 +660,13 @@ export default function UsersScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
+  countBadge: { backgroundColor: colors.primary[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
+  countBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600] },
   addBtn: { width: 36, height: 36, borderRadius: borderRadius.xl, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center' },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
   // User card

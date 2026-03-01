@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { carsApi } from '../api/services';
@@ -74,13 +75,26 @@ export default function CarsScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
+      <LinearGradient
+        colors={[colors.white, colors.gray[50]] as [string, string]}
+        style={styles.header}
+      >
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
+          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Автомобили</Text>
-        <View style={{ width: 36 }} />
-      </View>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.blue[500], colors.blue[700]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="car-sport-outline" size={16} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Автомобили</Text>
+        </View>
+        <View style={{ width: 40 }} />
+      </LinearGradient>
 
       <View style={styles.searchWrap}>
         <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); }} placeholder="Поиск по марке, номеру..." />
@@ -110,10 +124,12 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[100],
+    borderBottomWidth: 1, borderBottomColor: colors.gray[100],
   },
-  backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
   searchWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[3] },
   list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8], gap: spacing[2], paddingTop: spacing[3] },
   carCard: {

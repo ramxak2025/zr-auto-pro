@@ -217,24 +217,38 @@ export default function ExpensesScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Ionicons name="arrow-back" size={20} color={colors.gray[700]} />
-          </TouchableOpacity>
-          <View style={styles.titleRow}>
-            <Ionicons name="wallet-outline" size={20} color={colors.gray[400]} style={{ marginRight: 6 }} />
-            <Text style={styles.title}>Расходы</Text>
-          </View>
+      <LinearGradient
+        colors={[colors.white, colors.gray[50]] as [string, string]}
+        style={styles.header}
+      >
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={20} color={colors.red[600]} />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.red[500], colors.red[700]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="wallet-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Расходы</Text>
+          {expenses.length > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{expenses.length}</Text>
+            </View>
+          )}
         </View>
-        {isDirector && (
+        {isDirector ? (
           <TouchableOpacity style={styles.addBtn} onPress={() => { resetForm(); setModalOpen(true); }}>
             <Ionicons name="add-circle-outline" size={16} color={colors.white} style={{ marginRight: 4 }} />
             <Text style={styles.addBtnText}>Новый</Text>
           </TouchableOpacity>
+        ) : (
+          <View style={{ width: 60 }} />
         )}
-        {!isDirector && <View style={{ width: 60 }} />}
-      </View>
+      </LinearGradient>
 
       {/* Period selector */}
       <View style={styles.periodWrapper}>
@@ -432,34 +446,49 @@ const styles = StyleSheet.create({
   // Header
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[100],
   },
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: borderRadius.xl,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.gray[100],
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.red[50],
     alignItems: 'center',
     justifyContent: 'center',
   },
-  titleRow: {
+  headerCenter: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing[2],
+  },
+  headerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   title: {
     fontSize: fontSize.xl,
     fontWeight: fontWeight.bold,
     color: colors.gray[900],
+  },
+  countBadge: {
+    backgroundColor: colors.red[100],
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+    marginLeft: spacing[1],
+  },
+  countBadgeText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.red[600],
   },
   addBtn: {
     flexDirection: 'row',

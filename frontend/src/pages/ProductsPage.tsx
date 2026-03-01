@@ -23,7 +23,7 @@ import {
   Upload,
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi } from '../api/services';
-import type { Product, BundleItem, PaginatedResponse } from '../types';
+import type { Product, BundleItem, PaginatedResponse, StockMovement } from '../types';
 import { UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -516,6 +516,8 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 
   const actual = parseFloat(actualStock) || 0;
   const diff = actual - product.stock;
+  const damageAmount = diff < 0 ? Math.abs(diff) * product.costPrice : 0;
+  const excessAmount = diff > 0 ? diff * product.costPrice : 0;
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -547,6 +549,20 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
               <p className="text-[10px] text-gray-400 uppercase">Разница</p>
             </div>
           </div>
+          {/* Cost impact for shortage/excess */}
+          {diff !== 0 && (
+            <div className={`mt-3 rounded-lg p-2 text-center ${diff < 0 ? 'bg-red-50 border border-red-100' : 'bg-green-50 border border-green-100'}`}>
+              <p className={`text-[10px] uppercase font-semibold ${diff < 0 ? 'text-red-500' : 'text-green-500'}`}>
+                {diff < 0 ? 'Сумма недостачи' : 'Сумма излишков'}
+              </p>
+              <p className={`text-sm font-bold ${diff < 0 ? 'text-red-700' : 'text-green-700'}`}>
+                {formatMoney(diff < 0 ? damageAmount : excessAmount)}
+              </p>
+              <p className="text-[10px] text-gray-400">
+                {Math.abs(diff).toFixed(product.unit === 'pcs' ? 0 : 2)} {unitLabel(product.unit)} x {formatMoney(product.costPrice)}
+              </p>
+            </div>
+          )}
         </div>
 
         <div>
@@ -574,20 +590,38 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 // Product Grid Card — vertical card for 2-col grid layout
 // ---------------------------------------------------------------------------
 
+/** Format a date as dd.mm.yy */
+function formatDateShort(dateStr: string): string {
+  const d = new Date(dateStr);
+  const dd = d.getDate().toString().padStart(2, '0');
+  const mm = (d.getMonth() + 1).toString().padStart(2, '0');
+  const yy = d.getFullYear().toString().slice(-2);
+  return `${dd}.${mm}.${yy}`;
+}
+
+/** Check if a date is within the last 24 hours */
+function isWithin24h(dateStr: string): boolean {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  return diff < 24 * 60 * 60 * 1000;
+}
+
 const ProductCard = memo(function ProductCard({
   product,
   onClick,
   selectMode,
   selected,
   onToggleSelect,
+  lastInventoryDate,
 }: {
   product: Product;
   onClick: () => void;
   selectMode?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
+  lastInventoryDate?: string;
 }) {
   const isLow = product.stock <= product.minStock;
+  const recentlyChecked = lastInventoryDate && isWithin24h(lastInventoryDate);
 
   return (
     <div
@@ -603,9 +637,10 @@ const ProductCard = memo(function ProductCard({
           else onClick();
         }
       }}
-      className={`relative bg-white rounded-2xl overflow-hidden shadow-sm border transition-all active:scale-[0.97] cursor-pointer ${
-        selected ? 'border-primary-500 ring-2 ring-primary-500/20' : 'border-gray-100'
+      className={`relative rounded-2xl overflow-hidden shadow-sm border transition-all active:scale-[0.97] cursor-pointer ${
+        selected ? 'border-primary-500 ring-2 ring-primary-500/20' : recentlyChecked ? 'border-green-200 ring-1 ring-green-100' : 'border-gray-100'
       }`}
+      style={recentlyChecked ? { backgroundColor: '#f0fdf4' } : { backgroundColor: '#ffffff' }}
     >
       {/* Select checkbox overlay */}
       {selectMode && (
@@ -618,6 +653,15 @@ const ProductCard = memo(function ProductCard({
             }`}
           >
             {selected && <CheckIcon className="h-3 w-3 text-white" />}
+          </div>
+        </div>
+      )}
+
+      {/* Recently checked badge */}
+      {recentlyChecked && (
+        <div className="absolute top-2 right-2 z-10">
+          <div className="flex items-center gap-0.5 bg-green-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full shadow-sm">
+            <CheckIcon className="h-2.5 w-2.5" />
           </div>
         </div>
       )}
@@ -652,6 +696,17 @@ const ProductCard = memo(function ProductCard({
         <p className="text-sm font-bold text-gray-900 mt-1">
           {formatMoney(product.sellPrice)}
         </p>
+        {/* Inventory check date */}
+        {lastInventoryDate && !recentlyChecked && (
+          <p className="text-[10px] text-gray-400 mt-0.5">
+            Проверено: {formatDateShort(lastInventoryDate)}
+          </p>
+        )}
+        {recentlyChecked && (
+          <p className="text-[10px] text-green-600 font-medium mt-0.5">
+            Проверено сегодня
+          </p>
+        )}
       </div>
     </div>
   );
@@ -666,11 +721,15 @@ function FolderTile({
   count,
   hasLow,
   onClick,
+  recentlyChecked,
+  lastCheckDate,
 }: {
   name: string;
   count: number;
   hasLow: boolean;
   onClick: () => void;
+  recentlyChecked?: boolean;
+  lastCheckDate?: string;
 }) {
   return (
     <div
@@ -678,18 +737,31 @@ function FolderTile({
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      className="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer relative"
+      className={`rounded-2xl overflow-hidden shadow-sm border p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer relative ${
+        recentlyChecked ? 'border-green-200' : 'border-gray-100'
+      }`}
+      style={recentlyChecked ? { backgroundColor: '#f0fdf4' } : { backgroundColor: '#ffffff' }}
     >
       {hasLow && (
         <div className="absolute top-2 right-2">
           <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />
         </div>
       )}
-      <div className="h-12 w-12 rounded-xl bg-primary-50 flex items-center justify-center">
-        <FolderOpen className="h-6 w-6 text-primary-500" />
+      {recentlyChecked && (
+        <div className="absolute top-2 left-2">
+          <div className="flex items-center gap-0.5 bg-green-500 text-white text-[8px] font-bold px-1 py-0.5 rounded-full">
+            <CheckIcon className="h-2.5 w-2.5" />
+          </div>
+        </div>
+      )}
+      <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}>
+        <FolderOpen className={`h-6 w-6 ${recentlyChecked ? 'text-green-500' : 'text-primary-500'}`} />
       </div>
       <p className="text-[13px] font-semibold text-gray-900 text-center truncate w-full">{name}</p>
       <p className="text-[11px] text-gray-400">{count} шт</p>
+      {lastCheckDate && !recentlyChecked && (
+        <p className="text-[9px] text-gray-400">{formatDateShort(lastCheckDate)}</p>
+      )}
     </div>
   );
 }
@@ -888,6 +960,32 @@ export default function ProductsPage() {
 
   const allProducts = productsData?.data || [];
 
+  // Fetch inventory movements to determine last check dates for products
+  const { data: inventoryMovements } = useQuery<StockMovement[]>({
+    queryKey: ['inventory-movements'],
+    queryFn: async () => {
+      const res = await productsApi.getMovements({ limit: 5000 });
+      // res.data can be StockMovement[] or { data: StockMovement[] } depending on API
+      const raw = res.data as any;
+      const list: StockMovement[] = Array.isArray(raw) ? raw : (raw?.data ?? []);
+      return list.filter((m: StockMovement) => m.type === 'inventory');
+    },
+    staleTime: 60_000,
+  });
+
+  // Map: productId -> last inventory date string
+  const lastInventoryMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!inventoryMovements) return map;
+    for (const m of inventoryMovements) {
+      const existing = map.get(m.productId);
+      if (!existing || new Date(m.createdAt) > new Date(existing)) {
+        map.set(m.productId, m.createdAt);
+      }
+    }
+    return map;
+  }, [inventoryMovements]);
+
   // Fetch persisted empty warehouse categories
   const { data: warehouseCats } = useQuery<Array<{ id: string; path: string }>>({
     queryKey: ['warehouse-categories'],
@@ -967,6 +1065,40 @@ export default function ProductsPage() {
     return { subfolders: sortedSubfolders, currentProducts: prods };
   }, [allProducts, activePath, warehouseCats]);
 
+  // Compute per-folder inventory check info: whether all products in folder
+  // were checked within last 24h (recentlyChecked), and the latest check date
+  const folderCheckInfo = useMemo(() => {
+    const info = new Map<string, { recentlyChecked: boolean; lastCheckDate?: string }>();
+    if (lastInventoryMap.size === 0) return info;
+    const prefix = activePath.length > 0 ? activePath.join('/') : '';
+
+    for (const folder of subfolders) {
+      const folderPrefix = prefix ? `${prefix}/${folder.name}` : folder.name;
+      // Find all products in this folder (directly or nested)
+      const folderProducts = allProducts.filter(p => {
+        const cat = p.category || '';
+        return cat === folderPrefix || cat.startsWith(folderPrefix + '/');
+      });
+      if (folderProducts.length === 0) {
+        info.set(folder.name, { recentlyChecked: false });
+        continue;
+      }
+      let allCheckedRecently = true;
+      let latestDate: string | undefined;
+      for (const p of folderProducts) {
+        const checkDate = lastInventoryMap.get(p.id);
+        if (!checkDate) {
+          allCheckedRecently = false;
+        } else {
+          if (!isWithin24h(checkDate)) allCheckedRecently = false;
+          if (!latestDate || new Date(checkDate) > new Date(latestDate)) latestDate = checkDate;
+        }
+      }
+      info.set(folder.name, { recentlyChecked: allCheckedRecently, lastCheckDate: latestDate });
+    }
+    return info;
+  }, [subfolders, allProducts, activePath, lastInventoryMap]);
+
   const allCategoryPaths = useMemo(() => {
     const paths = new Set<string>();
     for (const p of allProducts) {
@@ -1036,6 +1168,7 @@ export default function ProductsPage() {
     onSuccess: () => {
       toast.success('Инвентаризация проведена');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
       setInventoryTarget(null);
     },
     onError: () => toast.error('Ошибка инвентаризации'),
@@ -1181,6 +1314,7 @@ export default function ProductsPage() {
             selectMode={!isSearch && selectMode}
             selected={selectedProducts.has(product.id)}
             onToggleSelect={() => toggleSelect(product.id)}
+            lastInventoryDate={lastInventoryMap.get(product.id)}
           />
         )}
       />
@@ -1355,15 +1489,20 @@ export default function ProductsPage() {
           {/* ── Category folders grid ── */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
             <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4 md:grid-cols-5">
-              {subfolders.map((folder) => (
-                <FolderTile
-                  key={folder.name}
-                  name={folder.name}
-                  count={folder.count}
-                  hasLow={folder.hasLow}
-                  onClick={() => enterFolder(folder.name)}
-                />
-              ))}
+              {subfolders.map((folder) => {
+                const checkInfo = folderCheckInfo.get(folder.name);
+                return (
+                  <FolderTile
+                    key={folder.name}
+                    name={folder.name}
+                    count={folder.count}
+                    hasLow={folder.hasLow}
+                    onClick={() => enterFolder(folder.name)}
+                    recentlyChecked={checkInfo?.recentlyChecked}
+                    lastCheckDate={checkInfo?.lastCheckDate}
+                  />
+                );
+              })}
               {/* New folder tile */}
               {canManageWarehouse && (
                 <div
@@ -1633,7 +1772,10 @@ export default function ProductsPage() {
                 await productsApi.updateStock(item.productId, { type: 'inventory', quantity: item.actual, reason: item.reason || 'Инвентаризация' });
               }
               queryClient.invalidateQueries({ queryKey: ['products'] });
+              queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
               toast.success(`Инвентаризация завершена (${items.length} позиций)`);
+            }}
+            onClose={() => {
               setWarehouseOpsMode(null);
               setWarehouseOpsOpen(false);
             }}
@@ -1779,6 +1921,137 @@ export default function ProductsPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Inventory Report Line
+// ---------------------------------------------------------------------------
+
+interface InventoryReportItem {
+  productId: string;
+  name: string;
+  unit?: string;
+  stockBefore: number;
+  actual: number;
+  diff: number;
+  costPrice: number;
+  damageAmount: number; // shortage * costPrice (positive for shortage)
+}
+
+// ---------------------------------------------------------------------------
+// Inventory Report View — shown after inventory is completed
+// ---------------------------------------------------------------------------
+
+function InventoryReport({
+  items,
+  onClose,
+}: {
+  items: InventoryReportItem[];
+  onClose: () => void;
+}) {
+  const shortageItems = items.filter(i => i.diff < 0);
+  const excessItems = items.filter(i => i.diff > 0);
+  const matchItems = items.filter(i => i.diff === 0);
+
+  const totalShortageAmount = shortageItems.reduce((sum, i) => sum + Math.abs(i.diff) * i.costPrice, 0);
+  const totalExcessAmount = excessItems.reduce((sum, i) => sum + i.diff * i.costPrice, 0);
+
+  return (
+    <div className="space-y-4 max-h-[70vh] flex flex-col">
+      {/* Summary cards */}
+      <div className="grid grid-cols-3 gap-2.5">
+        <div className="rounded-xl bg-red-50 border border-red-100 p-3 text-center">
+          <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider">Недостача</p>
+          <p className="text-base font-bold text-red-700 mt-0.5">{formatMoney(totalShortageAmount)}</p>
+          <p className="text-[11px] text-red-400 mt-0.5">{shortageItems.length} поз.</p>
+        </div>
+        <div className="rounded-xl bg-green-50 border border-green-100 p-3 text-center">
+          <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">Излишки</p>
+          <p className="text-base font-bold text-green-700 mt-0.5">{formatMoney(totalExcessAmount)}</p>
+          <p className="text-[11px] text-green-400 mt-0.5">{excessItems.length} поз.</p>
+        </div>
+        <div className="rounded-xl bg-gray-50 border border-gray-100 p-3 text-center">
+          <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Совпало</p>
+          <p className="text-base font-bold text-gray-700 mt-0.5">{matchItems.length}</p>
+          <p className="text-[11px] text-gray-400 mt-0.5">позиций</p>
+        </div>
+      </div>
+
+      {/* Detailed list */}
+      <div className="flex-1 overflow-y-auto min-h-0 space-y-1.5">
+        {/* Shortage items first */}
+        {shortageItems.length > 0 && (
+          <>
+            <p className="text-xs font-semibold text-red-600 uppercase tracking-wider pt-1">Недостача</p>
+            {shortageItems.map(item => (
+              <div key={item.productId} className="rounded-xl border border-red-100 bg-red-50/40 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
+                    <p className="text-[11px] text-gray-400">
+                      Было: {item.stockBefore} → Факт: {item.actual} {unitLabel(item.unit)}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-sm font-bold text-red-600">{item.diff}</p>
+                    <p className="text-[11px] text-red-400">{formatMoney(Math.abs(item.diff) * item.costPrice)}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* Excess items */}
+        {excessItems.length > 0 && (
+          <>
+            <p className="text-xs font-semibold text-green-600 uppercase tracking-wider pt-2">Излишки</p>
+            {excessItems.map(item => (
+              <div key={item.productId} className="rounded-xl border border-green-100 bg-green-50/40 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
+                    <p className="text-[11px] text-gray-400">
+                      Было: {item.stockBefore} → Факт: {item.actual} {unitLabel(item.unit)}
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-sm font-bold text-green-600">+{item.diff}</p>
+                    <p className="text-[11px] text-green-400">{formatMoney(item.diff * item.costPrice)}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* Matching items */}
+        {matchItems.length > 0 && (
+          <>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider pt-2">Без расхождений</p>
+            {matchItems.map(item => (
+              <div key={item.productId} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
+                    <p className="text-[11px] text-gray-400">Остаток: {item.actual} {unitLabel(item.unit)}</p>
+                  </div>
+                  <CheckIcon className="w-4 h-4 text-green-500 flex-shrink-0" />
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      <div className="flex items-center justify-end pt-3 border-t border-gray-100">
+        <button type="button" onClick={onClose}
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700">
+          Закрыть
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Global Inventory Form
 // ---------------------------------------------------------------------------
 
@@ -1787,16 +2060,25 @@ function GlobalInventoryForm({
   categories,
   activePath,
   onSubmit,
+  onClose,
 }: {
   products: Product[];
   categories: string[];
   activePath: string[];
   onSubmit: (items: Array<{ productId: string; actual: number; reason: string }>) => void;
+  onClose: () => void;
 }) {
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState('');
   const [entries, setEntries] = useState<Record<string, { actual: string; reason: string }>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [reportItems, setReportItems] = useState<InventoryReportItem[] | null>(null);
+
+  const productMap = useMemo(() => {
+    const map = new Map<string, Product>();
+    products.forEach(p => map.set(p.id, p));
+    return map;
+  }, [products]);
 
   const filtered = useMemo(() => {
     let list = products.filter(p => !p.isBundle);
@@ -1820,8 +2102,37 @@ function GlobalInventoryForm({
       }));
     if (items.length === 0) { toast.error('Укажите фактические остатки'); return; }
     setSubmitting(true);
-    try { await onSubmit(items); } finally { setSubmitting(false); }
+    try {
+      // Build report data before submitting (uses current stock values)
+      const report: InventoryReportItem[] = items.map(item => {
+        const product = productMap.get(item.productId);
+        const stockBefore = product?.stock ?? 0;
+        const diff = item.actual - stockBefore;
+        return {
+          productId: item.productId,
+          name: product?.name ?? 'Неизвестный товар',
+          unit: product?.unit,
+          stockBefore,
+          actual: item.actual,
+          diff,
+          costPrice: product?.costPrice ?? 0,
+          damageAmount: diff < 0 ? Math.abs(diff) * (product?.costPrice ?? 0) : 0,
+        };
+      });
+
+      await onSubmit(items);
+      setReportItems(report);
+    } finally {
+      setSubmitting(false);
+    }
   };
+
+  // Show report after successful inventory
+  if (reportItems) {
+    return (
+      <InventoryReport items={reportItems} onClose={onClose} />
+    );
+  }
 
   const countedIds = new Set(Object.keys(entries).filter(id => entries[id].actual !== ''));
 

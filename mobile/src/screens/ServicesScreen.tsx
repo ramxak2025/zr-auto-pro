@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { servicesApi } from '../api/services';
@@ -20,6 +21,7 @@ import type { Service, PaginatedResponse } from '../../../shared/types';
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 
 export default function ServicesScreen() {
+  const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -101,15 +103,33 @@ export default function ServicesScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
+      <LinearGradient
+        colors={[colors.white, colors.gray[50]] as [string, string]}
+        style={styles.header}
+      >
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Услуги</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="construct-outline" size={16} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Услуги</Text>
+          {total > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>{total}</Text>
+            </View>
+          )}
+        </View>
         <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
           <Text style={styles.addBtnText}>+ Новая</Text>
         </TouchableOpacity>
-      </View>
+      </LinearGradient>
 
       <View style={styles.searchWrap}>
         <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); }} placeholder="Поиск услуги..." />
@@ -170,8 +190,13 @@ export default function ServicesScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
+  countBadge: { backgroundColor: colors.primary[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
+  countBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600] },
   addBtn: { backgroundColor: colors.primary[600], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: spacing[4] },
