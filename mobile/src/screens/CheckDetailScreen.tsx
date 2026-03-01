@@ -34,12 +34,13 @@ export default function CheckDetailScreen() {
   // Entrance animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+    Animated.timing(fadeAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
   }, []);
 
   const { data: check, isLoading } = useQuery<Check>({
     queryKey: ['check', id],
     queryFn: async () => { const res = await checksApi.getById(id); return res.data; },
+    staleTime: 30_000,
   });
 
   const { data: company } = useQuery<Tenant>({

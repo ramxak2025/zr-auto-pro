@@ -11,6 +11,7 @@ import { scheduleApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
 
@@ -65,6 +66,7 @@ function GridTab() {
   const { data: entries, isLoading } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', dateFrom, dateTo],
     queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom, dateTo }); return res.data; },
+    staleTime: 30_000,
   });
 
   const { data: usersData } = useQuery<User[]>({
@@ -482,9 +484,14 @@ function SettingsTab() {
 
   const [applyModeId, setApplyModeId] = useState('');
   const [applyUserId, setApplyUserId] = useState('');
-  const [applyFrom, setApplyFrom] = useState('');
-  const [applyTo, setApplyTo] = useState('');
+  const [applyFrom, setApplyFrom] = useState<Date | null>(null);
+  const [applyTo, setApplyTo] = useState<Date | null>(null);
   const [showApplyModal, setShowApplyModal] = useState(false);
+  const [showApplyFromPicker, setShowApplyFromPicker] = useState(false);
+  const [showApplyToPicker, setShowApplyToPicker] = useState(false);
+
+  const formatPickerDate = (d: Date) => `${d.getDate().toString().padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+  const toISODate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
   const applyMutation = useMutation({
     mutationFn: (data: any) => scheduleApi.applyWorkMode(data),
@@ -541,7 +548,7 @@ function SettingsTab() {
                 <Text style={styles.modeName}>{mode.name}</Text>
                 <Text style={styles.modeInfo}>{mode.shiftStart} — {mode.shiftEnd}</Text>
               </View>
-              <TouchableOpacity style={styles.modeApplyBtn} onPress={() => { setApplyModeId(mode.id); setApplyUserId(''); setApplyFrom(''); setApplyTo(''); setShowApplyModal(true); }}>
+              <TouchableOpacity style={styles.modeApplyBtn} onPress={() => { setApplyModeId(mode.id); setApplyUserId(''); setApplyFrom(null); setApplyTo(null); setShowApplyModal(true); }}>
                 <Ionicons name="play" size={14} color={colors.primary[600]} />
               </TouchableOpacity>
             </View>
@@ -574,20 +581,42 @@ function SettingsTab() {
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
             <Text style={styles.formLabel}>С даты</Text>
-            <TextInput value={applyFrom} onChangeText={setApplyFrom} style={styles.formInput} placeholder="2026-03-01" placeholderTextColor={colors.gray[400]} />
+            <TouchableOpacity style={styles.formInput} onPress={() => setShowApplyFromPicker(true)}>
+              <Text style={{ fontSize: fontSize.sm, color: applyFrom ? colors.gray[900] : colors.gray[400] }}>
+                {applyFrom ? formatPickerDate(applyFrom) : 'Выберите'}
+              </Text>
+            </TouchableOpacity>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.formLabel}>По дату</Text>
-            <TextInput value={applyTo} onChangeText={setApplyTo} style={styles.formInput} placeholder="2026-03-31" placeholderTextColor={colors.gray[400]} />
+            <TouchableOpacity style={styles.formInput} onPress={() => setShowApplyToPicker(true)}>
+              <Text style={{ fontSize: fontSize.sm, color: applyTo ? colors.gray[900] : colors.gray[400] }}>
+                {applyTo ? formatPickerDate(applyTo) : 'Выберите'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
+        <DateTimePickerModal
+          visible={showApplyFromPicker}
+          value={applyFrom || new Date()}
+          mode="date"
+          onConfirm={(d) => { setShowApplyFromPicker(false); setApplyFrom(d); }}
+          onCancel={() => setShowApplyFromPicker(false)}
+        />
+        <DateTimePickerModal
+          visible={showApplyToPicker}
+          value={applyTo || new Date()}
+          mode="date"
+          onConfirm={(d) => { setShowApplyToPicker(false); setApplyTo(d); }}
+          onCancel={() => setShowApplyToPicker(false)}
+        />
         <View style={styles.formActions}>
           <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowApplyModal(false)}>
             <Text style={styles.cancelBtnText}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.applyBtn} onPress={() => {
             if (!applyFrom || !applyTo) { Alert.alert('Ошибка', 'Укажите даты'); return; }
-            applyMutation.mutate({ workModeId: applyModeId, userId: applyUserId || undefined, dateFrom: applyFrom, dateTo: applyTo });
+            applyMutation.mutate({ workModeId: applyModeId, userId: applyUserId || undefined, dateFrom: toISODate(applyFrom), dateTo: toISODate(applyTo) });
           }}>
             {applyMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : (
               <Text style={styles.applyBtnText}>Применить</Text>

@@ -1,18 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Alert,
+  View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { checksApi } from '../api/services';
+import { checksApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Check, PaginatedResponse } from '../../../shared/types';
+import type { Check, PaginatedResponse, User } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = { cash: 'Наличные', card: 'Карта', warranty: 'Гарантия', cash_card: 'Нал/Карта' };
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
@@ -42,14 +43,39 @@ export default function ChecksScreen() {
   const limit = 20;
   const [refreshing, setRefreshing] = useState(false);
 
+  // Filters
+  const [showFilters, setShowFilters] = useState(false);
+  const [dateFrom, setDateFrom] = useState<Date | null>(null);
+  const [dateTo, setDateTo] = useState<Date | null>(null);
+  const [filterMasterId, setFilterMasterId] = useState('');
+  const [showDateFromPicker, setShowDateFromPicker] = useState(false);
+  const [showDateToPicker, setShowDateToPicker] = useState(false);
+
+  const activeFilterCount = (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0);
+
+  const { data: allUsers } = useQuery<User[]>({
+    queryKey: ['users-for-filter'],
+    queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
+    staleTime: 5 * 60_000,
+  });
+
+  const activeUsers = useMemo(() => (allUsers || []).filter(u => u.isActive), [allUsers]);
+
+  const formatFilterDate = (d: Date) => `${d.getDate().toString().padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+  const toISODate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
   const { data: checksData, isLoading } = useQuery<PaginatedResponse<Check>>({
-    queryKey: ['checks', page, search],
+    queryKey: ['checks', page, search, dateFrom ? toISODate(dateFrom) : '', dateTo ? toISODate(dateTo) : '', filterMasterId],
     queryFn: async () => {
       const params: Record<string, any> = { page, limit };
       if (search) params.search = search;
+      if (dateFrom) params.dateFrom = toISODate(dateFrom);
+      if (dateTo) params.dateTo = toISODate(dateTo);
+      if (filterMasterId) params.masterId = filterMasterId;
       const res = await checksApi.getAll(params);
       return res.data;
     },
+    staleTime: 30_000,
   });
 
   const deleteMutation = useMutation({
@@ -193,10 +219,96 @@ export default function ChecksScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
+      {/* Search + Filter toggle */}
       <View style={styles.searchWrap}>
-        <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); lastDateGroup = ''; }} placeholder="Поиск по клиенту, авто, номеру..." />
+        <View style={{ flex: 1 }}>
+          <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1); lastDateGroup = ''; }} placeholder="Поиск по клиенту, авто, номеру..." />
+        </View>
+        <TouchableOpacity style={[styles.filterToggle, activeFilterCount > 0 && styles.filterToggleActive]} onPress={() => setShowFilters(!showFilters)}>
+          <Ionicons name="options-outline" size={18} color={activeFilterCount > 0 ? colors.primary[600] : colors.gray[500]} />
+          {activeFilterCount > 0 && (
+            <View style={styles.filterBadge}><Text style={styles.filterBadgeText}>{activeFilterCount}</Text></View>
+          )}
+        </TouchableOpacity>
       </View>
+
+      {/* Filters panel */}
+      {showFilters && (
+        <View style={styles.filtersPanel}>
+          {/* Date range */}
+          <View style={styles.filterRow}>
+            <TouchableOpacity style={styles.filterDateBtn} onPress={() => setShowDateFromPicker(true)}>
+              <Ionicons name="calendar-outline" size={14} color={colors.gray[500]} />
+              <Text style={[styles.filterDateText, dateFrom && { color: colors.gray[900] }]}>
+                {dateFrom ? formatFilterDate(dateFrom) : 'С даты'}
+              </Text>
+              {dateFrom && (
+                <TouchableOpacity onPress={() => { setDateFrom(null); setPage(1); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close-circle" size={14} color={colors.gray[400]} />
+                </TouchableOpacity>
+              )}
+            </TouchableOpacity>
+            <Ionicons name="arrow-forward" size={12} color={colors.gray[300]} />
+            <TouchableOpacity style={styles.filterDateBtn} onPress={() => setShowDateToPicker(true)}>
+              <Ionicons name="calendar-outline" size={14} color={colors.gray[500]} />
+              <Text style={[styles.filterDateText, dateTo && { color: colors.gray[900] }]}>
+                {dateTo ? formatFilterDate(dateTo) : 'По дату'}
+              </Text>
+              {dateTo && (
+                <TouchableOpacity onPress={() => { setDateTo(null); setPage(1); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close-circle" size={14} color={colors.gray[400]} />
+                </TouchableOpacity>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Employee filter */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing[2] }}>
+            <View style={{ flexDirection: 'row', gap: spacing[1.5] }}>
+              <TouchableOpacity
+                style={[styles.empChip, !filterMasterId && styles.empChipActive]}
+                onPress={() => { setFilterMasterId(''); setPage(1); }}
+              >
+                <Text style={[styles.empChipText, !filterMasterId && styles.empChipTextActive]}>Все</Text>
+              </TouchableOpacity>
+              {activeUsers.map(u => (
+                <TouchableOpacity
+                  key={u.id}
+                  style={[styles.empChip, filterMasterId === u.id && styles.empChipActive]}
+                  onPress={() => { setFilterMasterId(filterMasterId === u.id ? '' : u.id); setPage(1); }}
+                >
+                  <Text style={[styles.empChipText, filterMasterId === u.id && styles.empChipTextActive]}>
+                    {u.fullName?.split(' ')[0]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+
+          {activeFilterCount > 0 && (
+            <TouchableOpacity style={styles.clearFiltersBtn} onPress={() => { setDateFrom(null); setDateTo(null); setFilterMasterId(''); setPage(1); }}>
+              <Ionicons name="close-circle-outline" size={14} color={colors.red[500]} />
+              <Text style={styles.clearFiltersBtnText}>Сбросить фильтры</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Date pickers */}
+      <DateTimePickerModal
+        visible={showDateFromPicker}
+        value={dateFrom || new Date()}
+        mode="date"
+        onConfirm={(d) => { setShowDateFromPicker(false); setDateFrom(d); setPage(1); }}
+        onCancel={() => setShowDateFromPicker(false)}
+      />
+      <DateTimePickerModal
+        visible={showDateToPicker}
+        value={dateTo || new Date()}
+        mode="date"
+        onConfirm={(d) => { setShowDateToPicker(false); setDateTo(d); setPage(1); }}
+        onCancel={() => setShowDateToPicker(false)}
+      />
 
       {/* Content */}
       {isLoading ? (
@@ -226,7 +338,21 @@ const styles = StyleSheet.create({
   totalCount: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600], backgroundColor: colors.primary[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full, overflow: 'hidden' },
   newBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], backgroundColor: colors.primary[600], paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },
   newBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  searchWrap: { paddingHorizontal: spacing[4], marginBottom: spacing[1] },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingHorizontal: spacing[4], marginBottom: spacing[1] },
+  filterToggle: { width: 40, height: 40, borderRadius: borderRadius.lg, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
+  filterToggleActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
+  filterBadge: { position: 'absolute', top: -2, right: -2, width: 16, height: 16, borderRadius: 8, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center' },
+  filterBadgeText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.white },
+  filtersPanel: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  filterDateBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
+  filterDateText: { flex: 1, fontSize: fontSize.xs, color: colors.gray[400] },
+  empChip: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: borderRadius.full, backgroundColor: colors.gray[100], borderWidth: 1, borderColor: colors.gray[200] },
+  empChipActive: { backgroundColor: colors.primary[50], borderColor: colors.primary[500] },
+  empChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600] },
+  empChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
+  clearFiltersBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1.5], marginTop: spacing[2], paddingVertical: spacing[1.5] },
+  clearFiltersBtnText: { fontSize: fontSize.xs, color: colors.red[500], fontWeight: fontWeight.medium },
   list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8] },
 
   // Date group headers

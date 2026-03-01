@@ -323,22 +323,22 @@ export default function SupplierDetailScreen() {
           style={[styles.formInput, { marginBottom: spacing[3] }]}
           placeholder="Поиск товара..."
           placeholderTextColor={colors.gray[400]}
+          autoFocus
         />
-        <FlatList
-          data={products || []}
-          keyExtractor={(i: any) => i.id}
-          style={{ maxHeight: 300 }}
-          renderItem={({ item }: { item: Product }) => (
-            <TouchableOpacity style={styles.productRow} onPress={() => addProduct(item)}>
+        <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+          {(products || []).map((item: Product) => (
+            <TouchableOpacity key={item.id} style={styles.productRow} onPress={() => addProduct(item)}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
                 <Text style={styles.productInfo}>Себестоимость: {formatMoney(item.costPrice || 0)} · Остаток: {item.stock}</Text>
               </View>
               <Ionicons name="add-circle" size={24} color={colors.primary[500]} />
             </TouchableOpacity>
+          ))}
+          {(products || []).length === 0 && (
+            <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[6] }}>Нет товаров</Text>
           )}
-          ListEmptyComponent={<Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[6] }}>Нет товаров</Text>}
-        />
+        </ScrollView>
       </Modal>
 
       {/* New Payment Modal */}

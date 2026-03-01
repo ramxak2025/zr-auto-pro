@@ -9,10 +9,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { checksApi, clientsApi, carsApi, usersApi, servicesApi, productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import Modal from '../components/Modal';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Client, Car, User, Service, Product, CheckServiceLine, CheckProductLine, PaymentMethod } from '../../../shared/types';
 
@@ -376,14 +376,20 @@ export default function CheckCreateScreen() {
               </TouchableOpacity>
             </View>
 
-            {showDatePicker && (
-              <DateTimePicker value={checkDate} mode="date" display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                onChange={(_, d) => { setShowDatePicker(false); if (d) { const u = new Date(checkDate); u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate()); setCheckDate(u); } }} />
-            )}
-            {showTimePicker && (
-              <DateTimePicker value={checkDate} mode="time" display={Platform.OS === 'ios' ? 'spinner' : 'default'} is24Hour
-                onChange={(_, d) => { setShowTimePicker(false); if (d) { const u = new Date(checkDate); u.setHours(d.getHours(), d.getMinutes()); setCheckDate(u); } }} />
-            )}
+            <DateTimePickerModal
+              visible={showDatePicker}
+              value={checkDate}
+              mode="date"
+              onConfirm={(d) => { setShowDatePicker(false); const u = new Date(checkDate); u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate()); setCheckDate(u); }}
+              onCancel={() => setShowDatePicker(false)}
+            />
+            <DateTimePickerModal
+              visible={showTimePicker}
+              value={checkDate}
+              mode="time"
+              onConfirm={(d) => { setShowTimePicker(false); const u = new Date(checkDate); u.setHours(d.getHours(), d.getMinutes()); setCheckDate(u); }}
+              onCancel={() => setShowTimePicker(false)}
+            />
 
             {/* Client search */}
             <TouchableOpacity style={styles.plateSearch} onPress={() => { setPlateSearch(''); setShowPlatePicker(true); }} activeOpacity={0.7}>
@@ -752,7 +758,7 @@ export default function CheckCreateScreen() {
       </Modal>
 
       {/* Product Picker — 80% of screen height */}
-      <RNModal visible={showProductPicker} animationType="slide" transparent onRequestClose={() => setShowProductPicker(false)}>
+      <RNModal visible={showProductPicker} animationType="fade" transparent onRequestClose={() => setShowProductPicker(false)}>
         <View style={styles.productPickerOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowProductPicker(false)} />
           <Animated.View
