@@ -658,7 +658,7 @@ export default function ProductsScreen() {
                 autoFocus
               />
             </View>
-            <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}>
+            <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
               {filteredWriteoffProducts.map(p => (
                 <TouchableOpacity key={p.id} style={styles.writeoffItem} onPress={() => selectWriteoffProduct(p)}>
                   <View style={{ flex: 1 }}>

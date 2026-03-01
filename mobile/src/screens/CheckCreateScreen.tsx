@@ -691,7 +691,7 @@ export default function CheckCreateScreen() {
           placeholder="Госномер, имя или телефон..." placeholderTextColor={colors.gray[400]}
           autoFocus autoCapitalize="characters"
         />
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4, marginTop: spacing[3] }}>
+        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4, marginTop: spacing[3] }} keyboardShouldPersistTaps="handled">
           {plateResults.map(({ client, car }) => (
             <TouchableOpacity key={`${client.id}-${car.id}`} style={styles.pickerItem}
               onPress={() => { setClientId(client.id); setCarId(car.id); setShowPlatePicker(false); }}>
@@ -715,7 +715,7 @@ export default function CheckCreateScreen() {
 
       {/* Master Picker */}
       <Modal visible={showMasterPicker !== null} onClose={() => setShowMasterPicker(null)} title="Выберите мастера">
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }}>
+        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
           {masters.map(m => {
             const isSelected = showMasterPicker !== null && (serviceLines[showMasterPicker]?.lineMasterId || serviceLines[showMasterPicker]?.masterId) === m.id;
             return (
@@ -744,7 +744,7 @@ export default function CheckCreateScreen() {
       <Modal visible={showServicePicker} onClose={() => setShowServicePicker(false)} title="Добавить услугу">
         <TextInput value={serviceSearch} onChangeText={setServiceSearch} style={[styles.formInput, { marginBottom: spacing[3] }]}
           placeholder="Поиск услуги..." placeholderTextColor={colors.gray[400]} autoFocus />
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }}>
+        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
           {filteredServices.map(service => (
             <TouchableOpacity key={service.id} style={styles.pickerItem} onPress={() => addServiceLine(service)}>
               <View style={{ flex: 1 }}><Text style={styles.pickerName}>{service.name}</Text></View>

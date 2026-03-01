@@ -236,17 +236,17 @@ const styles = StyleSheet.create({
   },
   logoWrap: {
     alignItems: 'center',
-    marginBottom: spacing[3],
+    marginBottom: spacing[4],
   },
   logoImage: {
-    width: 180,
-    height: 64,
+    width: 260,
+    height: 72,
   },
   subtitle: {
     textAlign: 'center',
     fontSize: fontSize.sm,
     color: colors.gray[400],
-    marginBottom: spacing[10],
+    marginBottom: spacing[8],
     letterSpacing: 1,
   },
   fieldWrap: {

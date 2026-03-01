@@ -577,7 +577,7 @@ export default function UsersScreen() {
             style={[styles.formInput, { marginBottom: spacing[3] }]}
             placeholder="Поиск товара..." placeholderTextColor={colors.gray[400]} autoFocus
           />
-          <ScrollView style={{ maxHeight: 300 }}>
+          <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
             {filteredProducts.map(p => (
               <TouchableOpacity key={p.id} style={styles.productPickerItem} onPress={() => addCommissionProduct(p)}>
                 <View style={{ flex: 1 }}>

@@ -258,7 +258,7 @@ export default function SupplierDetailScreen() {
 
       {/* New Delivery Modal */}
       <Modal visible={deliveryModalOpen} onClose={() => setDeliveryModalOpen(false)} title="Новая поставка">
-        <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false}>
+        <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           <TouchableOpacity style={styles.addItemBtn} onPress={() => setProductPickerOpen(true)}>
             <Ionicons name="add" size={18} color={colors.primary[600]} />
             <Text style={styles.addItemText}>Добавить товар</Text>
@@ -325,7 +325,7 @@ export default function SupplierDetailScreen() {
           placeholderTextColor={colors.gray[400]}
           autoFocus
         />
-        <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+        <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {(products || []).map((item: Product) => (
             <TouchableOpacity key={item.id} style={styles.productRow} onPress={() => addProduct(item)}>
               <View style={{ flex: 1 }}>
