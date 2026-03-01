@@ -58,10 +58,10 @@ export default function CheckDetailScreen() {
     const phone = c?.phone || '';
     const footer = c?.receiptFooter || '';
     const date = formatShortDate(check.date) + ' ' + formatTime(check.date);
-    const servicesHtml = check.services.map(s =>
+    const servicesHtml = (check.services || []).map(s =>
       `<tr><td>${s.name}</td><td style="text-align:right">${s.quantity}</td><td style="text-align:right">${formatMoney(s.total)}</td></tr>`
     ).join('');
-    const productsHtml = check.products.map(p =>
+    const productsHtml = (check.products || []).map(p =>
       `<tr><td>${p.name}</td><td style="text-align:right">${p.quantity}</td><td style="text-align:right">${formatMoney(p.totalSell)}</td></tr>`
     ).join('');
     const html = `
@@ -264,10 +264,10 @@ export default function CheckDetailScreen() {
               </View>
               <Text style={styles.sectionTitle}>{'\u0423\u0441\u043B\u0443\u0433\u0438'}</Text>
               <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>{check.services.length}</Text>
+                <Text style={styles.countBadgeText}>{(check.services || []).length}</Text>
               </View>
             </View>
-            {check.services.map((line, idx) => (
+            {(check.services || []).map((line, idx) => (
               <View key={idx} style={[styles.lineRow, idx === 0 && { borderTopWidth: 0 }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.lineName}>{line.name}</Text>
@@ -293,10 +293,10 @@ export default function CheckDetailScreen() {
               </View>
               <Text style={styles.sectionTitle}>{'\u0422\u043E\u0432\u0430\u0440\u044B'}</Text>
               <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>{check.products.length}</Text>
+                <Text style={styles.countBadgeText}>{(check.products || []).length}</Text>
               </View>
             </View>
-            {check.products.map((line, idx) => (
+            {(check.products || []).map((line, idx) => (
               <View key={idx} style={[styles.lineRow, idx === 0 && { borderTopWidth: 0 }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.lineName}>{line.name}</Text>

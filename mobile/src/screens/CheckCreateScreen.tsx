@@ -11,6 +11,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { checksApi, clientsApi, carsApi, usersApi, servicesApi, productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
+import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -216,7 +217,7 @@ export default function CheckCreateScreen() {
   const cardAmountCalc = Math.max(total - (Number(cashAmount) || 0), 0);
 
   // Get current user as default master
-  const { user: currentUser } = require('../contexts/AuthContext').useAuth();
+  const { user: currentUser } = useAuth();
   const defaultMasterId = currentUser?.id || '';
 
   const addServiceLine = (service: Service) => {
