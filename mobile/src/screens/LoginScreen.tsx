@@ -16,8 +16,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
-import { getSavedServerUrl, setServerUrl } from '../api/axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
 function formatPhone(raw: string): string {
@@ -36,7 +34,7 @@ function formatPhone(raw: string): string {
 }
 
 export default function LoginScreen() {
-  const { login, configureServer } = useAuth();
+  const { login } = useAuth();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -209,33 +207,6 @@ export default function LoginScreen() {
             </Animated.View>
           </View>
 
-          {/* Change server */}
-          <TouchableOpacity
-            style={styles.changeServerBtn}
-            onPress={() => {
-              Alert.alert(
-                'Сменить сервер',
-                'Вы уверены? Текущее подключение будет сброшено.',
-                [
-                  { text: 'Отмена', style: 'cancel' },
-                  {
-                    text: 'Сменить',
-                    style: 'destructive',
-                    onPress: async () => {
-                      await AsyncStorage.removeItem('server_url');
-                      await AsyncStorage.removeItem('token');
-                      await configureServer('');
-                      // Force reload by setting empty — AuthContext will show ServerSetup
-                    },
-                  },
-                ]
-              );
-            }}
-          >
-            <Ionicons name="server-outline" size={14} color={colors.gray[400]} />
-            <Text style={styles.changeServerText}>Сменить сервер</Text>
-          </TouchableOpacity>
-
           {/* Footer */}
           <Text style={styles.footer}>Autexa v1.8 © 2026</Text>
         </ScrollView>
@@ -393,22 +364,10 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
     color: colors.blue[700],
   },
-  changeServerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[1.5],
-    marginTop: spacing[6],
-    paddingVertical: spacing[2],
-  },
-  changeServerText: {
-    fontSize: fontSize.xs,
-    color: colors.gray[400],
-  },
   footer: {
     textAlign: 'center',
     fontSize: fontSize.xs,
     color: colors.gray[300],
-    marginTop: spacing[3],
+    marginTop: spacing[8],
   },
 });

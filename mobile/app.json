@@ -25,7 +25,9 @@
       },
       "package": "com.autexa.mobile"
     },
-    "extra": {},
+    "extra": {
+      "apiUrl": "http://212.8.229.254:3000/api"
+    },
     "plugins": []
   }
 }
