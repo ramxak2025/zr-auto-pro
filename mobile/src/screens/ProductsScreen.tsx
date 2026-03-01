@@ -59,6 +59,8 @@ export default function ProductsScreen() {
   const [inventorySearch, setInventorySearch] = useState('');
   const [inventoryItems, setInventoryItems] = useState<{ productId: string; name: string; currentStock: number; actualStock: string }[]>([]);
   const [inventoryReason, setInventoryReason] = useState('');
+  const [showInventoryPicker, setShowInventoryPicker] = useState(false);
+  const [inventoryPickerSearch, setInventoryPickerSearch] = useState('');
 
   // Writeoff modal state
   const [showWriteoffModal, setShowWriteoffModal] = useState(false);
@@ -69,6 +71,7 @@ export default function ProductsScreen() {
   const [writeoffReason, setWriteoffReason] = useState('');
   const [writeoffSearch, setWriteoffSearch] = useState('');
   const [writeoffStep, setWriteoffStep] = useState<'select' | 'form'>('select');
+  const [showWriteoffPicker, setShowWriteoffPicker] = useState(false);
 
   const { data, isLoading } = useQuery<PaginatedResponse<Product>>({
     queryKey: ['products', { search, limit }],
@@ -294,7 +297,7 @@ export default function ProductsScreen() {
     setWriteoffProductStock(0);
     setWriteoffQty('');
     setWriteoffReason('');
-    setShowWriteoffModal(true);
+    setShowWriteoffPicker(true);
   };
 
   const selectWriteoffProduct = (p: Product) => {
@@ -303,7 +306,9 @@ export default function ProductsScreen() {
     setWriteoffProductStock(p.stock);
     setWriteoffQty('');
     setWriteoffReason('');
+    setShowWriteoffPicker(false);
     setWriteoffStep('form');
+    setShowWriteoffModal(true);
   };
 
   const handleWriteoffSubmit = async () => {
@@ -337,6 +342,10 @@ export default function ProductsScreen() {
 
   const filteredWriteoffProducts = writeoffSearch
     ? allProducts.filter(p => p.name.toLowerCase().includes(writeoffSearch.toLowerCase()))
+    : allProducts;
+
+  const filteredInventoryPickerProducts = inventoryPickerSearch
+    ? allProducts.filter(p => p.name.toLowerCase().includes(inventoryPickerSearch.toLowerCase()))
     : allProducts;
 
   // Photo display helper

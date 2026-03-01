@@ -7,7 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { usersApi, productsApi } from '../api/services';
+import * as ImagePicker from 'expo-image-picker';
+import { usersApi, productsApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -270,6 +271,29 @@ export default function UsersScreen() {
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
+  const handleAvatarChange = async (userId: string) => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      const asset = result.assets[0];
+      const filename = asset.fileName || `avatar_${userId}.jpg`;
+      const uploadRes = await uploadsApi.upload(asset.uri, filename);
+      const uploadedUrl = uploadRes.data.url;
+      await usersApi.update(userId, { avatar: uploadedUrl });
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      Alert.alert('Готово', 'Аватар обновлён');
+    } catch (err: any) {
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось загрузить аватар');
+    }
+  };
+
+  const isDirectorOrSuperadmin = currentUser?.role === 'director' || currentUser?.role === 'superadmin';
+
   if (isLoading) return <LoadingSpinner />;
 
   const getRoleBadge = (role: string) => {
@@ -344,13 +368,20 @@ export default function UsersScreen() {
             return (
               <View key={user.id} style={styles.userCard}>
                 <TouchableOpacity style={styles.userRow} onPress={() => openEdit(user)} activeOpacity={0.7}>
-                  {getImageUrl(user.avatar) ? (
-                    <Image source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
-                  ) : (
-                    <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
-                      <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
-                    </View>
-                  )}
+                  <View style={styles.avatarWrap}>
+                    {getImageUrl(user.avatar) ? (
+                      <Image source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
+                    ) : (
+                      <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
+                        <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
+                      </View>
+                    )}
+                    {isDirectorOrSuperadmin && (
+                      <TouchableOpacity style={styles.avatarCameraBtn} onPress={() => handleAvatarChange(user.id)} activeOpacity={0.7}>
+                        <Ionicons name="camera" size={12} color={colors.white} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                       <Text style={styles.userName} numberOfLines={1}>{user.fullName}</Text>
@@ -621,6 +652,8 @@ const styles = StyleSheet.create({
   avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   avatarImage: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: colors.gray[100] },
   avatarText: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
+  avatarWrap: { position: 'relative' },
+  avatarCameraBtn: { position: 'absolute', bottom: -2, right: -2, width: 22, height: 22, borderRadius: 11, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.white },
   userName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900], flexShrink: 1 },
   roleBadge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
   roleBadgeText: { fontSize: 11, fontWeight: fontWeight.medium },

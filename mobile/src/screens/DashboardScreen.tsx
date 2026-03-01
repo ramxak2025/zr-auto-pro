@@ -413,12 +413,31 @@ function EmployeeRankingSection() {
   if (!ranking) return null;
   const data = tab === 'today' ? (ranking.today || []) : (ranking.month || []);
 
+  // Split into top 3 and the rest
+  const top3 = data.slice(0, 3);
+  const rest = data.slice(3);
+
+  // Reorder top3 for podium: [2nd, 1st, 3rd]
+  const podiumOrder = top3.length >= 3
+    ? [top3[1], top3[0], top3[2]]
+    : top3.length === 2
+      ? [top3[1], top3[0]]
+      : top3;
+  const podiumPositions = top3.length >= 3
+    ? [2, 1, 3]
+    : top3.length === 2
+      ? [2, 1]
+      : [1];
+
+  const podiumColors: Record<number, string> = { 1: '#FFD700', 2: '#E8E8E8', 3: '#F4A460' };
+
   return (
     <AnimatedCard index={3} style={styles.card}>
+      {/* Card header */}
       <View style={styles.rankingHeader}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Ionicons name="trophy-outline" size={16} color={colors.amber[600]} />
-          <Text style={styles.sectionTitle}>Рейтинг сотрудников</Text>
+          <Ionicons name="flame-outline" size={18} color={colors.amber[600]} />
+          <Text style={styles.sectionTitle}>Рейтинг мастеров</Text>
         </View>
         <View style={styles.tabRow}>
           <TouchableOpacity
@@ -435,25 +454,52 @@ function EmployeeRankingSection() {
           </TouchableOpacity>
         </View>
       </View>
+
       {data.length === 0 ? (
-        <Text style={styles.emptyText}>Нет данных за выбранный период</Text>
+        <View style={styles.rankingEmpty}>
+          <Ionicons name="bar-chart-outline" size={32} color={colors.gray[300]} />
+          <Text style={styles.rankingEmptyText}>Нет данных</Text>
+        </View>
       ) : (
-        data.map((emp, idx) => (
-          <View key={emp.masterId} style={styles.rankingRow}>
-            <View style={[styles.rankBadge, idx === 0 && styles.rankGold, idx === 1 && styles.rankSilver, idx === 2 && styles.rankBronze]}>
-              {idx < 3 ? (
-                <Ionicons name="trophy" size={14} color={idx === 0 ? '#FFD700' : idx === 1 ? '#C0C0C0' : '#CD7F32'} />
-              ) : (
-                <Text style={styles.rankBadgeText}>{idx + 1}</Text>
-              )}
-            </View>
-            <View style={styles.rankInfo}>
-              <Text style={styles.rankName} numberOfLines={1}>{emp.masterName}</Text>
-              <Text style={styles.rankSub}>{emp.checkCount} заказов</Text>
-            </View>
-            <Text style={styles.rankRevenue}>{formatMoney(emp.revenue)}</Text>
+        <>
+          {/* Top 3 podium */}
+          <View style={styles.podiumContainer}>
+            {podiumOrder.map((emp, idx) => {
+              const pos = podiumPositions[idx];
+              const isFirst = pos === 1;
+              const bgColor = podiumColors[pos] || colors.gray[200];
+              return (
+                <View key={emp.masterId} style={[styles.podiumItem, isFirst && styles.podiumItemFirst]}>
+                  <View style={[styles.podiumCircle, isFirst && styles.podiumCircleFirst, { backgroundColor: bgColor }]}>
+                    <Text style={[styles.podiumPosition, isFirst && styles.podiumPositionFirst]}>{pos}</Text>
+                  </View>
+                  <Text style={[styles.podiumName, isFirst && styles.podiumNameFirst]} numberOfLines={1}>
+                    {emp.masterName.split(' ')[0]}
+                  </Text>
+                  <Text style={[styles.podiumRevenue, isFirst && styles.podiumRevenueFirst]}>{formatMoney(emp.revenue)}</Text>
+                </View>
+              );
+            })}
           </View>
-        ))
+
+          {/* Remaining employees */}
+          {rest.length > 0 && (
+            <View style={styles.rankingList}>
+              {rest.map((emp, idx) => (
+                <View key={emp.masterId} style={[styles.rankingListRow, idx < rest.length - 1 && styles.rankingListRowBorder]}>
+                  <View style={styles.rankingListNum}>
+                    <Text style={styles.rankingListNumText}>{idx + 4}</Text>
+                  </View>
+                  <View style={styles.rankInfo}>
+                    <Text style={styles.rankName} numberOfLines={1}>{emp.masterName}</Text>
+                    <Text style={styles.rankSub}>{emp.checkCount} заказов</Text>
+                  </View>
+                  <Text style={styles.rankRevenue}>{formatMoney(emp.revenue)}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </>
       )}
     </AnimatedCard>
   );
@@ -775,12 +821,26 @@ const styles = StyleSheet.create({
   tabBtnActive: { backgroundColor: colors.white, shadowColor: colors.black, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2 },
   tabBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
   tabBtnTextActive: { color: colors.gray[900] },
-  rankingRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 1, borderTopColor: colors.gray[50] },
-  rankBadge: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.gray[50], marginRight: spacing[3] },
-  rankGold: { backgroundColor: colors.amber[100] },
-  rankSilver: { backgroundColor: colors.gray[100] },
-  rankBronze: { backgroundColor: colors.orange[50] },
-  rankBadgeText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[400] },
+  rankingEmpty: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[8], gap: spacing[2] },
+  rankingEmptyText: { fontSize: fontSize.sm, color: colors.gray[400] },
+  // Podium
+  podiumContainer: { flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-end', gap: spacing[3], marginBottom: spacing[4], paddingTop: spacing[2] },
+  podiumItem: { alignItems: 'center', flex: 1, maxWidth: 100 },
+  podiumItemFirst: { marginBottom: spacing[2] },
+  podiumCircle: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[1.5], shadowColor: colors.black, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3 },
+  podiumCircleFirst: { width: 60, height: 60, borderRadius: 30 },
+  podiumPosition: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[700] },
+  podiumPositionFirst: { fontSize: fontSize.xl },
+  podiumName: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[700], textAlign: 'center' },
+  podiumNameFirst: { fontSize: fontSize.xs, color: colors.gray[900] },
+  podiumRevenue: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.gray[500], marginTop: 2 },
+  podiumRevenueFirst: { fontSize: 11, color: colors.gray[900] },
+  // Ranking list (below podium)
+  rankingList: { borderTopWidth: 1, borderTopColor: colors.gray[100], paddingTop: spacing[2] },
+  rankingListRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[2.5] },
+  rankingListRowBorder: { borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
+  rankingListNum: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.gray[50], marginRight: spacing[3] },
+  rankingListNumText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.gray[400] },
   rankInfo: { flex: 1, minWidth: 0 },
   rankName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   rankSub: { fontSize: 11, color: colors.gray[400] },
