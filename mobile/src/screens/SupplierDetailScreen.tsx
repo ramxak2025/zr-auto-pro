@@ -1,21 +1,20 @@
 import React, { useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, Alert, ActivityIndicator, Dimensions,
-  Modal as RNModal,
+  RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { suppliersApi, productsApi } from '../api/services';
+import { suppliersApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
+import ProductPickerModal from '../components/ProductPickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Supplier, Delivery, SupplierPayment, Product } from '../../../shared/types';
 
-const SCREEN_HEIGHT = Dimensions.get('window').height;
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 function formatDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
@@ -41,7 +40,6 @@ export default function SupplierDetailScreen() {
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItem[]>([]);
   const [deliveryComment, setDeliveryComment] = useState('');
   const [productPickerOpen, setProductPickerOpen] = useState(false);
-  const [productSearch, setProductSearch] = useState('');
 
   // Payment form
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
@@ -61,12 +59,6 @@ export default function SupplierDetailScreen() {
   const { data: payments } = useQuery<SupplierPayment[]>({
     queryKey: ['supplier-payments', id],
     queryFn: async () => { const res = await suppliersApi.getPayments({ supplierId: id }); return res.data; },
-  });
-
-  const { data: products } = useQuery<Product[]>({
-    queryKey: ['products-for-delivery', productSearch],
-    queryFn: async () => { const res = await productsApi.getAll({ search: productSearch }); return res.data?.data || res.data; },
-    enabled: productPickerOpen,
   });
 
   const invalidateAll = () => Promise.all([
@@ -328,7 +320,7 @@ export default function SupplierDetailScreen() {
       {/* New Delivery Modal */}
       <Modal visible={deliveryModalOpen} onClose={() => setDeliveryModalOpen(false)} title="Новая поставка">
         <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity style={styles.addItemBtn} onPress={() => { setProductSearch(''); setDeliveryModalOpen(false); setTimeout(() => setProductPickerOpen(true), 300); }}>
+          <TouchableOpacity style={styles.addItemBtn} onPress={() => { setDeliveryModalOpen(false); setTimeout(() => setProductPickerOpen(true), 300); }}>
             <Ionicons name="add" size={18} color={colors.primary[600]} />
             <Text style={styles.addItemText}>Добавить товар</Text>
           </TouchableOpacity>
@@ -384,76 +376,15 @@ export default function SupplierDetailScreen() {
         </View>
       </Modal>
 
-      {/* Product Picker — 80% bottom sheet */}
-      <RNModal visible={productPickerOpen} animationType="slide" transparent onRequestClose={() => { setProductPickerOpen(false); setProductSearch(''); setTimeout(() => setDeliveryModalOpen(true), 300); }}>
-        <View style={styles.bottomSheetOverlay}>
-          <TouchableOpacity style={styles.bottomSheetBackdrop} activeOpacity={1} onPress={() => { setProductPickerOpen(false); setProductSearch(''); setTimeout(() => setDeliveryModalOpen(true), 300); }} />
-          <View style={styles.bottomSheet}>
-            <View style={styles.bottomSheetHandle} />
-            <Text style={styles.bottomSheetTitle}>Выберите товар</Text>
-
-            <View style={styles.bottomSheetSearch}>
-              <Ionicons name="search" size={18} color={colors.gray[400]} />
-              <TextInput
-                value={productSearch}
-                onChangeText={setProductSearch}
-                style={styles.bottomSheetSearchInput}
-                placeholder="Поиск товара..."
-                placeholderTextColor={colors.gray[400]}
-                autoFocus
-              />
-              {productSearch.length > 0 && (
-                <TouchableOpacity onPress={() => setProductSearch('')}>
-                  <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Selected items count badge */}
-            {deliveryItems.length > 0 && (
-              <View style={styles.selectedBadge}>
-                <Ionicons name="checkmark-circle" size={14} color={colors.primary[600]} />
-                <Text style={styles.selectedBadgeText}>Выбрано: {deliveryItems.length}</Text>
-                <TouchableOpacity onPress={() => { setProductPickerOpen(false); setProductSearch(''); setTimeout(() => setDeliveryModalOpen(true), 300); }} style={styles.selectedDoneBtn}>
-                  <Text style={styles.selectedDoneBtnText}>Готово</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              {(products || []).map((item: Product) => {
-                const isAdded = deliveryItems.some(i => i.productId === item.id);
-                return (
-                  <TouchableOpacity key={item.id} style={[styles.productRow, isAdded && styles.productRowAdded]} onPress={() => addProduct(item)}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
-                      <Text style={styles.productInfo}>
-                        Цена: {formatMoney(item.costPrice || 0)} · Остаток: {item.stock}
-                      </Text>
-                    </View>
-                    {isAdded ? (
-                      <View style={styles.addedBadge}>
-                        <Ionicons name="checkmark" size={14} color={colors.primary[600]} />
-                        <Text style={styles.addedBadgeText}>
-                          {deliveryItems.find(i => i.productId === item.id)?.quantity}
-                        </Text>
-                      </View>
-                    ) : (
-                      <Ionicons name="add-circle" size={24} color={colors.primary[500]} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-              {(products || []).length === 0 && (
-                <View style={styles.emptyState}>
-                  <Ionicons name="search" size={28} color={colors.gray[300]} />
-                  <Text style={styles.emptyText}>Нет товаров</Text>
-                </View>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </RNModal>
+      {/* Product Picker with folder navigation */}
+      <ProductPickerModal
+        visible={productPickerOpen}
+        onClose={() => { setProductPickerOpen(false); setTimeout(() => setDeliveryModalOpen(true), 300); }}
+        onSelectProduct={addProduct}
+        title="Выберите товар"
+        showCostPrice={true}
+        getCartQty={(id) => deliveryItems.find(i => i.productId === id)?.quantity || 0}
+      />
 
       {/* New Payment Modal */}
       <Modal visible={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} title="Новый платёж">
@@ -563,26 +494,6 @@ const styles = StyleSheet.create({
   deliveryTotalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 2, borderTopColor: colors.gray[200], marginBottom: spacing[3] },
   deliveryTotalLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   deliveryTotalValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.primary[600] },
-  // 80% Bottom sheet
-  bottomSheetOverlay: { flex: 1, justifyContent: 'flex-end' },
-  bottomSheetBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
-  bottomSheet: { height: SCREEN_HEIGHT * 0.8, backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: spacing[2] },
-  bottomSheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.gray[300], alignSelf: 'center', marginBottom: spacing[3] },
-  bottomSheetTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], paddingHorizontal: spacing[4], marginBottom: spacing[3] },
-  bottomSheetSearch: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginHorizontal: spacing[4], backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], height: 44, marginBottom: spacing[2] },
-  bottomSheetSearchInput: { flex: 1, fontSize: fontSize.sm, color: colors.gray[900], paddingVertical: 0 },
-  // Selected count badge
-  selectedBadge: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginHorizontal: spacing[4], backgroundColor: colors.primary[50], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginBottom: spacing[2] },
-  selectedBadgeText: { fontSize: fontSize.sm, color: colors.primary[700], fontWeight: fontWeight.medium, flex: 1 },
-  selectedDoneBtn: { backgroundColor: colors.primary[600], paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.lg },
-  selectedDoneBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.white },
-  // Product picker rows
-  productRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3], paddingHorizontal: spacing[4], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
-  productRowAdded: { backgroundColor: colors.primary[50] },
-  productName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  productInfo: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  addedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.primary[100], paddingHorizontal: spacing[2], paddingVertical: spacing[1], borderRadius: borderRadius.full },
-  addedBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[700] },
   // Payment form
   debtInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: colors.red[50], padding: spacing[3], borderRadius: borderRadius.xl, marginBottom: spacing[4] },
   debtInfoLabel: { fontSize: fontSize.xs, color: colors.red[500] },

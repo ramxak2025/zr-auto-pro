@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
@@ -111,7 +112,17 @@ export default function SuppliersScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Поставщики</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.orange[500], colors.orange[600]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="business-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Поставщики</Text>
+        </View>
         <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
           <Text style={styles.addBtnText}>+ Новый</Text>
         </TouchableOpacity>
@@ -146,6 +157,8 @@ export default function SuppliersScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   addBtn: { backgroundColor: colors.primary[600], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },

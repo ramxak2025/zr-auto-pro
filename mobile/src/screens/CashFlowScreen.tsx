@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Modal, FlatList, TextInput, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { reportsApi, usersApi } from '../api/services';
@@ -9,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { UserRole } from '../../../shared/types';
 
 function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
 
@@ -23,7 +25,7 @@ export default function CashFlowScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user, isRole } = useAuth();
-  const canFilterByMaster = isRole('director', 'superadmin', 'admin');
+  const canFilterByMaster = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
   const [refreshing, setRefreshing] = useState(false);
 
   const now = new Date();
@@ -98,7 +100,17 @@ export default function CashFlowScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Движение денег</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.green[500], colors.green[700]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="cash-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Движение денег</Text>
+        </View>
         <View style={{ width: 22 }} />
       </View>
 
@@ -284,6 +296,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4], paddingVertical: spacing[3],
     backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[100],
   },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
   empty: { textAlign: 'center', padding: spacing[8], color: colors.gray[400] },

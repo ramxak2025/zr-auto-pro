@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi } from '../api/services';
@@ -136,7 +137,17 @@ export default function ClientsScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Клиенты</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.blue[500], colors.blue[700]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="people-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Клиенты</Text>
+        </View>
         <TouchableOpacity style={styles.addBtn} onPress={openCreateModal}>
           <Text style={styles.addBtnText}>+ Новый</Text>
         </TouchableOpacity>
@@ -217,6 +228,8 @@ export default function ClientsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3] },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   addBtn: { backgroundColor: colors.primary[600], paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },

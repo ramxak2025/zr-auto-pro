@@ -8,6 +8,7 @@ import { useNavigation } from '@react-navigation/native';
 import { reportsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { FinancialReport } from '../../../shared/types';
 
@@ -81,7 +82,17 @@ export default function ReportsScreen() {
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
           </TouchableOpacity>
-          <Text style={styles.title}>Отчёты</Text>
+          <View style={styles.headerCenter}>
+            <LinearGradient
+              colors={[colors.primary[400], colors.primary[600]] as [string, string]}
+              style={styles.headerIcon}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <Ionicons name="bar-chart-outline" size={18} color={colors.white} />
+            </LinearGradient>
+            <Text style={styles.title}>Отчёты</Text>
+          </View>
           <View style={{ width: 60 }} />
         </View>
         <View style={styles.accessDenied}>
@@ -109,7 +120,17 @@ export default function ReportsScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
-        <Text style={styles.title}>Отчёты</Text>
+        <View style={styles.headerCenter}>
+          <LinearGradient
+            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
+            style={styles.headerIcon}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+          >
+            <Ionicons name="bar-chart-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Отчёты</Text>
+        </View>
         <View style={{ width: 60 }} />
       </View>
 
@@ -132,26 +153,28 @@ export default function ReportsScreen() {
         ) : (
           <>
             {/* Hero: Net Profit */}
-            <LinearGradient
-              colors={report.netProfit >= 0 ? ['#059669', '#047857'] : ['#dc2626', '#b91c1c']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.heroCard}
-            >
-              <View style={styles.heroTop}>
-                <Ionicons
-                  name={report.netProfit >= 0 ? 'trending-up' : 'trending-down'}
-                  size={16}
-                  color="rgba(255,255,255,0.6)"
-                />
-                <Text style={styles.heroLabel}>ЧИСТАЯ ПРИБЫЛЬ</Text>
-              </View>
-              <Text style={styles.heroValue}>{formatMoney(report.netProfit)}</Text>
-              <Text style={styles.heroSub}>Маржа {marginPct}%</Text>
-            </LinearGradient>
+            <AnimatedCard index={0}>
+              <LinearGradient
+                colors={report.netProfit >= 0 ? ['#059669', '#047857'] : ['#dc2626', '#b91c1c']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.heroCard}
+              >
+                <View style={styles.heroTop}>
+                  <Ionicons
+                    name={report.netProfit >= 0 ? 'trending-up' : 'trending-down'}
+                    size={16}
+                    color="rgba(255,255,255,0.6)"
+                  />
+                  <Text style={styles.heroLabel}>ЧИСТАЯ ПРИБЫЛЬ</Text>
+                </View>
+                <Text style={styles.heroValue}>{formatMoney(report.netProfit)}</Text>
+                <Text style={styles.heroSub}>Маржа {marginPct}%</Text>
+              </LinearGradient>
+            </AnimatedCard>
 
             {/* Revenue + Gross Profit */}
-            <View style={styles.twoCol}>
+            <AnimatedCard index={1} style={styles.twoCol}>
               <View style={styles.metricCard}>
                 <View style={styles.metricIconWrap}>
                   <View style={[styles.metricIcon, { backgroundColor: colors.blue[50] }]}>
@@ -171,10 +194,10 @@ export default function ReportsScreen() {
                 </View>
                 <Text style={styles.metricValue}>{formatMoney(report.grossProfit)}</Text>
               </View>
-            </View>
+            </AnimatedCard>
 
             {/* Expenses breakdown */}
-            <View style={styles.expCard}>
+            <AnimatedCard index={2} style={styles.expCard}>
               <Text style={styles.expTitle}>РАСХОДЫ</Text>
 
               <View style={styles.expRow}>
@@ -222,10 +245,10 @@ export default function ReportsScreen() {
                   </View>
                 </>
               )}
-            </View>
+            </AnimatedCard>
 
             {/* Check count */}
-            <View style={styles.checkCard}>
+            <AnimatedCard index={3} style={styles.checkCard}>
               <View style={styles.checkLeft}>
                 <View style={[styles.metricIcon, { backgroundColor: colors.primary[50] }]}>
                   <Ionicons name="receipt-outline" size={16} color={colors.primary[600]} />
@@ -236,7 +259,7 @@ export default function ReportsScreen() {
                 </View>
               </View>
               <Text style={styles.checkCount}>{report.checkCount}</Text>
-            </View>
+            </AnimatedCard>
           </>
         )}
       </ScrollView>
@@ -247,6 +270,8 @@ export default function ReportsScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },

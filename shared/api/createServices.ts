@@ -7,9 +7,9 @@
 import type { AxiosInstance } from 'axios';
 import type {
   User, Tenant, Plan, Client, Car, Product, Service, Check, Supplier,
-  Delivery, SupplierPayment, MasterSalary, SalarySummary, FinancialReport,
-  DashboardStats, EmployeeRanking, Shift, ScheduleEntry, WorkMode,
-  StockMovement, PaginatedResponse, SubscriptionInfo, PlatformStats,
+  Delivery, SupplierPayment, MasterSalary, SalarySummary, SalaryPayment,
+  FinancialReport, DashboardStats, EmployeeRanking, Shift, ScheduleEntry,
+  WorkMode, StockMovement, PaginatedResponse, SubscriptionInfo, PlatformStats,
   TodayEmployeeStatus, MarketingDashboard, ReviewResponse, ReviewAlert,
   MessagingIntegration, ReviewPlatformLink, ReviewSettings, PublicReviewData,
 } from '../types';
@@ -160,6 +160,8 @@ export function createSalaryApi(api: AxiosInstance) {
   return {
     getAll: (params?: DateRangeParams) => api.get<MasterSalary[]>('/salary', { params }),
     getMy: () => api.get<SalarySummary>('/salary/my'),
+    getPayments: (params?: { userId?: string; monthYear?: string }) => api.get<SalaryPayment[]>('/salary/payments', { params }),
+    createPayment: (data: { userId: string; amount: number; monthYear: string; type: 'salary' | 'advance'; comment?: string }) => api.post<SalaryPayment>('/salary/payments', data),
   };
 }
 

@@ -283,6 +283,20 @@ export interface FinancialReport {
   checkCount: number;
 }
 
+export interface SalaryPayment {
+  id: string;
+  userId: string;
+  userName?: string;
+  amount: number;
+  monthYear: string;
+  type: 'salary' | 'advance';
+  comment?: string;
+  createdBy?: string;
+  creatorName?: string;
+  date: string;
+  createdAt: string;
+}
+
 export interface MasterSalary {
   masterId: string;
   masterName: string;
@@ -293,6 +307,9 @@ export interface MasterSalary {
   totalEarnings: number;
   totalRevenue: number;
   checkCount: number;
+  paidAmount: number;
+  remainingAmount: number;
+  payments?: SalaryPayment[];
 }
 
 export interface ProductPromotion {

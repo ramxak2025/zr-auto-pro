@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, Alert, ActivityIndicator, Image, Dimensions,
-  Modal as RNModal, ScrollView,
+  Modal as RNModal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,8 +17,10 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import AnimatedCard from '../components/AnimatedCard';
+import ProductPickerModal from '../components/ProductPickerModal';
+import type { FolderAnnotation } from '../components/ProductPickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Product, PaginatedResponse } from '../../../shared/types';
+import type { Product, PaginatedResponse, StockMovement } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -60,7 +62,6 @@ export default function ProductsScreen() {
   const [inventoryItems, setInventoryItems] = useState<{ productId: string; name: string; currentStock: number; actualStock: string }[]>([]);
   const [inventoryReason, setInventoryReason] = useState('');
   const [showInventoryPicker, setShowInventoryPicker] = useState(false);
-  const [inventoryPickerSearch, setInventoryPickerSearch] = useState('');
 
   // Writeoff modal state
   const [showWriteoffModal, setShowWriteoffModal] = useState(false);
@@ -69,7 +70,6 @@ export default function ProductsScreen() {
   const [writeoffProductStock, setWriteoffProductStock] = useState(0);
   const [writeoffQty, setWriteoffQty] = useState('');
   const [writeoffReason, setWriteoffReason] = useState('');
-  const [writeoffSearch, setWriteoffSearch] = useState('');
   const [showWriteoffPicker, setShowWriteoffPicker] = useState(false);
 
   const { data, isLoading } = useQuery<PaginatedResponse<Product>>({
@@ -80,6 +80,14 @@ export default function ProductsScreen() {
   const { data: extraFolders } = useQuery({
     queryKey: ['warehouse-categories'],
     queryFn: async () => { const res = await warehouseCategoriesApi.getAll(); return res.data; },
+  });
+
+  // Fetch inventory movements for folder annotations
+  const { data: inventoryMovements } = useQuery<StockMovement[]>({
+    queryKey: ['inventory-movements'],
+    queryFn: async () => { const res = await productsApi.getMovements({ limit: 1000 }); return res.data; },
+    enabled: showInventoryPicker || showInventoryModal,
+    staleTime: 60_000,
   });
 
   const createMutation = useMutation({
@@ -108,6 +116,48 @@ export default function ProductsScreen() {
   });
 
   const allProducts = data?.data || [];
+
+  // Compute folder annotations: last inventory date per folder
+  const inventoryAnnotations = useMemo(() => {
+    const annotations = new Map<string, FolderAnnotation>();
+    if (!inventoryMovements || !allProducts.length) return annotations;
+
+    const inventoryMoves = inventoryMovements.filter(m => m.type === 'inventory');
+    const lastInvByProduct = new Map<string, Date>();
+    for (const m of inventoryMoves) {
+      const d = new Date(m.createdAt);
+      const existing = lastInvByProduct.get(m.productId);
+      if (!existing || d > existing) lastInvByProduct.set(m.productId, d);
+    }
+
+    const folderProducts = new Map<string, string[]>();
+    for (const p of allProducts) {
+      const cat = p.category || '';
+      const catParts = cat ? cat.split('/') : [];
+      if (catParts.length > 0) {
+        const topFolder = catParts[0];
+        if (!folderProducts.has(topFolder)) folderProducts.set(topFolder, []);
+        folderProducts.get(topFolder)!.push(p.id);
+      }
+    }
+
+    for (const [folder, productIds] of folderProducts) {
+      const dates = productIds.map(id => lastInvByProduct.get(id)).filter(Boolean) as Date[];
+      if (dates.length > 0) {
+        const oldest = new Date(Math.min(...dates.map(d => d.getTime())));
+        const formatted = oldest.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const allChecked = dates.length === productIds.length;
+        annotations.set(folder, {
+          label: allChecked ? `Проверено: ${formatted}` : `Частично: ${formatted}`,
+          color: allChecked ? colors.green[600] : colors.orange[500],
+        });
+      } else {
+        annotations.set(folder, { label: 'Не проверено', color: colors.gray[400] });
+      }
+    }
+
+    return annotations;
+  }, [inventoryMovements, allProducts]);
 
   // Stats
   const warehouseStats = useMemo(() => {
@@ -289,7 +339,6 @@ export default function ProductsScreen() {
   // --- Writeoff handlers ---
   const openWriteoff = () => {
     setShowOpsModal(false);
-    setWriteoffSearch('');
     setWriteoffProductId('');
     setWriteoffProductName('');
     setWriteoffProductStock(0);
@@ -337,14 +386,6 @@ export default function ProductsScreen() {
     }
   };
 
-  const filteredWriteoffProducts = writeoffSearch
-    ? allProducts.filter(p => p.name.toLowerCase().includes(writeoffSearch.toLowerCase()))
-    : allProducts;
-
-  const filteredInventoryPickerProducts = inventoryPickerSearch
-    ? allProducts.filter(p => p.name.toLowerCase().includes(inventoryPickerSearch.toLowerCase()))
-    : allProducts;
-
   const addInventoryProduct = (p: Product) => {
     // Only add if not already in the list
     if (!inventoryItems.find(item => item.productId === p.id)) {
@@ -355,8 +396,10 @@ export default function ProductsScreen() {
         actualStock: String(p.stock),
       }]);
     }
+  };
+
+  const handleInventoryPickerClose = () => {
     setShowInventoryPicker(false);
-    setInventoryPickerSearch('');
     setTimeout(() => setShowInventoryModal(true), 300);
   };
 
@@ -631,7 +674,7 @@ export default function ProductsScreen() {
 
         <TouchableOpacity
           style={styles.addProductBtn}
-          onPress={() => { setInventoryPickerSearch(''); setShowInventoryModal(false); setTimeout(() => setShowInventoryPicker(true), 300); }}
+          onPress={() => { setShowInventoryModal(false); setTimeout(() => setShowInventoryPicker(true), 300); }}
         >
           <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
           <Text style={styles.addProductBtnText}>{'Добавить товар'}</Text>
@@ -673,77 +716,23 @@ export default function ProductsScreen() {
         </View>
       </Modal>
 
-      {/* Inventory Product Picker - 80% bottom sheet */}
-      <RNModal visible={showInventoryPicker} transparent animationType="slide" onRequestClose={() => { setShowInventoryPicker(false); setTimeout(() => setShowInventoryModal(true), 300); }}>
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} activeOpacity={1} onPress={() => { setShowInventoryPicker(false); setTimeout(() => setShowInventoryModal(true), 300); }} />
-          <View style={styles.bottomSheet}>
-            <View style={styles.bottomSheetHandle} />
-            <Text style={styles.bottomSheetTitle}>{'Добавить товар в инвентаризацию'}</Text>
-            <View style={{ paddingHorizontal: spacing[4], marginBottom: spacing[3] }}>
-              <TextInput
-                value={inventoryPickerSearch}
-                onChangeText={setInventoryPickerSearch}
-                style={styles.formInput}
-                placeholder={'Поиск товара...'}
-                placeholderTextColor={colors.gray[400]}
-                autoFocus
-              />
-            </View>
-            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-              {filteredInventoryPickerProducts.map(p => {
-                const alreadyAdded = inventoryItems.some(item => item.productId === p.id);
-                return (
-                  <TouchableOpacity
-                    key={p.id}
-                    style={[styles.bottomSheetItem, alreadyAdded && { opacity: 0.5 }]}
-                    onPress={() => addInventoryProduct(p)}
-                    disabled={alreadyAdded}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.writeoffItemName}>{p.name}</Text>
-                      <Text style={styles.writeoffItemStock}>{'Остаток: '}{p.stock} {'шт'}{alreadyAdded ? ' (уже добавлен)' : ''}</Text>
-                    </View>
-                    {!alreadyAdded && <Ionicons name="add-circle-outline" size={20} color={colors.primary[600]} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-      </RNModal>
+      {/* Inventory Product Picker */}
+      <ProductPickerModal
+        visible={showInventoryPicker}
+        onClose={handleInventoryPickerClose}
+        onSelectProduct={addInventoryProduct}
+        title="Добавить товар в инвентаризацию"
+        getCartQty={(id) => inventoryItems.some(item => item.productId === id) ? 1 : 0}
+        folderAnnotations={inventoryAnnotations}
+      />
 
-      {/* Writeoff Product Picker - 80% bottom sheet */}
-      <RNModal visible={showWriteoffPicker} transparent animationType="slide" onRequestClose={() => setShowWriteoffPicker(false)}>
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} activeOpacity={1} onPress={() => setShowWriteoffPicker(false)} />
-          <View style={styles.bottomSheet}>
-            <View style={styles.bottomSheetHandle} />
-            <Text style={styles.bottomSheetTitle}>{'Выберите товар для списания'}</Text>
-            <View style={{ paddingHorizontal: spacing[4], marginBottom: spacing[3] }}>
-              <TextInput
-                value={writeoffSearch}
-                onChangeText={setWriteoffSearch}
-                style={styles.formInput}
-                placeholder={'Поиск товара...'}
-                placeholderTextColor={colors.gray[400]}
-                autoFocus
-              />
-            </View>
-            <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-              {filteredWriteoffProducts.map(p => (
-                <TouchableOpacity key={p.id} style={styles.bottomSheetItem} onPress={() => selectWriteoffProduct(p)}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.writeoffItemName}>{p.name}</Text>
-                    <Text style={styles.writeoffItemStock}>{'Остаток: '}{p.stock} {'шт'}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </RNModal>
+      {/* Writeoff Product Picker */}
+      <ProductPickerModal
+        visible={showWriteoffPicker}
+        onClose={() => setShowWriteoffPicker(false)}
+        onSelectProduct={selectWriteoffProduct}
+        title="Выберите товар для списания"
+      />
 
       {/* Writeoff Form Modal */}
       <Modal visible={showWriteoffModal} onClose={() => setShowWriteoffModal(false)} title={'Списание товара'}>
@@ -753,7 +742,7 @@ export default function ProductsScreen() {
             <Text style={styles.writeoffSelectedName}>{writeoffProductName}</Text>
             <Text style={styles.writeoffSelectedStock}>{'На складе: '}{writeoffProductStock} {'шт'}</Text>
           </View>
-          <TouchableOpacity onPress={() => { setShowWriteoffModal(false); setWriteoffSearch(''); setShowWriteoffPicker(true); }}>
+          <TouchableOpacity onPress={() => { setShowWriteoffModal(false); setTimeout(() => setShowWriteoffPicker(true), 300); }}>
             <Text style={{ fontSize: fontSize.xs, color: colors.primary[600] }}>{'Изменить'}</Text>
           </TouchableOpacity>
         </View>
@@ -911,11 +900,6 @@ const styles = StyleSheet.create({
   writeoffSelectedProduct: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], backgroundColor: colors.primary[50], borderRadius: borderRadius.lg, padding: spacing[3], marginBottom: spacing[4] },
   writeoffSelectedName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   writeoffSelectedStock: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 },
-  // Bottom sheet (80% product picker)
-  bottomSheet: { height: SCREEN_HEIGHT * 0.8, backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  bottomSheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.gray[200], alignSelf: 'center', marginTop: 12, marginBottom: 8 },
-  bottomSheetTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], paddingHorizontal: spacing[4], marginBottom: spacing[3] },
-  bottomSheetItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], paddingHorizontal: spacing[4], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
   // Add product button (inventory)
   addProductBtn: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[2.5], paddingHorizontal: spacing[3], marginBottom: spacing[3], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.primary[200], borderStyle: 'dashed', backgroundColor: colors.primary[50] },
   addProductBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.primary[600] },

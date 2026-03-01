@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { checksApi, usersApi, productsApi, suppliersApi } from '../api/services';
@@ -374,18 +375,16 @@ export default function ChecksScreen() {
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Ionicons name="receipt" size={22} color={colors.primary[600]} />
-          <Text style={styles.title}>Журнал чеков</Text>
+          <LinearGradient colors={[colors.primary[400], colors.primary[600]] as [string, string]} style={styles.headerIcon} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
+            <Ionicons name="receipt-outline" size={18} color={colors.white} />
+          </LinearGradient>
+          <Text style={styles.title}>Журнал</Text>
           {total > 0 && activeTab === 'checks' && (
             <View style={styles.totalBadge}>
               <Text style={styles.totalBadgeText}>{total}</Text>
             </View>
           )}
         </View>
-        <TouchableOpacity style={styles.newBtn} onPress={() => navigation.navigate('CheckCreate')} activeOpacity={0.8}>
-          <Ionicons name="add" size={17} color={colors.white} />
-          <Text style={styles.newBtnText}>Новый</Text>
-        </TouchableOpacity>
       </View>
 
       {/* Search + Filter pill */}
@@ -688,6 +687,13 @@ const styles = StyleSheet.create({
     paddingTop: spacing[3],
     paddingBottom: spacing[2],
   },
+  headerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -711,26 +717,6 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.bold,
     color: colors.primary[600],
   },
-  newBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[1],
-    backgroundColor: colors.primary[600],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.full,
-    shadowColor: colors.primary[700],
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
-  },
-  newBtnText: {
-    color: colors.white,
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
-  },
-
   // ── Search + Filter row ─────────────────────────────────────────
   searchRow: {
     flexDirection: 'row',
@@ -745,17 +731,23 @@ const styles = StyleSheet.create({
   filterPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1],
+    gap: spacing[1.5],
     height: 44,
-    paddingHorizontal: spacing[3],
-    borderRadius: borderRadius.full,
-    backgroundColor: colors.gray[100],
+    paddingHorizontal: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.gray[200],
+    shadowColor: colors.black,
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
   },
   filterPillActive: {
     backgroundColor: colors.primary[50],
-    borderColor: colors.primary[200],
+    borderColor: colors.primary[300],
+    shadowColor: colors.primary[400],
+    shadowOpacity: 0.15,
   },
   filterPillText: {
     fontSize: fontSize.sm,
@@ -763,7 +755,8 @@ const styles = StyleSheet.create({
     color: colors.gray[500],
   },
   filterPillTextActive: {
-    color: colors.primary[600],
+    color: colors.primary[700],
+    fontWeight: fontWeight.semibold,
   },
   filterCountBadge: {
     minWidth: 18,

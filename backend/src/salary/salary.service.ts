@@ -30,17 +30,184 @@ export class SalaryService {
       [tenantID, dateFrom, dateTo],
     );
 
-    return rows.map((r) => ({
-      masterId: r.master_id,
-      masterName: r.master_name,
-      salaryPercent: parseFloat(r.salary_percent) || 0,
-      productSalaryPercent: parseFloat(r.product_salary_percent) || 0,
-      serviceEarnings: parseFloat(r.service_earnings) || 0,
-      productEarnings: parseFloat(r.product_earnings) || 0,
-      totalEarnings: parseFloat(r.total_earnings) || 0,
-      totalRevenue: parseFloat(r.total_revenue) || 0,
-      checkCount: parseInt(r.check_count) || 0,
+    // Build month_year values for the date range to query payments
+    const monthYears = this.getMonthYearsForRange(dateFrom, dateTo);
+
+    // Query payments for all masters in the period
+    let paymentRows: any[] = [];
+    if (monthYears.length > 0) {
+      const placeholders = monthYears.map((_, i) => `$${i + 2}`).join(', ');
+      const { rows: pRows } = await this.pool.query(
+        `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name
+         FROM salary_payments sp
+         LEFT JOIN users u ON u.id = sp.user_id
+         LEFT JOIN users c ON c.id = sp.created_by
+         WHERE sp.tenant_id = $1 AND sp.month_year IN (${placeholders})
+         ORDER BY sp.date DESC`,
+        [tenantID, ...monthYears],
+      );
+      paymentRows = pRows;
+    }
+
+    // Group payments by user_id
+    const paymentsByUser: Record<string, any[]> = {};
+    for (const p of paymentRows) {
+      if (!paymentsByUser[p.user_id]) paymentsByUser[p.user_id] = [];
+      paymentsByUser[p.user_id].push({
+        id: p.id,
+        userId: p.user_id,
+        userName: p.user_name,
+        amount: parseFloat(p.amount) || 0,
+        monthYear: p.month_year,
+        type: p.type,
+        comment: p.comment,
+        createdBy: p.created_by,
+        creatorName: p.creator_name,
+        date: p.date,
+        createdAt: p.created_at,
+      });
+    }
+
+    return rows.map((r) => {
+      const masterId = r.master_id;
+      const masterPayments = paymentsByUser[masterId] || [];
+      const paidAmount = masterPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+      const totalEarnings = parseFloat(r.total_earnings) || 0;
+
+      return {
+        masterId,
+        masterName: r.master_name,
+        salaryPercent: parseFloat(r.salary_percent) || 0,
+        productSalaryPercent: parseFloat(r.product_salary_percent) || 0,
+        serviceEarnings: parseFloat(r.service_earnings) || 0,
+        productEarnings: parseFloat(r.product_earnings) || 0,
+        totalEarnings,
+        totalRevenue: parseFloat(r.total_revenue) || 0,
+        checkCount: parseInt(r.check_count) || 0,
+        paidAmount,
+        remainingAmount: totalEarnings - paidAmount,
+        payments: masterPayments,
+      };
+    });
+  }
+
+  private getMonthYearsForRange(dateFrom: string, dateTo: string): string[] {
+    const result: string[] = [];
+    const start = new Date(dateFrom);
+    const end = new Date(dateTo);
+    const current = new Date(start.getFullYear(), start.getMonth(), 1);
+
+    while (current <= end) {
+      const year = current.getFullYear();
+      const month = String(current.getMonth() + 1).padStart(2, '0');
+      result.push(`${year}-${month}`);
+      current.setMonth(current.getMonth() + 1);
+    }
+
+    return result;
+  }
+
+  async getPayments(tenantID: string, params: any) {
+    let where = 'sp.tenant_id = $1';
+    const queryParams: any[] = [tenantID];
+    let idx = 2;
+
+    if (params.userId) {
+      where += ` AND sp.user_id = $${idx++}`;
+      queryParams.push(params.userId);
+    }
+    if (params.monthYear) {
+      where += ` AND sp.month_year = $${idx++}`;
+      queryParams.push(params.monthYear);
+    }
+
+    const { rows } = await this.pool.query(
+      `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name
+       FROM salary_payments sp
+       LEFT JOIN users u ON u.id = sp.user_id
+       LEFT JOIN users c ON c.id = sp.created_by
+       WHERE ${where}
+       ORDER BY sp.date DESC`,
+      queryParams,
+    );
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name,
+      amount: parseFloat(r.amount) || 0,
+      monthYear: r.month_year,
+      type: r.type,
+      comment: r.comment,
+      createdBy: r.created_by,
+      creatorName: r.creator_name,
+      date: r.date,
+      createdAt: r.created_at,
     }));
+  }
+
+  async createPayment(tenantID: string, createdBy: string, dto: any) {
+    // 1. Insert salary payment
+    const { rows: paymentRows } = await this.pool.query(
+      `INSERT INTO salary_payments (tenant_id, user_id, amount, month_year, type, comment, created_by, date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+       RETURNING *`,
+      [tenantID, dto.userId, dto.amount, dto.monthYear, dto.type || 'salary', dto.comment || null, createdBy],
+    );
+    const payment = paymentRows[0];
+
+    // 2. Find or create "Зарплата" expense category for this tenant
+    let categoryId: string;
+    const { rows: catRows } = await this.pool.query(
+      `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = 'Зарплата' LIMIT 1`,
+      [tenantID],
+    );
+    if (catRows.length > 0) {
+      categoryId = catRows[0].id;
+    } else {
+      const { rows: newCatRows } = await this.pool.query(
+        `INSERT INTO expense_categories (name, tenant_id) VALUES ('Зарплата', $1) RETURNING id`,
+        [tenantID],
+      );
+      categoryId = newCatRows[0].id;
+    }
+
+    // 3. Get user name for expense description
+    const { rows: userRows } = await this.pool.query(
+      'SELECT full_name FROM users WHERE id = $1',
+      [dto.userId],
+    );
+    const userName = userRows[0]?.full_name || 'Сотрудник';
+
+    // Format month_year for description (e.g., "2026-02" -> "Февраль 2026")
+    const monthNames = [
+      'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+      'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+    ];
+    const [year, month] = dto.monthYear.split('-');
+    const monthName = monthNames[parseInt(month, 10) - 1] || dto.monthYear;
+    const description = `Зарплата: ${userName} за ${monthName} ${year}`;
+
+    // 4. Create expense record
+    await this.pool.query(
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [categoryId, dto.amount, description, payment.date, createdBy, tenantID],
+    );
+
+    // 5. Return created payment with user info
+    return {
+      id: payment.id,
+      userId: payment.user_id,
+      userName,
+      amount: parseFloat(payment.amount) || 0,
+      monthYear: payment.month_year,
+      type: payment.type,
+      comment: payment.comment,
+      createdBy: payment.created_by,
+      date: payment.date,
+      createdAt: payment.created_at,
+    };
   }
 
   async getMy(tenantID: string, userID: string) {
