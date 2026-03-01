@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, spacing, borderRadius } from '../theme';
 
 // Screens
+import ServerSetupScreen from '../screens/ServerSetupScreen';
 import LoginScreen from '../screens/LoginScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import ProductsScreen from '../screens/ProductsScreen';
@@ -92,6 +93,7 @@ function gated(featureKey: string, ScreenComponent: React.ComponentType<any>) {
 }
 
 export type RootStackParamList = {
+  ServerSetup: undefined;
   Login: undefined;
   Main: undefined;
   CheckCreate: { id?: string } | undefined;
@@ -299,7 +301,7 @@ function TabNavigator() {
 }
 
 export default function AppNavigator() {
-  const { user, loading } = useAuth();
+  const { user, loading, serverConfigured } = useAuth();
 
   if (loading) {
     return <LoadingSpinner />;
@@ -307,7 +309,9 @@ export default function AppNavigator() {
 
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {!user ? (
+      {!serverConfigured ? (
+        <Stack.Screen name="ServerSetup" component={ServerSetupScreen} />
+      ) : !user ? (
         <Stack.Screen name="Login" component={LoginScreen} />
       ) : (
         <>

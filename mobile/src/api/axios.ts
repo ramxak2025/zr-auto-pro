@@ -2,37 +2,79 @@ import axios, { AxiosError } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 
-// API URL configuration:
-// 1. Set in app.json → expo.extra.apiUrl for production
-// 2. Falls back to backend on port 3000 via Expo's debuggerHost
-// 3. Final fallback: localhost
-function getApiBaseUrl(): string {
-  const configUrl = Constants.expoConfig?.extra?.apiUrl;
-  if (configUrl) return configUrl;
+const SERVER_URL_KEY = 'server_url';
 
-  // In dev, use the Expo dev server host IP (same machine where backend runs)
+// Get default API URL from config or dev server
+function getDefaultApiBaseUrl(): string {
   const debuggerHost = Constants.expoConfig?.hostUri || (Constants as any).debuggerHost;
   if (debuggerHost) {
     const host = debuggerHost.split(':')[0];
     return `http://${host}:3000/api`;
   }
-  return 'http://localhost:3000/api';
+  return '';
 }
 
-const API_BASE_URL = getApiBaseUrl();
+let _currentBaseUrl = getDefaultApiBaseUrl();
+
+/** Get saved server URL from AsyncStorage */
+export async function getSavedServerUrl(): Promise<string> {
+  const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
+  return saved || '';
+}
+
+/** Save server URL and update axios baseURL */
+export async function setServerUrl(url: string): Promise<void> {
+  // Normalize: remove trailing slashes, ensure /api suffix
+  let normalized = url.replace(/\/+$/, '');
+  if (!normalized.endsWith('/api')) {
+    normalized = normalized + '/api';
+  }
+  await AsyncStorage.setItem(SERVER_URL_KEY, normalized);
+  _currentBaseUrl = normalized;
+  api.defaults.baseURL = normalized;
+}
+
+/** Initialize server URL from storage (call on app start) */
+export async function initServerUrl(): Promise<boolean> {
+  const saved = await AsyncStorage.getItem(SERVER_URL_KEY);
+  if (saved) {
+    _currentBaseUrl = saved;
+    api.defaults.baseURL = saved;
+    return true;
+  }
+  // Fallback to dev server if available
+  const defaultUrl = getDefaultApiBaseUrl();
+  if (defaultUrl) {
+    _currentBaseUrl = defaultUrl;
+    api.defaults.baseURL = defaultUrl;
+    return true;
+  }
+  return false;
+}
+
+/** Check if server URL is configured */
+export function isServerConfigured(): boolean {
+  return !!_currentBaseUrl;
+}
+
+/** Get current server URL (without /api suffix) */
+export function getServerUrl(): string {
+  return _currentBaseUrl.replace(/\/api\/?$/, '');
+}
 
 // Derive server origin for image URLs (strip /api suffix)
-export const SERVER_URL = API_BASE_URL.replace(/\/api\/?$/, '');
+export const SERVER_URL = '';
 
 /** Resolve a relative image path (/uploads/xxx) to full URL */
 export function getImageUrl(path?: string | null): string | undefined {
   if (!path) return undefined;
   if (path.startsWith('http://') || path.startsWith('https://')) return path;
-  return `${SERVER_URL}${path.startsWith('/') ? '' : '/'}${path}`;
+  const base = getServerUrl();
+  return `${base}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: _currentBaseUrl || 'http://localhost:3000/api',
   timeout: 30000,
 });
 
