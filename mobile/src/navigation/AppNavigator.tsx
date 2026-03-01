@@ -30,6 +30,7 @@ import MarketingScreen from '../screens/MarketingScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
 import SubscriptionScreen from '../screens/SubscriptionScreen';
+import AdminScreen from '../screens/AdminScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import FeatureGate from '../components/FeatureGate';
 
@@ -221,6 +222,7 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
       <MoreStack.Screen name="Users" component={gated('users_manage', UsersScreen)} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
+      <MoreStack.Screen name="Admin" component={AdminScreen} />
     </MoreStack.Navigator>
   );
 }

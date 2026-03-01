@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Check, PaginatedResponse, User, StockMovement, Delivery } from '../../../shared/types';
@@ -79,6 +80,8 @@ export default function ChecksScreen() {
   const [filterMasterId, setFilterMasterId] = useState('');
   const [showDateFromPicker, setShowDateFromPicker] = useState(false);
   const [showDateToPicker, setShowDateToPicker] = useState(false);
+
+  const [selectedDoc, setSelectedDoc] = useState<WarehouseDoc | null>(null);
 
   const activeFilterCount = (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0);
 
@@ -273,7 +276,7 @@ export default function ChecksScreen() {
       const m = item.data;
       const typeInfo = movementTypeIcons[m.type] || movementTypeIcons.income;
       return (
-        <View style={styles.warehouseCard}>
+        <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => setSelectedDoc(item)}>
           <View style={[styles.warehouseAccent, { backgroundColor: typeInfo.accentColor }]} />
           <View style={styles.warehouseCardContent}>
             <View style={styles.warehouseCardHeader}>
@@ -312,7 +315,7 @@ export default function ChecksScreen() {
               </View>
             )}
           </View>
-        </View>
+        </TouchableOpacity>
       );
     }
 
@@ -320,7 +323,7 @@ export default function ChecksScreen() {
     const d = item.data;
     const statusStyle = paymentStatusColors[d.paymentStatus] || paymentStatusColors.unpaid;
     return (
-      <View style={styles.warehouseCard}>
+      <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => setSelectedDoc(item)}>
         <View style={[styles.warehouseAccent, { backgroundColor: colors.green[500] }]} />
         <View style={styles.warehouseCardContent}>
           <View style={styles.warehouseCardHeader}>
@@ -357,7 +360,7 @@ export default function ChecksScreen() {
             ) : null}
           </View>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -561,6 +564,114 @@ export default function ChecksScreen() {
           )}
         </>
       )}
+      {/* Warehouse Document Detail Modal */}
+      <Modal visible={!!selectedDoc} onClose={() => setSelectedDoc(null)} title={selectedDoc?.kind === 'movement' ? movementTypeLabels[selectedDoc.data.type] || 'Документ' : 'Поставка'}>
+        {selectedDoc?.kind === 'movement' && (() => {
+          const m = selectedDoc.data;
+          const typeInfo = movementTypeIcons[m.type] || movementTypeIcons.income;
+          return (
+            <View style={{ gap: spacing[3] }}>
+              <View style={styles.docDetailHeader}>
+                <View style={[styles.docDetailIcon, { backgroundColor: typeInfo.accentColor + '18' }]}>
+                  <Ionicons name={typeInfo.name as any} size={28} color={typeInfo.color} />
+                </View>
+                <Text style={styles.docDetailType}>{movementTypeLabels[m.type]}</Text>
+              </View>
+
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Товар</Text>
+                <Text style={styles.docDetailValue}>{m.product?.name || '—'}</Text>
+              </View>
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Количество</Text>
+                <Text style={[styles.docDetailValue, { color: m.type === 'writeoff' || m.type === 'expense' ? colors.red[600] : colors.green[600] }]}>
+                  {m.type === 'writeoff' || m.type === 'expense' ? '-' : '+'}{m.quantity} шт
+                </Text>
+              </View>
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Остаток до</Text>
+                <Text style={styles.docDetailValue}>{m.stockBefore} шт</Text>
+              </View>
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Остаток после</Text>
+                <Text style={styles.docDetailValue}>{m.stockAfter} шт</Text>
+              </View>
+              {m.reason && (
+                <View style={styles.docDetailRow}>
+                  <Text style={styles.docDetailLabel}>Причина</Text>
+                  <Text style={styles.docDetailValue}>{m.reason}</Text>
+                </View>
+              )}
+              {m.user && (
+                <View style={styles.docDetailRow}>
+                  <Text style={styles.docDetailLabel}>Сотрудник</Text>
+                  <Text style={styles.docDetailValue}>{m.user.fullName}</Text>
+                </View>
+              )}
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Дата</Text>
+                <Text style={styles.docDetailValue}>{formatDate(m.createdAt)}</Text>
+              </View>
+            </View>
+          );
+        })()}
+
+        {selectedDoc?.kind === 'delivery' && (() => {
+          const d = selectedDoc.data;
+          const statusStyle = paymentStatusColors[d.paymentStatus] || paymentStatusColors.unpaid;
+          return (
+            <View style={{ gap: spacing[3] }}>
+              <View style={styles.docDetailHeader}>
+                <View style={[styles.docDetailIcon, { backgroundColor: colors.green[50] }]}>
+                  <Ionicons name="bus-outline" size={28} color={colors.green[600]} />
+                </View>
+                <Text style={styles.docDetailType}>Поставка</Text>
+              </View>
+
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Поставщик</Text>
+                <Text style={styles.docDetailValue}>{d.supplier?.name || '—'}</Text>
+              </View>
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Дата</Text>
+                <Text style={styles.docDetailValue}>{formatDate(d.date)}</Text>
+              </View>
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Сумма</Text>
+                <Text style={[styles.docDetailValue, { fontWeight: fontWeight.bold }]}>{formatMoney(d.totalAmount)}</Text>
+              </View>
+              <View style={styles.docDetailRow}>
+                <Text style={styles.docDetailLabel}>Статус</Text>
+                <View style={[styles.docDetailStatusBadge, { backgroundColor: statusStyle.bg }]}>
+                  <Text style={[styles.docDetailStatusText, { color: statusStyle.text }]}>
+                    {paymentStatusLabels[d.paymentStatus] || d.paymentStatus}
+                  </Text>
+                </View>
+              </View>
+
+              {d.items && d.items.length > 0 && (
+                <View style={styles.docDetailItems}>
+                  <Text style={styles.docDetailItemsTitle}>Товары ({d.items.length})</Text>
+                  {d.items.map((item, idx) => (
+                    <View key={idx} style={styles.docDetailItemRow}>
+                      <Text style={styles.docDetailItemName} numberOfLines={1}>{item.product?.name || '—'}</Text>
+                      <Text style={styles.docDetailItemQty}>{item.quantity} x {formatMoney(item.price)}</Text>
+                      <Text style={styles.docDetailItemTotal}>{formatMoney(item.total)}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {d.comment && (
+                <View style={styles.docDetailRow}>
+                  <Text style={styles.docDetailLabel}>Комментарий</Text>
+                  <Text style={[styles.docDetailValue, { fontStyle: 'italic' }]}>{d.comment}</Text>
+                </View>
+              )}
+            </View>
+          );
+        })()}
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -854,5 +965,87 @@ const styles = StyleSheet.create({
   paymentStatusText: {
     fontSize: 10,
     fontWeight: fontWeight.semibold,
+  },
+
+  // ── Document Detail Modal ─────────────────────────────────────
+  docDetailHeader: {
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingBottom: spacing[3],
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[100],
+  },
+  docDetailIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  docDetailType: {
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[900],
+  },
+  docDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing[1.5],
+  },
+  docDetailLabel: {
+    fontSize: fontSize.sm,
+    color: colors.gray[500],
+    flex: 1,
+  },
+  docDetailValue: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[900],
+    flex: 1,
+    textAlign: 'right',
+  },
+  docDetailStatusBadge: {
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1],
+    borderRadius: borderRadius.full,
+  },
+  docDetailStatusText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
+  },
+  docDetailItems: {
+    backgroundColor: colors.gray[50],
+    borderRadius: borderRadius.xl,
+    padding: spacing[3],
+    gap: spacing[2],
+  },
+  docDetailItemsTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[700],
+    marginBottom: spacing[1],
+  },
+  docDetailItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[1],
+  },
+  docDetailItemName: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    color: colors.gray[700],
+  },
+  docDetailItemQty: {
+    fontSize: fontSize.xs,
+    color: colors.gray[400],
+    marginHorizontal: spacing[2],
+  },
+  docDetailItemTotal: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[700],
+    minWidth: 60,
+    textAlign: 'right',
   },
 });

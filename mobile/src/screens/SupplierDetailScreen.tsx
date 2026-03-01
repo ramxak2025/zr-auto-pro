@@ -328,7 +328,7 @@ export default function SupplierDetailScreen() {
       {/* New Delivery Modal */}
       <Modal visible={deliveryModalOpen} onClose={() => setDeliveryModalOpen(false)} title="Новая поставка">
         <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity style={styles.addItemBtn} onPress={() => { setProductSearch(''); setProductPickerOpen(true); }}>
+          <TouchableOpacity style={styles.addItemBtn} onPress={() => { setProductSearch(''); setDeliveryModalOpen(false); setTimeout(() => setProductPickerOpen(true), 300); }}>
             <Ionicons name="add" size={18} color={colors.primary[600]} />
             <Text style={styles.addItemText}>Добавить товар</Text>
           </TouchableOpacity>
@@ -385,9 +385,9 @@ export default function SupplierDetailScreen() {
       </Modal>
 
       {/* Product Picker — 80% bottom sheet */}
-      <RNModal visible={productPickerOpen} animationType="slide" transparent onRequestClose={() => { setProductPickerOpen(false); setProductSearch(''); }}>
+      <RNModal visible={productPickerOpen} animationType="slide" transparent onRequestClose={() => { setProductPickerOpen(false); setProductSearch(''); setTimeout(() => setDeliveryModalOpen(true), 300); }}>
         <View style={styles.bottomSheetOverlay}>
-          <TouchableOpacity style={styles.bottomSheetBackdrop} activeOpacity={1} onPress={() => { setProductPickerOpen(false); setProductSearch(''); }} />
+          <TouchableOpacity style={styles.bottomSheetBackdrop} activeOpacity={1} onPress={() => { setProductPickerOpen(false); setProductSearch(''); setTimeout(() => setDeliveryModalOpen(true), 300); }} />
           <View style={styles.bottomSheet}>
             <View style={styles.bottomSheetHandle} />
             <Text style={styles.bottomSheetTitle}>Выберите товар</Text>
@@ -414,7 +414,7 @@ export default function SupplierDetailScreen() {
               <View style={styles.selectedBadge}>
                 <Ionicons name="checkmark-circle" size={14} color={colors.primary[600]} />
                 <Text style={styles.selectedBadgeText}>Выбрано: {deliveryItems.length}</Text>
-                <TouchableOpacity onPress={() => { setProductPickerOpen(false); setProductSearch(''); }} style={styles.selectedDoneBtn}>
+                <TouchableOpacity onPress={() => { setProductPickerOpen(false); setProductSearch(''); setTimeout(() => setDeliveryModalOpen(true), 300); }} style={styles.selectedDoneBtn}>
                   <Text style={styles.selectedDoneBtnText}>Готово</Text>
                 </TouchableOpacity>
               </View>

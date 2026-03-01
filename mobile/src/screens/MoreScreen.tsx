@@ -51,6 +51,7 @@ const menuItems: MenuItem[] = [
   { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', featureKey: 'users_manage', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
   { label: 'Настройки компании', description: 'Реквизиты и данные для чеков', screen: 'CompanySettings', roles: ['director', 'superadmin'], icon: 'business-outline', iconBg: colors.slate[100], iconColor: colors.slate[600] },
   { label: 'Подписка', description: 'Тариф и оплата', screen: 'Subscription', roles: ['director', 'superadmin'], icon: 'card-outline', iconBg: colors.primary[50], iconColor: colors.primary[600] },
+  { label: 'Админ-панель', description: 'Управление тенантами и планами', screen: 'Admin', roles: ['superadmin'], icon: 'shield-checkmark-outline', iconBg: colors.red[50], iconColor: colors.red[600] },
 ];
 
 function AnimatedMenuItem({ item, index, onPress, locked }: { item: MenuItem; index: number; onPress: () => void; locked?: boolean }) {

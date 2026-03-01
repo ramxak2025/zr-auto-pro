@@ -357,6 +357,7 @@ export default function ProductsScreen() {
     }
     setShowInventoryPicker(false);
     setInventoryPickerSearch('');
+    setTimeout(() => setShowInventoryModal(true), 300);
   };
 
   // Photo display helper
@@ -630,7 +631,7 @@ export default function ProductsScreen() {
 
         <TouchableOpacity
           style={styles.addProductBtn}
-          onPress={() => { setInventoryPickerSearch(''); setShowInventoryPicker(true); }}
+          onPress={() => { setInventoryPickerSearch(''); setShowInventoryModal(false); setTimeout(() => setShowInventoryPicker(true), 300); }}
         >
           <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
           <Text style={styles.addProductBtnText}>{'Добавить товар'}</Text>
@@ -673,9 +674,9 @@ export default function ProductsScreen() {
       </Modal>
 
       {/* Inventory Product Picker - 80% bottom sheet */}
-      <RNModal visible={showInventoryPicker} transparent animationType="fade" onRequestClose={() => setShowInventoryPicker(false)}>
+      <RNModal visible={showInventoryPicker} transparent animationType="slide" onRequestClose={() => { setShowInventoryPicker(false); setTimeout(() => setShowInventoryModal(true), 300); }}>
         <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowInventoryPicker(false)} />
+          <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} activeOpacity={1} onPress={() => { setShowInventoryPicker(false); setTimeout(() => setShowInventoryModal(true), 300); }} />
           <View style={styles.bottomSheet}>
             <View style={styles.bottomSheetHandle} />
             <Text style={styles.bottomSheetTitle}>{'Добавить товар в инвентаризацию'}</Text>
@@ -713,9 +714,9 @@ export default function ProductsScreen() {
       </RNModal>
 
       {/* Writeoff Product Picker - 80% bottom sheet */}
-      <RNModal visible={showWriteoffPicker} transparent animationType="fade" onRequestClose={() => setShowWriteoffPicker(false)}>
+      <RNModal visible={showWriteoffPicker} transparent animationType="slide" onRequestClose={() => setShowWriteoffPicker(false)}>
         <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowWriteoffPicker(false)} />
+          <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} activeOpacity={1} onPress={() => setShowWriteoffPicker(false)} />
           <View style={styles.bottomSheet}>
             <View style={styles.bottomSheetHandle} />
             <Text style={styles.bottomSheetTitle}>{'Выберите товар для списания'}</Text>
