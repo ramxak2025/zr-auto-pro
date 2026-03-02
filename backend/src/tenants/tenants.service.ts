@@ -145,7 +145,7 @@ export class TenantsService {
       if (dto.directorPhone && dto.directorPassword && dto.directorName) {
         const directorPhone = normalizePhone(dto.directorPhone);
         const hash = await bcrypt.hash(dto.directorPassword, 10);
-        const allPerms = '{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true}';
+        const allPerms = '{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"checks_change_datetime":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true,"schedule_view":true,"salary_view":true,"marketing_access":true}';
         await client.query(
           `INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions)
            VALUES ($1, $2, $3, 'director', true, $4, $5)`,

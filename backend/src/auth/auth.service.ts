@@ -53,6 +53,7 @@ const ALL_PERMISSIONS = JSON.stringify({
   checks_create: true,
   checks_edit: true,
   checks_delete: true,
+  checks_change_datetime: true,
   profit_view: true,
   clients_view: true,
   clients_edit: true,
@@ -61,6 +62,9 @@ const ALL_PERMISSIONS = JSON.stringify({
   financial_reports: true,
   export_data: true,
   user_management: true,
+  schedule_view: true,
+  salary_view: true,
+  marketing_access: true,
 });
 
 @Injectable()

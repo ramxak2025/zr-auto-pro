@@ -29,6 +29,7 @@ const permissionLabels: Record<keyof UserPermissions, string> = {
   checks_create: 'Создание заказ-нарядов',
   checks_edit: 'Редактирование заказ-нарядов',
   checks_delete: 'Удаление заказ-нарядов',
+  checks_change_datetime: 'Изменение даты/времени заказ-нарядов',
   profit_view: 'Просмотр прибыли',
   clients_view: 'Просмотр клиентов',
   clients_edit: 'Редактирование клиентов',
@@ -37,6 +38,9 @@ const permissionLabels: Record<keyof UserPermissions, string> = {
   financial_reports: 'Финансовые отчёты',
   export_data: 'Экспорт данных',
   user_management: 'Управление сотрудниками',
+  schedule_view: 'Просмотр расписания',
+  salary_view: 'Просмотр зарплат',
+  marketing_access: 'Доступ к маркетингу',
 };
 
 interface UserFormData {
@@ -54,6 +58,7 @@ const defaultPermissions: UserPermissions = {
   checks_create: true,
   checks_edit: false,
   checks_delete: false,
+  checks_change_datetime: false,
   profit_view: false,
   clients_view: true,
   clients_edit: false,
@@ -62,6 +67,9 @@ const defaultPermissions: UserPermissions = {
   financial_reports: false,
   export_data: false,
   user_management: false,
+  schedule_view: false,
+  salary_view: false,
+  marketing_access: false,
 };
 
 const emptyForm: UserFormData = {

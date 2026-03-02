@@ -43,6 +43,7 @@ const defaultPermissions: UserPermissions = {
   checks_create: true,
   checks_edit: false,
   checks_delete: false,
+  checks_change_datetime: false,
   profit_view: false,
   clients_view: true,
   clients_edit: false,
@@ -51,6 +52,9 @@ const defaultPermissions: UserPermissions = {
   financial_reports: false,
   export_data: false,
   user_management: false,
+  schedule_view: false,
+  salary_view: false,
+  marketing_access: false,
 };
 
 // ----------- Tenant Edit Form -----------
