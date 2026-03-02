@@ -52,6 +52,18 @@ log "Git pull complete. Latest commit:"
 git log --oneline -1 2>&1
 
 # ═══════════════════════════════════════════════════════
+# STEP 1.5: Копируем последний APK в папку для скачивания
+# ═══════════════════════════════════════════════════════
+mkdir -p "$REPO_DIR/downloads"
+LATEST_APK=$(ls -t "$REPO_DIR"/Autexa-v*.apk 2>/dev/null | head -1)
+if [ -n "$LATEST_APK" ]; then
+    cp "$LATEST_APK" "$REPO_DIR/downloads/Autexa.apk"
+    log "APK для скачивания обновлён: $LATEST_APK → downloads/Autexa.apk"
+else
+    log "APK файл не найден — пропускаем"
+fi
+
+# ═══════════════════════════════════════════════════════
 # STEP 2: Rebuild ONLY backend + frontend (NOT postgres!)
 # Volume pgdata is NEVER touched — data is safe.
 # ═══════════════════════════════════════════════════════
