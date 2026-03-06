@@ -3,6 +3,7 @@ import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('salary')
@@ -26,7 +27,7 @@ export class SalaryController {
 
   @Roles('director', 'superadmin')
   @Post('payments')
-  createPayment(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  createPayment(@CurrentUser() user: JwtPayload, @Body() dto: CreateSalaryPaymentDto) {
     return this.salaryService.createPayment(user.tenantID, user.userID, dto);
   }
 }

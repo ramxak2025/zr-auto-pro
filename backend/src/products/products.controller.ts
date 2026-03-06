@@ -3,6 +3,9 @@ import { Response } from 'express';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { CreateProductDto } from './dto/create-product.dto';
+import { UpdateProductDto } from './dto/update-product.dto';
+import { StockUpdateDto } from './dto/stock-update.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('products')
@@ -48,12 +51,12 @@ export class ProductsController {
   }
 
   @Post()
-  create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
     return this.productsService.create(user.tenantID, dto);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateProductDto) {
     return this.productsService.update(id, user.tenantID, dto);
   }
 
@@ -63,7 +66,7 @@ export class ProductsController {
   }
 
   @Post(':id/stock')
-  updateStock(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+  updateStock(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: StockUpdateDto) {
     return this.productsService.updateStock(id, user.tenantID, dto, user.userID);
   }
 }

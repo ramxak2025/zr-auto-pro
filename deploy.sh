@@ -41,12 +41,23 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 1: Pull latest code
+# STEP 1: Pull latest code (safely)
 # ═══════════════════════════════════════════════════════
 log "Fetching branch: $BRANCH"
 git fetch origin "$BRANCH" 2>&1
 git checkout "$BRANCH" 2>&1 || true
-git reset --hard "origin/$BRANCH" 2>&1
+
+# Stash any local changes instead of destroying them
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+    log "Stashing local changes..."
+    git stash push -m "auto-stash before deploy $(date '+%Y%m%d-%H%M%S')" 2>&1 || true
+fi
+
+git merge --ff-only "origin/$BRANCH" 2>&1 || {
+    log "ERROR: Cannot fast-forward merge. Manual intervention required."
+    log "Local branch has diverged from origin/$BRANCH"
+    exit 1
+}
 
 log "Git pull complete. Latest commit:"
 git log --oneline -1 2>&1

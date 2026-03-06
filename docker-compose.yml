@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: zr_auto_pro
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,11 +23,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://postgres:${DB_PASSWORD:-postgres}@postgres:5432/zr_auto_pro?sslmode=disable
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      DATABASE_URL: postgres://postgres:${DB_PASSWORD:?DB_PASSWORD must be set in .env}@postgres:5432/zr_auto_pro?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
       PORT: 3000
-    ports:
-      - '3000:3000'
+    expose:
+      - '3000'
     volumes:
       - uploads:/app/uploads
     healthcheck:
@@ -59,11 +59,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      DEPLOY_SECRET: ${DEPLOY_SECRET:-zr-auto-deploy-secret-change-me}
+      DEPLOY_SECRET: ${DEPLOY_SECRET:?DEPLOY_SECRET must be set in .env}
       DEPLOY_BRANCH: ${DEPLOY_BRANCH:-master}
       WEBHOOK_PORT: '9000'
     ports:
-      - '9000:9000'
+      - '127.0.0.1:9000:9000'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/deploy/repo

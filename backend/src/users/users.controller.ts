@@ -2,6 +2,8 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@n
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('users')
@@ -24,12 +26,12 @@ export class UsersController {
   }
 
   @Post()
-  create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {
     return this.usersService.create(user.tenantID, dto);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
     return this.usersService.update(id, user.tenantID, dto);
   }
 

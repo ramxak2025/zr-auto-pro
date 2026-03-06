@@ -17,3 +17,5 @@ backups/
 backend/server
 .expo/
 *.apk
+downloads/*.apk
+Autexa-*.apk
