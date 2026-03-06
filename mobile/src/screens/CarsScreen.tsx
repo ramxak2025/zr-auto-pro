@@ -36,7 +36,7 @@ export default function CarsScreen() {
     setRefreshing(false);
   };
 
-  const cars = data?.data || data || [];
+  const cars: any[] = data?.data || (Array.isArray(data) ? data : []);
   const total = data?.total || cars.length;
   const hasMore = page * limit < total;
 

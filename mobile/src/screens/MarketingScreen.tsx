@@ -45,7 +45,7 @@ function DashboardTab() {
 
   const stats = [
     { label: 'Всего отзывов', value: data.totalReviews || 0, icon: 'chatbubbles-outline' as const, color: colors.primary[600], bg: colors.primary[50] },
-    { label: 'Средний рейтинг', value: data.averageRating ? data.averageRating.toFixed(1) : '—', icon: 'star' as const, color: colors.amber[600], bg: colors.amber[50] },
+    { label: 'Средний рейтинг', value: data.avgRating ? data.avgRating.toFixed(1) : '—', icon: 'star' as const, color: colors.amber[600], bg: colors.amber[50] },
     { label: 'Токенов отправлено', value: data.tokensSent || 0, icon: 'send-outline' as const, color: colors.teal[600], bg: colors.teal[50] },
     { label: 'Отклик', value: data.responseRate ? `${Math.round(data.responseRate)}%` : '—', icon: 'trending-up-outline' as const, color: colors.green[600], bg: colors.green[50] },
   ];
@@ -153,7 +153,7 @@ function ReviewsTab() {
     queryFn: async () => { const res = await marketingApi.getReviews({ month }); return res.data; },
   });
 
-  const reviews = data?.reviews || data || [];
+  const reviews: any[] = Array.isArray(data) ? data : [];
 
   const navigateMonth = (dir: number) => {
     const [y, m] = month.split('-').map(Number);
@@ -278,8 +278,8 @@ function IntegrationsTab() {
   const activeLinks = Array.isArray(platformLinks) ? platformLinks : [];
 
   const openProviderEdit = (providerKey: string) => {
-    const existing = activeIntegrations.find((i: any) => i.provider === providerKey);
-    setApiKey(existing?.apiKey || '');
+    const existing = activeIntegrations.find((i: any) => i.providerType === providerKey);
+    setApiKey((existing as any)?.apiKey || '');
     setEditProvider(providerKey);
   };
 
@@ -460,7 +460,7 @@ function SettingsTab() {
   // Initialize from fetched settings
   if (settings && !initialized) {
     setSendTime(settings.sendTime || '10:00');
-    setDelayHours(String(settings.delayHours || 24));
+    setDelayHours(String(settings.feedbackDelayHours || 24));
     setAutoSend(settings.autoSendEnabled ?? false);
     setMessageTemplate(settings.messageTemplate || '');
     setInitialized(true);

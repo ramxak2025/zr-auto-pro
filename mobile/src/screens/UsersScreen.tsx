@@ -286,7 +286,7 @@ export default function UsersScreen() {
       const filename = asset.fileName || `avatar_${userId}.jpg`;
       const uploadRes = await uploadsApi.upload(asset.uri, filename);
       const uploadedUrl = uploadRes.data.url;
-      await usersApi.update(userId, { avatar: uploadedUrl });
+      await usersApi.update(userId, { avatar: uploadedUrl } as any);
       queryClient.invalidateQueries({ queryKey: ['users'] });
       Alert.alert('Готово', 'Аватар обновлён');
     } catch (err: any) {

@@ -215,7 +215,7 @@ export default function ProductsScreen() {
     // Extra folders from API
     if (Array.isArray(extraFolders)) {
       for (const ef of extraFolders) {
-        const efParts = (ef.path || ef.name || '').split('/');
+        const efParts = (ef.path || (ef as any).name || '').split('/');
         const matchesPath = invActivePath.every((seg: string, i: number) => efParts[i] === seg);
         if (matchesPath && efParts.length > invActivePath.length) {
           const folderName = efParts[invActivePath.length];
@@ -338,7 +338,7 @@ export default function ProductsScreen() {
     // Extra folders from API
     if (Array.isArray(extraFolders)) {
       for (const ef of extraFolders) {
-        const efParts = (ef.path || ef.name || '').split('/');
+        const efParts = (ef.path || (ef as any).name || '').split('/');
         const matchesPath = activePath.every((seg: string, i: number) => efParts[i] === seg);
         if (matchesPath && efParts.length > activePath.length) {
           const folderName = efParts[activePath.length];
