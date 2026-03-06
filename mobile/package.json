@@ -5,9 +5,12 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
+    "start:dev": "expo start --dev-client",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build:dev-apk": "eas build --profile development --platform android",
+    "build:preview-apk": "eas build --profile preview --platform android"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -22,6 +25,7 @@
     "expo": "~54.0.0",
     "expo-build-properties": "^0.14.8",
     "expo-constants": "~18.0.13",
+    "expo-dev-client": "~6.0.20",
     "expo-image-picker": "~17.0.10",
     "expo-linear-gradient": "~15.0.8",
     "expo-print": "~15.0.8",
