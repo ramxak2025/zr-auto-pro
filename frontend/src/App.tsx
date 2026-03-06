@@ -1,4 +1,4 @@
-import { lazy, Suspense, ComponentType } from 'react';
+import { lazy, Suspense, ComponentType, ReactElement } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { UserRole } from './types';
@@ -8,6 +8,7 @@ import Layout from './components/Layout';
 import AdminLayout from './components/AdminLayout';
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorBoundary from './components/ErrorBoundary';
+import FeatureGate from './components/FeatureGate';
 
 // ─── Lazy loading with retry on chunk failure ────────────────────────────────
 // After a deployment, the browser may have a cached index.html that references
@@ -76,6 +77,61 @@ const AdminTenantsPage = lazyWithRetry(() => import('./pages/admin/AdminTenantsP
 const AdminTenantDetailPage = lazyWithRetry(() => import('./pages/admin/AdminTenantDetailPage'));
 const AdminPlansPage = lazyWithRetry(() => import('./pages/admin/AdminPlansPage'));
 
+// ─── Feature gate definitions (same keys as mobile) ─────────────────────────
+const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
+  schedule_view: {
+    title: 'Расписание',
+    description: 'Управляйте графиком работы мастеров и планируйте загрузку автосервиса',
+    benefits: ['График работы мастеров', 'Планирование смен', 'Контроль загрузки'],
+  },
+  clients_view: {
+    title: 'Клиенты',
+    description: 'Ведите базу клиентов с историей обращений и автомобилей',
+    benefits: ['База клиентов', 'История обращений', 'Привязка автомобилей'],
+  },
+  services_view: {
+    title: 'Услуги',
+    description: 'Каталог услуг с ценами для быстрого оформления заказ-нарядов',
+    benefits: ['Каталог услуг', 'Быстрое добавление в чек', 'Гибкие цены'],
+  },
+  suppliers_view: {
+    title: 'Поставщики',
+    description: 'Управляйте закупками, поставками и долгами перед поставщиками',
+    benefits: ['Учёт поставок и закупок', 'Контроль долгов', 'История платежей'],
+  },
+  cashflow_view: {
+    title: 'Движение денег',
+    description: 'Отслеживайте все денежные потоки по дням и сотрудникам',
+    benefits: ['Касса по дням', 'Разбивка по сотрудникам', 'Наличные и безналичные'],
+  },
+  salary_view: {
+    title: 'Зарплата',
+    description: 'Автоматический расчёт зарплат мастеров на основе выполненных работ',
+    benefits: ['Автоматический расчёт', 'Процент от услуг', 'История выплат'],
+  },
+  reports_view: {
+    title: 'Отчёты',
+    description: 'Финансовые отчёты с анализом прибыли, расходов и маржинальности',
+    benefits: ['Выручка и прибыль', 'Анализ расходов', 'Средний чек'],
+  },
+  users_manage: {
+    title: 'Пользователи',
+    description: 'Управляйте сотрудниками, ролями и правами доступа',
+    benefits: ['Роли и права', 'Управление доступом', 'Контроль сотрудников'],
+  },
+};
+
+/** Wrap a lazy page element with a FeatureGate paywall */
+function gated(featureKey: string, element: ReactElement): ReactElement {
+  const gate = FEATURE_GATES[featureKey];
+  if (!gate) return element;
+  return (
+    <FeatureGate featureKey={featureKey} title={gate.title} description={gate.description} benefits={gate.benefits}>
+      {element}
+    </FeatureGate>
+  );
+}
+
 function isSubscriptionExpired(subscriptionEnd?: string | null): boolean {
   if (!subscriptionEnd) return false; // No date set = no restriction
   const end = new Date(subscriptionEnd);
@@ -130,20 +186,20 @@ export default function App() {
                   <Route path="/checks/new" element={<CheckCreatePage />} />
                   <Route path="/checks/:id/edit" element={<CheckCreatePage />} />
                   <Route path="/checks/:id" element={<CheckDetailPage />} />
-                  <Route path="/clients" element={<ClientsPage />} />
-                  <Route path="/clients/retail" element={<RetailChecksPage />} />
-                  <Route path="/clients/:id" element={<ClientDetailPage />} />
-                  <Route path="/cars" element={<CarsPage />} />
+                  <Route path="/clients" element={gated('clients_view', <ClientsPage />)} />
+                  <Route path="/clients/retail" element={gated('clients_view', <RetailChecksPage />)} />
+                  <Route path="/clients/:id" element={gated('clients_view', <ClientDetailPage />)} />
+                  <Route path="/cars" element={gated('clients_view', <CarsPage />)} />
                   <Route path="/products" element={<ProductsPage />} />
-                  <Route path="/services" element={<ServicesPage />} />
-                  <Route path="/suppliers" element={<SuppliersPage />} />
-                  <Route path="/suppliers/:id" element={<SupplierDetailPage />} />
-                  <Route path="/salary" element={<SalaryPage />} />
-                  <Route path="/reports" element={<ReportsPage />} />
-                  <Route path="/cashflow" element={<CashFlowPage />} />
+                  <Route path="/services" element={gated('services_view', <ServicesPage />)} />
+                  <Route path="/suppliers" element={gated('suppliers_view', <SuppliersPage />)} />
+                  <Route path="/suppliers/:id" element={gated('suppliers_view', <SupplierDetailPage />)} />
+                  <Route path="/salary" element={gated('salary_view', <SalaryPage />)} />
+                  <Route path="/reports" element={gated('reports_view', <ReportsPage />)} />
+                  <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
                   <Route path="/expenses" element={<ExpensesPage />} />
-                  <Route path="/users" element={<UsersPage />} />
-                  <Route path="/schedule" element={<SchedulePage />} />
+                  <Route path="/users" element={gated('users_manage', <UsersPage />)} />
+                  <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
                   <Route path="/more" element={<MorePage />} />
                   <Route path="/tariff" element={<TariffPage />} />
                   <Route path="/marketing" element={<MarketingPage />} />

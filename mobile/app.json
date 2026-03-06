@@ -16,7 +16,12 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.autexa.mobile"
+      "bundleIdentifier": "com.autexa.mobile",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Приложению нужен доступ к камере для фотографирования документов и автомобилей",
+        "NSPhotoLibraryUsageDescription": "Приложению нужен доступ к галерее для выбора фотографий"
+      }
     },
     "android": {
       "adaptiveIcon": {
