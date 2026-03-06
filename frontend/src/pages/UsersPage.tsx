@@ -11,17 +11,12 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
+import { roleLabels } from '../../../shared/utils/formatters';
 
 const roleBadgeMap: Record<string, string> = {
   director: 'badge-blue',
   admin: 'badge-green',
   master: 'badge-yellow',
-};
-
-const roleLabels: Record<string, string> = {
-  director: 'Директор',
-  admin: 'Админ',
-  master: 'Мастер',
 };
 
 const permissionLabels: Record<keyof UserPermissions, string> = {

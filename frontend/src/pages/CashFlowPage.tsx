@@ -10,6 +10,7 @@ import DatePeriodPicker from '../components/DatePeriodPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import type { User } from '../../../shared/types';
+import { formatMoney } from '../../../shared/utils/formatters';
 
 interface CashFlowDay {
   date: string;
@@ -27,10 +28,6 @@ interface CashFlowData {
     warranty: number;
     total: number;
   };
-}
-
-function formatCurrency(value: number): string {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
 }
 
 export default function CashFlowPage() {
@@ -103,7 +100,7 @@ export default function CashFlowPage() {
             <div className="stat-label">Наличные</div>
           </div>
           <div className="stat-value text-green-600">
-            {formatCurrency(totals.cash)}
+            {formatMoney(totals.cash)}
           </div>
         </div>
         <div className="stat-card">
@@ -112,7 +109,7 @@ export default function CashFlowPage() {
             <div className="stat-label">Карта</div>
           </div>
           <div className="stat-value text-blue-600">
-            {formatCurrency(totals.card)}
+            {formatMoney(totals.card)}
           </div>
         </div>
         <div className="stat-card">
@@ -121,7 +118,7 @@ export default function CashFlowPage() {
             <div className="stat-label">Гарантия</div>
           </div>
           <div className="stat-value text-orange-600">
-            {formatCurrency(totals.warranty)}
+            {formatMoney(totals.warranty)}
           </div>
         </div>
         <div className="stat-card">
@@ -130,7 +127,7 @@ export default function CashFlowPage() {
             <div className="stat-label">Итого</div>
           </div>
           <div className="stat-value text-gray-900">
-            {formatCurrency(totals.total)}
+            {formatMoney(totals.total)}
           </div>
         </div>
       </div>
@@ -154,12 +151,12 @@ export default function CashFlowPage() {
                   <span className="font-semibold text-gray-900 text-sm">
                     {format(new Date(day.date), 'dd MMM yyyy', { locale: ru })}
                   </span>
-                  <span className="font-bold text-gray-900 text-sm">{formatCurrency(day.total)}</span>
+                  <span className="font-bold text-gray-900 text-sm">{formatMoney(day.total)}</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
-                  {day.cash > 0 && <span className="text-green-600"><Banknote className="w-3 h-3 inline mr-0.5" />{formatCurrency(day.cash)}</span>}
-                  {day.card > 0 && <span className="text-blue-600"><CreditCard className="w-3 h-3 inline mr-0.5" />{formatCurrency(day.card)}</span>}
-                  {day.warranty > 0 && <span className="text-orange-600"><Shield className="w-3 h-3 inline mr-0.5" />{formatCurrency(day.warranty)}</span>}
+                  {day.cash > 0 && <span className="text-green-600"><Banknote className="w-3 h-3 inline mr-0.5" />{formatMoney(day.cash)}</span>}
+                  {day.card > 0 && <span className="text-blue-600"><CreditCard className="w-3 h-3 inline mr-0.5" />{formatMoney(day.card)}</span>}
+                  {day.warranty > 0 && <span className="text-orange-600"><Shield className="w-3 h-3 inline mr-0.5" />{formatMoney(day.warranty)}</span>}
                 </div>
               </div>
             ))}
@@ -184,16 +181,16 @@ export default function CashFlowPage() {
                       {format(new Date(day.date), 'dd MMM yyyy', { locale: ru })}
                     </td>
                     <td className="text-right text-green-600">
-                      {day.cash > 0 ? formatCurrency(day.cash) : '\u2014'}
+                      {day.cash > 0 ? formatMoney(day.cash) : '\u2014'}
                     </td>
                     <td className="text-right text-blue-600">
-                      {day.card > 0 ? formatCurrency(day.card) : '\u2014'}
+                      {day.card > 0 ? formatMoney(day.card) : '\u2014'}
                     </td>
                     <td className="text-right text-orange-600">
-                      {day.warranty > 0 ? formatCurrency(day.warranty) : '\u2014'}
+                      {day.warranty > 0 ? formatMoney(day.warranty) : '\u2014'}
                     </td>
                     <td className="text-right font-semibold text-gray-900">
-                      {formatCurrency(day.total)}
+                      {formatMoney(day.total)}
                     </td>
                   </tr>
                 ))}
@@ -202,16 +199,16 @@ export default function CashFlowPage() {
                 <tr className="border-t-2 border-gray-300 bg-gray-50">
                   <td className="font-bold text-gray-900">Итого</td>
                   <td className="text-right font-bold text-green-600">
-                    {formatCurrency(totals.cash)}
+                    {formatMoney(totals.cash)}
                   </td>
                   <td className="text-right font-bold text-blue-600">
-                    {formatCurrency(totals.card)}
+                    {formatMoney(totals.card)}
                   </td>
                   <td className="text-right font-bold text-orange-600">
-                    {formatCurrency(totals.warranty)}
+                    {formatMoney(totals.warranty)}
                   </td>
                   <td className="text-right font-bold text-gray-900">
-                    {formatCurrency(totals.total)}
+                    {formatMoney(totals.total)}
                   </td>
                 </tr>
               </tfoot>

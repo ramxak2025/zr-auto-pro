@@ -12,6 +12,7 @@ import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import PhoneInput from '../components/PhoneInput';
 import { Supplier, PaginatedResponse } from '../types';
+import { formatMoney } from '../../../shared/utils/formatters';
 
 interface SupplierFormData {
   name: string;
@@ -26,15 +27,6 @@ const emptyForm: SupplierFormData = {
   contactPerson: '',
   comment: '',
 };
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('ru-RU', {
-    style: 'currency',
-    currency: 'RUB',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
-}
 
 export default function SuppliersPage() {
   const navigate = useNavigate();
@@ -161,15 +153,15 @@ export default function SuppliersPage() {
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-semibold text-gray-900 text-sm">{supplier.name}</span>
                   {supplier.currentDebt > 0 && (
-                    <span className="text-xs font-medium text-red-600">{formatCurrency(supplier.currentDebt)}</span>
+                    <span className="text-xs font-medium text-red-600">{formatMoney(supplier.currentDebt)}</span>
                   )}
                 </div>
                 {supplier.contactPerson && (
                   <p className="text-xs text-gray-500 mb-1">{supplier.contactPerson}</p>
                 )}
                 <div className="flex items-center gap-4 text-xs text-gray-500">
-                  <span>Закупки: <span className="font-medium text-gray-700">{formatCurrency(supplier.totalPurchases)}</span></span>
-                  <span>Оплачено: <span className="font-medium text-gray-700">{formatCurrency(supplier.totalPaid)}</span></span>
+                  <span>Закупки: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPurchases)}</span></span>
+                  <span>Оплачено: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPaid)}</span></span>
                 </div>
               </div>
             ))}
@@ -203,17 +195,17 @@ export default function SuppliersPage() {
                       {supplier.phone || '\u2014'}
                     </td>
                     <td className="text-right text-gray-900">
-                      {formatCurrency(supplier.totalPurchases)}
+                      {formatMoney(supplier.totalPurchases)}
                     </td>
                     <td className="text-right text-gray-900">
-                      {formatCurrency(supplier.totalPaid)}
+                      {formatMoney(supplier.totalPaid)}
                     </td>
                     <td
                       className={`text-right font-medium ${
                         supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'
                       }`}
                     >
-                      {formatCurrency(supplier.currentDebt)}
+                      {formatMoney(supplier.currentDebt)}
                     </td>
                   </tr>
                 ))}

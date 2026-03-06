@@ -9,23 +9,13 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import type { Check, PaginatedResponse } from '../types';
-
-const paymentMethodLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал/Карта',
-};
+import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 
 const paymentMethodBadge: Record<string, string> = {
   cash: 'badge-green',
   card: 'badge-blue',
   warranty: 'badge-yellow',
   cash_card: 'badge-gray',
-};
-
-const formatCurrency = (value: number): string => {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
 };
 
 export default function RetailChecksPage() {
@@ -114,7 +104,7 @@ export default function RetailChecksPage() {
                       )}
                     </div>
                     <span className="text-sm font-bold text-gray-900">
-                      {formatCurrency(check.totalRevenue)}
+                      {formatMoney(check.totalRevenue)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -160,7 +150,7 @@ export default function RetailChecksPage() {
                       </td>
                       <td>{format(new Date(check.date), 'dd.MM.yyyy', { locale: ru })}</td>
                       <td>{check.master?.fullName ?? '\u2014'}</td>
-                      <td className="font-semibold">{formatCurrency(check.totalRevenue)}</td>
+                      <td className="font-semibold">{formatMoney(check.totalRevenue)}</td>
                       <td>
                         <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
                           {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}

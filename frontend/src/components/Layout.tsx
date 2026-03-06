@@ -22,6 +22,7 @@ import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { useRoutePrefetch } from '../hooks/useRoutePrefetch';
 import { useOfflineSync } from '../hooks/useOfflineSync';
 import type { UserPermissions } from '../types';
+import { roleLabels } from '../../../shared/utils/formatters';
 
 
 interface NavItem {
@@ -66,13 +67,6 @@ const roleBadgeColors: Record<string, string> = {
   director: 'bg-purple-50 text-purple-700',
   admin: 'bg-blue-50 text-blue-700',
   master: 'bg-green-50 text-green-700',
-};
-
-const roleLabels: Record<string, string> = {
-  superadmin: 'Суперадмин',
-  director: 'Директор',
-  admin: 'Администратор',
-  master: 'Мастер',
 };
 
 function getPageTitle(pathname: string): string[] {

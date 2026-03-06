@@ -1,9 +1,10 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ChecksService } from './checks.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('checks')
 export class ChecksController {
   constructor(private checksService: ChecksService) {}
@@ -43,6 +44,7 @@ export class ChecksController {
     return this.checksService.update(id, user.tenantID, user.role, dto);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.checksService.remove(id, user.tenantID, user.role);

@@ -17,21 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-
-function formatPhone(raw: string): string {
-  let digits = raw.replace(/\D/g, '');
-  if (digits.length > 0 && digits[0] === '8') {
-    digits = '7' + digits.slice(1);
-  }
-  if (digits.length === 0) return '';
-  if (digits.length <= 1) return `+${digits}`;
-  if (digits.length <= 4) return `+${digits.slice(0, 1)} (${digits.slice(1)}`;
-  if (digits.length <= 7)
-    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4)}`;
-  if (digits.length <= 9)
-    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-  return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
-}
+import { formatPhone } from '../../../shared/validation/phone';
 
 export default function LoginScreen() {
   const { login } = useAuth();
@@ -47,13 +33,10 @@ export default function LoginScreen() {
   const logoScale = useRef(new Animated.Value(1)).current;
   const formSlide = useRef(new Animated.Value(20)).current;
   const formFade = useRef(new Animated.Value(0)).current;
-  const demoFade = useRef(new Animated.Value(0)).current;
-
   useEffect(() => {
     Animated.parallel([
       Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
       Animated.timing(formSlide, { toValue: 0, duration: 250, useNativeDriver: true }),
-      Animated.timing(demoFade, { toValue: 1, duration: 350, useNativeDriver: true }),
     ]).start();
   }, []);
 
@@ -86,21 +69,6 @@ export default function LoginScreen() {
         Alert.alert('Ошибка', error.response?.data?.message || 'Неверный телефон или пароль');
       } else {
         Alert.alert('Ошибка', `Ошибка сервера: ${error.response?.status}. Попробуйте позже.`);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleDemoLogin = async (demoPhone: string) => {
-    setSubmitting(true);
-    try {
-      await login(demoPhone, 'demo123');
-    } catch (err: any) {
-      if (err.code === 'ERR_NETWORK' || !err.response) {
-        Alert.alert('Ошибка', 'Сервер недоступен!');
-      } else {
-        Alert.alert('Ошибка', `Ошибка демо-входа: ${err.response?.data?.message || err.response?.status}`);
       }
     } finally {
       setSubmitting(false);
@@ -181,34 +149,10 @@ export default function LoginScreen() {
             </TouchableOpacity>
             </Animated.View>
 
-            {/* Demo access */}
-            <Animated.View style={[styles.demoSection, { opacity: demoFade }]}>
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>ДЕМО-ДОСТУП</Text>
-                <View style={styles.dividerLine} />
-              </View>
-              <View style={styles.demoButtons}>
-                <TouchableOpacity
-                  style={[styles.demoBtn, styles.demoBtnOwner]}
-                  onPress={() => handleDemoLogin('+7 (000) 000-00-01')}
-                  disabled={submitting}
-                >
-                  <Text style={styles.demoBtnOwnerText}>Владелец</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.demoBtn, styles.demoBtnMaster]}
-                  onPress={() => handleDemoLogin('+7 (000) 000-00-02')}
-                  disabled={submitting}
-                >
-                  <Text style={styles.demoBtnMasterText}>Мастер</Text>
-                </TouchableOpacity>
-              </View>
-            </Animated.View>
           </View>
 
           {/* Footer */}
-          <Text style={styles.footer}>Autexa v1.9 © 2026</Text>
+          <Text style={styles.footer}>Autexa v2.1 © 2026</Text>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -315,54 +259,6 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: 15,
     fontWeight: fontWeight.semibold,
-  },
-  demoSection: {
-    marginTop: spacing[8],
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing[4],
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.gray[200],
-  },
-  dividerText: {
-    paddingHorizontal: spacing[3],
-    fontSize: fontSize.xs,
-    color: colors.gray[400],
-    letterSpacing: 1.5,
-  },
-  demoButtons: {
-    flexDirection: 'row',
-    gap: spacing[3],
-  },
-  demoBtn: {
-    flex: 1,
-    paddingVertical: spacing[3],
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    borderWidth: 1,
-  },
-  demoBtnOwner: {
-    backgroundColor: colors.emerald[50],
-    borderColor: colors.emerald[200],
-  },
-  demoBtnOwnerText: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-    color: colors.emerald[700],
-  },
-  demoBtnMaster: {
-    backgroundColor: colors.blue[50],
-    borderColor: colors.blue[200],
-  },
-  demoBtnMasterText: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-    color: colors.blue[700],
   },
   footer: {
     textAlign: 'center',

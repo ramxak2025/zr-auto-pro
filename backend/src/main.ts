@@ -14,7 +14,9 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
   app.useGlobalInterceptors(new ETagInterceptor());
   app.enableCors({
-    origin: process.env.CORS_ORIGIN || true,
+    origin: process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+      : ['https://autexa.pw', 'https://www.autexa.pw'],
     credentials: true,
   });
 

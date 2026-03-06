@@ -30,14 +30,11 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import VirtualProductGrid from '../components/VirtualProductGrid';
 import VirtualList from '../components/VirtualList';
+import { formatMoney } from '../../../shared/utils/formatters';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatMoney(value: number): string {
-  return value.toLocaleString('ru-RU') + ' \u20BD';
-}
 
 /** Return the image URL as-is (client-side compression handles size) */
 function thumbUrl(url?: string): string | undefined {

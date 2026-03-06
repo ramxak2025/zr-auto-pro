@@ -21,6 +21,7 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { authApi, uploadsApi } from '../api/services';
 import type { UserPermissions } from '../types';
+import { roleLabels } from '../../../shared/utils/formatters';
 
 interface MenuItem {
   label: string;
@@ -138,16 +139,6 @@ const menuItems: MenuItem[] = [
     iconColor: 'text-rose-600',
   },
 ];
-
-const roleLabels: Record<string, string> = {
-  superadmin: 'Суперадмин',
-  director: 'Владелец',
-  owner: 'Владелец',
-  admin: 'Администратор',
-  master: 'Мастер',
-  storekeeper: 'Товаровед',
-  accountant: 'Бухгалтер',
-};
 
 export default function MorePage() {
   const { user, logout, hasPermission, refreshUser } = useAuth();

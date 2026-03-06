@@ -18,15 +18,12 @@ import toast from 'react-hot-toast';
 
 import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { formatMoney } from '../../../shared/utils/formatters';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import { UserRole, MasterSalary, SalarySummary, SalaryPayment } from '../types';
-
-function formatCurrency(value: number): string {
-  return Math.round(value).toLocaleString('ru-RU') + ' \u20BD';
-}
 
 /** Current month in 'yyyy-MM' format */
 function getCurrentMonthYear(): string {
@@ -99,7 +96,7 @@ function PaymentHistorySection({ userId }: { userId: string }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-gray-800">
-                {formatCurrency(p.amount)}
+                {formatMoney(p.amount)}
               </span>
               <span
                 className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
@@ -172,7 +169,7 @@ function MasterSalaryView() {
         <div className="stat-card">
           <div className="stat-label">Сегодня</div>
           <div className="stat-value text-green-600">
-            {formatCurrency(summary.today)}
+            {formatMoney(summary.today)}
           </div>
           {summary.todayChecks !== undefined && (
             <p className="text-xs text-gray-400 mt-1">
@@ -183,13 +180,13 @@ function MasterSalaryView() {
         <div className="stat-card">
           <div className="stat-label">Неделя</div>
           <div className="stat-value text-blue-600">
-            {formatCurrency(summary.week)}
+            {formatMoney(summary.week)}
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Месяц</div>
           <div className="stat-value text-purple-600">
-            {formatCurrency(summary.month)}
+            {formatMoney(summary.month)}
           </div>
           {summary.monthChecks !== undefined && (
             <p className="text-xs text-gray-400 mt-1">
@@ -200,7 +197,7 @@ function MasterSalaryView() {
         <div className="stat-card">
           <div className="stat-label">Всего</div>
           <div className="stat-value text-gray-900">
-            {formatCurrency(summary.total)}
+            {formatMoney(summary.total)}
           </div>
         </div>
       </div>
@@ -219,7 +216,7 @@ function MasterSalaryView() {
               <div>
                 <p className="text-sm text-green-700">Наличные</p>
                 <p className="text-lg font-semibold text-green-800">
-                  {formatCurrency(summary.todayCash || 0)}
+                  {formatMoney(summary.todayCash || 0)}
                 </p>
               </div>
             </div>
@@ -230,7 +227,7 @@ function MasterSalaryView() {
               <div>
                 <p className="text-sm text-blue-700">Карта</p>
                 <p className="text-lg font-semibold text-blue-800">
-                  {formatCurrency(summary.todayCard || 0)}
+                  {formatMoney(summary.todayCard || 0)}
                 </p>
               </div>
             </div>
@@ -241,7 +238,7 @@ function MasterSalaryView() {
               <div>
                 <p className="text-sm text-orange-700">Гарантия</p>
                 <p className="text-lg font-semibold text-orange-800">
-                  {formatCurrency(summary.todayWarranty || 0)}
+                  {formatMoney(summary.todayWarranty || 0)}
                 </p>
               </div>
             </div>
@@ -403,13 +400,13 @@ function AdminSalaryView() {
                       <div>
                         <p className="text-[10px] text-gray-400 uppercase">Выручка</p>
                         <p className="text-sm font-medium text-gray-900">
-                          {formatCurrency(master.totalRevenue)}
+                          {formatMoney(master.totalRevenue)}
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-[10px] text-gray-400 uppercase">Заработок</p>
                         <p className="text-sm font-bold text-green-600">
-                          {formatCurrency(master.totalEarnings)}
+                          {formatMoney(master.totalEarnings)}
                         </p>
                       </div>
                       <div className="text-right">
@@ -425,13 +422,13 @@ function AdminSalaryView() {
                       <div>
                         <p className="text-[10px] text-gray-400 uppercase">Выплачено</p>
                         <p className="text-sm font-medium text-blue-600">
-                          {formatCurrency(master.paidAmount || 0)}
+                          {formatMoney(master.paidAmount || 0)}
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-[10px] text-gray-400 uppercase">Остаток</p>
                         <p className="text-sm font-bold text-red-600">
-                          {formatCurrency(master.remainingAmount ?? master.totalEarnings)}
+                          {formatMoney(master.remainingAmount ?? master.totalEarnings)}
                         </p>
                       </div>
                     </div>
@@ -478,10 +475,10 @@ function AdminSalaryView() {
                 <span className="font-bold text-gray-900 text-sm">Итого</span>
                 <div className="flex items-center gap-4 text-sm">
                   <span className="font-semibold text-gray-900">
-                    {formatCurrency(totalRevenue)}
+                    {formatMoney(totalRevenue)}
                   </span>
                   <span className="font-bold text-green-600">
-                    {formatCurrency(totalEarnings)}
+                    {formatMoney(totalEarnings)}
                   </span>
                 </div>
               </div>
@@ -516,16 +513,16 @@ function AdminSalaryView() {
                           {master.salaryPercent}%
                         </td>
                         <td className="text-right text-gray-900">
-                          {formatCurrency(master.totalRevenue)}
+                          {formatMoney(master.totalRevenue)}
                         </td>
                         <td className="text-right font-medium text-green-600">
-                          {formatCurrency(master.totalEarnings)}
+                          {formatMoney(master.totalEarnings)}
                         </td>
                         <td className="text-right text-blue-600">
-                          {formatCurrency(master.paidAmount || 0)}
+                          {formatMoney(master.paidAmount || 0)}
                         </td>
                         <td className="text-right font-medium text-red-600">
-                          {formatCurrency(master.remainingAmount ?? master.totalEarnings)}
+                          {formatMoney(master.remainingAmount ?? master.totalEarnings)}
                         </td>
                         <td className="text-right text-gray-600">
                           {master.checkCount}
@@ -572,16 +569,16 @@ function AdminSalaryView() {
                   <td className="font-semibold text-gray-900">Итого</td>
                   <td></td>
                   <td className="text-right font-semibold text-gray-900">
-                    {formatCurrency(totalRevenue)}
+                    {formatMoney(totalRevenue)}
                   </td>
                   <td className="text-right font-semibold text-green-600">
-                    {formatCurrency(totalEarnings)}
+                    {formatMoney(totalEarnings)}
                   </td>
                   <td className="text-right font-semibold text-blue-600">
-                    {formatCurrency(totalPaid)}
+                    {formatMoney(totalPaid)}
                   </td>
                   <td className="text-right font-semibold text-red-600">
-                    {formatCurrency(totalRemaining)}
+                    {formatMoney(totalRemaining)}
                   </td>
                   <td className="text-right font-semibold text-gray-600">
                     {totalChecks}

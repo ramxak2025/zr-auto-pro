@@ -34,6 +34,7 @@ import {
   Product,
   PaginatedResponse,
 } from '../types';
+import { formatMoney } from '../../../shared/utils/formatters';
 
 type TabType = 'deliveries' | 'payments';
 
@@ -60,15 +61,6 @@ interface PaymentFormData {
   amount: number;
   date: string;
   comment: string;
-}
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('ru-RU', {
-    style: 'currency',
-    currency: 'RUB',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
 }
 
 function statusBadge(status: string) {
@@ -168,7 +160,7 @@ function DeliveryProductPicker({
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
                   <p className="text-xs text-gray-400">{p.category || 'Без категории'}</p>
                 </div>
-                <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatCurrency(p.costPrice)}</span>
+                <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatMoney(p.costPrice)}</span>
               </button>
             ))
           )
@@ -192,7 +184,7 @@ function DeliveryProductPicker({
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
                   <p className="text-xs text-gray-400">Остаток: {p.stock} {p.unit === 'm' ? 'м' : p.unit === 'l' ? 'л' : 'шт'}</p>
                 </div>
-                <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatCurrency(p.costPrice)}</span>
+                <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatMoney(p.costPrice)}</span>
               </button>
             ))}
             {subfolders.length === 0 && currentProducts.length === 0 && (
@@ -512,13 +504,13 @@ export default function SupplierDetailPage() {
         <div className="stat-card">
           <div className="stat-label">Закупки всего</div>
           <div className="stat-value text-blue-600">
-            {formatCurrency(supplier.totalPurchases)}
+            {formatMoney(supplier.totalPurchases)}
           </div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Оплачено</div>
           <div className="stat-value text-green-600">
-            {formatCurrency(supplier.totalPaid)}
+            {formatMoney(supplier.totalPaid)}
           </div>
         </div>
         <div className="stat-card">
@@ -528,7 +520,7 @@ export default function SupplierDetailPage() {
               supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'
             }`}
           >
-            {formatCurrency(supplier.currentDebt)}
+            {formatMoney(supplier.currentDebt)}
           </div>
         </div>
       </div>
@@ -596,7 +588,7 @@ export default function SupplierDetailPage() {
                         })}
                       </td>
                       <td className="text-right font-medium text-gray-900">
-                        {formatCurrency(delivery.totalAmount)}
+                        {formatMoney(delivery.totalAmount)}
                       </td>
                       <td>{statusBadge(delivery.paymentStatus)}</td>
                       <td className="text-gray-500 text-sm">
@@ -647,7 +639,7 @@ export default function SupplierDetailPage() {
                         })}
                       </td>
                       <td className="text-right font-medium text-green-600">
-                        {formatCurrency(payment.amount)}
+                        {formatMoney(payment.amount)}
                       </td>
                       <td className="text-gray-500 text-sm">
                         {payment.comment || '\u2014'}
@@ -806,7 +798,7 @@ export default function SupplierDetailPage() {
                         </button>
                       </div>
                       <span className="text-sm font-semibold text-gray-700 flex-shrink-0 w-20 text-right">
-                        {formatCurrency(item.quantity * item.price)}
+                        {formatMoney(item.quantity * item.price)}
                       </span>
                       <button type="button" onClick={() => removeDeliveryItem(index)}
                         className="p-1 text-red-400 hover:text-red-600 flex-shrink-0">
@@ -834,7 +826,7 @@ export default function SupplierDetailPage() {
 
           <div className="text-right text-sm font-semibold text-gray-700">
             Итого:{' '}
-            {formatCurrency(
+            {formatMoney(
               deliveryForm.items.reduce(
                 (sum, item) => sum + item.quantity * item.price,
                 0
@@ -922,7 +914,7 @@ export default function SupplierDetailPage() {
             <p className="text-sm text-gray-500">
               Текущий долг:{' '}
               <span className="font-medium text-red-600">
-                {formatCurrency(supplier.currentDebt)}
+                {formatMoney(supplier.currentDebt)}
               </span>
             </p>
           )}

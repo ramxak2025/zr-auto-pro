@@ -1,11 +1,5 @@
 import type { Check, Tenant } from '../types';
-
-const paymentMethodLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал / Карта',
-};
+import { paymentMethodLabels } from '../../../shared/utils/formatters';
 
 const fmt = (value: number): string =>
   value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

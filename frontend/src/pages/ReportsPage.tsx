@@ -16,15 +16,10 @@ import { format, startOfMonth } from 'date-fns';
 
 import { reportsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { formatMoney } from '../../../shared/utils/formatters';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { FinancialReport } from '../types';
-
-function formatMoney(value: number): string {
-  const abs = Math.abs(Math.round(value));
-  const formatted = abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  return `${value < 0 ? '-' : ''}${formatted} \u20BD`;
-}
 
 export default function ReportsPage() {
   const { hasPermission } = useAuth();

@@ -13,6 +13,7 @@ import Pagination from '../components/Pagination';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import SearchInput from '../components/SearchInput';
 import type { Check, User, PaginatedResponse, StockMovement } from '../types';
+import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 
 const movementTypeConfig: Record<string, { label: string; color: string; bg: string; icon: typeof Package }> = {
   writeoff: { label: 'Списание', color: 'text-red-600', bg: 'bg-red-50 border-red-200', icon: AlertTriangle },
@@ -21,22 +22,11 @@ const movementTypeConfig: Record<string, { label: string; color: string; bg: str
   expense: { label: 'Продажа', color: 'text-green-600', bg: 'bg-green-50 border-green-200', icon: ArrowUp },
 };
 
-const paymentMethodLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал/Карта',
-};
-
 const paymentMethodBadge: Record<string, string> = {
   cash: 'badge-green',
   card: 'badge-blue',
   warranty: 'badge-yellow',
   cash_card: 'badge-gray',
-};
-
-const formatCurrency = (value: number): string => {
-  return value.toLocaleString('ru-RU') + ' ₽';
 };
 
 // ─── Memoized mobile check card ──────────────────────────────────────────────
@@ -114,10 +104,10 @@ const MobileCheckCard = memo(function MobileCheckCard({
           {(check.discount ?? 0) > 0 && (
             <div className="flex items-center gap-0.5">
               <Percent className="w-3 h-3 text-orange-400" />
-              <span className="text-xs font-medium text-orange-500">-{formatCurrency(check.discount ?? 0)}</span>
+              <span className="text-xs font-medium text-orange-500">-{formatMoney(check.discount ?? 0)}</span>
             </div>
           )}
-          <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
+          <span className="text-sm font-bold text-gray-900">{formatMoney(check.totalRevenue)}</span>
         </div>
       </div>
       {canViewProfit && (
@@ -129,7 +119,7 @@ const MobileCheckCard = memo(function MobileCheckCard({
             <span className="text-xs text-gray-400">Прибыль</span>
           </div>
           <span className={`text-sm font-bold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-            {check.profit >= 0 ? '+' : ''}{formatCurrency(check.profit)}
+            {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
           </span>
         </div>
       )}
@@ -385,17 +375,17 @@ export default function ChecksPage() {
                     {canViewProfit && (
                       <td>
                         {(check.discount ?? 0) > 0 ? (
-                          <span className="text-sm text-orange-500 font-medium">-{formatCurrency(check.discount ?? 0)}</span>
+                          <span className="text-sm text-orange-500 font-medium">-{formatMoney(check.discount ?? 0)}</span>
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
                       </td>
                     )}
-                    <td className="font-semibold">{formatCurrency(check.totalRevenue)}</td>
+                    <td className="font-semibold">{formatMoney(check.totalRevenue)}</td>
                     {canViewProfit && (
                       <td>
                         <span className={`font-semibold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                          {check.profit >= 0 ? '+' : ''}{formatCurrency(check.profit)}
+                          {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
                         </span>
                       </td>
                     )}

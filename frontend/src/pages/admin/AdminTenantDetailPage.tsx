@@ -24,18 +24,12 @@ import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
+import { roleLabels } from '../../../../shared/utils/formatters';
 
 const roleBadgeMap: Record<string, string> = {
   director: 'badge-blue',
   admin: 'badge-green',
   master: 'badge-yellow',
-};
-
-const roleLabels: Record<string, string> = {
-  superadmin: 'Суперадмин',
-  director: 'Директор',
-  admin: 'Админ',
-  master: 'Мастер',
 };
 
 const defaultPermissions: UserPermissions = {

@@ -2,9 +2,10 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Re
 import { Response } from 'express';
 import { ClientsService } from './clients.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('clients')
 export class ClientsController {
   constructor(private clientsService: ClientsService) {}
@@ -38,6 +39,7 @@ export class ClientsController {
     return this.clientsService.update(id, user.tenantID, dto);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.clientsService.remove(id, user.tenantID);

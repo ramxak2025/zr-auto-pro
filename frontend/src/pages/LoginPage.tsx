@@ -3,21 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Loader2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-
-function formatPhone(raw: string): string {
-  let digits = raw.replace(/\D/g, '');
-  if (digits.length > 0 && digits[0] === '8') {
-    digits = '7' + digits.slice(1);
-  }
-  if (digits.length === 0) return '';
-  if (digits.length <= 1) return `+${digits}`;
-  if (digits.length <= 4) return `+${digits.slice(0, 1)} (${digits.slice(1)}`;
-  if (digits.length <= 7)
-    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4)}`;
-  if (digits.length <= 9)
-    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
-  return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
-}
+import { formatPhone } from '../../../shared/validation/phone';
 
 export default function LoginPage() {
   const navigate = useNavigate();

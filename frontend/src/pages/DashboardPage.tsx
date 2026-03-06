@@ -26,21 +26,10 @@ import { format, subDays, addDays, startOfWeek, addWeeks, subWeeks, startOfMonth
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
+import { formatMoney } from '../../../shared/utils/formatters';
 import { checksApi, salaryApi, shiftsApi, scheduleApi } from '../api/services';
 import type { SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatMoney(value: number): string {
-  const rounded = Math.round(value);
-  const formatted = rounded
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  return `${formatted} \u20BD`;
-}
 
 // ---------------------------------------------------------------------------
 // Skeleton loader for cards

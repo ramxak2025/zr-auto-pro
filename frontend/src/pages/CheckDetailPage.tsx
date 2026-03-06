@@ -31,13 +31,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import ConfirmDialog from '../components/ConfirmDialog';
 import type { Check, Tenant } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
-
-const paymentMethodLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал/Карта',
-};
+import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 
 const paymentMethodIcons: Record<string, typeof Banknote> = {
   cash: Banknote,
@@ -51,10 +45,6 @@ const paymentMethodColors: Record<string, string> = {
   card: 'text-blue-600 bg-blue-50',
   warranty: 'text-yellow-600 bg-yellow-50',
   cash_card: 'text-gray-600 bg-gray-100',
-};
-
-const formatCurrency = (value: number): string => {
-  return value.toLocaleString('ru-RU') + ' ₽';
 };
 
 export default function CheckDetailPage() {
@@ -312,7 +302,7 @@ export default function CheckDetailPage() {
               <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.services.length}</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-700">{formatCurrency(check.serviceTotal)}</span>
+              <span className="text-sm font-semibold text-gray-700">{formatMoney(check.serviceTotal)}</span>
               <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${servicesOpen ? 'rotate-180' : ''}`} />
             </div>
           </button>
@@ -330,9 +320,9 @@ export default function CheckDetailPage() {
                         )}
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-semibold text-gray-900">{formatCurrency(svc.total)}</p>
+                        <p className="text-sm font-semibold text-gray-900">{formatMoney(svc.total)}</p>
                         {svc.quantity > 1 && (
-                          <p className="text-xs text-gray-400">{svc.quantity} x {formatCurrency(svc.price)}</p>
+                          <p className="text-xs text-gray-400">{svc.quantity} x {formatMoney(svc.price)}</p>
                         )}
                       </div>
                     </div>
@@ -358,9 +348,9 @@ export default function CheckDetailPage() {
                         <td className="text-gray-400">{idx + 1}</td>
                         <td className="font-medium">{svc.name}</td>
                         <td className="text-gray-600">{svc.master?.fullName ?? '—'}</td>
-                        <td className="text-right text-gray-600">{formatCurrency(svc.price)}</td>
+                        <td className="text-right text-gray-600">{formatMoney(svc.price)}</td>
                         <td className="text-center text-gray-600">{svc.quantity}</td>
-                        <td className="text-right font-semibold">{formatCurrency(svc.total)}</td>
+                        <td className="text-right font-semibold">{formatMoney(svc.total)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -385,7 +375,7 @@ export default function CheckDetailPage() {
               <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.products.length}</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-700">{formatCurrency(check.productTotal)}</span>
+              <span className="text-sm font-semibold text-gray-700">{formatMoney(check.productTotal)}</span>
               <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${productsOpen ? 'rotate-180' : ''}`} />
             </div>
           </button>
@@ -399,10 +389,10 @@ export default function CheckDetailPage() {
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-gray-900">{prod.name}</p>
                         {prod.quantity > 1 && (
-                          <p className="text-xs text-gray-400 mt-0.5">{prod.quantity} x {formatCurrency(prod.sellPrice)}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">{prod.quantity} x {formatMoney(prod.sellPrice)}</p>
                         )}
                       </div>
-                      <p className="text-sm font-semibold text-gray-900 flex-shrink-0">{formatCurrency(prod.totalSell)}</p>
+                      <p className="text-sm font-semibold text-gray-900 flex-shrink-0">{formatMoney(prod.totalSell)}</p>
                     </div>
                   </div>
                 ))}
@@ -424,9 +414,9 @@ export default function CheckDetailPage() {
                       <tr key={prod.id ?? idx}>
                         <td className="text-gray-400">{idx + 1}</td>
                         <td className="font-medium">{prod.name}</td>
-                        <td className="text-right text-gray-600">{formatCurrency(prod.sellPrice)}</td>
+                        <td className="text-right text-gray-600">{formatMoney(prod.sellPrice)}</td>
                         <td className="text-center text-gray-600">{prod.quantity}</td>
-                        <td className="text-right font-semibold">{formatCurrency(prod.totalSell)}</td>
+                        <td className="text-right font-semibold">{formatMoney(prod.totalSell)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -445,22 +435,22 @@ export default function CheckDetailPage() {
           <div className="space-y-2.5">
             <div className="flex justify-between items-center text-sm">
               <span className="text-gray-500">{'Услуги'}</span>
-              <span className="font-medium">{formatCurrency(check.serviceTotal)}</span>
+              <span className="font-medium">{formatMoney(check.serviceTotal)}</span>
             </div>
             <div className="flex justify-between items-center text-sm">
               <span className="text-gray-500">{'Товары'}</span>
-              <span className="font-medium">{formatCurrency(check.productTotal)}</span>
+              <span className="font-medium">{formatMoney(check.productTotal)}</span>
             </div>
             {(check.discount ?? 0) > 0 && (
               <div className="flex justify-between items-center text-sm">
                 <span className="text-gray-500">{'Скидка на товары'}</span>
-                <span className="font-medium text-orange-500">-{formatCurrency(check.discount ?? 0)}</span>
+                <span className="font-medium text-orange-500">-{formatMoney(check.discount ?? 0)}</span>
               </div>
             )}
             <div className="border-t border-gray-100 pt-2.5 mt-2.5">
               <div className="flex justify-between items-center">
                 <span className="text-base font-bold text-gray-900">{'Выручка'}</span>
-                <span className="text-lg font-bold text-primary-600">{formatCurrency(check.totalRevenue)}</span>
+                <span className="text-lg font-bold text-primary-600">{formatMoney(check.totalRevenue)}</span>
               </div>
             </div>
 
@@ -468,11 +458,11 @@ export default function CheckDetailPage() {
               <div className="border-t border-dashed border-gray-200 pt-3 mt-3 space-y-2">
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-gray-400">{'Себестоимость товаров'}</span>
-                  <span className="text-gray-500">{formatCurrency(check.productCostTotal)}</span>
+                  <span className="text-gray-500">{formatMoney(check.productCostTotal)}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
                   <span className="text-gray-400">{'Зарплата мастеров'}</span>
-                  <span className="text-gray-500">{formatCurrency(check.serviceSalaryTotal)}</span>
+                  <span className="text-gray-500">{formatMoney(check.serviceSalaryTotal)}</span>
                 </div>
                 <div className="flex justify-between items-center pt-1.5">
                   <div className="flex items-center gap-1.5">
@@ -480,7 +470,7 @@ export default function CheckDetailPage() {
                     <span className="text-sm font-bold text-gray-700">{'Чистая прибыль'}</span>
                   </div>
                   <span className={`text-base font-bold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                    {check.profit >= 0 ? '+' : ''}{formatCurrency(check.profit)}
+                    {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
                   </span>
                 </div>
               </div>
@@ -502,14 +492,14 @@ export default function CheckDetailPage() {
                   <Banknote className="w-4 h-4" />
                   <span>{'Наличные'}</span>
                 </div>
-                <span className="font-medium">{formatCurrency(check.cashAmount)}</span>
+                <span className="font-medium">{formatMoney(check.cashAmount)}</span>
               </div>
               <div className="flex justify-between items-center text-sm">
                 <div className="flex items-center gap-2 text-gray-500">
                   <CreditCard className="w-4 h-4" />
                   <span>{'Карта'}</span>
                 </div>
-                <span className="font-medium">{formatCurrency(check.cardAmount)}</span>
+                <span className="font-medium">{formatMoney(check.cardAmount)}</span>
               </div>
             </div>
           )}
