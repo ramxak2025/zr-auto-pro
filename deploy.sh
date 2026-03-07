@@ -17,7 +17,7 @@ else
     REPO_DIR="/opt/zr-auto-pro"
 fi
 
-BRANCH="${DEPLOY_BRANCH:-master}"
+BRANCH="${DEPLOY_BRANCH:-claude/refactor-architecture-fixes-r8D6C}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
