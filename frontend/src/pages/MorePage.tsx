@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   Users,
   Wrench,
@@ -16,11 +17,12 @@ import {
   CreditCard,
   Megaphone,
   Building2,
+  Lock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
-import { authApi, uploadsApi } from '../api/services';
-import type { UserPermissions } from '../types';
+import { authApi, uploadsApi, subscriptionApi } from '../api/services';
+import type { UserPermissions, SubscriptionInfo } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
 
 interface MenuItem {
@@ -30,6 +32,7 @@ interface MenuItem {
   icon: typeof Users;
   permission?: keyof UserPermissions;
   roles?: string[];
+  featureKey?: string;
   color: string;
   iconColor: string;
 }
@@ -40,6 +43,7 @@ const menuItems: MenuItem[] = [
     description: 'График работы и смены',
     path: '/schedule',
     icon: CalendarDays,
+    featureKey: 'schedule_view',
     color: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
   },
@@ -49,6 +53,7 @@ const menuItems: MenuItem[] = [
     path: '/clients',
     icon: Users,
     permission: 'clients_view',
+    featureKey: 'clients_view',
     color: 'bg-blue-50',
     iconColor: 'text-blue-600',
   },
@@ -57,6 +62,7 @@ const menuItems: MenuItem[] = [
     description: 'Каталог услуг',
     path: '/services',
     icon: Wrench,
+    featureKey: 'services_view',
     color: 'bg-orange-50',
     iconColor: 'text-orange-600',
   },
@@ -66,6 +72,7 @@ const menuItems: MenuItem[] = [
     path: '/suppliers',
     icon: Truck,
     permission: 'suppliers_access',
+    featureKey: 'suppliers_view',
     color: 'bg-amber-50',
     iconColor: 'text-amber-600',
   },
@@ -74,6 +81,7 @@ const menuItems: MenuItem[] = [
     description: 'Касса по дням и сотрудникам',
     path: '/cashflow',
     icon: ArrowRightLeft,
+    featureKey: 'cashflow_view',
     color: 'bg-teal-50',
     iconColor: 'text-teal-600',
   },
@@ -82,6 +90,7 @@ const menuItems: MenuItem[] = [
     description: 'Заработок мастеров',
     path: '/salary',
     icon: Wallet,
+    featureKey: 'salary_view',
     color: 'bg-green-50',
     iconColor: 'text-green-600',
   },
@@ -100,6 +109,7 @@ const menuItems: MenuItem[] = [
     path: '/reports',
     icon: BarChart3,
     permission: 'financial_reports',
+    featureKey: 'reports_view',
     color: 'bg-purple-50',
     iconColor: 'text-purple-600',
   },
@@ -117,6 +127,7 @@ const menuItems: MenuItem[] = [
     path: '/users',
     icon: Shield,
     permission: 'user_management',
+    featureKey: 'users_manage',
     color: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
   },
@@ -145,6 +156,22 @@ export default function MorePage() {
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+
+  // Fetch subscription for feature gating
+  const { data: sub } = useQuery<SubscriptionInfo>({
+    queryKey: ['subscription'],
+    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const currentPlan = sub?.plans?.find(p => p.name === sub?.planName);
+  const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
+  const isBypass = user?.role === 'superadmin' || user?.role === 'director';
+
+  const isFeatureLocked = (featureKey?: string) => {
+    if (!featureKey || isBypass || !sub) return false;
+    return !planFeatures.includes(featureKey);
+  };
 
   const handleAvatarUpload = async (file: File) => {
     if (file.size > 5 * 1024 * 1024) {
@@ -225,21 +252,26 @@ export default function MorePage() {
           }
 
           const Icon = item.icon;
+          const locked = isFeatureLocked(item.featureKey);
 
           return (
             <Link
               key={item.path}
               to={item.path}
-              className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+              className={`flex items-center gap-4 px-5 py-4 transition-colors ${locked ? 'opacity-60' : 'hover:bg-gray-50 active:bg-gray-100'}`}
             >
               <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${item.color}`}>
-                <Icon className={`h-5 w-5 ${item.iconColor}`} />
+                <Icon className={`h-5 w-5 ${locked ? 'text-gray-400' : item.iconColor}`} />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">{item.label}</p>
+                <p className={`text-sm font-semibold ${locked ? 'text-gray-400' : 'text-gray-900'}`}>{item.label}</p>
                 <p className="text-xs text-gray-500">{item.description}</p>
               </div>
-              <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
+              {locked ? (
+                <Lock className="h-4 w-4 text-gray-300 flex-shrink-0" />
+              ) : (
+                <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
+              )}
             </Link>
           );
         })}

@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
   Users,
@@ -16,12 +17,14 @@ import {
   BookOpen,
   CalendarDays,
   Megaphone,
+  Lock,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { subscriptionApi } from '../api/services';
 import { usePullToRefresh } from '../hooks/usePullToRefresh';
 import { useRoutePrefetch } from '../hooks/useRoutePrefetch';
 import { useOfflineSync } from '../hooks/useOfflineSync';
-import type { UserPermissions } from '../types';
+import type { UserPermissions, SubscriptionInfo } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
 
 
@@ -30,21 +33,22 @@ interface NavItem {
   path: string;
   icon: typeof LayoutDashboard;
   permission?: keyof UserPermissions;
+  featureKey?: string;
 }
 
 const navItems: NavItem[] = [
   { label: 'Главная', path: '/dashboard', icon: LayoutDashboard },
-  { label: 'Клиенты', path: '/clients', icon: Users, permission: 'clients_view' },
+  { label: 'Клиенты', path: '/clients', icon: Users, permission: 'clients_view', featureKey: 'clients_view' },
   { label: 'Касса', path: '/checks', icon: Receipt, permission: 'checks_view' },
   { label: 'Склад', path: '/products', icon: Package, permission: 'warehouse_access' },
-  { label: 'Услуги', path: '/services', icon: Wrench },
-  { label: 'Поставщики', path: '/suppliers', icon: Truck, permission: 'suppliers_access' },
-  { label: 'Движение денег', path: '/cashflow', icon: Wallet },
-  { label: 'Зарплата', path: '/salary', icon: Wallet },
-  { label: 'Расписание', path: '/schedule', icon: CalendarDays },
-  { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports' },
+  { label: 'Услуги', path: '/services', icon: Wrench, featureKey: 'services_view' },
+  { label: 'Поставщики', path: '/suppliers', icon: Truck, permission: 'suppliers_access', featureKey: 'suppliers_view' },
+  { label: 'Движение денег', path: '/cashflow', icon: Wallet, featureKey: 'cashflow_view' },
+  { label: 'Зарплата', path: '/salary', icon: Wallet, featureKey: 'salary_view' },
+  { label: 'Расписание', path: '/schedule', icon: CalendarDays, featureKey: 'schedule_view' },
+  { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports', featureKey: 'reports_view' },
   { label: 'Маркетинг', path: '/marketing', icon: Megaphone },
-  { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management' },
+  { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management', featureKey: 'users_manage' },
 ];
 
 interface TabItem {
@@ -100,6 +104,7 @@ interface SidebarProps {
   tenantName: string;
   roleLabel: string;
   hasPermission: (perm: keyof UserPermissions) => boolean;
+  isFeatureLocked: (featureKey?: string) => boolean;
   onLogout: () => void;
 }
 
@@ -110,6 +115,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
   tenantName,
   roleLabel,
   hasPermission,
+  isFeatureLocked,
   onLogout,
 }: SidebarProps) {
   const prefetch = useRoutePrefetch();
@@ -130,6 +136,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
           {navItems.map((item) => {
             if (item.permission && !hasPermission(item.permission)) return null;
             const Icon = item.icon;
+            const locked = isFeatureLocked(item.featureKey);
             return (
               <li key={item.path}>
                 <NavLink
@@ -138,14 +145,17 @@ const DesktopSidebar = memo(function DesktopSidebar({
                   {...prefetch(item.path)}
                   className={({ isActive }) =>
                     `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
-                      isActive
-                        ? 'bg-primary-50 text-primary-700'
-                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      locked
+                        ? 'text-gray-400 cursor-default'
+                        : isActive
+                          ? 'bg-primary-50 text-primary-700'
+                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                     }`
                   }
                 >
-                  <Icon className="h-5 w-5 flex-shrink-0" />
-                  <span>{item.label}</span>
+                  <Icon className={`h-5 w-5 flex-shrink-0 ${locked ? 'text-gray-300' : ''}`} />
+                  <span className="flex-1">{item.label}</span>
+                  {locked && <Lock className="h-3.5 w-3.5 text-gray-300" />}
                 </NavLink>
               </li>
             );
@@ -251,6 +261,22 @@ export default function Layout() {
   // Background sync: handle offline mutations and online/offline events
   useOfflineSync();
 
+  // Fetch subscription for feature gating in sidebar
+  const { data: sub } = useQuery<SubscriptionInfo>({
+    queryKey: ['subscription'],
+    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const currentPlan = sub?.plans?.find(p => p.name === sub?.planName);
+  const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
+  const isBypass = user?.role === 'superadmin' || user?.role === 'director';
+
+  const isFeatureLocked = useMemo(() => (featureKey?: string) => {
+    if (!featureKey || isBypass || !sub) return false;
+    return !planFeatures.includes(featureKey);
+  }, [isBypass, sub, planFeatures]);
+
   const breadcrumbs = getPageTitle(location.pathname);
   const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
   const userName = user?.fullName || 'User';
@@ -265,8 +291,9 @@ export default function Layout() {
     tenantName,
     roleLabel,
     hasPermission,
+    isFeatureLocked,
     onLogout: logout,
-  }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, logout]);
+  }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, isFeatureLocked, logout]);
 
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
