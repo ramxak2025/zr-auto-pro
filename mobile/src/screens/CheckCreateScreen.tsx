@@ -396,7 +396,7 @@ export default function CheckCreateScreen() {
             <TouchableOpacity style={styles.plateSearch} onPress={() => { setPlateSearch(''); setShowPlatePicker(true); }} activeOpacity={0.7}>
               <Ionicons name="search-outline" size={16} color={colors.blue[400]} />
               <Text style={[styles.plateSearchText, clientId && { color: colors.gray[900], fontWeight: fontWeight.medium }]}>
-                {selectedClient ? selectedClient.fullName : 'Поиск клиента по госномеру или имени'}
+                {selectedClient ? selectedClient.fullName : 'Розничный покупатель (нажмите для выбора)'}
               </Text>
               {clientId ? (
                 <TouchableOpacity onPress={() => { setClientId(''); setCarId(''); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>

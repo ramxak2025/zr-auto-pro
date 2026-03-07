@@ -100,7 +100,42 @@ export default function ClientsScreen() {
   const total = data?.total || 0;
   const hasMore = page * limit < total;
 
-  const renderClient = ({ item, index }: { item: Client; index: number }) => (
+  const retailBuyer: Client = {
+    id: '__retail__',
+    fullName: 'Розничный покупатель',
+    phone: '',
+    comment: 'Все чеки без клиента — автоматически розничный покупатель',
+    tenantId: '',
+    createdAt: '',
+  } as Client;
+
+  // Pin "Розничный покупатель" at top when not searching
+  const displayClients = !search ? [retailBuyer, ...clients] : clients;
+
+  const renderClient = ({ item, index }: { item: Client; index: number }) => {
+    // Special render for pinned retail buyer
+    if (item.id === '__retail__') {
+      return (
+        <View style={[styles.clientCard, styles.retailCard]}>
+          <View style={styles.clientTop}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], flex: 1 }}>
+              <View style={styles.retailIcon}>
+                <Ionicons name="storefront-outline" size={16} color={colors.primary[600]} />
+              </View>
+              <Text style={[styles.clientName, { color: colors.primary[700] }]}>{item.fullName}</Text>
+            </View>
+            <View style={styles.retailBadge}>
+              <Text style={styles.retailBadgeText}>По умолчанию</Text>
+            </View>
+          </View>
+          <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[1] }}>
+            {item.comment}
+          </Text>
+        </View>
+      );
+    }
+
+    return (
     <AnimatedCard
       style={styles.clientCard}
       index={index}
@@ -132,6 +167,7 @@ export default function ClientsScreen() {
       </View>
     </AnimatedCard>
   );
+  };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -169,7 +205,7 @@ export default function ClientsScreen() {
         />
       ) : (
         <FlatList
-          data={clients}
+          data={displayClients}
           keyExtractor={(item) => item.id}
           renderItem={renderClient}
           contentContainerStyle={styles.list}
@@ -258,4 +294,30 @@ const styles = StyleSheet.create({
   cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
   submitBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
+  // Retail buyer card
+  retailCard: {
+    borderColor: colors.primary[200],
+    borderWidth: 1.5,
+    backgroundColor: colors.primary[50],
+    borderStyle: 'dashed' as any,
+  },
+  retailIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primary[100],
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  retailBadge: {
+    backgroundColor: colors.primary[100],
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.sm,
+  },
+  retailBadgeText: {
+    fontSize: 10,
+    fontWeight: fontWeight.semibold,
+    color: colors.primary[600],
+  },
 });

@@ -116,47 +116,82 @@ const MoreStack = createNativeStackNavigator();
 //  Касса — branded blue gradient center button
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const KASSA_SIZE = 66;
+const KASSA_SIZE = 68;
 
 function KassaButton({ focused }: { focused?: boolean }) {
   const pulse = useRef(new Animated.Value(0)).current;
+  const plasma = useRef(new Animated.Value(0)).current;
+  const rotate = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    // Outer glow pulse
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 2200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ]),
+    ).start();
+    // Inner plasma breathing
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(plasma, { toValue: 1, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(plasma, { toValue: 0, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ]),
+    ).start();
+    // Slow rotation for plasma orbs
+    Animated.loop(
+      Animated.timing(rotate, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true }),
     ).start();
   }, []);
 
-  const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
-  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.5] });
+  const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] });
+  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.6] });
+  const plasmaScale = plasma.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.2] });
+  const plasmaOpacity = plasma.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.35] });
+  const rotateVal = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   return (
     <View style={kassa.outer}>
-      {/* Soft pulsing glow behind the button */}
+      {/* Outer pulsing glow ring */}
       <Animated.View
         style={[
-          kassa.glow,
+          kassa.glowRing,
           { opacity: glowOpacity, transform: [{ scale: glowScale }] },
+        ]}
+      />
+
+      {/* Secondary glow layer */}
+      <Animated.View
+        style={[
+          kassa.glowInner,
+          { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.45] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1.05, 1.25] }) }] },
         ]}
       />
 
       {/* Main button body */}
       <View style={kassa.body}>
         <LinearGradient
-          colors={[colors.primary[400], colors.primary[600], colors.primary[800]]}
+          colors={[colors.primary[300], colors.primary[500], colors.primary[700], colors.primary[900]]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
 
-        {/* Subtle shine overlay at top-left */}
+        {/* Rotating plasma orbs */}
+        <Animated.View style={[kassa.plasmaContainer, { transform: [{ rotate: rotateVal }] }]}>
+          <Animated.View style={[kassa.plasmaOrb1, { opacity: plasmaOpacity, transform: [{ scale: plasmaScale }] }]} />
+          <Animated.View style={[kassa.plasmaOrb2, { opacity: plasmaOpacity, transform: [{ scale: plasma.interpolate({ inputRange: [0, 1], outputRange: [1.1, 0.7] }) }] }]} />
+          <Animated.View style={[kassa.plasmaOrb3, { opacity: plasma.interpolate({ inputRange: [0, 1], outputRange: [0.1, 0.25] }), transform: [{ scale: plasma.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.3] }) }] }]} />
+        </Animated.View>
+
+        {/* Top-left shine highlight */}
         <View style={kassa.shine} />
 
-        {/* Icon only */}
-        <Ionicons name="calculator-outline" size={28} color={colors.white} />
+        {/* Bottom-right subtle highlight */}
+        <View style={kassa.shineBottom} />
+
+        {/* Icon */}
+        <Ionicons name="calculator-outline" size={28} color={colors.white} style={{ zIndex: 5 }} />
       </View>
     </View>
   );
@@ -166,16 +201,23 @@ const kassa = StyleSheet.create({
   outer: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: KASSA_SIZE + 22,
-    height: KASSA_SIZE + 22,
-    marginTop: -30,
+    width: KASSA_SIZE + 28,
+    height: KASSA_SIZE + 28,
+    marginTop: -32,
   },
-  glow: {
+  glowRing: {
     position: 'absolute',
-    width: KASSA_SIZE + 20,
-    height: KASSA_SIZE + 20,
-    borderRadius: (KASSA_SIZE + 20) / 2,
+    width: KASSA_SIZE + 26,
+    height: KASSA_SIZE + 26,
+    borderRadius: (KASSA_SIZE + 26) / 2,
     backgroundColor: colors.primary[400],
+  },
+  glowInner: {
+    position: 'absolute',
+    width: KASSA_SIZE + 14,
+    height: KASSA_SIZE + 14,
+    borderRadius: (KASSA_SIZE + 14) / 2,
+    backgroundColor: colors.primary[300],
   },
   body: {
     width: KASSA_SIZE,
@@ -184,20 +226,65 @@ const kassa = StyleSheet.create({
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 10,
-    shadowColor: colors.primary[700],
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
+    elevation: 14,
+    shadowColor: colors.primary[600],
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    borderWidth: 2,
+    borderColor: 'rgba(147, 197, 253, 0.3)',
+  },
+  plasmaContainer: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  plasmaOrb1: {
+    position: 'absolute',
+    top: 4,
+    left: 6,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.primary[300],
+  },
+  plasmaOrb2: {
+    position: 'absolute',
+    bottom: 6,
+    right: 4,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.blue[300],
+  },
+  plasmaOrb3: {
+    position: 'absolute',
+    top: 18,
+    right: 8,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.cyan[400],
   },
   shine: {
     position: 'absolute',
-    top: -KASSA_SIZE * 0.12,
-    left: -KASSA_SIZE * 0.12,
-    width: KASSA_SIZE * 0.65,
-    height: KASSA_SIZE * 0.65,
-    borderRadius: KASSA_SIZE * 0.325,
-    backgroundColor: 'rgba(255,255,255,0.13)',
+    top: -KASSA_SIZE * 0.1,
+    left: -KASSA_SIZE * 0.1,
+    width: KASSA_SIZE * 0.55,
+    height: KASSA_SIZE * 0.55,
+    borderRadius: KASSA_SIZE * 0.275,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    zIndex: 3,
+  },
+  shineBottom: {
+    position: 'absolute',
+    bottom: -KASSA_SIZE * 0.08,
+    right: -KASSA_SIZE * 0.08,
+    width: KASSA_SIZE * 0.4,
+    height: KASSA_SIZE * 0.4,
+    borderRadius: KASSA_SIZE * 0.2,
+    backgroundColor: 'rgba(96, 165, 250, 0.1)',
+    zIndex: 2,
   },
 });
 
@@ -330,9 +417,9 @@ const styles = StyleSheet.create({
   tabBar: {
     backgroundColor: colors.white,
     borderTopWidth: 0,
-    height: Platform.OS === 'ios' ? 88 : 68,
+    height: Platform.OS === 'ios' ? 78 : 62,
     paddingTop: spacing[1],
-    paddingBottom: Platform.OS === 'ios' ? spacing[7] : spacing[2],
+    paddingBottom: Platform.OS === 'ios' ? spacing[4] : spacing[1.5],
     elevation: 24,
     shadowColor: '#1e293b',
     shadowOffset: { width: 0, height: -6 },
