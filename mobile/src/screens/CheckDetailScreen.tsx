@@ -33,8 +33,12 @@ export default function CheckDetailScreen() {
 
   // Entrance animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(30)).current;
   useEffect(() => {
-    Animated.timing(fadeAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 350, useNativeDriver: true }),
+    ]).start();
   }, []);
 
   const { data: check, isLoading } = useQuery<Check>({
@@ -80,7 +84,7 @@ export default function CheckDetailScreen() {
         <div class="meta">${[inn, addr, phone].filter(Boolean).join(' | ')}</div>
         <hr/>
         <div><strong>\u0427\u0435\u043A #${check.number}</strong> \u043E\u0442 ${date}</div>
-        ${check.client ? `<div>\u041A\u043B\u0438\u0435\u043D\u0442: ${check.client.fullName}</div>` : ''}
+        ${check.client ? `<div>\u041A\u043B\u0438\u0435\u043D\u0442: ${check.client.fullName}</div>` : '<div>\u041A\u043B\u0438\u0435\u043D\u0442: \u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C</div>'}
         ${check.car ? `<div>\u0410\u0432\u0442\u043E: ${check.car.makeModel} ${check.car.plateNumber || ''}</div>` : ''}
         ${check.master ? `<div>\u041C\u0430\u0441\u0442\u0435\u0440: ${check.master.fullName}</div>` : ''}
         ${check.services.length > 0 ? `
@@ -133,18 +137,18 @@ export default function CheckDetailScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Modern glassmorphism-style header */}
+      {/* Modern header with gradient accent */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Чек #{check.number}</Text>
-          <View style={[styles.headerStatusDot, isDeferred ? { backgroundColor: colors.amber[600] } : { backgroundColor: colors.green[500] }]} />
+          <Text style={styles.headerTitle}>{'\u0427\u0435\u043A'} #{check.number}</Text>
+          <Text style={styles.headerDate}>{formatShortDate(check.date)}</Text>
         </View>
-        <View style={{ flexDirection: 'row', gap: spacing[2], alignItems: 'center' }}>
+        <View style={styles.headerActions}>
           <TouchableOpacity onPress={generatePdf} style={styles.actionBtn}>
-            <Ionicons name="share-outline" size={17} color={colors.violet[600]} />
+            <Ionicons name="document-text-outline" size={17} color={colors.violet[600]} />
           </TouchableOpacity>
           {canEdit && (
             <TouchableOpacity onPress={() => navigation.navigate('CheckCreate', { id: check.id })} style={styles.actionBtn}>
@@ -153,9 +157,9 @@ export default function CheckDetailScreen() {
           )}
           {canDelete && (
             <TouchableOpacity onPress={() => {
-              Alert.alert('Удалить?', 'Это действие необратимо', [
-                { text: 'Отмена', style: 'cancel' },
-                { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate() },
+              Alert.alert('\u0423\u0434\u0430\u043B\u0438\u0442\u044C?', '\u042D\u0442\u043E \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043D\u0435\u043E\u0431\u0440\u0430\u0442\u0438\u043C\u043E', [
+                { text: '\u041E\u0442\u043C\u0435\u043D\u0430', style: 'cancel' },
+                { text: '\u0423\u0434\u0430\u043B\u0438\u0442\u044C', style: 'destructive', onPress: () => deleteMutation.mutate() },
               ]);
             }} style={[styles.actionBtn, { backgroundColor: colors.red[50] }]}>
               <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
@@ -164,196 +168,198 @@ export default function CheckDetailScreen() {
         </View>
       </View>
 
-      <Animated.ScrollView style={[styles.scroll, { opacity: fadeAnim }]} contentContainerStyle={styles.scrollContent}>
-        {/* Hero status card with gradient */}
-        <LinearGradient
-          colors={isDeferred ? ['#fffbeb', '#fef3c7'] : ['#f0fdf4', '#dcfce7']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.statusCard}
-        >
-          <View style={styles.statusCardLeft}>
-            <View style={[styles.statusIconWrap, isDeferred ? { backgroundColor: colors.amber[200] } : { backgroundColor: colors.green[200] }]}>
-              <Ionicons name={isDeferred ? 'time-outline' : 'checkmark-circle'} size={20} color={isDeferred ? colors.amber[600] : colors.green[600]} />
-            </View>
-            <View>
-              <Text style={[styles.statusLabel, isDeferred ? { color: colors.amber[600] } : { color: colors.green[600] }]}>
-                {isDeferred ? 'Отложен' : 'Закрыт'}
-              </Text>
-              <Text style={styles.statusDate}>{formatDateTime(check.date)}</Text>
-            </View>
+      <Animated.ScrollView
+        style={[styles.scroll, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Status chip row */}
+        <View style={styles.chipRow}>
+          <View style={[styles.statusChip, isDeferred ? { backgroundColor: colors.amber[50], borderColor: colors.amber[200] } : { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}>
+            <View style={[styles.statusDot, isDeferred ? { backgroundColor: colors.amber[600] } : { backgroundColor: colors.green[500] }]} />
+            <Text style={[styles.statusChipText, isDeferred ? { color: colors.amber[600] } : { color: colors.green[700] }]}>
+              {isDeferred ? '\u041E\u0442\u043B\u043E\u0436\u0435\u043D' : '\u0417\u0430\u043A\u0440\u044B\u0442'}
+            </Text>
           </View>
-          <View style={[styles.paymentChip, { backgroundColor: badge.bg }]}>
+          <View style={[styles.paymentChip, { backgroundColor: badge.bg, borderColor: badge.bg }]}>
             <Ionicons name={paymentIcons[check.paymentMethod] || 'cash-outline'} size={13} color={badge.text} />
             <Text style={[styles.paymentChipText, { color: badge.text }]}>{paymentLabels[check.paymentMethod] ?? check.paymentMethod}</Text>
           </View>
-        </LinearGradient>
+          <Text style={styles.timeChip}>{formatTime(check.date)}</Text>
+        </View>
 
-        {/* Client & Car — modern horizontal layout */}
-        <View style={styles.card}>
-          <View style={styles.cardRow}>
-            <View style={[styles.cardIconCircle, { backgroundColor: colors.blue[50] }]}>
-              <Ionicons name="person" size={18} color={colors.blue[600]} />
+        {/* Client & info — modern glassmorphism style card */}
+        <View style={styles.infoCard}>
+          <View style={styles.infoRow}>
+            <View style={[styles.infoIconCircle, { backgroundColor: colors.blue[50] }]}>
+              <Ionicons name="person" size={16} color={colors.blue[600]} />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardLabel}>Клиент</Text>
-              <Text style={styles.cardValue}>{check.client?.fullName ?? 'Розничный покупатель'}</Text>
+            <View style={styles.infoContent}>
+              <Text style={styles.infoLabel}>Клиент</Text>
+              <Text style={styles.infoValue}>{check.client?.fullName ?? '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}</Text>
             </View>
           </View>
 
           {check.car && (
-            <View style={styles.cardRow}>
-              <View style={[styles.cardIconCircle, { backgroundColor: colors.indigo[50] }]}>
-                <Ionicons name="car-sport" size={18} color={colors.indigo[600]} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardLabel}>Автомобиль</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <Text style={styles.cardValue}>{check.car.makeModel}</Text>
-                  {check.car.plateNumber && (
-                    <View style={styles.plateChip}>
-                      <Text style={styles.plateChipText}>{check.car.plateNumber}</Text>
-                    </View>
-                  )}
+            <>
+              <View style={styles.infoDivider} />
+              <View style={styles.infoRow}>
+                <View style={[styles.infoIconCircle, { backgroundColor: colors.indigo[50] }]}>
+                  <Ionicons name="car-sport" size={16} color={colors.indigo[600]} />
+                </View>
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Автомобиль</Text>
+                  <View style={styles.carRow}>
+                    <Text style={styles.infoValue}>{check.car.makeModel}</Text>
+                    {check.car.plateNumber && (
+                      <View style={styles.plateTag}>
+                        <Text style={styles.plateTagText}>{check.car.plateNumber}</Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
               </View>
-            </View>
+            </>
           )}
 
-          <View style={styles.cardRow}>
-            <View style={[styles.cardIconCircle, { backgroundColor: colors.orange[50] }]}>
-              <Ionicons name="construct" size={18} color={colors.orange[500]} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardLabel}>Мастер</Text>
-              <Text style={styles.cardValue}>{check.master?.fullName ?? '—'}</Text>
-            </View>
-          </View>
+          {check.master && (
+            <>
+              <View style={styles.infoDivider} />
+              <View style={styles.infoRow}>
+                <View style={[styles.infoIconCircle, { backgroundColor: colors.orange[50] }]}>
+                  <Ionicons name="build" size={16} color={colors.orange[500]} />
+                </View>
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Мастер</Text>
+                  <Text style={styles.infoValue}>{check.master.fullName}</Text>
+                </View>
+              </View>
+            </>
+          )}
 
           {check.mileage ? (
-            <View style={styles.cardRow}>
-              <View style={[styles.cardIconCircle, { backgroundColor: colors.teal[50] }]}>
-                <Ionicons name="speedometer" size={18} color={colors.teal[600]} />
+            <>
+              <View style={styles.infoDivider} />
+              <View style={styles.infoRow}>
+                <View style={[styles.infoIconCircle, { backgroundColor: colors.teal[50] }]}>
+                  <Ionicons name="speedometer" size={16} color={colors.teal[600]} />
+                </View>
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Пробег</Text>
+                  <Text style={styles.infoValue}>{check.mileage.toLocaleString()} км</Text>
+                </View>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardLabel}>Пробег</Text>
-                <Text style={styles.cardValue}>{check.mileage.toLocaleString()} км</Text>
-              </View>
-            </View>
+            </>
           ) : null}
         </View>
 
         {/* Comment */}
         {check.comment && (
           <View style={styles.commentCard}>
-            <View style={[styles.cardIconCircle, { backgroundColor: colors.gray[100], width: 32, height: 32 }]}>
-              <Ionicons name="chatbubble-ellipses" size={15} color={colors.gray[500]} />
-            </View>
+            <Ionicons name="chatbubble-ellipses" size={15} color={colors.primary[400]} />
             <Text style={styles.commentText}>{check.comment}</Text>
           </View>
         )}
 
-        {/* Services — modern list */}
+        {/* Services */}
         {check.services.length > 0 && (
-          <View style={styles.card}>
+          <View style={styles.sectionCard}>
             <View style={styles.sectionHeader}>
-              <LinearGradient colors={[colors.orange[50], '#fff7ed']} style={styles.sectionIconGrad}>
+              <LinearGradient colors={[colors.orange[50], '#fff']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.sectionGradient}>
                 <Ionicons name="build" size={15} color={colors.orange[500]} />
+                <Text style={styles.sectionTitle}>Услуги</Text>
               </LinearGradient>
-              <Text style={styles.sectionTitle}>Услуги</Text>
-              <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>{check.services.length}</Text>
+              <View style={styles.sectionBadge}>
+                <Text style={styles.sectionBadgeText}>{check.services.length}</Text>
               </View>
             </View>
-            {check.services.map((line, idx) => (
-              <View key={idx} style={[styles.lineRow, idx === 0 && { borderTopWidth: 0 }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.lineName}>{line.name}</Text>
-                  <View style={{ flexDirection: 'row', gap: spacing[2], marginTop: 3 }}>
-                    {line.master && (
-                      <View style={styles.lineTag}>
-                        <Ionicons name="person-outline" size={10} color={colors.primary[600]} />
-                        <Text style={styles.lineTagText}>{line.master.fullName}</Text>
-                      </View>
-                    )}
-                    {line.quantity > 1 && (
-                      <Text style={styles.lineSub}>{line.quantity} × {formatMoney(line.price)}</Text>
-                    )}
+            {(check.services || []).map((line, idx) => (
+              <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
+                <View style={styles.lineItemLeft}>
+                  <Text style={styles.lineItemName}>{line.name}</Text>
+                  <View style={styles.lineItemMeta}>
+                    {line.master && <Text style={styles.lineItemMetaText}>{line.master.fullName}</Text>}
+                    {line.quantity > 1 && <Text style={styles.lineItemMetaText}>{line.quantity} x {formatMoney(line.price)}</Text>}
                   </View>
                 </View>
-                <Text style={styles.linePrice}>{formatMoney(line.total)}</Text>
+                <Text style={styles.lineItemPrice}>{formatMoney(line.total)}</Text>
               </View>
             ))}
-            <View style={styles.subtotalRow}>
+            <View style={styles.sectionSubtotal}>
               <Text style={styles.subtotalLabel}>Итого услуги</Text>
               <Text style={styles.subtotalValue}>{formatMoney(check.serviceTotal)}</Text>
             </View>
           </View>
         )}
 
-        {/* Products — modern list */}
+        {/* Products */}
         {check.products.length > 0 && (
-          <View style={styles.card}>
+          <View style={styles.sectionCard}>
             <View style={styles.sectionHeader}>
-              <LinearGradient colors={[colors.blue[50], '#eff6ff']} style={styles.sectionIconGrad}>
+              <LinearGradient colors={[colors.blue[50], '#fff']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.sectionGradient}>
                 <Ionicons name="cube" size={15} color={colors.blue[600]} />
+                <Text style={styles.sectionTitle}>Товары</Text>
               </LinearGradient>
-              <Text style={styles.sectionTitle}>Товары</Text>
-              <View style={styles.countBadge}>
-                <Text style={styles.countBadgeText}>{check.products.length}</Text>
+              <View style={styles.sectionBadge}>
+                <Text style={styles.sectionBadgeText}>{check.products.length}</Text>
               </View>
             </View>
-            {check.products.map((line, idx) => (
-              <View key={idx} style={[styles.lineRow, idx === 0 && { borderTopWidth: 0 }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.lineName}>{line.name}</Text>
-                  {line.quantity > 1 && <Text style={styles.lineSub}>{line.quantity} × {formatMoney(line.sellPrice)}</Text>}
+            {(check.products || []).map((line, idx) => (
+              <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
+                <View style={styles.lineItemLeft}>
+                  <Text style={styles.lineItemName}>{line.name}</Text>
+                  {line.quantity > 1 && (
+                    <View style={styles.lineItemMeta}>
+                      <Text style={styles.lineItemMetaText}>{line.quantity} x {formatMoney(line.sellPrice)}</Text>
+                    </View>
+                  )}
                 </View>
-                <Text style={styles.linePrice}>{formatMoney(line.totalSell)}</Text>
+                <Text style={styles.lineItemPrice}>{formatMoney(line.totalSell)}</Text>
               </View>
             ))}
-            <View style={styles.subtotalRow}>
+            <View style={styles.sectionSubtotal}>
               <Text style={styles.subtotalLabel}>Итого товары</Text>
               <Text style={styles.subtotalValue}>{formatMoney(check.productTotal)}</Text>
             </View>
           </View>
         )}
 
-        {/* Total summary — premium gradient card */}
-        <LinearGradient
-          colors={[colors.primary[50], '#ffffff', colors.primary[50]]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.totalCard}
-        >
-          {(check.discount ?? 0) > 0 && (
-            <View style={styles.totalRow}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
-                <Ionicons name="pricetag" size={14} color={colors.orange[500]} />
-                <Text style={styles.totalLabel}>Скидка</Text>
+        {/* Grand total — hero card */}
+        <View style={styles.totalCard}>
+          <LinearGradient
+            colors={[colors.primary[600], colors.primary[800]]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.totalGradient}
+          >
+            {/* Decorative circles */}
+            <View style={styles.totalDecoCircle1} />
+            <View style={styles.totalDecoCircle2} />
+
+            {(check.discount ?? 0) > 0 && (
+              <View style={styles.totalDiscountRow}>
+                <Text style={styles.totalDiscountLabel}>Скидка</Text>
+                <Text style={styles.totalDiscountValue}>-{formatMoney(check.discount ?? 0)}</Text>
               </View>
-              <Text style={[styles.totalValue, { color: colors.orange[500] }]}>-{formatMoney(check.discount ?? 0)}</Text>
+            )}
+            <View style={styles.totalMainRow}>
+              <Text style={styles.totalMainLabel}>ИТОГО</Text>
+              <Text style={styles.totalMainValue}>{formatMoney(check.totalRevenue)}</Text>
+            </View>
+          </LinearGradient>
+
+          {canViewProfit && (
+            <View style={styles.profitRow}>
+              <View style={styles.profitLeft}>
+                <Ionicons name="trending-up" size={16} color={check.profit >= 0 ? colors.green[600] : colors.red[500]} />
+                <Text style={styles.profitLabel}>Прибыль</Text>
+              </View>
+              <Text style={[styles.profitValue, check.profit >= 0 ? { color: colors.green[600] } : { color: colors.red[500] }]}>
+                {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+              </Text>
             </View>
           )}
-          <View style={styles.totalMainRow}>
-            <Text style={styles.totalMainLabel}>Итого</Text>
-            <Text style={styles.totalMainValue}>{formatMoney(check.totalRevenue)}</Text>
-          </View>
-          {canViewProfit && (
-            <>
-              <View style={styles.totalDivider} />
-              <View style={styles.totalRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
-                  <View style={[styles.profitDot, { backgroundColor: check.profit >= 0 ? colors.green[500] : colors.red[500] }]} />
-                  <Text style={styles.totalLabel}>Прибыль</Text>
-                </View>
-                <Text style={[styles.totalProfitValue, check.profit >= 0 ? { color: colors.green[600] } : { color: colors.red[500] }]}>
-                  {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
-                </Text>
-              </View>
-            </>
-          )}
-        </LinearGradient>
+        </View>
       </Animated.ScrollView>
     </SafeAreaView>
   );
@@ -361,59 +367,249 @@ export default function CheckDetailScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+
   // Header
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
-  backBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    backgroundColor: colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[100],
+  },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerCenter: { flex: 1, marginHorizontal: spacing[3] },
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  headerStatusDot: { width: 8, height: 8, borderRadius: 4 },
-  actionBtn: { width: 36, height: 36, borderRadius: 12, backgroundColor: colors.gray[50], alignItems: 'center', justifyContent: 'center' },
+  headerDate: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+  headerActions: { flexDirection: 'row', gap: spacing[1.5], alignItems: 'center' },
+  actionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.gray[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Scroll
   scroll: { flex: 1 },
-  scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
-  // Status card
-  statusCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: spacing[4], borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: 'rgba(0,0,0,0.04)' },
-  statusCardLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  statusIconWrap: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  statusLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  statusDate: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 },
-  paymentChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.full },
-  paymentChipText: { fontSize: 11, fontWeight: fontWeight.semibold },
-  // Card
-  card: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], padding: spacing[4], shadowColor: colors.black, shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3, borderWidth: 1, borderColor: 'rgba(0,0,0,0.03)' },
-  cardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2.5] },
-  cardIconCircle: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
-  cardLabel: { fontSize: 11, color: colors.gray[400], letterSpacing: 0.5, marginBottom: 1 },
-  cardValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  plateChip: { backgroundColor: colors.primary[50], borderRadius: borderRadius.md, paddingHorizontal: spacing[2], paddingVertical: 2, borderWidth: 1, borderColor: colors.primary[200] },
-  plateChipText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.primary[700] },
+  scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[10] },
+
+  // Status chips row
+  chipRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flexWrap: 'wrap' },
+  statusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  statusDot: { width: 7, height: 7, borderRadius: 3.5 },
+  statusChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
+  paymentChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  paymentChipText: { fontSize: 12, fontWeight: fontWeight.medium },
+  timeChip: { fontSize: 12, color: colors.gray[400], marginLeft: 'auto' },
+
+  // Info card
+  infoCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+    shadowColor: colors.black,
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  infoIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  infoContent: { flex: 1 },
+  infoLabel: { fontSize: 11, color: colors.gray[400], marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  infoValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  infoDivider: { height: 1, backgroundColor: colors.gray[50], marginVertical: spacing[3], marginLeft: spacing[4] + 40 },
+  carRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flexWrap: 'wrap' },
+  plateTag: {
+    backgroundColor: colors.primary[50],
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.primary[200],
+  },
+  plateTagText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.primary[700], letterSpacing: 0.5 },
+
   // Comment
-  commentCard: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius['2xl'], padding: spacing[4], shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  commentText: { fontSize: fontSize.sm, color: colors.gray[600], flex: 1, lineHeight: 20 },
-  // Section header
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[3] },
-  sectionIconGrad: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], flex: 1 },
-  countBadge: { backgroundColor: colors.gray[100], paddingHorizontal: 10, paddingVertical: 3, borderRadius: borderRadius.full },
-  countBadgeText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.gray[500] },
-  // Lines
-  lineRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3], borderTopWidth: 1, borderTopColor: colors.gray[50] },
-  lineName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  lineSub: { fontSize: fontSize.xs, color: colors.gray[400] },
-  lineTag: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.primary[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.sm },
-  lineTagText: { fontSize: 10, color: colors.primary[600], fontWeight: fontWeight.medium },
-  linePrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], marginLeft: spacing[3] },
-  subtotalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: spacing[3], marginTop: spacing[2], borderTopWidth: 1, borderTopColor: colors.gray[200] },
+  commentCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2.5],
+    backgroundColor: colors.primary[50],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.primary[100],
+    padding: spacing[3.5],
+  },
+  commentText: { fontSize: fontSize.sm, color: colors.gray[700], flex: 1, lineHeight: 20 },
+
+  // Section card
+  sectionCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    overflow: 'hidden',
+    shadowColor: colors.black,
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingRight: spacing[4],
+  },
+  sectionGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    flex: 1,
+  },
+  sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  sectionBadge: {
+    backgroundColor: colors.gray[100],
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  sectionBadgeText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.gray[500] },
+
+  // Line items
+  lineItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+  },
+  lineItemBorder: { borderTopWidth: 1, borderTopColor: colors.gray[50] },
+  lineItemLeft: { flex: 1, marginRight: spacing[3] },
+  lineItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  lineItemMeta: { flexDirection: 'row', gap: spacing[2], marginTop: 3 },
+  lineItemMetaText: { fontSize: 11, color: colors.gray[400] },
+  lineItemPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+
+  // Subtotal
+  sectionSubtotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[100],
+    backgroundColor: colors.gray[50],
+  },
   subtotalLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[500] },
-  subtotalValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[800] },
+  subtotalValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+
   // Total card
-  totalCard: { borderRadius: borderRadius['2xl'], borderWidth: 2, borderColor: colors.primary[200], padding: spacing[5], shadowColor: colors.primary[600], shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[1.5] },
-  totalLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
-  totalValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  totalMainRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing[3] },
-  totalMainLabel: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  totalMainValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, color: colors.primary[600] },
-  totalDivider: { height: 1, backgroundColor: colors.primary[100], marginVertical: spacing[2] },
-  profitDot: { width: 8, height: 8, borderRadius: 4 },
-  totalProfitValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  totalCard: {
+    borderRadius: borderRadius['2xl'],
+    overflow: 'hidden',
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  totalGradient: {
+    padding: spacing[5],
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  totalDecoCircle1: {
+    position: 'absolute',
+    top: -20,
+    right: -20,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  totalDecoCircle2: {
+    position: 'absolute',
+    bottom: -10,
+    left: -10,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  totalDiscountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing[2],
+  },
+  totalDiscountLabel: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.7)' },
+  totalDiscountValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.amber[200] },
+  totalMainRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+  },
+  totalMainLabel: {
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.bold,
+    color: 'rgba(255,255,255,0.85)',
+    letterSpacing: 2,
+  },
+  totalMainValue: {
+    fontSize: fontSize['2xl'],
+    fontWeight: fontWeight.bold,
+    color: colors.white,
+  },
+  profitRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[3.5],
+    backgroundColor: colors.white,
+  },
+  profitLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  profitLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
+  profitValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold },
 });

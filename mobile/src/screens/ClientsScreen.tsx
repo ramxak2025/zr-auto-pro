@@ -197,11 +197,11 @@ export default function ClientsScreen() {
       {/* Content */}
       {isLoading ? (
         <LoadingSpinner />
-      ) : clients.length === 0 ? (
+      ) : clients.length === 0 && !search ? (
         <EmptyState
           title="Нет клиентов"
-          description={search ? 'По запросу ничего не найдено' : 'Добавьте первого клиента'}
-          action={!search ? { label: 'Добавить клиента', onPress: openCreateModal } : undefined}
+          description="Добавьте первого клиента"
+          action={{ label: 'Добавить клиента', onPress: openCreateModal }}
         />
       ) : (
         <FlatList

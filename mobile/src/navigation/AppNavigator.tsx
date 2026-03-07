@@ -113,7 +113,7 @@ const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Касса — branded blue gradient center button
+//  Касса — plasma glow branded center button
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const KASSA_SIZE = 68;
@@ -226,7 +226,7 @@ const kassa = StyleSheet.create({
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 14,
+    elevation: 16,
     shadowColor: colors.primary[600],
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.5,

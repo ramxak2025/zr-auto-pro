@@ -393,6 +393,15 @@ export default function CheckCreateScreen() {
             />
 
             {/* Client search */}
+            {/* Default retail buyer indicator */}
+            {!clientId && (
+              <View style={styles.retailDefault}>
+                <Ionicons name="storefront-outline" size={14} color={colors.green[600]} />
+                <Text style={styles.retailDefaultText}>Розничный покупатель</Text>
+                <Text style={styles.retailDefaultHint}>(по умолчанию)</Text>
+              </View>
+            )}
+
             <TouchableOpacity style={styles.plateSearch} onPress={() => { setPlateSearch(''); setShowPlatePicker(true); }} activeOpacity={0.7}>
               <Ionicons name="search-outline" size={16} color={colors.blue[400]} />
               <Text style={[styles.plateSearchText, clientId && { color: colors.gray[900], fontWeight: fontWeight.medium }]}>
@@ -932,6 +941,10 @@ const styles = StyleSheet.create({
   dateBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   timeBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], paddingHorizontal: spacing[4] },
   timeBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  // Retail default
+  retailDefault: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], backgroundColor: colors.green[50], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginBottom: spacing[2] },
+  retailDefaultText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.green[700] },
+  retailDefaultHint: { fontSize: 11, color: colors.green[500] },
   // Plate search
   plateSearch: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5] },
   plateSearchText: { flex: 1, fontSize: fontSize.sm, color: colors.gray[400] },

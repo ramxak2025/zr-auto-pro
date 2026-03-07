@@ -34,6 +34,7 @@ export default function LoginScreen() {
   const formSlide = useRef(new Animated.Value(20)).current;
   const formFade = useRef(new Animated.Value(0)).current;
   const demoFade = useRef(new Animated.Value(0)).current;
+
   useEffect(() => {
     Animated.parallel([
       Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
