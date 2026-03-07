@@ -166,7 +166,7 @@ export default function MorePage() {
 
   const currentPlan = sub?.plans?.find(p => p.name === sub?.planName);
   const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
-  const isBypass = user?.role === 'superadmin' || user?.role === 'director';
+  const isBypass = user?.role === 'superadmin';
 
   const isFeatureLocked = (featureKey?: string) => {
     if (!featureKey || isBypass || !sub) return false;

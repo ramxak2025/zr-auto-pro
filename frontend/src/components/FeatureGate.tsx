@@ -30,8 +30,8 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
     staleTime: 5 * 60 * 1000,
   });
 
-  // Superadmin & director always have access
-  if (user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR) {
+  // Only superadmin bypasses feature gates
+  if (user?.role === UserRole.SUPERADMIN) {
     return <>{children}</>;
   }
 

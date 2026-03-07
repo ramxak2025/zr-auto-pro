@@ -26,8 +26,8 @@ export default function GatedScreen({ featureKey, title, description, benefits, 
     staleTime: 5 * 60 * 1000,
   });
 
-  // Superadmin and director bypass all gates
-  if (user?.role === 'superadmin' || user?.role === 'director') {
+  // Only superadmin bypasses all gates
+  if (user?.role === 'superadmin') {
     return <>{children}</>;
   }
 
