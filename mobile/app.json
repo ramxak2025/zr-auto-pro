@@ -2,6 +2,7 @@
   "expo": {
     "name": "Autexa",
     "slug": "autexa-mobile",
+    "owner": "ramxak",
     "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -32,7 +33,10 @@
       "versionCode": 2
     },
     "extra": {
-      "apiUrl": "https://autexa.pw/api"
+      "apiUrl": "https://autexa.pw/api",
+      "eas": {
+        "projectId": "2d08b9be-9503-4e31-9198-8ec7093e44d7"
+      }
     },
     "plugins": [
       [
