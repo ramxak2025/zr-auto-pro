@@ -192,7 +192,7 @@ interface MobileHeaderProps {
 
 const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: MobileHeaderProps) {
   return (
-    <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
+    <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4 pt-[env(safe-area-inset-top,0px)]" style={{ minHeight: 'calc(3.5rem + env(safe-area-inset-top, 0px))' }}>
       <div className="flex items-center gap-2">
         <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
       </div>

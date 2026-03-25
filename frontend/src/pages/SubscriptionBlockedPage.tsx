@@ -21,7 +21,7 @@ export default function SubscriptionBlockedPage() {
   )}`;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
+    <div className="min-h-screen min-h-[100dvh] bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4 pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]">
       <div className="w-full max-w-sm">
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-8 text-center">
           {/* Icon */}
