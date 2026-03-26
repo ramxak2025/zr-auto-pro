@@ -182,6 +182,9 @@ export class CallsService {
 
       this.logger.log(`Mapped ${mappedCalls.length} calls: ${mappedCalls.filter(c => c.direction === 'incoming').length} in, ${mappedCalls.filter(c => c.direction === 'outgoing').length} out`);
 
+      // Sort by date descending (newest first)
+      mappedCalls.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
       const incoming = mappedCalls.filter((c: any) => c.direction === 'incoming');
       const outgoing = mappedCalls.filter((c: any) => c.direction === 'outgoing');
       const missed = mappedCalls.filter((c: any) =>
