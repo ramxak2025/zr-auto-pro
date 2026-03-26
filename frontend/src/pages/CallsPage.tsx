@@ -71,7 +71,11 @@ function formatDuration(seconds: number): string {
 
 function formatPhone(phone: string): string {
   if (!phone) return '';
-  const cleaned = phone.replace(/\D/g, '');
+  let cleaned = phone.replace(/\D/g, '');
+  // Normalize: 8xxx -> 7xxx
+  if (cleaned.length === 11 && cleaned[0] === '8') {
+    cleaned = '7' + cleaned.slice(1);
+  }
   if (cleaned.length === 11) {
     return `+${cleaned[0]} (${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7, 9)}-${cleaned.slice(9, 11)}`;
   }
