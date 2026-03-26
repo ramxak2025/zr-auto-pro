@@ -75,10 +75,12 @@ export class CallsService {
 
       const calls = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
 
-      // Log first raw call for debugging direction field
+      // Log first 3 raw calls for debugging
       if (calls.length > 0) {
-        const sample = calls[0];
-        this.logger.log(`Raw call sample: direction=${sample.direction}, type=${sample.type}, call_type=${sample.call_type}, disposition=${sample.disposition}, keys=${Object.keys(sample).join(',')}`);
+        for (let i = 0; i < Math.min(3, calls.length); i++) {
+          const c = calls[i];
+          this.logger.log(`Raw call[${i}]: direction=${c.direction}, answered=${c.answered}, duration=${c.duration}, client_number=${c.client_number}, src_number=${c.src_number}, src_id=${c.src_id}, recording=${c.recording ? 'yes' : 'no'}`);
+        }
       }
 
       const clientPhones = new Map<string, { id: string; fullName: string; cars: any[] }>();
@@ -128,18 +130,21 @@ export class CallsService {
       }
 
       const mappedCalls = [...deduped.values()].map((call: any) => {
-        // Handle direction from multiple possible fields and formats
+        // MoiZvonki direction: 0 = incoming, 1 = outgoing
+        // Also support string variants and other APIs
         const dir = call.direction ?? call.type ?? call.call_type ?? '';
-        const dirStr = String(dir).toLowerCase().trim();
+        const dirVal = typeof dir === 'number' ? dir : parseInt(String(dir), 10);
         let direction: 'incoming' | 'outgoing';
-        if (dirStr === '1' || dirStr === 'in' || dirStr === 'incoming' || dirStr === 'inbound') {
-          direction = 'incoming';
-        } else if (dirStr === '2' || dirStr === 'out' || dirStr === 'outgoing' || dirStr === 'outbound') {
-          direction = 'outgoing';
+        if (!isNaN(dirVal)) {
+          // MoiZvonki uses 0=incoming, 1=outgoing
+          direction = dirVal === 1 ? 'outgoing' : 'incoming';
         } else {
-          // Fallback: if src_number matches our known numbers it's outgoing, otherwise incoming
-          // For now, try to detect from the call structure
-          direction = call.src_number && !call.client_number ? 'outgoing' : 'incoming';
+          const dirStr = String(dir).toLowerCase().trim();
+          if (dirStr === 'out' || dirStr === 'outgoing' || dirStr === 'outbound') {
+            direction = 'outgoing';
+          } else {
+            direction = 'incoming';
+          }
         }
         const clientPhone = (call.client_number || '').replace(/[\s\-\+\(\)]/g, '');
         const clientPhoneShort = clientPhone.length >= 10 ? clientPhone.slice(-10) : clientPhone;
