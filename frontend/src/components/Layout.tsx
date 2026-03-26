@@ -330,7 +330,7 @@ export default function Layout() {
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 md:pb-6 w-full min-w-0" style={{ paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom, 0px))' }}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 md:pb-6 w-full min-w-0" style={{ paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom, 0px))' }}>
           <div className="w-full min-w-0">
             <Outlet />
           </div>
