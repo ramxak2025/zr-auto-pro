@@ -18,11 +18,9 @@
     width: 100%;
   }
 
-  /* iOS PWA: fill the area behind status bar / Dynamic Island */
-  @supports (padding-top: env(safe-area-inset-top)) {
-    html {
-      background-color: #ffffff;  /* matches header bg */
-    }
+  /* iOS PWA: fill safe areas with white to match header/tab bar */
+  html {
+    background-color: #ffffff;
   }
 
   body {
