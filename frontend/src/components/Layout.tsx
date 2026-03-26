@@ -63,7 +63,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
   { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
   { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
   { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
-  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow', '/schedule', '/tariff', '/clients/retail', '/marketing'] },
+  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow', '/schedule', '/tariff', '/clients/retail', '/marketing', '/calls'] },
 ];
 
 const roleBadgeColors: Record<string, string> = {

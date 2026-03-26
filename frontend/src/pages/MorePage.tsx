@@ -18,6 +18,7 @@ import {
   Megaphone,
   Building2,
   Lock,
+  Phone,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -112,6 +113,15 @@ const menuItems: MenuItem[] = [
     featureKey: 'reports_view',
     color: 'bg-purple-50',
     iconColor: 'text-purple-600',
+  },
+  {
+    label: 'Звонки',
+    description: 'Журнал звонков и записи',
+    path: '/calls',
+    icon: Phone,
+    roles: ['director', 'superadmin'],
+    color: 'bg-cyan-50',
+    iconColor: 'text-cyan-600',
   },
   {
     label: 'Маркетинг',

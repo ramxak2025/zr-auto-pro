@@ -238,3 +238,16 @@ export function createPublicReviewApi(api: AxiosInstance) {
     submit: (token: string, data: { rating: number; comment?: string; redirectedTo?: string }) => api.post<{ success: boolean }>(`/marketing/review/${token}`, data),
   };
 }
+
+export function createCallsApi(api: AxiosInstance) {
+  return {
+    getCalls: (params: { date?: string; dateFrom?: string; dateTo?: string }) =>
+      api.get<{ calls: any[]; summary: { total: number; incoming: number; outgoing: number; missed: number; notCalledBack: number } }>('/calls', { params }),
+    getClientCalls: (clientId: string, params?: { dateFrom?: string; dateTo?: string }) =>
+      api.get<{ calls: any[]; total: number }>(`/calls/client/${clientId}`, { params }),
+    getClientSms: (clientId: string) =>
+      api.get<any[]>(`/calls/client/${clientId}/sms`),
+    getRecordingUrl: (url: string) =>
+      api.get<{ url: string }>('/calls/recording', { params: { url } }),
+  };
+}
