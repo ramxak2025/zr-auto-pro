@@ -215,7 +215,7 @@ interface MobileTabBarProps {
 
 const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
   return (
-    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
+    <nav className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center justify-around h-[68px] px-2">
         {mobileTabItems.map((tab) => {
           const Icon = tab.icon;
@@ -296,7 +296,7 @@ export default function Layout() {
   }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, isFeatureLocked, logout]);
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
+    <div className="flex fixed inset-0 overflow-hidden bg-gray-50">
       {/* ─── Desktop sidebar (memoized) ─── */}
       <DesktopSidebar {...sidebarProps} />
 
@@ -330,7 +330,7 @@ export default function Layout() {
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 md:pb-6 w-full min-w-0" style={{ paddingBottom: 'calc(5.5rem + env(safe-area-inset-bottom, 0px))' }}
           <div className="w-full min-w-0">
             <Outlet />
           </div>
