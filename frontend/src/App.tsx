@@ -156,7 +156,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-    <Suspense fallback={null}>
+    <Suspense fallback={<div className="flex items-center justify-center h-32"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>}>
       <Routes>
         {/* Public: Review page (no auth) */}
         <Route path="/review/:token" element={<ReviewPublicPage />} />

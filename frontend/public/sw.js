@@ -6,8 +6,10 @@
 //  - Offline mutations: queued and replayed when back online
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v6';
+const STATIC_CACHE = 'autexa-static-v7';
+const API_CACHE = 'autexa-api-v1';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
+const API_CACHE_TTL = 30_000; // 30 seconds
 
 const PRECACHE_ASSETS = [
   '/',
@@ -31,7 +33,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k !== STATIC_CACHE)
+          .filter((k) => k !== STATIC_CACHE && k !== API_CACHE)
           .map((k) => caches.delete(k))
       )
     )
@@ -47,12 +49,14 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin !== self.location.origin) return;
 
-  // API requests — ALWAYS network, no cache
+  // API requests
   if (url.pathname.startsWith('/api')) {
     if (request.method !== 'GET') {
       event.respondWith(networkWithOfflineQueue(request));
+      return;
     }
-    // GET /api — just let the browser fetch normally (no SW interception)
+    // GET /api — stale-while-revalidate for speed
+    event.respondWith(apiStaleWhileRevalidate(request));
     return;
   }
 
@@ -80,6 +84,29 @@ self.addEventListener('fetch', (event) => {
 });
 
 // ─── Strategies ──────────────────────────────────────────────────────────────
+
+async function apiStaleWhileRevalidate(request) {
+  const cache = await caches.open(API_CACHE);
+  const cached = await cache.match(request);
+
+  // Always fetch in background
+  const networkPromise = fetch(request).then((response) => {
+    if (response.ok) {
+      const clone = response.clone();
+      cache.put(request, clone);
+    }
+    return response;
+  }).catch(() => cached || new Response('{"error":"offline"}', { status: 503, headers: { 'Content-Type': 'application/json' } }));
+
+  // Return cached immediately if fresh enough, otherwise wait for network
+  if (cached) {
+    const dateHeader = cached.headers.get('date');
+    const age = dateHeader ? Date.now() - new Date(dateHeader).getTime() : Infinity;
+    if (age < API_CACHE_TTL) return cached;
+  }
+
+  return networkPromise;
+}
 
 async function cacheFirst(request) {
   const cached = await caches.match(request);
