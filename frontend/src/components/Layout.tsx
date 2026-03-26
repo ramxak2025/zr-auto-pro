@@ -296,7 +296,7 @@ export default function Layout() {
   }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, isFeatureLocked, logout]);
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
+    <div className="flex h-full overflow-hidden bg-gray-50">
       {/* ─── Desktop sidebar (memoized) ─── */}
       <DesktopSidebar {...sidebarProps} />
 

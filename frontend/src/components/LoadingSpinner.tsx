@@ -1,6 +1,6 @@
 export default function LoadingSpinner() {
   return (
-    <div className="flex flex-col h-screen h-[100dvh] bg-gray-50">
+    <div className="flex flex-col h-full bg-gray-50">
       {/* Header skeleton */}
       <div className="flex-shrink-0 h-14 bg-white border-b border-gray-200 flex items-center px-4 gap-3 pt-[env(safe-area-inset-top,0px)]" style={{ minHeight: 'calc(3.5rem + env(safe-area-inset-top, 0px))' }}>
         <div className="h-8 w-20 bg-gray-100 rounded animate-pulse" />
