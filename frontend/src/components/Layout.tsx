@@ -215,7 +215,7 @@ interface MobileTabBarProps {
 
 const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
   return (
-    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white border-t border-gray-100">
+    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white border-t border-gray-100 pb-[env(safe-area-inset-bottom,0px)]">
       <div className="flex items-center justify-around h-[68px] px-2">
         {mobileTabItems.map((tab) => {
           const Icon = tab.icon;
