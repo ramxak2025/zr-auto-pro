@@ -192,7 +192,7 @@ interface MobileHeaderProps {
 
 const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: MobileHeaderProps) {
   return (
-    <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4 pt-[env(safe-area-inset-top,0px)]" style={{ minHeight: 'calc(3.5rem + env(safe-area-inset-top, 0px))' }}>
+    <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
       <div className="flex items-center gap-2">
         <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
       </div>
@@ -215,7 +215,7 @@ interface MobileTabBarProps {
 
 const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps) {
   return (
-    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white border-t border-gray-100 pb-[env(safe-area-inset-bottom,0px)]">
+    <nav className="md:hidden flex-shrink-0 relative z-30 bg-white/95 backdrop-blur-lg border-t border-gray-100 pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center justify-around h-[68px] px-2">
         {mobileTabItems.map((tab) => {
           const Icon = tab.icon;
@@ -296,7 +296,7 @@ export default function Layout() {
   }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, isFeatureLocked, logout]);
 
   return (
-    <div className="flex h-full overflow-hidden bg-gray-50">
+    <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
       {/* ─── Desktop sidebar (memoized) ─── */}
       <DesktopSidebar {...sidebarProps} />
 
@@ -330,7 +330,7 @@ export default function Layout() {
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-4 md:p-6 md:pb-6 w-full min-w-0">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
           <div className="w-full min-w-0">
             <Outlet />
           </div>
