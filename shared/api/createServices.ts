@@ -229,6 +229,8 @@ export function createMarketingApi(api: AxiosInstance) {
     removePlatformLink: (id: string) => api.delete(`/marketing/platform-links/${id}`),
     getSettings: () => api.get<ReviewSettings>('/marketing/settings'),
     updateSettings: (data: Partial<ReviewSettings>) => api.patch<ReviewSettings>('/marketing/settings', data),
+    testIntegration: (id: string) => api.post(`/marketing/integrations/${id}/test`),
+    sendSms: (data: { clientId: string; phone: string; message: string }) => api.post('/marketing/sms/send', data),
   };
 }
 
@@ -246,6 +248,8 @@ export function createCallsApi(api: AxiosInstance) {
     getClientCalls: (clientId: string, params?: { dateFrom?: string; dateTo?: string }) =>
       api.get<{ calls: any[]; total: number }>(`/calls/client/${clientId}`, { params }),
     getClientSms: (clientId: string) =>
+      api.get<any[]>(`/calls/client/${clientId}/sms`),
+    getClientSmsHistory: (clientId: string) =>
       api.get<any[]>(`/calls/client/${clientId}/sms`),
     getRecordingUrl: (url: string) =>
       api.get<{ url: string }>('/calls/recording', { params: { url } }),
