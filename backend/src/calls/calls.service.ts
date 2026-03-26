@@ -75,6 +75,12 @@ export class CallsService {
 
       const calls = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
 
+      // Log first raw call for debugging direction field
+      if (calls.length > 0) {
+        const sample = calls[0];
+        this.logger.log(`Raw call sample: direction=${sample.direction}, type=${sample.type}, call_type=${sample.call_type}, disposition=${sample.disposition}, keys=${Object.keys(sample).join(',')}`);
+      }
+
       const clientPhones = new Map<string, { id: string; fullName: string; cars: any[] }>();
       if (calls.length > 0) {
         const { rows: clients } = await this.pool.query(
@@ -122,13 +128,19 @@ export class CallsService {
       }
 
       const mappedCalls = [...deduped.values()].map((call: any) => {
-        // Handle direction as number, string number, or string name
-        const dir = call.direction;
-        const direction = (dir === 1 || dir === '1' || dir === 'in' || dir === 'incoming' || dir === 'IN')
-          ? 'incoming'
-          : (dir === 2 || dir === '2' || dir === 'out' || dir === 'outgoing' || dir === 'OUT')
-            ? 'outgoing'
-            : 'incoming'; // default to incoming if unknown
+        // Handle direction from multiple possible fields and formats
+        const dir = call.direction ?? call.type ?? call.call_type ?? '';
+        const dirStr = String(dir).toLowerCase().trim();
+        let direction: 'incoming' | 'outgoing';
+        if (dirStr === '1' || dirStr === 'in' || dirStr === 'incoming' || dirStr === 'inbound') {
+          direction = 'incoming';
+        } else if (dirStr === '2' || dirStr === 'out' || dirStr === 'outgoing' || dirStr === 'outbound') {
+          direction = 'outgoing';
+        } else {
+          // Fallback: if src_number matches our known numbers it's outgoing, otherwise incoming
+          // For now, try to detect from the call structure
+          direction = call.src_number && !call.client_number ? 'outgoing' : 'incoming';
+        }
         const clientPhone = (call.client_number || '').replace(/[\s\-\+\(\)]/g, '');
         const clientPhoneShort = clientPhone.length >= 10 ? clientPhone.slice(-10) : clientPhone;
 
