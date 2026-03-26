@@ -122,7 +122,13 @@ export class CallsService {
       }
 
       const mappedCalls = [...deduped.values()].map((call: any) => {
-        const direction = call.direction === 1 ? 'incoming' : call.direction === 2 ? 'outgoing' : 'unknown';
+        // Handle direction as number, string number, or string name
+        const dir = call.direction;
+        const direction = (dir === 1 || dir === '1' || dir === 'in' || dir === 'incoming' || dir === 'IN')
+          ? 'incoming'
+          : (dir === 2 || dir === '2' || dir === 'out' || dir === 'outgoing' || dir === 'OUT')
+            ? 'outgoing'
+            : 'incoming'; // default to incoming if unknown
         const clientPhone = (call.client_number || '').replace(/[\s\-\+\(\)]/g, '');
         const clientPhoneShort = clientPhone.length >= 10 ? clientPhone.slice(-10) : clientPhone;
 
@@ -132,8 +138,11 @@ export class CallsService {
           ? new Date(call.start_time * 1000).toISOString()
           : call.date || '';
 
-        const isAnswered = call.answered === 1 || call.answered === true;
+        const answered = call.answered;
+        const isAnswered = answered === 1 || answered === '1' || answered === true || answered === 'true';
         const duration = parseInt(call.duration || '0') || 0;
+        // Also consider answered if duration > 0
+        const finalAnswered = isAnswered || duration > 0;
 
         return {
           id: call.db_call_id || call.event_pbx_call_id || `${call.start_time}_${clientPhone}`,
@@ -142,9 +151,10 @@ export class CallsService {
           from: direction === 'incoming' ? (call.client_number || '') : (call.src_number || ''),
           to: direction === 'incoming' ? (call.src_number || '') : (call.client_number || ''),
           duration,
-          status: isAnswered ? 'answered' : 'missed',
+          status: finalAnswered ? 'answered' : 'missed',
           recordingUrl: call.recording || null,
           clientPhone,
+          calledBack: false, // will be computed below
           client: matchedClient ? {
             id: matchedClient.id,
             fullName: matchedClient.fullName,
@@ -153,21 +163,42 @@ export class CallsService {
         };
       });
 
+      this.logger.log(`Mapped ${mappedCalls.length} calls: ${mappedCalls.filter(c => c.direction === 'incoming').length} in, ${mappedCalls.filter(c => c.direction === 'outgoing').length} out`);
+
       const incoming = mappedCalls.filter((c: any) => c.direction === 'incoming');
       const outgoing = mappedCalls.filter((c: any) => c.direction === 'outgoing');
       const missed = mappedCalls.filter((c: any) =>
         c.direction === 'incoming' && c.status === 'missed',
       );
 
-      const answeredOutgoing = new Set(outgoing.filter((c: any) => c.duration > 0).map((c: any) => {
-        const phone = (c.to || '').replace(/[\s\-\+\(\)]/g, '');
-        return phone.length >= 10 ? phone.slice(-10) : phone;
-      }));
-      const notCalledBack = missed.filter((c: any) => {
+      // Build set of phones we called back (outgoing with duration > 0 OR any answered incoming from same number after the missed call)
+      const calledBackPhones = new Set<string>();
+      // Outgoing calls to the same number count as "called back"
+      for (const c of outgoing) {
+        if (c.duration > 0) {
+          const phone = (c.to || '').replace(/[\s\-\+\(\)]/g, '');
+          calledBackPhones.add(phone.length >= 10 ? phone.slice(-10) : phone);
+        }
+      }
+      // Answered incoming from the same number also counts (they called again and we picked up)
+      for (const c of incoming) {
+        if (c.status === 'answered') {
+          const phone = (c.from || '').replace(/[\s\-\+\(\)]/g, '');
+          calledBackPhones.add(phone.length >= 10 ? phone.slice(-10) : phone);
+        }
+      }
+
+      // Mark missed calls as calledBack and count notCalledBack
+      const notCalledBack: any[] = [];
+      for (const c of missed) {
         const phone = (c.from || '').replace(/[\s\-\+\(\)]/g, '');
         const phoneShort = phone.length >= 10 ? phone.slice(-10) : phone;
-        return !answeredOutgoing.has(phoneShort);
-      });
+        if (calledBackPhones.has(phoneShort)) {
+          c.calledBack = true;
+        } else {
+          notCalledBack.push(c);
+        }
+      }
 
       return {
         calls: mappedCalls,

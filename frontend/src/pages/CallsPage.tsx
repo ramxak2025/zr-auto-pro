@@ -40,6 +40,7 @@ interface Call {
   status: 'answered' | 'missed';
   recordingUrl: string | null;
   clientPhone: string;
+  calledBack?: boolean;
   client: {
     id: string;
     fullName: string;
@@ -223,9 +224,11 @@ function CallRow({ call, canListen, activeRecording, onPlayRecording }: {
       <div className="flex items-center gap-3 px-4 py-3 active:bg-gray-50 transition-colors">
         {/* Left: direction indicator */}
         <div className={`flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 ${
-          isMissed ? 'bg-red-50' : isIncoming ? 'bg-green-50' : 'bg-blue-50'
+          isMissed && call.calledBack ? 'bg-green-50' : isMissed ? 'bg-red-50' : isIncoming ? 'bg-green-50' : 'bg-blue-50'
         }`}>
-          {isMissed ? (
+          {isMissed && call.calledBack ? (
+            <PhoneForwarded className="h-4 w-4 text-green-600" />
+          ) : isMissed ? (
             <PhoneMissed className="h-4 w-4 text-red-500" />
           ) : isIncoming ? (
             <ArrowDownLeft className="h-4 w-4 text-green-600" />
@@ -262,7 +265,10 @@ function CallRow({ call, canListen, activeRecording, onPlayRecording }: {
             {call.duration > 0 && (
               <p className="text-[10px] text-gray-400">{formatDuration(call.duration)}</p>
             )}
-            {isMissed && (
+            {isMissed && call.calledBack && (
+              <p className="text-[10px] font-medium text-green-600">Перезвонили</p>
+            )}
+            {isMissed && !call.calledBack && (
               <p className="text-[10px] font-medium text-red-500">Пропущен</p>
             )}
           </div>
