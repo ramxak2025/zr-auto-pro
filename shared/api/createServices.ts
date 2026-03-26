@@ -229,8 +229,8 @@ export function createMarketingApi(api: AxiosInstance) {
     removePlatformLink: (id: string) => api.delete(`/marketing/platform-links/${id}`),
     getSettings: () => api.get<ReviewSettings>('/marketing/settings'),
     updateSettings: (data: Partial<ReviewSettings>) => api.patch<ReviewSettings>('/marketing/settings', data),
-    testIntegration: (id: string) => api.post(`/marketing/integrations/${id}/test`),
-    sendSms: (data: { clientId: string; phone: string; message: string }) => api.post('/marketing/sms/send', data),
+    testIntegration: (id?: string) => api.post('/marketing/integrations/test', { id }),
+    sendSms: (data: { phone: string; text: string }) => api.post('/marketing/sms/send', data),
   };
 }
 
