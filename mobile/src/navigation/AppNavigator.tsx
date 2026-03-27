@@ -31,6 +31,7 @@ import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
 import SubscriptionScreen from '../screens/SubscriptionScreen';
 import AdminScreen from '../screens/AdminScreen';
+import CallsScreen from '../screens/CallsScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import FeatureGate from '../components/FeatureGate';
 
@@ -307,6 +308,7 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
       <MoreStack.Screen name="Reports" component={gated('reports_view', ReportsScreen)} />
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
+      <MoreStack.Screen name="Calls" component={CallsScreen} />
       <MoreStack.Screen name="Users" component={gated('users_manage', UsersScreen)} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
       <MoreStack.Screen name="Admin" component={AdminScreen} />
@@ -417,9 +419,9 @@ const styles = StyleSheet.create({
   tabBar: {
     backgroundColor: colors.white,
     borderTopWidth: 0,
-    height: Platform.OS === 'ios' ? 78 : 62,
-    paddingTop: spacing[1],
-    paddingBottom: Platform.OS === 'ios' ? spacing[4] : spacing[1.5],
+    height: Platform.OS === 'ios' ? 88 : 72,
+    paddingTop: spacing[1.5],
+    paddingBottom: Platform.OS === 'ios' ? spacing[6] : spacing[3],
     elevation: 24,
     shadowColor: '#1e293b',
     shadowOffset: { width: 0, height: -6 },
