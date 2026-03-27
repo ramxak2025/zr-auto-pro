@@ -734,31 +734,33 @@ function FolderTile({
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      className={`rounded-2xl overflow-hidden shadow-sm border p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer relative ${
-        recentlyChecked ? 'border-green-200' : 'border-gray-100'
+      className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border active:bg-gray-50 transition-all cursor-pointer ${
+        recentlyChecked ? 'border-green-200 bg-green-50/50' : 'border-gray-100 bg-white'
       }`}
-      style={recentlyChecked ? { backgroundColor: '#f0fdf4' } : { backgroundColor: '#ffffff' }}
     >
-      {hasLow && (
-        <div className="absolute top-2 right-2">
-          <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />
+      <div className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}>
+        <FolderOpen className={`h-4.5 w-4.5 ${recentlyChecked ? 'text-green-500' : 'text-primary-500'}`} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-900 truncate">{name}</p>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs text-gray-400">{count} шт</span>
+          {lastCheckDate && !recentlyChecked && (
+            <span className="text-[10px] text-gray-400">проверка {formatDateShort(lastCheckDate)}</span>
+          )}
         </div>
-      )}
-      {recentlyChecked && (
-        <div className="absolute top-2 left-2">
-          <div className="flex items-center gap-0.5 bg-green-500 text-white text-[8px] font-bold px-1 py-0.5 rounded-full">
+      </div>
+      <div className="flex items-center gap-1.5 flex-shrink-0">
+        {recentlyChecked && (
+          <div className="flex items-center gap-0.5 bg-green-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full">
             <CheckIcon className="h-2.5 w-2.5" />
           </div>
-        </div>
-      )}
-      <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}>
-        <FolderOpen className={`h-6 w-6 ${recentlyChecked ? 'text-green-500' : 'text-primary-500'}`} />
+        )}
+        {hasLow && (
+          <AlertTriangle className="h-4 w-4 text-orange-500" />
+        )}
+        <ChevronLeft className="h-4 w-4 text-gray-300 rotate-180" />
       </div>
-      <p className="text-[13px] font-semibold text-gray-900 text-center truncate w-full">{name}</p>
-      <p className="text-[11px] text-gray-400">{count} шт</p>
-      {lastCheckDate && !recentlyChecked && (
-        <p className="text-[9px] text-gray-400">{formatDateShort(lastCheckDate)}</p>
-      )}
     </div>
   );
 }
@@ -1483,9 +1485,9 @@ export default function ProductsPage() {
             </div>
           )}
 
-          {/* ── Category folders grid ── */}
+          {/* ── Category folders list ── */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
-            <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4 md:grid-cols-5">
+            <div className="space-y-1.5">
               {subfolders.map((folder) => {
                 const checkInfo = folderCheckInfo.get(folder.name);
                 return (
@@ -1500,19 +1502,18 @@ export default function ProductsPage() {
                   />
                 );
               })}
-              {/* New folder tile */}
               {canManageWarehouse && (
                 <div
                   role="button"
                   tabIndex={0}
                   onClick={() => setShowFolderModal(true)}
                   onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
-                  className="rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 p-4 flex flex-col items-center gap-1.5 active:scale-[0.97] transition-all cursor-pointer bg-gray-50/50"
+                  className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl border-2 border-dashed border-gray-200 active:bg-gray-50 transition-colors cursor-pointer"
                 >
-                  <div className="h-12 w-12 rounded-xl bg-gray-100 flex items-center justify-center">
-                    <FolderPlus className="h-6 w-6 text-gray-400" />
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 flex-shrink-0">
+                    <FolderPlus className="h-4.5 w-4.5 text-gray-400" />
                   </div>
-                  <p className="text-[11px] font-medium text-gray-400 text-center">Новая папка</p>
+                  <p className="text-sm font-medium text-gray-400">Новая папка</p>
                 </div>
               )}
             </div>
@@ -1525,9 +1526,11 @@ export default function ProductsPage() {
               tabIndex={0}
               onClick={() => setShowFolderModal(true)}
               onKeyDown={(e) => e.key === 'Enter' && setShowFolderModal(true)}
-              className="flex items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50/50 px-4 py-3 active:bg-gray-100 transition-colors cursor-pointer"
+              className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl border-2 border-dashed border-gray-200 active:bg-gray-50 transition-colors cursor-pointer"
             >
-              <FolderPlus className="h-4 w-4 text-gray-400" />
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 flex-shrink-0">
+                <FolderPlus className="h-4.5 w-4.5 text-gray-400" />
+              </div>
               <p className="text-sm font-medium text-gray-400">Новая папка</p>
             </div>
           )}
