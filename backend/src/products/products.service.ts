@@ -178,7 +178,13 @@ export class ProductsService {
     return this.mapProduct(rows[0]);
   }
 
-  async update(id: string, tenantID: string, dto: any) {
+  async update(id: string, tenantID: string, dto: any, userID?: string) {
+    // Get current prices before update for price history
+    const { rows: current } = await this.pool.query(
+      'SELECT cost_price, sell_price FROM products WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -203,7 +209,65 @@ export class ProductsService {
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
+
+    // Track price changes
+    if (current.length > 0) {
+      const oldCost = parseFloat(current[0].cost_price) || 0;
+      const oldSell = parseFloat(current[0].sell_price) || 0;
+      const newCost = dto.costPrice !== undefined ? parseFloat(dto.costPrice) : oldCost;
+      const newSell = dto.sellPrice !== undefined ? parseFloat(dto.sellPrice) : oldSell;
+      if (oldCost !== newCost || oldSell !== newSell) {
+        await this.pool.query(
+          `INSERT INTO price_history (product_id, cost_price_before, cost_price_after, sell_price_before, sell_price_after, user_id, tenant_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [id, oldCost, newCost, oldSell, newSell, userID || null, tenantID],
+        );
+      }
+    }
+
     return this.mapProduct(rows[0]);
+  }
+
+  async getProductMovements(productId: string, tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT sm.*, u.full_name as user_name
+       FROM stock_movements sm
+       LEFT JOIN users u ON u.id = sm.user_id
+       WHERE sm.product_id = $1 AND sm.tenant_id = $2
+       ORDER BY sm.created_at DESC LIMIT 50`,
+      [productId, tenantID],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      type: row.type,
+      quantity: parseFloat(row.quantity) || 0,
+      stockBefore: parseFloat(row.stock_before) || 0,
+      stockAfter: parseFloat(row.stock_after) || 0,
+      reason: row.reason,
+      userId: row.user_id,
+      user: row.user_id ? { id: row.user_id, fullName: row.user_name } : null,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async getProductPriceHistory(productId: string, tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT ph.*, u.full_name as user_name
+       FROM price_history ph
+       LEFT JOIN users u ON u.id = ph.user_id
+       WHERE ph.product_id = $1 AND ph.tenant_id = $2
+       ORDER BY ph.created_at DESC LIMIT 50`,
+      [productId, tenantID],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      costPriceBefore: parseFloat(row.cost_price_before) || 0,
+      costPriceAfter: parseFloat(row.cost_price_after) || 0,
+      sellPriceBefore: parseFloat(row.sell_price_before) || 0,
+      sellPriceAfter: parseFloat(row.sell_price_after) || 0,
+      user: row.user_id ? { id: row.user_id, fullName: row.user_name } : null,
+      createdAt: row.created_at,
+    }));
   }
 
   async remove(id: string, tenantID: string) {

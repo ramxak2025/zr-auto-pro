@@ -769,6 +769,13 @@ function FolderTile({
 // Product Detail Modal — edit, delete, writeoff, inventory accessible here
 // ---------------------------------------------------------------------------
 
+const MOVEMENT_LABELS: Record<string, { label: string; color: string }> = {
+  income: { label: 'Приход', color: 'text-green-600 bg-green-50' },
+  expense: { label: 'Расход', color: 'text-blue-600 bg-blue-50' },
+  writeoff: { label: 'Списание', color: 'text-orange-600 bg-orange-50' },
+  inventory: { label: 'Инвентаризация', color: 'text-purple-600 bg-purple-50' },
+};
+
 function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory, onDelete }: {
   product: Product;
   onClose: () => void;
@@ -777,89 +784,226 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
   onInventory: () => void;
   onDelete: () => void;
 }) {
+  const [tab, setTab] = useState<'info' | 'movements' | 'prices'>('info');
   const isLow = product.stock <= product.minStock;
   const uLabel = unitLabel(product.unit);
 
+  const { data: movements, isLoading: movLoading } = useQuery({
+    queryKey: ['product-movements', product.id],
+    queryFn: async () => { const res = await productsApi.getProductMovements(product.id); return res.data; },
+    enabled: tab === 'movements',
+    staleTime: 30_000,
+  });
+
+  const { data: priceHistory, isLoading: priceLoading } = useQuery({
+    queryKey: ['product-prices', product.id],
+    queryFn: async () => { const res = await productsApi.getProductPriceHistory(product.id); return res.data; },
+    enabled: tab === 'prices',
+    staleTime: 30_000,
+  });
+
+  const fmtDate = (d: string) => {
+    const dt = new Date(d);
+    return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' +
+      dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  };
+
   return (
     <Modal isOpen onClose={onClose} title={product.name} size="lg">
-      <div className="space-y-5">
-        {/* Photo + info */}
-        <div className="flex items-start gap-4">
-          <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-gray-50 flex-shrink-0 overflow-hidden">
-            {product.photo ? (
-              <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-xl" loading="lazy" />
-            ) : (
-              <Package className="h-8 w-8 text-gray-300" />
-            )}
-          </div>
-          <div className="flex-1 min-w-0 space-y-1.5">
-            <div className="flex items-center gap-2 flex-wrap">
-              {product.category && (
-                <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">{product.category}</span>
-              )}
-              {product.isBundle && (
-                <span className="inline-block text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Комплект</span>
-              )}
-            </div>
-            <p className="text-base font-bold text-gray-900">{product.name}</p>
-          </div>
+      <div className="space-y-4">
+        {/* Tabs */}
+        <div className="flex border-b border-gray-100">
+          {[
+            { key: 'info' as const, label: 'Информация' },
+            { key: 'movements' as const, label: 'Движение' },
+            { key: 'prices' as const, label: 'Цены' },
+          ].map(t => (
+            <button key={t.key} type="button" onClick={() => setTab(t.key)}
+              className={`flex-1 py-2.5 text-xs font-semibold text-center relative transition-colors ${tab === t.key ? 'text-primary-600' : 'text-gray-400'}`}>
+              {t.label}
+              {tab === t.key && <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-500 rounded-full" />}
+            </button>
+          ))}
         </div>
 
-        {/* Bundle contents */}
-        {product.isBundle && product.bundleItems && product.bundleItems.length > 0 && (
-          <div className="rounded-xl border border-primary-200 bg-primary-50/50 p-3 space-y-2">
-            <p className="text-[11px] font-semibold text-primary-600 uppercase tracking-wider">Состав комплекта</p>
-            {product.bundleItems.map((bi, idx) => (
-              <div key={idx} className="flex items-center gap-2 text-sm">
-                <Package className="h-3.5 w-3.5 text-primary-400 flex-shrink-0" />
-                <span className="flex-1 text-gray-900 truncate">{bi.name}</span>
-                <span className="text-gray-500 font-medium">{bi.quantity} {unitLabel('pcs')}</span>
+        {/* Tab: Info */}
+        {tab === 'info' && (
+          <div className="space-y-5">
+            <div className="flex items-start gap-4">
+              <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-gray-50 flex-shrink-0 overflow-hidden">
+                {product.photo ? (
+                  <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-xl" loading="lazy" />
+                ) : (
+                  <Package className="h-8 w-8 text-gray-300" />
+                )}
               </div>
-            ))}
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {product.category && (
+                    <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">{product.category}</span>
+                  )}
+                  {product.isBundle && (
+                    <span className="inline-block text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Комплект</span>
+                  )}
+                </div>
+                <p className="text-base font-bold text-gray-900">{product.name}</p>
+              </div>
+            </div>
+
+            {product.isBundle && product.bundleItems && product.bundleItems.length > 0 && (
+              <div className="rounded-xl border border-primary-200 bg-primary-50/50 p-3 space-y-2">
+                <p className="text-[11px] font-semibold text-primary-600 uppercase tracking-wider">Состав комплекта</p>
+                {product.bundleItems.map((bi, idx) => (
+                  <div key={idx} className="flex items-center gap-2 text-sm">
+                    <Package className="h-3.5 w-3.5 text-primary-400 flex-shrink-0" />
+                    <span className="flex-1 text-gray-900 truncate">{bi.name}</span>
+                    <span className="text-gray-500 font-medium">{bi.quantity} {unitLabel('pcs')}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-gray-50 p-3">
+                <p className="text-[11px] text-gray-400 mb-0.5">Закуп. цена</p>
+                <p className="text-sm font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3">
+                <p className="text-[11px] text-gray-400 mb-0.5">Продажная цена</p>
+                <p className="text-sm font-bold text-primary-600">{formatMoney(product.sellPrice)}</p>
+              </div>
+              <div className={`rounded-xl p-3 ${isLow ? 'bg-red-50' : 'bg-gray-50'}`}>
+                <p className="text-[11px] text-gray-400 mb-0.5">Остаток</p>
+                <p className={`text-sm font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
+                  {product.stock} {uLabel} {isLow && <AlertTriangle className="inline h-3 w-3 ml-1" />}
+                </p>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-3">
+                <p className="text-[11px] text-gray-400 mb-0.5">Мин. остаток</p>
+                <p className="text-sm font-bold text-gray-900">{product.minStock} {uLabel}</p>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-gray-100">
+              <button type="button" onClick={onEdit}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                <Pencil className="h-4 w-4 text-primary-500" />Редактировать
+              </button>
+              <button type="button" onClick={onWriteoff}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                <PackageMinus className="h-4 w-4 text-orange-500" />Списание
+              </button>
+              <button type="button" onClick={onInventory}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                <ClipboardCheck className="h-4 w-4 text-blue-500" />Инвентаризация
+              </button>
+              <button type="button" onClick={onDelete}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors">
+                <Trash2 className="h-4 w-4" />Удалить товар
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Stats grid */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[11px] text-gray-400 mb-0.5">Закуп. цена</p>
-            <p className="text-sm font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
+        {/* Tab: Movement history */}
+        {tab === 'movements' && (
+          <div className="space-y-2">
+            {movLoading ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /></div>
+            ) : !movements || movements.length === 0 ? (
+              <div className="text-center py-8 text-sm text-gray-400">Нет движений по товару</div>
+            ) : (
+              <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
+                {movements.map((m: any) => {
+                  const info = MOVEMENT_LABELS[m.type] || { label: m.type, color: 'text-gray-600 bg-gray-50' };
+                  const diff = m.stockAfter - m.stockBefore;
+                  return (
+                    <div key={m.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl bg-gray-50">
+                      <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 mt-0.5 ${info.color}`}>
+                        {info.label}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-600'}`}>
+                            {diff > 0 ? '+' : ''}{diff} {uLabel}
+                          </span>
+                          <span className="text-xs text-gray-400">{m.stockBefore} → {m.stockAfter}</span>
+                        </div>
+                        {m.reason && <p className="text-xs text-gray-500 mt-0.5 truncate">{m.reason}</p>}
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] text-gray-400">{fmtDate(m.createdAt)}</span>
+                          {m.user && <span className="text-[10px] text-gray-400">• {m.user.fullName}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[11px] text-gray-400 mb-0.5">Продажная цена</p>
-            <p className="text-sm font-bold text-primary-600">{formatMoney(product.sellPrice)}</p>
-          </div>
-          <div className={`rounded-xl p-3 ${isLow ? 'bg-red-50' : 'bg-gray-50'}`}>
-            <p className="text-[11px] text-gray-400 mb-0.5">Остаток</p>
-            <p className={`text-sm font-bold ${isLow ? 'text-red-600' : 'text-gray-900'}`}>
-              {product.stock} {uLabel} {isLow && <AlertTriangle className="inline h-3 w-3 ml-1" />}
-            </p>
-          </div>
-          <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[11px] text-gray-400 mb-0.5">Мин. остаток</p>
-            <p className="text-sm font-bold text-gray-900">{product.minStock} {uLabel}</p>
-          </div>
-        </div>
+        )}
 
-        {/* Actions */}
-        <div className="space-y-2 pt-2 border-t border-gray-100">
-          <button type="button" onClick={onEdit}
-            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-            <Pencil className="h-4 w-4 text-primary-500" />Редактировать
-          </button>
-          <button type="button" onClick={onWriteoff}
-            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-            <PackageMinus className="h-4 w-4 text-orange-500" />Списание
-          </button>
-          <button type="button" onClick={onInventory}
-            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-            <ClipboardCheck className="h-4 w-4 text-blue-500" />Инвентаризация
-          </button>
-          <button type="button" onClick={onDelete}
-            className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors">
-            <Trash2 className="h-4 w-4" />Удалить товар
-          </button>
-        </div>
+        {/* Tab: Price history */}
+        {tab === 'prices' && (
+          <div className="space-y-2">
+            {/* Current prices */}
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              <div className="rounded-xl bg-gray-50 p-3 text-center">
+                <p className="text-[10px] text-gray-400 mb-0.5">Закупочная</p>
+                <p className="text-base font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
+              </div>
+              <div className="rounded-xl bg-primary-50 p-3 text-center">
+                <p className="text-[10px] text-gray-400 mb-0.5">Продажная</p>
+                <p className="text-base font-bold text-primary-600">{formatMoney(product.sellPrice)}</p>
+              </div>
+            </div>
+
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">История изменений</p>
+
+            {priceLoading ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /></div>
+            ) : !priceHistory || priceHistory.length === 0 ? (
+              <div className="text-center py-8 text-sm text-gray-400">Цены не менялись</div>
+            ) : (
+              <div className="space-y-1.5 max-h-[350px] overflow-y-auto">
+                {priceHistory.map((p: any) => {
+                  const costChanged = p.costPriceBefore !== p.costPriceAfter;
+                  const sellChanged = p.sellPriceBefore !== p.sellPriceAfter;
+                  return (
+                    <div key={p.id} className="px-3 py-2.5 rounded-xl bg-gray-50">
+                      <div className="space-y-1">
+                        {costChanged && (
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="text-gray-400 w-16">Закуп.</span>
+                            <span className="text-gray-500 line-through">{formatMoney(p.costPriceBefore)}</span>
+                            <span className="text-gray-400">→</span>
+                            <span className={`font-bold ${p.costPriceAfter > p.costPriceBefore ? 'text-red-600' : 'text-green-600'}`}>
+                              {formatMoney(p.costPriceAfter)}
+                            </span>
+                          </div>
+                        )}
+                        {sellChanged && (
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="text-gray-400 w-16">Продаж.</span>
+                            <span className="text-gray-500 line-through">{formatMoney(p.sellPriceBefore)}</span>
+                            <span className="text-gray-400">→</span>
+                            <span className={`font-bold ${p.sellPriceAfter > p.sellPriceBefore ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatMoney(p.sellPriceAfter)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-[10px] text-gray-400">{fmtDate(p.createdAt)}</span>
+                        {p.user && <span className="text-[10px] text-gray-400">• {p.user.fullName}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   );

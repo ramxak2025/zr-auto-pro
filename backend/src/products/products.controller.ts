@@ -55,9 +55,19 @@ export class ProductsController {
     return this.productsService.create(user.tenantID, dto);
   }
 
+  @Get(':id/movements')
+  getProductMovements(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.productsService.getProductMovements(id, user.tenantID);
+  }
+
+  @Get(':id/price-history')
+  getProductPriceHistory(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.productsService.getProductPriceHistory(id, user.tenantID);
+  }
+
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateProductDto) {
-    return this.productsService.update(id, user.tenantID, dto);
+    return this.productsService.update(id, user.tenantID, dto, user.userID);
   }
 
   @Delete(':id')

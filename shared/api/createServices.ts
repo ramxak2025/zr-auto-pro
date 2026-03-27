@@ -112,6 +112,8 @@ export function createProductsApi(api: AxiosInstance) {
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
     remove: (id: string) => api.delete(`/products/${id}`),
     updateStock: (id: string, data: StockUpdateRequest) => api.post<{ stock: number }>(`/products/${id}/stock`, data),
+    getProductMovements: (id: string) => api.get<any[]>(`/products/${id}/movements`),
+    getProductPriceHistory: (id: string) => api.get<any[]>(`/products/${id}/price-history`),
     exportCsv: () => api.get('/products/export-csv', { responseType: 'blob' }),
     importCsv: (items: Array<{ name: string; category?: string; costPrice?: number; sellPrice?: number; stock?: number; minStock?: number; unit?: string }>) =>
       api.post<{ created: number; updated: number; total: number }>('/products/import-csv', { items }),
