@@ -185,6 +185,15 @@ export default function CheckDetailScreen() {
             <Ionicons name={paymentIcons[check.paymentMethod] || 'cash-outline'} size={13} color={badge.text} />
             <Text style={[styles.paymentChipText, { color: badge.text }]}>{paymentLabels[check.paymentMethod] ?? check.paymentMethod}</Text>
           </View>
+          {check.paymentMethod === 'cash_card' && (check.cashAmount || check.cardAmount) && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
+              <Ionicons name="cash-outline" size={12} color={colors.green[600]} />
+              <Text style={{ fontSize: 11, color: colors.green[600], fontWeight: fontWeight.semibold }}>{formatMoney(check.cashAmount || 0)}</Text>
+              <Text style={{ fontSize: 11, color: colors.gray[300] }}>/</Text>
+              <Ionicons name="card-outline" size={12} color={colors.blue[600]} />
+              <Text style={{ fontSize: 11, color: colors.blue[600], fontWeight: fontWeight.semibold }}>{formatMoney(check.cardAmount || 0)}</Text>
+            </View>
+          )}
           <Text style={styles.timeChip}>{formatTime(check.date)}</Text>
         </View>
 
