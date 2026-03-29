@@ -48,6 +48,7 @@ export default function CheckCreateScreen() {
   const [discount, setDiscount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash' as PaymentMethod);
   const [cashAmount, setCashAmount] = useState('');
+  const [cashGiven, setCashGiven] = useState('');
   const [isDeferred, setIsDeferred] = useState(false);
 
   // Line items
@@ -241,6 +242,35 @@ export default function CheckCreateScreen() {
   };
 
   const addProductLine = (product: Product) => {
+    // Handle bundle products — expand into individual component products
+    if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
+      const allProducts = productsQuery.data?.data ?? productsQuery.data ?? [];
+      setProductLines(prev => {
+        const updated = [...prev];
+        for (const bi of product.bundleItems!) {
+          const bundleProduct = (allProducts as Product[]).find(p => p.id === bi.productId);
+          if (!bundleProduct) continue;
+          const existIdx = updated.findIndex(l => l.productId === bundleProduct.id);
+          if (existIdx >= 0) {
+            updated[existIdx] = {
+              ...updated[existIdx],
+              quantity: updated[existIdx].quantity + (bi.quantity || 1),
+              totalSell: updated[existIdx].sellPrice * (updated[existIdx].quantity + (bi.quantity || 1)),
+              totalCost: updated[existIdx].costPrice * (updated[existIdx].quantity + (bi.quantity || 1)),
+            };
+          } else {
+            updated.push({
+              productId: bundleProduct.id, name: bundleProduct.name, sellPrice: bundleProduct.sellPrice,
+              costPrice: bundleProduct.costPrice, quantity: bi.quantity || 1,
+              totalSell: bundleProduct.sellPrice * (bi.quantity || 1), totalCost: bundleProduct.costPrice * (bi.quantity || 1),
+            });
+          }
+        }
+        return updated;
+      });
+      return;
+    }
+
     const existing = productLines.findIndex(l => l.productId === product.id);
     if (existing >= 0) {
       updateProductLine(existing, 'quantity', productLines[existing].quantity + 1);
@@ -344,16 +374,19 @@ export default function CheckCreateScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Minimal header */}
-      {isStackScreen && (
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-            <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
+      {/* Receipt-style header */}
+      <View style={styles.receiptHeader}>
+        {isStackScreen && (
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.receiptBackBtn}>
+            <Ionicons name="chevron-back" size={22} color={colors.white} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Редактирование</Text>
-          <View style={{ width: 36 }} />
+        )}
+        <View style={styles.receiptHeaderCenter}>
+          <Text style={styles.receiptHeaderTitle}>ЗАКАЗ-НАРЯД</Text>
+          <Text style={styles.receiptHeaderSub}>{isEditing ? 'Редактирование' : 'Новый чек'}</Text>
         </View>
-      )}
+        {isStackScreen && <View style={{ width: 36 }} />}
+      </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
@@ -636,6 +669,32 @@ export default function CheckCreateScreen() {
               })}
             </View>
 
+            {paymentMethod === ('cash' as PaymentMethod) && (
+              <View style={styles.splitWrap}>
+                <View style={styles.splitRow}>
+                  <View style={styles.splitIconRow}>
+                    <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+                    <Text style={styles.splitLabel}>Клиент дал</Text>
+                  </View>
+                  <TextInput value={cashGiven} onChangeText={setCashGiven} style={styles.splitInput} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.gray[400]} />
+                </View>
+                {Number(cashGiven) > total && (
+                  <>
+                    <View style={styles.splitDivider} />
+                    <View style={styles.splitRow}>
+                      <View style={styles.splitIconRow}>
+                        <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
+                        <Text style={[styles.splitLabel, { fontWeight: fontWeight.bold }]}>Сдача</Text>
+                      </View>
+                      <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}>
+                        {formatMoney(Number(cashGiven) - total)}
+                      </Text>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+
             {paymentMethod === ('cash_card' as PaymentMethod) && (
               <View style={styles.splitWrap}>
                 <View style={styles.splitRow}>
@@ -889,6 +948,11 @@ export default function CheckCreateScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[100] },
+  receiptHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.gray[900] },
+  receiptBackBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  receiptHeaderCenter: { flex: 1, alignItems: 'center' },
+  receiptHeaderTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 3 },
+  receiptHeaderSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
   backBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
