@@ -7,7 +7,10 @@ import { PG_POOL } from '../database.module';
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(@Inject(PG_POOL) private pool: Pool) {
-    const secret = process.env.JWT_SECRET || 'change-me-in-production';
+    const secret = process.env.JWT_SECRET;
+    if (!secret || secret === 'change-me-in-production') {
+      throw new Error('FATAL: JWT_SECRET environment variable must be set in production');
+    }
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,

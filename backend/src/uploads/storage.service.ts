@@ -37,8 +37,12 @@ export class LocalStorageAdapter implements IStorageAdapter {
   private readonly basePath: string;
 
   constructor() {
-    this.basePath = process.env.UPLOAD_DIR || 'uploads';
+    this.basePath = path.resolve(process.env.UPLOAD_DIR || 'uploads');
     fs.mkdirSync(this.basePath, { recursive: true });
+  }
+
+  getBasePath(): string {
+    return this.basePath;
   }
 
   async save(stream: Readable, ext: string, tenantId: string): Promise<StoredFile> {

@@ -122,8 +122,11 @@ export class AuthService {
       throw new BadRequestException({ message: 'Телефон, пароль и имя обязательны' });
     }
 
-    if (dto.password.length < 6) {
-      throw new BadRequestException({ message: 'Пароль должен быть не менее 6 символов' });
+    if (dto.password.length < 8) {
+      throw new BadRequestException({ message: 'Пароль должен быть не менее 8 символов' });
+    }
+    if (!/[A-ZА-Я]/.test(dto.password) || !/[0-9]/.test(dto.password)) {
+      throw new BadRequestException({ message: 'Пароль должен содержать заглавную букву и цифру' });
     }
 
     const phone = normalizePhone(dto.phone);
@@ -136,7 +139,7 @@ export class AuthService {
       throw new BadRequestException({ message: 'Пользователь с таким телефоном уже существует' });
     }
 
-    const hash = await bcrypt.hash(dto.password, 10);
+    const hash = await bcrypt.hash(dto.password, 12);
     const tenantName = dto.tenantName || 'Мой автосервис';
 
     const client = await this.pool.connect();

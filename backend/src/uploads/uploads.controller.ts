@@ -110,9 +110,10 @@ export class UploadsController {
       return res.status(404).json({ message: 'Файл не найден' });
     }
 
-    // Prevent directory traversal — reject any path containing '..'
+    // Prevent directory traversal
     const normalized = path.normalize(urlPath);
-    if (normalized.includes('..')) {
+    const fullPath = path.resolve(this.storage.getBasePath(), normalized);
+    if (!fullPath.startsWith(this.storage.getBasePath()) || normalized.includes('..')) {
       return res.status(400).json({ message: 'Недопустимый путь' });
     }
 
