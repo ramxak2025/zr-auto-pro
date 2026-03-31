@@ -597,22 +597,25 @@ export default function MarketingScreen() {
 
       {/* Tabs */}
       <View style={styles.tabBar}>
-        {tabs.map(tab => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-            onPress={() => setActiveTab(tab.key)}
-          >
-            <Ionicons
-              name={tab.icon}
-              size={16}
-              color={activeTab === tab.key ? colors.primary[600] : colors.gray[400]}
-            />
-            <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
-              {tab.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {tabs.map(tab => {
+          const active = activeTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.tab, active && styles.tabActive]}
+              onPress={() => setActiveTab(tab.key)}
+            >
+              <Ionicons
+                name={(active ? tab.icon.replace('-outline', '') : tab.icon) as any}
+                size={18}
+                color={active ? colors.primary[600] : colors.gray[400]}
+              />
+              <Text style={[styles.tabText, active && styles.tabTextActive]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <ScrollView
@@ -642,16 +645,16 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
   // Tabs
   tabBar: {
-    flexDirection: 'row', backgroundColor: colors.white, paddingHorizontal: spacing[4],
-    paddingBottom: spacing[2], gap: spacing[2],
+    flexDirection: 'row', backgroundColor: colors.white, paddingHorizontal: spacing[3],
+    paddingBottom: spacing[2], gap: spacing[1.5],
   },
   tab: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[1.5],
-    paddingVertical: spacing[2.5], borderRadius: borderRadius.xl, backgroundColor: colors.gray[50],
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    paddingVertical: spacing[2], borderRadius: borderRadius.xl, backgroundColor: colors.gray[50],
   },
-  tabActive: { backgroundColor: colors.primary[50] },
-  tabText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[400] },
-  tabTextActive: { color: colors.primary[600] },
+  tabActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
+  tabText: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[400], marginTop: 3 },
+  tabTextActive: { color: colors.primary[600], fontWeight: fontWeight.bold },
   // Content
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], paddingBottom: spacing[8] },

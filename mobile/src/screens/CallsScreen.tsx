@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { callsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';

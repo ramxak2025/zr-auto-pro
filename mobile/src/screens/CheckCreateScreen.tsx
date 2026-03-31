@@ -244,11 +244,11 @@ export default function CheckCreateScreen() {
   const addProductLine = (product: Product) => {
     // Handle bundle products — expand into individual component products
     if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
-      const allProducts = productsQuery.data?.data ?? productsQuery.data ?? [];
+      const productsList = allProducts || [];
       setProductLines(prev => {
         const updated = [...prev];
         for (const bi of product.bundleItems!) {
-          const bundleProduct = (allProducts as Product[]).find(p => p.id === bi.productId);
+          const bundleProduct = productsList.find(p => p.id === bi.productId);
           if (!bundleProduct) continue;
           const existIdx = updated.findIndex(l => l.productId === bundleProduct.id);
           if (existIdx >= 0) {
