@@ -400,10 +400,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     const maxRating = query.maxRating ? parseInt(query.maxRating) : null;
     const month = query.month; // format: "2026-02"
 
-    let sql = `SELECT rr.*, u.full_name as employee_name, cl.full_name as client_name
+    let sql = `SELECT rr.*, u.full_name as employee_name, cl.full_name as client_name,
+                       ca.make_model as car_make_model, ca.plate_number as car_plate
                FROM review_responses rr
                LEFT JOIN users u ON u.id = rr.employee_id
                LEFT JOIN clients cl ON cl.id = rr.client_id
+               LEFT JOIN checks ch ON ch.id = rr.check_id
+               LEFT JOIN cars ca ON ca.id = ch.car_id
                WHERE rr.tenant_id=$1`;
     const params: any[] = [tenantId];
     let idx = 2;
@@ -419,9 +422,11 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     sql += ` ORDER BY rr.created_at DESC LIMIT 200`;
     const { rows } = await this.pool.query(sql, params);
     return rows.map(r => ({
-      id: r.id, checkId: r.check_id, clientName: r.client_name,
+      id: r.id, checkId: r.check_id,
+      clientId: r.client_id, clientName: r.client_name,
       employeeName: r.employee_name, employeeId: r.employee_id,
       rating: r.rating, comment: r.comment,
+      carMakeModel: r.car_make_model || null, carPlate: r.car_plate || null,
       redirectedTo: r.redirected_to, createdAt: r.created_at,
     }));
   }

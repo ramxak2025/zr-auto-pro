@@ -168,6 +168,7 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
   reviews: ReviewResponse[]; loading: boolean; month: string; onMonthChange: (m: string) => void;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selectedMasterId, setSelectedMasterId] = useState<string | null>(null);
 
   const monthLabel = (() => {
     const [y, m] = month.split('-');
@@ -220,33 +221,88 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
         </div>
       ) : (
         <>
-          {/* Employee ratings */}
+          {/* Employee ratings — clickable */}
           {employeeStats.length > 0 && (
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
               <div className="flex items-center gap-2 mb-3">
-                <Users className="h-4 w-4 text-gray-400" />
+                <Trophy className="h-4 w-4 text-amber-500" />
                 <h3 className="text-sm font-semibold text-gray-900">Рейтинг мастеров</h3>
               </div>
-              <div className="space-y-3">
-                {employeeStats.map(e => {
+              <div className="space-y-2">
+                {employeeStats.map((e, idx) => {
                   const avgRounded = Math.round(e.avg * 10) / 10;
                   const isGood = avgRounded >= 4;
+                  const isSelected = selectedMasterId === e.id;
+                  const masterReviews = reviews.filter(r => r.employeeId === e.id);
                   return (
-                    <div key={e.id} className={`flex items-center gap-3 p-3 rounded-xl ${isGood ? 'bg-green-50' : 'bg-red-50'}`}>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{e.name}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <Stars rating={Math.round(e.avg)} />
-                          <span className={`text-xs font-semibold ${isGood ? 'text-green-600' : 'text-red-600'}`}>{avgRounded}</span>
+                    <div key={e.id}>
+                      <button
+                        onClick={() => setSelectedMasterId(isSelected ? null : e.id)}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left ${
+                          isSelected ? 'bg-primary-50 border border-primary-200' : isGood ? 'bg-green-50 hover:bg-green-100' : 'bg-red-50 hover:bg-red-100'
+                        }`}
+                      >
+                        <div className={`flex-shrink-0 flex items-center justify-center h-8 w-8 rounded-full text-sm font-bold text-white ${
+                          idx === 0 ? 'bg-amber-500' : idx === 1 ? 'bg-gray-400' : idx === 2 ? 'bg-amber-700' : 'bg-gray-300'
+                        }`}>
+                          {idx + 1}
                         </div>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="text-sm font-semibold text-gray-900">{e.count}</p>
-                        <p className="text-xs text-gray-500">отзыв{e.count === 1 ? '' : e.count < 5 ? 'а' : 'ов'}</p>
-                      </div>
-                      {e.negative > 0 && (
-                        <div className="flex-shrink-0" title={`${e.negative} негативных`}>
-                          <AlertTriangle className="h-4 w-4 text-red-500" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{e.name}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <Stars rating={Math.round(e.avg)} />
+                            <span className={`text-xs font-bold ${isGood ? 'text-green-600' : 'text-red-600'}`}>{avgRounded}</span>
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-bold text-gray-900">{e.count}</p>
+                          <p className="text-[10px] text-gray-400">отзыв{e.count === 1 ? '' : e.count < 5 ? 'а' : 'ов'}</p>
+                        </div>
+                        {e.negative > 0 && <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0" />}
+                        <ChevronDown className={`h-4 w-4 text-gray-300 flex-shrink-0 transition-transform ${isSelected ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {/* Expanded: master's review history */}
+                      {isSelected && (
+                        <div className="mt-2 ml-3 border-l-2 border-primary-200 pl-3 space-y-2">
+                          <div className="flex items-center gap-4 text-xs text-gray-500 py-1">
+                            <span className="flex items-center gap-1"><ThumbsUp className="h-3 w-3 text-green-500" />{masterReviews.filter(r => r.rating >= 4).length} положит.</span>
+                            <span className="flex items-center gap-1"><ThumbsDown className="h-3 w-3 text-red-500" />{e.negative} негатив.</span>
+                          </div>
+                          {masterReviews.length === 0 ? (
+                            <p className="text-xs text-gray-400 py-2">Нет отзывов за этот период</p>
+                          ) : (
+                            masterReviews.map(r => {
+                              const good = r.rating >= 4;
+                              return (
+                                <div key={r.id} className={`p-3 rounded-lg ${good ? 'bg-green-50' : 'bg-red-50'}`}>
+                                  <div className="flex items-center gap-2">
+                                    <div className={`flex-shrink-0 flex items-center justify-center h-6 w-6 rounded-full text-[10px] font-bold text-white ${good ? 'bg-green-500' : 'bg-red-500'}`}>
+                                      {r.rating}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      {r.clientId ? (
+                                        <a href={`/clients/${r.clientId}`} className="text-sm font-medium text-primary-600 hover:underline truncate block">{r.clientName || 'Клиент'}</a>
+                                      ) : (
+                                        <p className="text-sm font-medium text-gray-900 truncate">{r.clientName || 'Клиент'}</p>
+                                      )}
+                                    </div>
+                                    <span className="text-[10px] text-gray-400 flex-shrink-0">
+                                      {new Date(r.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+                                    </span>
+                                  </div>
+                                  {(r.carMakeModel || r.carPlate) && (
+                                    <p className="text-xs text-gray-500 mt-1 ml-8">
+                                      {r.carMakeModel}{r.carPlate && ` · ${r.carPlate}`}
+                                    </p>
+                                  )}
+                                  {r.comment && (
+                                    <p className={`text-xs mt-1.5 ml-8 ${good ? 'text-green-700' : 'text-red-700'}`}>{r.comment}</p>
+                                  )}
+                                </div>
+                              );
+                            })
+                          )}
                         </div>
                       )}
                     </div>
@@ -256,9 +312,9 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
             </div>
           )}
 
-          {/* Reviews journal */}
+          {/* All reviews journal */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-            <h3 className="text-sm font-semibold text-gray-900 mb-3">Последние оценки</h3>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Все отзывы</h3>
             <div className="space-y-1">
               {reviews.map(r => {
                 const isGood = r.rating >= 4;
@@ -280,9 +336,15 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
                         <p className="text-sm font-medium text-gray-900 truncate">{r.clientName || 'Клиент'}</p>
                         <p className="text-xs text-gray-400">
                           {r.employeeName && `${r.employeeName} · `}
+                          {r.carMakeModel && `${r.carMakeModel} · `}
                           {new Date(r.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
                         </p>
                       </div>
+                      {r.clientId && (
+                        <a href={`/clients/${r.clientId}`} onClick={e => e.stopPropagation()} className="text-xs text-primary-500 hover:underline flex-shrink-0">
+                          Профиль
+                        </a>
+                      )}
                       {r.comment && (
                         <ChevronDown className={`h-4 w-4 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                       )}

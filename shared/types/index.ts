@@ -455,11 +455,14 @@ export interface EmployeeReviewRating {
 export interface ReviewResponse {
   id: string;
   checkId?: string;
+  clientId?: string;
   clientName?: string;
   employeeId?: string;
   employeeName?: string;
   rating: number;
   comment?: string;
+  carMakeModel?: string;
+  carPlate?: string;
   redirectedTo?: string;
   createdAt: string;
 }
