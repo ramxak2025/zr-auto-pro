@@ -10,7 +10,7 @@ import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line } from 'react-na
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
-import { checksApi, salaryApi, shiftsApi, scheduleApi, reportsApi } from '../api/services';
+import { checksApi, salaryApi, shiftsApi, scheduleApi, reportsApi, marketingApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import AnimatedCard from '../components/AnimatedCard';
@@ -506,6 +506,103 @@ function EmployeeRankingSection() {
 }
 
 // ── Master Dashboard ──
+function MasterRatingCard({ userId }: { userId?: string }) {
+  const { data } = useQuery({
+    queryKey: ['marketing-dashboard'],
+    queryFn: async () => { const res = await marketingApi.getDashboard(); return res.data; },
+    staleTime: 5 * 60_000,
+  });
+
+  if (!data?.employeeRatings?.length || !userId) return null;
+
+  const myRating = data.employeeRatings.find(e => e.employeeId === userId);
+  if (!myRating) return null;
+
+  const rank = data.employeeRatings
+    .sort((a, b) => b.avgRating - a.avgRating)
+    .findIndex(e => e.employeeId === userId) + 1;
+
+  const stars = Math.round(myRating.avgRating);
+
+  return (
+    <AnimatedCard index={5} style={styles.card}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
+        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: rank <= 3 ? colors.amber[50] : colors.gray[50], alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name={rank === 1 ? 'trophy' : rank <= 3 ? 'medal' : 'star'} size={22} color={rank === 1 ? colors.amber[600] : rank <= 3 ? colors.gray[500] : colors.primary[500]} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}>Мой рейтинг</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginTop: 2 }}>
+            {[1,2,3,4,5].map(i => (
+              <Ionicons key={i} name={i <= stars ? 'star' : 'star-outline'} size={14} color={i <= stars ? colors.amber[400] : colors.gray[200]} />
+            ))}
+            <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: myRating.avgRating >= 4 ? colors.green[600] : colors.orange[500], marginLeft: spacing[1] }}>
+              {myRating.avgRating.toFixed(1)}
+            </Text>
+          </View>
+        </View>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={{ fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, color: rank <= 3 ? colors.amber[600] : colors.gray[700] }}>#{rank}</Text>
+          <Text style={{ fontSize: 10, color: colors.gray[400] }}>из {data.employeeRatings.length}</Text>
+        </View>
+      </View>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: spacing[3], paddingTop: spacing[3], borderTopWidth: 1, borderTopColor: colors.gray[100] }}>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] }}>{myRating.reviewCount}</Text>
+          <Text style={{ fontSize: 10, color: colors.gray[400] }}>отзывов</Text>
+        </View>
+        <View style={{ alignItems: 'center' }}>
+          <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.green[600] }}>{Math.round(100 - myRating.negativeRate)}%</Text>
+          <Text style={{ fontSize: 10, color: colors.gray[400] }}>положит.</Text>
+        </View>
+      </View>
+    </AnimatedCard>
+  );
+}
+
+function MasterRecentChecks() {
+  const navigation = useNavigation<any>();
+  const { data: checks } = useQuery({
+    queryKey: ['checks', 'recent-master'],
+    queryFn: async () => { const res = await checksApi.getAll({ limit: 5 }); return res.data; },
+    staleTime: 30_000,
+  });
+
+  const items = (checks as any)?.data || checks || [];
+  if (!Array.isArray(items) || items.length === 0) return null;
+
+  return (
+    <AnimatedCard index={6} style={styles.card}>
+      <Text style={styles.cashTitle}>ПОСЛЕДНИЕ ЧЕКИ</Text>
+      <View style={{ gap: spacing[1.5] }}>
+        {items.slice(0, 5).map((check: any) => (
+          <TouchableOpacity
+            key={check.id}
+            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[2], paddingHorizontal: spacing[1], borderBottomWidth: 1, borderBottomColor: colors.gray[50] }}
+            onPress={() => navigation.navigate('CheckDetail', { id: check.id })}
+          >
+            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: check.isDeferred ? colors.amber[50] : colors.green[50], alignItems: 'center', justifyContent: 'center', marginRight: spacing[3] }}>
+              <Ionicons name={check.isDeferred ? 'time-outline' : 'receipt-outline'} size={14} color={check.isDeferred ? colors.amber[600] : colors.green[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] }} numberOfLines={1}>
+                {check.client?.fullName || 'Розничный'}
+              </Text>
+              <Text style={{ fontSize: 11, color: colors.gray[400] }}>
+                {new Date(check.date).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })}
+                {check.car?.makeModel ? ` · ${check.car.makeModel}` : ''}
+              </Text>
+            </View>
+            <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[600] }}>
+              {formatMoney(check.totalRevenue || 0)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </AnimatedCard>
+  );
+}
+
 function MasterDashboard() {
   const { user } = useAuth();
   const { data, isLoading } = useQuery<SalarySummary>({
@@ -593,6 +690,12 @@ function MasterDashboard() {
           </View>
         </AnimatedCard>
       ) : null}
+
+      {/* My rating from reviews */}
+      <MasterRatingCard userId={user?.id} />
+
+      {/* Recent checks */}
+      <MasterRecentChecks />
 
       {/* Product promotions — enhanced with photos */}
       {data.productPromotions && data.productPromotions.length > 0 && data.productPromotions.some(p => p.percent > 0) && (
