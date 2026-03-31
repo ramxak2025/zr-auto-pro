@@ -383,7 +383,7 @@ export default function CheckCreateScreen() {
         )}
         <View style={styles.receiptHeaderCenter}>
           <Text style={styles.receiptHeaderTitle}>ЗАКАЗ-НАРЯД</Text>
-          <Text style={styles.receiptHeaderSub}>{isEditing ? 'Редактирование' : 'Новый чек'}</Text>
+          <Text style={styles.receiptHeaderSub}>{editId ? 'Редактирование' : 'Новый чек'}</Text>
         </View>
         {isStackScreen && <View style={{ width: 36 }} />}
       </View>

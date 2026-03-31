@@ -534,7 +534,7 @@ function MasterRatingCard({ userId }: { userId?: string }) {
           <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}>Мой рейтинг</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginTop: 2 }}>
             {[1,2,3,4,5].map(i => (
-              <Ionicons key={i} name={i <= stars ? 'star' : 'star-outline'} size={14} color={i <= stars ? colors.amber[400] : colors.gray[200]} />
+              <Ionicons key={i} name={i <= stars ? 'star' : 'star-outline'} size={14} color={i <= stars ? colors.yellow[400] : colors.gray[200]} />
             ))}
             <Text style={{ fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: myRating.avgRating >= 4 ? colors.green[600] : colors.orange[500], marginLeft: spacing[1] }}>
               {myRating.avgRating.toFixed(1)}
