@@ -60,14 +60,14 @@ function getAvatarColors(name?: string): string[] {
 }
 
 function getCellDot(entry?: ScheduleEntry) {
-  if (!entry) return { dotColor: 'transparent', hasEntry: false };
+  if (!entry) return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
   const note = (entry.note || '').toLowerCase();
-  if (note.includes('больнич')) return { dotColor: colors.rose[500], hasEntry: true };
-  if (entry.isDayOff) return { dotColor: colors.gray[400], hasEntry: true };
-  if (entry.lateStatus === 'late_major') return { dotColor: colors.orange[500], hasEntry: true };
-  if (entry.lateStatus === 'late_minor') return { dotColor: colors.yellow[500], hasEntry: true };
-  if (entry.shiftStart) return { dotColor: colors.green[500], hasEntry: true };
-  return { dotColor: 'transparent', hasEntry: false };
+  if (note.includes('больнич')) return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50] };
+  if (entry.isDayOff) return { dotColor: colors.gray[400], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100] };
+  if (entry.lateStatus === 'late_major') return { dotColor: colors.orange[500], hasEntry: true, icon: 'warning' as const, bgColor: colors.orange[50] };
+  if (entry.lateStatus === 'late_minor') return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50] };
+  if (entry.shiftStart) return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
+  return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
 }
 
 // ============== GRID TAB ==============
@@ -415,10 +415,10 @@ function TodayTab() {
     const note = (s.note || '').toLowerCase();
     if (note.includes('больнич')) return { label: 'Больничный', color: colors.rose[500], icon: 'medkit-outline' as const, bgColor: colors.rose[50], accentColor: colors.rose[400] };
     if (s.isDayOff) return { label: 'Выходной', color: colors.gray[500], icon: 'moon-outline' as const, bgColor: colors.gray[100], accentColor: colors.gray[400] };
-    if (s.lateStatus === 'late_major') return { label: 'Опозд. >1ч', color: colors.orange[500], icon: 'warning-outline' as const, bgColor: colors.orange[50], accentColor: colors.orange[500] };
-    if (s.lateStatus === 'late_minor') return { label: 'Опозд. <1ч', color: colors.yellow[600], icon: 'alarm-outline' as const, bgColor: colors.yellow[50], accentColor: colors.yellow[500] };
+    if (s.lateStatus === 'late_major') return { label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. >1ч', color: colors.orange[500], icon: 'warning' as const, bgColor: colors.orange[50], accentColor: colors.orange[500] };
+    if (s.lateStatus === 'late_minor') return { label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. <1ч', color: colors.yellow[600], icon: 'alarm' as const, bgColor: colors.yellow[50], accentColor: colors.yellow[500] };
     if (s.isWorking) return { label: 'На смене', color: colors.green[600], icon: 'checkmark-circle' as const, bgColor: colors.green[50], accentColor: colors.green[500] };
-    if (s.hasSchedule) return { label: 'Прогул', color: colors.red[500], icon: 'close-circle' as const, bgColor: colors.red[50], accentColor: colors.red[500] };
+    if (s.hasSchedule && !s.isDayOff) return { label: 'Прогул', color: colors.red[500], icon: 'close-circle' as const, bgColor: colors.red[50], accentColor: colors.red[500] };
     return { label: '—', color: colors.gray[400], icon: 'remove-outline' as const, bgColor: colors.gray[50], accentColor: colors.gray[300] };
   };
 
