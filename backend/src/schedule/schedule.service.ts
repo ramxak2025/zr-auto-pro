@@ -45,7 +45,8 @@ export class ScheduleService {
        FROM schedule_entries se
        JOIN users u ON u.id = se.user_id
        WHERE se.tenant_id = $1 AND se.date >= $2 AND se.date <= $3
-       ORDER BY u.full_name, se.date`,
+       ORDER BY u.full_name, se.date
+       LIMIT 5000`,
       [tenantID, dateFrom, dateTo],
     );
     return rows.map(this.mapEntry);

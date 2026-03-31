@@ -97,21 +97,24 @@ export class AuthService {
     );
 
     if (rows.length === 0) {
+      this.logger.warn(`Login FAILED: phone=${phone} — not found`);
       throw new UnauthorizedException({ message: 'Неверный телефон или пароль' });
     }
 
     const row = rows[0];
 
     if (!row.is_active) {
+      this.logger.warn(`Login FAILED: phone=${phone} — account deactivated`);
       throw new UnauthorizedException({ message: 'Аккаунт деактивирован' });
     }
 
     const passwordMatch = await bcrypt.compare(dto.password, row.password);
     if (!passwordMatch) {
+      this.logger.warn(`Login FAILED: phone=${phone} — wrong password`);
       throw new UnauthorizedException({ message: 'Неверный телефон или пароль' });
     }
 
-    this.logger.log(`Login OK for phone=${phone} role=${row.role}`);
+    this.logger.log(`Login OK: phone=${phone} role=${row.role} tenant=${row.tenant_id || 'none'}`);
 
     const token = this.generateToken(row.id);
     return { token, user: mapUserRow(row) };
