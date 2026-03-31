@@ -358,10 +358,10 @@ const styles = StyleSheet.create({
   },
   warningText: { fontSize: fontSize.xs, color: colors.orange[600], fontWeight: fontWeight.medium },
 
-  tabs: { flexDirection: 'row', marginHorizontal: spacing[4], marginBottom: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius.xl, overflow: 'hidden', borderWidth: 1, borderColor: colors.gray[100] },
-  tab: { flex: 1, paddingVertical: spacing[2.5], alignItems: 'center' },
-  tabActive: { backgroundColor: colors.primary[50] },
-  tabText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[400] },
+  tabs: { flexDirection: 'row', marginHorizontal: spacing[4], marginBottom: spacing[3], gap: spacing[2] },
+  tab: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: borderRadius.lg, backgroundColor: colors.gray[50] },
+  tabActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
+  tabText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[400] },
   tabTextActive: { color: colors.primary[600] },
 
   list: { flex: 1, backgroundColor: colors.white, marginHorizontal: spacing[4], borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100] },
