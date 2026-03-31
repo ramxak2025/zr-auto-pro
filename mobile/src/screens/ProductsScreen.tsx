@@ -730,20 +730,23 @@ export default function ProductsScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
           ListHeaderComponent={
             !search && sortedFolders.length > 0 ? (
-              <View style={styles.foldersGrid}>
+              <View style={styles.foldersList}>
                 {sortedFolders.map(([folderName, info], idx) => (
-                  <AnimatedCard key={folderName} index={idx} style={styles.folderCard} onPress={() => enterFolder(folderName)}>
+                  <TouchableOpacity key={folderName} style={styles.folderRow} onPress={() => enterFolder(folderName)} activeOpacity={0.6}>
                     <View style={styles.folderIconBox}>
-                      <Ionicons name="folder-open-outline" size={22} color={colors.primary[500]} />
+                      <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
                     </View>
-                    <Text style={styles.folderName} numberOfLines={2}>{folderName}</Text>
-                    <Text style={styles.folderCount}>{info.count} {'\u0448\u0442'}</Text>
+                    <View style={styles.folderRowInfo}>
+                      <Text style={styles.folderRowName} numberOfLines={1}>{folderName}</Text>
+                      <Text style={styles.folderRowCount}>{info.count} шт</Text>
+                    </View>
                     {info.hasLow && (
-                      <View style={styles.folderAlert}>
-                        <Ionicons name="alert-circle" size={12} color={colors.orange[500]} />
+                      <View style={styles.folderRowAlert}>
+                        <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
                       </View>
                     )}
-                  </AnimatedCard>
+                    <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+                  </TouchableOpacity>
                 ))}
               </View>
             ) : null
@@ -1226,6 +1229,12 @@ const styles = StyleSheet.create({
   searchWrap: { paddingHorizontal: spacing[4] },
   list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8], gap: spacing[2], paddingTop: spacing[2] },
   // Folders - 3 cols
+  foldersList: { marginBottom: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], overflow: 'hidden' },
+  folderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[3.5], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
+  folderRowInfo: { flex: 1, marginLeft: spacing[3] },
+  folderRowName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  folderRowCount: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+  folderRowAlert: { marginRight: spacing[2] },
   foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: FOLDER_GAP, marginBottom: spacing[4] },
   folderCard: {
     width: FOLDER_WIDTH,
