@@ -168,12 +168,12 @@ function GridTab() {
     const base: any = { userId, date };
 
     if (type === 'delete' && entry) { deleteMutation.mutate(entry.id); return; }
-    if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; base.lateStatus = 'on_time'; base.lateMinutes = 0; }
+    if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; base.lateStatus = 'on_time'; base.lateMinutes = 0; base.actualArrival = new Date().toISOString(); }
     else if (type === 'dayoff') { base.isDayOff = true; base.note = ''; }
     else if (type === 'sick') { base.isDayOff = true; base.note = 'Больничный'; }
-    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание <1ч'; base.lateStatus = 'late_minor'; base.lateMinutes = 30; }
-    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание >1ч'; base.lateStatus = 'late_major'; base.lateMinutes = 90; }
-    else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; }
+    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_minor'; base.lateMinutes = 15; base.note = ''; }
+    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; }
+    else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
 
     if (entry) { updateMutation.mutate({ id: entry.id, data: base }); }
     else { createMutation.mutate(base); }
