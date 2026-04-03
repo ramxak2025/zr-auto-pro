@@ -329,9 +329,11 @@ function GridTab() {
                           activeOpacity={canEdit ? 0.5 : 1}
                         >
                           {cell.hasEntry ? (
-                            <View style={[styles.gridDot, { backgroundColor: cell.dotColor }]}>
-                              {entry?.shiftStart && !entry?.isDayOff && !(entry?.note || '').toLowerCase().includes('больнич') && (
-                                <Ionicons name="checkmark" size={8} color={colors.white} />
+                            <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30' }]}>
+                              {cell.icon ? (
+                                <Ionicons name={cell.icon} size={10} color={cell.dotColor} />
+                              ) : (
+                                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: cell.dotColor }} />
                               )}
                             </View>
                           ) : (
@@ -1287,9 +1289,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50] + '50',
   },
   gridDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
   },
