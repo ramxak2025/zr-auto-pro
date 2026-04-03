@@ -120,11 +120,11 @@ export class ScheduleService {
 
   async create(tenantID: string, dto: any) {
     const { rows } = await this.pool.query(
-      `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, late_status, late_minutes, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [dto.userId, dto.date, dto.shiftStart, dto.shiftEnd,
-       dto.isDayOff || false, dto.note, tenantID],
+       dto.isDayOff || false, dto.note, dto.lateStatus || null, dto.lateMinutes || 0, tenantID],
     );
     return this.mapEntry(rows[0]);
   }
@@ -138,6 +138,8 @@ export class ScheduleService {
     if (dto.shiftEnd !== undefined) { sets.push(`shift_end=$${idx++}`); vals.push(dto.shiftEnd); }
     if (dto.isDayOff !== undefined) { sets.push(`is_day_off=$${idx++}`); vals.push(dto.isDayOff); }
     if (dto.note !== undefined) { sets.push(`note=$${idx++}`); vals.push(dto.note); }
+    if (dto.lateStatus !== undefined) { sets.push(`late_status=$${idx++}`); vals.push(dto.lateStatus); }
+    if (dto.lateMinutes !== undefined) { sets.push(`late_minutes=$${idx++}`); vals.push(dto.lateMinutes); }
 
     if (sets.length === 0) {
       const { rows } = await this.pool.query('SELECT * FROM schedule_entries WHERE id=$1 AND tenant_id=$2', [id, tenantID]);

@@ -62,24 +62,29 @@ function getAvatarColors(name?: string): string[] {
 function getCellDot(entry?: ScheduleEntry) {
   if (!entry) return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
   const note = (entry.note || '').toLowerCase();
-  // Больничный — highest priority
+  const lateMin = entry.lateMinutes || 0;
+  const hasLate = entry.lateStatus === 'late_major' || entry.lateStatus === 'late_minor' || lateMin > 0;
+
+  // 1. Больничный
   if (note.includes('больнич')) return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50] };
-  // Выходной
+  // 2. Прогул (note содержит "прогул")
+  if (note.includes('прогул')) return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50] };
+  // 3. Выходной
   if (entry.isDayOff) return { dotColor: colors.gray[400], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100] };
-  // Опоздание >1ч (from lateStatus OR lateMinutes >= 60)
-  if (entry.lateStatus === 'late_major' || (entry.lateMinutes >= 60)) return { dotColor: colors.orange[500], hasEntry: true, icon: 'warning' as const, bgColor: colors.orange[50] };
-  // Опоздание <1ч (from lateStatus OR lateMinutes > 0)
-  if (entry.lateStatus === 'late_minor' || (entry.lateMinutes > 0 && entry.lateMinutes < 60)) return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50] };
-  // На смене (has shift start, no late)
-  if (entry.shiftStart && entry.actualArrival) return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
-  // Запланирована смена, но не пришёл = прогул (past date only)
-  if (entry.shiftStart && !entry.actualArrival) {
+  // 4. Опоздание >1ч
+  if (entry.lateStatus === 'late_major' || lateMin >= 60) return { dotColor: colors.orange[500], hasEntry: true, icon: 'warning' as const, bgColor: colors.orange[50] };
+  // 5. Опоздание <1ч
+  if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50] };
+  // 6. На смене (пришёл, без опозданий)
+  if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
+  // 7. Запланирована но не пришёл — проверяем прошла ли дата
+  if (entry.shiftStart && !entry.isDayOff) {
     const entryDate = new Date(entry.date + 'T23:59:59');
-    const now = new Date();
-    if (entryDate < now) {
+    if (entryDate < new Date()) {
+      // Прошедшая дата, не пришёл = прогул
       return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50] };
     }
-    // Future scheduled shift
+    // Будущая смена
     return { dotColor: colors.primary[400], hasEntry: true, icon: 'time' as const, bgColor: colors.primary[50] };
   }
   return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
@@ -163,11 +168,12 @@ function GridTab() {
     const base: any = { userId, date };
 
     if (type === 'delete' && entry) { deleteMutation.mutate(entry.id); return; }
-    if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; }
+    if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; base.lateStatus = 'on_time'; base.lateMinutes = 0; }
     else if (type === 'dayoff') { base.isDayOff = true; base.note = ''; }
     else if (type === 'sick') { base.isDayOff = true; base.note = 'Больничный'; }
-    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание <1ч'; }
-    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание >1ч'; }
+    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание <1ч'; base.lateStatus = 'late_minor'; base.lateMinutes = 30; }
+    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Опоздание >1ч'; base.lateStatus = 'late_major'; base.lateMinutes = 90; }
+    else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; }
 
     if (entry) { updateMutation.mutate({ id: entry.id, data: base }); }
     else { createMutation.mutate(base); }
@@ -376,6 +382,7 @@ function GridTab() {
               { type: 'sick', label: 'Больничный', icon: 'medkit-outline' as const, iconColor: colors.rose[500], bg: colors.rose[50], gradient: [colors.rose[50], '#ffe4e6'] },
               { type: 'late_minor', label: 'Опоздал <1ч', icon: 'alarm-outline' as const, iconColor: colors.yellow[600], bg: colors.yellow[50], gradient: [colors.yellow[50], '#fef9c3'] },
               { type: 'late_major', label: 'Опоздал >1ч', icon: 'warning-outline' as const, iconColor: colors.orange[500], bg: colors.orange[50], gradient: [colors.orange[50], '#fed7aa'] },
+              { type: 'absent', label: 'Прогул', icon: 'close-circle-outline' as const, iconColor: colors.red[500], bg: colors.red[50], gradient: [colors.red[50], '#fecaca'] },
             ].map(item => (
               <TouchableOpacity key={item.type} style={styles.quickBtn} onPress={() => quickAction(item.type)}>
                 <LinearGradient
