@@ -301,7 +301,7 @@ export default function SchedulePage() {
   });
 
   // Quick status change — directly creates/updates entry without opening modal
-  const quickSetStatus = (status: 'shift' | 'dayoff' | 'sick' | 'late_minor' | 'late_major' | 'delete') => {
+  const quickSetStatus = (status: 'shift' | 'dayoff' | 'sick' | 'late_minor' | 'late_major' | 'absent' | 'delete') => {
     if (!quickPopup) return;
     const { userId, date, entry } = quickPopup;
 
@@ -312,8 +312,9 @@ export default function SchedulePage() {
     }
 
     const isDayOff = status === 'dayoff' || status === 'sick';
-    const note = status === 'sick' ? 'Больничный' : (status === 'late_minor' ? 'Опоздание <1ч' : status === 'late_major' ? 'Опоздание >1ч' : '');
-    const lateStatus = status === 'late_minor' ? 'late_minor' : status === 'late_major' ? 'late_major' : undefined;
+    const note = status === 'sick' ? 'Больничный' : status === 'absent' ? 'Прогул' : '';
+    const lateStatus = status === 'late_minor' ? 'late_minor' : status === 'late_major' ? 'late_major' : status === 'shift' ? 'on_time' : undefined;
+    const lateMinutes = status === 'late_minor' ? 15 : status === 'late_major' ? 60 : 0;
 
     const payload: any = {
       userId,
@@ -322,6 +323,8 @@ export default function SchedulePage() {
       shiftEnd: isDayOff ? null : '18:00',
       isDayOff,
       note: note || undefined,
+      lateStatus: lateStatus || null,
+      lateMinutes: lateMinutes || 0,
     };
 
     if (entry) {
@@ -750,6 +753,13 @@ export default function SchedulePage() {
               >
                 <span className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center text-sm">⚠️</span>
                 <span className="text-sm font-medium text-gray-800">Опоздал больше часа</span>
+              </button>
+              <button
+                onClick={() => quickSetStatus('absent')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 transition-colors text-left"
+              >
+                <span className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center text-sm">❌</span>
+                <span className="text-sm font-medium text-gray-800">Прогул</span>
               </button>
               {quickPopup.entry && (
                 <button
