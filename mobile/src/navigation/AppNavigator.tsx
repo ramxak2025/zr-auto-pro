@@ -120,79 +120,91 @@ const MoreStack = createNativeStackNavigator();
 const KASSA_SIZE = 68;
 
 function KassaButton({ focused }: { focused?: boolean }) {
-  const pulse = useRef(new Animated.Value(0)).current;
-  const plasma = useRef(new Animated.Value(0)).current;
+  const wave1 = useRef(new Animated.Value(0)).current;
+  const wave2 = useRef(new Animated.Value(0)).current;
+  const wave3 = useRef(new Animated.Value(0)).current;
   const rotate = useRef(new Animated.Value(0)).current;
+  const rotate2 = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // Outer glow pulse
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ]),
-    ).start();
-    // Inner plasma breathing
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(plasma, { toValue: 1, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(plasma, { toValue: 0, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ]),
-    ).start();
-    // Slow rotation for plasma orbs
-    Animated.loop(
-      Animated.timing(rotate, { toValue: 1, duration: 6000, easing: Easing.linear, useNativeDriver: true }),
-    ).start();
+    // Three waves at different speeds for liquid glass effect
+    Animated.loop(Animated.sequence([
+      Animated.timing(wave1, { toValue: 1, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(wave1, { toValue: 0, duration: 2400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ])).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(wave2, { toValue: 1, duration: 1800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(wave2, { toValue: 0, duration: 1800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ])).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(wave3, { toValue: 1, duration: 3200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(wave3, { toValue: 0, duration: 3200, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ])).start();
+    // Slow rotation
+    Animated.loop(Animated.timing(rotate, { toValue: 1, duration: 10000, easing: Easing.linear, useNativeDriver: true })).start();
+    // Counter rotation
+    Animated.loop(Animated.timing(rotate2, { toValue: 1, duration: 7000, easing: Easing.linear, useNativeDriver: true })).start();
   }, []);
 
-  const glowScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.18] });
-  const glowOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.6] });
-  const plasmaScale = plasma.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.2] });
-  const plasmaOpacity = plasma.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.35] });
   const rotateVal = rotate.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  const rotateVal2 = rotate2.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '-360deg'] });
 
   return (
     <View style={kassa.outer}>
-      {/* Outer pulsing glow ring */}
-      <Animated.View
-        style={[
-          kassa.glowRing,
-          { opacity: glowOpacity, transform: [{ scale: glowScale }] },
-        ]}
-      />
-
-      {/* Secondary glow layer */}
-      <Animated.View
-        style={[
-          kassa.glowInner,
-          { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.45] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1.05, 1.25] }) }] },
-        ]}
-      />
-
-      {/* Main button body */}
+      {/* Main button body — no outer glow ring */}
       <View style={kassa.body}>
         <LinearGradient
-          colors={[colors.primary[300], colors.primary[500], colors.primary[700], colors.primary[900]]}
+          colors={[colors.primary[400], colors.primary[600], colors.primary[800]]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
 
-        {/* Rotating plasma orbs */}
-        <Animated.View style={[kassa.plasmaContainer, { transform: [{ rotate: rotateVal }] }]}>
-          <Animated.View style={[kassa.plasmaOrb1, { opacity: plasmaOpacity, transform: [{ scale: plasmaScale }] }]} />
-          <Animated.View style={[kassa.plasmaOrb2, { opacity: plasmaOpacity, transform: [{ scale: plasma.interpolate({ inputRange: [0, 1], outputRange: [1.1, 0.7] }) }] }]} />
-          <Animated.View style={[kassa.plasmaOrb3, { opacity: plasma.interpolate({ inputRange: [0, 1], outputRange: [0.1, 0.25] }), transform: [{ scale: plasma.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.3] }) }] }]} />
+        {/* Liquid glass layer 1 — large slow blob */}
+        <Animated.View style={[kassa.liquidContainer, { transform: [{ rotate: rotateVal }] }]}>
+          <Animated.View style={[kassa.liquidBlob, {
+            top: -8, left: -4, width: 50, height: 50, borderRadius: 25,
+            backgroundColor: 'rgba(147, 197, 253, 0.35)',
+            opacity: wave1.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.45] }) as any,
+            transform: [
+              { scale: wave1.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 1.2, 0.8] }) as any },
+              { translateX: wave2.interpolate({ inputRange: [0, 1], outputRange: [-3, 5] }) as any },
+            ],
+          }]} />
+          <Animated.View style={[kassa.liquidBlob, {
+            bottom: -6, right: -6, width: 40, height: 40, borderRadius: 20,
+            backgroundColor: 'rgba(96, 165, 250, 0.3)',
+            opacity: wave2.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.4] }) as any,
+            transform: [
+              { scale: wave2.interpolate({ inputRange: [0, 0.5, 1], outputRange: [1.1, 0.7, 1.1] }) as any },
+            ],
+          }]} />
         </Animated.View>
 
-        {/* Top-left shine highlight */}
-        <View style={kassa.shine} />
+        {/* Liquid glass layer 2 — counter-rotating */}
+        <Animated.View style={[kassa.liquidContainer, { transform: [{ rotate: rotateVal2 }] }]}>
+          <Animated.View style={[kassa.liquidBlob, {
+            top: 10, right: -2, width: 35, height: 35, borderRadius: 18,
+            backgroundColor: 'rgba(191, 219, 254, 0.3)',
+            opacity: wave3.interpolate({ inputRange: [0, 1], outputRange: [0.1, 0.35] }) as any,
+            transform: [
+              { scale: wave3.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.9, 1.3, 0.9] }) as any },
+            ],
+          }]} />
+        </Animated.View>
 
-        {/* Bottom-right subtle highlight */}
-        <View style={kassa.shineBottom} />
+        {/* Glass highlight — top left refraction */}
+        <Animated.View style={[kassa.glassHighlight, {
+          opacity: wave1.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.12, 0.25, 0.12] }) as any,
+        }]} />
+
+        {/* Bottom edge light */}
+        <Animated.View style={[kassa.bottomLight, {
+          opacity: wave3.interpolate({ inputRange: [0, 1], outputRange: [0.05, 0.15] }) as any,
+        }]} />
 
         {/* Icon */}
-        <Ionicons name="calculator-outline" size={28} color={colors.white} style={{ zIndex: 5 }} />
+        <Ionicons name="receipt-outline" size={26} color={colors.white} style={{ zIndex: 5 }} />
       </View>
     </View>
   );
@@ -202,23 +214,9 @@ const kassa = StyleSheet.create({
   outer: {
     alignItems: 'center',
     justifyContent: 'center',
-    width: KASSA_SIZE + 28,
-    height: KASSA_SIZE + 28,
-    marginTop: -32,
-  },
-  glowRing: {
-    position: 'absolute',
-    width: KASSA_SIZE + 26,
-    height: KASSA_SIZE + 26,
-    borderRadius: (KASSA_SIZE + 26) / 2,
-    backgroundColor: colors.primary[400],
-  },
-  glowInner: {
-    position: 'absolute',
-    width: KASSA_SIZE + 14,
-    height: KASSA_SIZE + 14,
-    borderRadius: (KASSA_SIZE + 14) / 2,
-    backgroundColor: colors.primary[300],
+    width: KASSA_SIZE + 4,
+    height: KASSA_SIZE + 4,
+    marginTop: -28,
   },
   body: {
     width: KASSA_SIZE,
@@ -227,64 +225,38 @@ const kassa = StyleSheet.create({
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 16,
-    shadowColor: colors.primary[600],
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
-    borderWidth: 2,
-    borderColor: 'rgba(147, 197, 253, 0.3)',
+    elevation: 12,
+    shadowColor: colors.primary[700],
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(191, 219, 254, 0.4)',
   },
-  plasmaContainer: {
+  liquidContainer: {
     ...StyleSheet.absoluteFillObject,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  plasmaOrb1: {
+  liquidBlob: {
     position: 'absolute',
-    top: 4,
-    left: 6,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.primary[300],
   },
-  plasmaOrb2: {
+  glassHighlight: {
     position: 'absolute',
-    bottom: 6,
-    right: 4,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.blue[300],
-  },
-  plasmaOrb3: {
-    position: 'absolute',
-    top: 18,
-    right: 8,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: colors.cyan[400],
-  },
-  shine: {
-    position: 'absolute',
-    top: -KASSA_SIZE * 0.1,
+    top: -KASSA_SIZE * 0.15,
     left: -KASSA_SIZE * 0.1,
-    width: KASSA_SIZE * 0.55,
-    height: KASSA_SIZE * 0.55,
-    borderRadius: KASSA_SIZE * 0.275,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    width: KASSA_SIZE * 0.65,
+    height: KASSA_SIZE * 0.45,
+    borderRadius: KASSA_SIZE * 0.3,
+    backgroundColor: 'rgba(255,255,255,0.25)',
     zIndex: 3,
   },
-  shineBottom: {
+  bottomLight: {
     position: 'absolute',
-    bottom: -KASSA_SIZE * 0.08,
-    right: -KASSA_SIZE * 0.08,
-    width: KASSA_SIZE * 0.4,
-    height: KASSA_SIZE * 0.4,
-    borderRadius: KASSA_SIZE * 0.2,
-    backgroundColor: 'rgba(96, 165, 250, 0.1)',
+    bottom: 2,
+    right: 4,
+    width: KASSA_SIZE * 0.35,
+    height: KASSA_SIZE * 0.2,
+    borderRadius: KASSA_SIZE * 0.15,
+    backgroundColor: 'rgba(147, 197, 253, 0.2)',
     zIndex: 2,
   },
 });

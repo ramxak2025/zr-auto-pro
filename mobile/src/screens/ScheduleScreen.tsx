@@ -62,11 +62,26 @@ function getAvatarColors(name?: string): string[] {
 function getCellDot(entry?: ScheduleEntry) {
   if (!entry) return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
   const note = (entry.note || '').toLowerCase();
+  // Больничный — highest priority
   if (note.includes('больнич')) return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50] };
+  // Выходной
   if (entry.isDayOff) return { dotColor: colors.gray[400], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100] };
-  if (entry.lateStatus === 'late_major') return { dotColor: colors.orange[500], hasEntry: true, icon: 'warning' as const, bgColor: colors.orange[50] };
-  if (entry.lateStatus === 'late_minor') return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50] };
-  if (entry.shiftStart) return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
+  // Опоздание >1ч (from lateStatus OR lateMinutes >= 60)
+  if (entry.lateStatus === 'late_major' || (entry.lateMinutes >= 60)) return { dotColor: colors.orange[500], hasEntry: true, icon: 'warning' as const, bgColor: colors.orange[50] };
+  // Опоздание <1ч (from lateStatus OR lateMinutes > 0)
+  if (entry.lateStatus === 'late_minor' || (entry.lateMinutes > 0 && entry.lateMinutes < 60)) return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50] };
+  // На смене (has shift start, no late)
+  if (entry.shiftStart && entry.actualArrival) return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
+  // Запланирована смена, но не пришёл = прогул (past date only)
+  if (entry.shiftStart && !entry.actualArrival) {
+    const entryDate = new Date(entry.date + 'T23:59:59');
+    const now = new Date();
+    if (entryDate < now) {
+      return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50] };
+    }
+    // Future scheduled shift
+    return { dotColor: colors.primary[400], hasEntry: true, icon: 'time' as const, bgColor: colors.primary[50] };
+  }
   return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
 }
 
@@ -200,13 +215,15 @@ function GridTab() {
       {/* Legend */}
       <View style={styles.legendRow}>
         {[
-          { color: colors.green[500], label: 'Смена' },
-          { color: colors.gray[400], label: 'Вых' },
-          { color: colors.rose[500], label: 'Б/Л' },
-          { color: colors.orange[500], label: 'Опозд.' },
+          { color: colors.green[500], label: 'Смена', icon: 'checkmark-circle' as const },
+          { color: colors.gray[400], label: 'Вых', icon: 'moon' as const },
+          { color: colors.rose[500], label: 'Б/Л', icon: 'medkit' as const },
+          { color: colors.yellow[500], label: '<1ч', icon: 'alarm' as const },
+          { color: colors.orange[500], label: '>1ч', icon: 'warning' as const },
+          { color: colors.red[500], label: 'Прогул', icon: 'close-circle' as const },
         ].map((item) => (
           <View key={item.label} style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: item.color }]} />
+            <Ionicons name={item.icon} size={10} color={item.color} />
             <Text style={styles.legendText}>{item.label}</Text>
           </View>
         ))}
