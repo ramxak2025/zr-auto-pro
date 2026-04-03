@@ -112,7 +112,7 @@ export class SuppliersService {
     const { rows } = await this.pool.query(
       `SELECT d.*, s.name as supplier_name
        FROM deliveries d JOIN suppliers s ON s.id = d.supplier_id
-       WHERE ${where} ORDER BY d.date DESC`,
+       WHERE ${where} AND d.tenant_id = $1 ORDER BY d.date DESC LIMIT 500`,
       params,
     );
 
@@ -262,7 +262,7 @@ export class SuppliersService {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT sp.* FROM supplier_payments sp WHERE ${where} ORDER BY sp.date DESC`,
+      `SELECT sp.* FROM supplier_payments sp WHERE ${where} ORDER BY sp.date DESC LIMIT 500`,
       params,
     );
 

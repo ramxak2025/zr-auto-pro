@@ -117,11 +117,14 @@ export class ShiftsService {
     }
   }
 
-  async close(id: string, tenantID: string) {
+  async close(id: string, tenantID: string, userID?: string) {
+    // Directors/admins can close any shift, masters only their own
+    const ownerCheck = userID ? ` AND user_id = $3` : '';
+    const params = userID ? [id, tenantID, userID] : [id, tenantID];
     const { rows } = await this.pool.query(
-      `UPDATE shifts SET closed_at = now() WHERE id = $1 AND tenant_id = $2
+      `UPDATE shifts SET closed_at = now() WHERE id = $1 AND tenant_id = $2${ownerCheck}
        RETURNING *`,
-      [id, tenantID],
+      params,
     );
     if (rows.length === 0) return { message: 'Смена не найдена' };
 

@@ -247,7 +247,12 @@ export class CallsService {
       throw new BadRequestException({ message: 'URL записи не указан' });
     }
 
+    // Only allow URLs from the configured MoiZvonki domain
     if (recordUrl.startsWith('http://') || recordUrl.startsWith('https://')) {
+      const allowedDomain = `${config.domain}.moizvonki.ru`;
+      if (!recordUrl.includes(allowedDomain)) {
+        throw new BadRequestException({ message: 'Недопустимый URL записи' });
+      }
       return { url: recordUrl };
     }
 

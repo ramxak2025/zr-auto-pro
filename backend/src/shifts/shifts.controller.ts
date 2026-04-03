@@ -25,6 +25,6 @@ export class ShiftsController {
 
   @Post(':id/close')
   close(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.shiftsService.close(id, user.tenantID);
+    return this.shiftsService.close(id, user.tenantID, user.userID);
   }
 }

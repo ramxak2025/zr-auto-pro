@@ -43,7 +43,7 @@ export class SalaryService {
          LEFT JOIN users u ON u.id = sp.user_id
          LEFT JOIN users c ON c.id = sp.created_by
          WHERE sp.tenant_id = $1 AND sp.month_year IN (${placeholders})
-         ORDER BY sp.date DESC`,
+         ORDER BY sp.date DESC LIMIT 500`,
         [tenantID, ...monthYears],
       );
       paymentRows = pRows;
