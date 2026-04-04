@@ -227,9 +227,10 @@ export class ScheduleService {
 
     if (userRows.length === 0) return { created: 0 };
 
-    // Generate entries for each day in range (only today and future — past entries are preserved)
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Generate entries for each day in range (only tomorrow and future — today and past preserved)
+    const tomorrow = new Date();
+    tomorrow.setHours(0, 0, 0, 0);
+    tomorrow.setDate(tomorrow.getDate() + 1);
     const start = new Date(dateFrom);
     const end = new Date(dateTo);
     let created = 0;
@@ -241,8 +242,8 @@ export class ScheduleService {
       while (cursor <= end) {
         const dateStr = cursor.toISOString().split('T')[0];
 
-        // Skip past days — keep existing entries unchanged
-        if (cursor < today) {
+        // Skip today and past days — keep existing entries unchanged
+        if (cursor < tomorrow) {
           cursor.setDate(cursor.getDate() + 1);
           continue;
         }

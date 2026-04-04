@@ -22,6 +22,7 @@ import {
   endOfMonth,
   addMonths,
   subMonths,
+  addDays,
   isToday,
   getDay,
 } from 'date-fns';
@@ -341,24 +342,43 @@ export default function SchedulePage() {
   };
 
   // Cell rendering helpers
-  const getCellContent = (entry: ScheduleEntry | undefined) => {
+  const getCellContent = (entry: ScheduleEntry | undefined, dateStr?: string) => {
     if (!entry) return null;
-    const isSick = (entry.note || '').toLowerCase().includes('больнич');
-    const isLateMinor = (entry.note || '').includes('<1ч') || entry.lateStatus === 'late_minor';
-    const isLateMajor = (entry.note || '').includes('>1ч') || entry.lateStatus === 'late_major';
-    if (isSick) {
+    const note = (entry.note || '').toLowerCase();
+    const lateMin = entry.lateMinutes || 0;
+    // Больничный
+    if (note.includes('больнич')) {
       return { label: '🏥', bgColor: 'bg-rose-50', textColor: 'text-rose-500', borderColor: 'border-rose-200' };
     }
+    // Прогул (из note)
+    if (note.includes('прогул')) {
+      return { label: '❌', bgColor: 'bg-red-50', textColor: 'text-red-600', borderColor: 'border-red-300' };
+    }
+    // Выходной
     if (entry.isDayOff) {
       return { label: '🌙', bgColor: 'bg-gray-800', textColor: 'text-white', borderColor: 'border-gray-700' };
     }
-    if (isLateMajor) {
+    // Опоздание >1ч
+    if (entry.lateStatus === 'late_major' || lateMin >= 60) {
       return { label: '⚠️', bgColor: 'bg-orange-50', textColor: 'text-orange-600', borderColor: 'border-orange-300' };
     }
-    if (isLateMinor) {
+    // Опоздание <1ч
+    if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) {
       return { label: '⏰', bgColor: 'bg-yellow-50', textColor: 'text-yellow-600', borderColor: 'border-yellow-300' };
     }
-    // Working shift
+    // На смене (пришёл)
+    if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
+      const time = entry.shiftStart?.slice(0, 5) || '✓';
+      return { label: time, bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' };
+    }
+    // Запланирована но не пришёл — прогул (прошедшая дата)
+    if (entry.shiftStart && !entry.isDayOff && dateStr) {
+      const entryDate = new Date(dateStr + 'T23:59:59');
+      if (entryDate < new Date()) {
+        return { label: '❌', bgColor: 'bg-red-50', textColor: 'text-red-600', borderColor: 'border-red-300' };
+      }
+    }
+    // Будущая запланированная смена
     const time = entry.shiftStart?.slice(0, 5) || '✓';
     return { label: time, bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' };
   };
@@ -568,7 +588,7 @@ export default function SchedulePage() {
                           {monthDays.map((day) => {
                             const dateStr = format(day, 'yyyy-MM-dd');
                             const entry = entryMap[u.id]?.[dateStr];
-                            const cellData = getCellContent(entry);
+                            const cellData = getCellContent(entry, dateStr);
                             const dayOfWeek = getDay(day);
                             const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
                             const isTodayDate = isToday(day);
@@ -1057,7 +1077,7 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
   const queryClient = useQueryClient();
   const [selectedMode, setSelectedMode] = useState('');
   const [selectedUser, setSelectedUser] = useState('');
-  const [applyFrom, setApplyFrom] = useState(format(startOfMonth(new Date()), 'yyyy-MM-dd'));
+  const [applyFrom, setApplyFrom] = useState(format(addDays(new Date(), 1), 'yyyy-MM-dd'));
   const [applyTo, setApplyTo] = useState(format(endOfMonth(new Date()), 'yyyy-MM-dd'));
 
   const applyMutation = useMutation({
