@@ -173,11 +173,11 @@ export default function SchedulePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      toast.success('Запись расписания создана');
+      toast.success('Создано');
       closeModal();
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка создания записи');
+      toast.error(err?.response?.data?.message || 'Ошибка');
     },
   });
 
@@ -186,7 +186,7 @@ export default function SchedulePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      toast.success('Запись обновлена');
+      toast.success('Обновлено');
       closeModal();
     },
     onError: (err: any) => {
@@ -323,17 +323,21 @@ export default function SchedulePage() {
       shiftStart: isDayOff ? null : '09:00',
       shiftEnd: isDayOff ? null : '18:00',
       isDayOff,
-      note: note || undefined,
+      note: note || '',
       lateStatus: lateStatus || null,
       lateMinutes: lateMinutes || 0,
     };
 
     if (entry) {
-      // Preserve existing shift times if editing shift
       if (!isDayOff && entry.shiftStart) {
         payload.shiftStart = entry.shiftStart;
         payload.shiftEnd = entry.shiftEnd;
       }
+      // Optimistic update — instantly update cache
+      queryClient.setQueryData(['schedule', dateFrom, dateTo], (old: any) => {
+        if (!old?.data) return old;
+        return { ...old, data: old.data.map((e: ScheduleEntry) => e.id === entry.id ? { ...e, ...payload } : e) };
+      });
       updateMutation.mutate({ id: entry.id, data: payload });
     } else {
       createMutation.mutate(payload);

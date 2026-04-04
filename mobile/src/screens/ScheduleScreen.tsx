@@ -169,12 +169,13 @@ function GridTab() {
 
     if (type === 'delete' && entry) { deleteMutation.mutate(entry.id); return; }
     if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; base.lateStatus = 'on_time'; base.lateMinutes = 0; base.actualArrival = new Date().toISOString(); }
-    else if (type === 'dayoff') { base.isDayOff = true; base.note = ''; }
-    else if (type === 'sick') { base.isDayOff = true; base.note = 'Больничный'; }
+    else if (type === 'dayoff') { base.isDayOff = true; base.shiftStart = null; base.shiftEnd = null; base.note = ''; base.lateStatus = null; base.lateMinutes = 0; }
+    else if (type === 'sick') { base.isDayOff = true; base.shiftStart = null; base.shiftEnd = null; base.note = 'Больничный'; base.lateStatus = null; base.lateMinutes = 0; }
     else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_minor'; base.lateMinutes = 15; base.note = ''; }
     else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; }
     else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
 
+    setQuickPopup(null);
     if (entry) { updateMutation.mutate({ id: entry.id, data: base }); }
     else { createMutation.mutate(base); }
   };
