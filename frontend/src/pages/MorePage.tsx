@@ -19,6 +19,7 @@ import {
   Building2,
   Lock,
   Phone,
+  Package,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -140,6 +141,15 @@ const menuItems: MenuItem[] = [
     featureKey: 'users_manage',
     color: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
+  },
+  {
+    label: 'Имущество',
+    description: 'Учёт инструментов и оборудования',
+    path: '/equipment',
+    icon: Package,
+    roles: ['director', 'superadmin'],
+    color: 'bg-emerald-50',
+    iconColor: 'text-emerald-600',
   },
   {
     label: 'Настройки компании',

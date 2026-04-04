@@ -70,6 +70,7 @@ const ExpensesPage = lazyWithRetry(() => import('./pages/ExpensesPage'));
 const MarketingPage = lazyWithRetry(() => import('./pages/MarketingPage'));
 const CompanySettingsPage = lazyWithRetry(() => import('./pages/CompanySettingsPage'));
 const CallsPage = lazyWithRetry(() => import('./pages/CallsPage'));
+const EquipmentPage = lazyWithRetry(() => import('./pages/EquipmentPage'));
 const ReviewPublicPage = lazyWithRetry(() => import('./pages/ReviewPublicPage'));
 
 // Admin pages
@@ -205,6 +206,7 @@ export default function App() {
                   <Route path="/tariff" element={<TariffPage />} />
                   <Route path="/marketing" element={<MarketingPage />} />
                   <Route path="/calls" element={<CallsPage />} />
+                  <Route path="/equipment" element={<EquipmentPage />} />
                   <Route path="/company-settings" element={<CompanySettingsPage />} />
                 </Route>
 

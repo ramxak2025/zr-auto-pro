@@ -257,3 +257,26 @@ export function createCallsApi(api: AxiosInstance) {
       api.get<{ url: string }>('/calls/recording', { params: { url } }),
   };
 }
+
+export function createEquipmentApi(api: AxiosInstance) {
+  return {
+    getAll: (params?: { userId?: string; status?: string }) =>
+      api.get<any[]>('/equipment', { params }),
+    getSummary: () =>
+      api.get<any[]>('/equipment/summary'),
+    getById: (id: string) =>
+      api.get<any>(`/equipment/${id}`),
+    create: (data: any) =>
+      api.post<any>('/equipment', data),
+    update: (id: string, data: any) =>
+      api.patch<any>(`/equipment/${id}`, data),
+    replace: (id: string, data: any) =>
+      api.post<any>(`/equipment/${id}/replace`, data),
+    writeOff: (id: string, reason?: string) =>
+      api.post(`/equipment/${id}/write-off`, { reason }),
+    returnItem: (id: string, reason?: string) =>
+      api.post(`/equipment/${id}/return`, { reason }),
+    remove: (id: string) =>
+      api.delete(`/equipment/${id}`),
+  };
+}
