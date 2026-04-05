@@ -8,200 +8,260 @@ export class EquipmentService {
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
-  private mapItem(row: any) {
+  // ─── Storage Categories (folders) ─────────────────────────────────
+
+  async getCategories(tenantId: string) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM storage_categories WHERE tenant_id = $1 ORDER BY sort_order, name`,
+      [tenantId],
+    );
+    return rows.map(r => ({ id: r.id, name: r.name, parentId: r.parent_id, sortOrder: r.sort_order }));
+  }
+
+  async createCategory(tenantId: string, dto: any) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO storage_categories (tenant_id, name, parent_id, sort_order) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [tenantId, dto.name, dto.parentId || null, dto.sortOrder || 0],
+    );
+    return { id: rows[0].id, name: rows[0].name, parentId: rows[0].parent_id };
+  }
+
+  async removeCategory(id: string, tenantId: string) {
+    await this.pool.query('DELETE FROM storage_categories WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    return { message: 'Удалено' };
+  }
+
+  // ─── Storage Items (подсобка) ─────────────────────────────────────
+
+  async getStorageItems(tenantId: string, query?: { categoryId?: string; search?: string }) {
+    let where = 'si.tenant_id = $1';
+    const params: any[] = [tenantId];
+    let idx = 2;
+    if (query?.categoryId) { where += ` AND si.category_id = $${idx++}`; params.push(query.categoryId); }
+    if (query?.search) { where += ` AND si.name ILIKE $${idx++}`; params.push(`%${query.search}%`); }
+
+    const { rows } = await this.pool.query(
+      `SELECT si.*, sc.name as category_name
+       FROM storage_items si LEFT JOIN storage_categories sc ON sc.id = si.category_id
+       WHERE ${where} ORDER BY si.name LIMIT 500`,
+      params,
+    );
+    return rows.map(r => ({
+      id: r.id, name: r.name, description: r.description, photo: r.photo,
+      purchasePrice: parseFloat(r.purchase_price) || 0, quantity: parseInt(r.quantity) || 0,
+      unit: r.unit, serviceLifeMonths: r.service_life_months,
+      categoryId: r.category_id, categoryName: r.category_name,
+    }));
+  }
+
+  async createStorageItem(tenantId: string, dto: any) {
+    const { rows } = await this.pool.query(
+      `INSERT INTO storage_items (tenant_id, category_id, name, description, photo, purchase_price, quantity, unit, service_life_months)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [tenantId, dto.categoryId || null, dto.name, dto.description, dto.photo,
+       dto.purchasePrice || 0, dto.quantity || 0, dto.unit || 'шт', dto.serviceLifeMonths || null],
+    );
+    return this.mapStorageItem(rows[0]);
+  }
+
+  async updateStorageItem(id: string, tenantId: string, dto: any) {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
+    if (dto.description !== undefined) { sets.push(`description=$${idx++}`); vals.push(dto.description); }
+    if (dto.photo !== undefined) { sets.push(`photo=$${idx++}`); vals.push(dto.photo); }
+    if (dto.purchasePrice !== undefined) { sets.push(`purchase_price=$${idx++}`); vals.push(dto.purchasePrice); }
+    if (dto.quantity !== undefined) { sets.push(`quantity=$${idx++}`); vals.push(dto.quantity); }
+    if (dto.unit !== undefined) { sets.push(`unit=$${idx++}`); vals.push(dto.unit); }
+    if (dto.serviceLifeMonths !== undefined) { sets.push(`service_life_months=$${idx++}`); vals.push(dto.serviceLifeMonths); }
+    if (dto.categoryId !== undefined) { sets.push(`category_id=$${idx++}`); vals.push(dto.categoryId); }
+    if (sets.length === 0) return;
+    vals.push(id, tenantId);
+    await this.pool.query(`UPDATE storage_items SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}`, vals);
+    return { message: 'Обновлено' };
+  }
+
+  async removeStorageItem(id: string, tenantId: string) {
+    await this.pool.query('DELETE FROM storage_items WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    return { message: 'Удалено' };
+  }
+
+  private mapStorageItem(r: any) {
     return {
-      id: row.id,
-      userId: row.user_id,
-      userName: row.user_name || null,
-      userAvatar: row.user_avatar || null,
-      name: row.name,
-      description: row.description,
-      photo: row.photo,
-      cost: parseFloat(row.cost) || 0,
-      source: row.source,
-      productId: row.product_id,
-      issuedAt: row.issued_at,
-      serviceLifeMonths: row.service_life_months,
-      expiresAt: row.expires_at,
-      status: row.status,
-      replacedBy: row.replaced_by,
-      replacedAt: row.replaced_at,
-      returnReason: row.return_reason,
-      createdAt: row.created_at,
+      id: r.id, name: r.name, description: r.description, photo: r.photo,
+      purchasePrice: parseFloat(r.purchase_price) || 0, quantity: parseInt(r.quantity) || 0,
+      unit: r.unit, serviceLifeMonths: r.service_life_months,
+      categoryId: r.category_id, categoryName: r.category_name,
     };
   }
 
-  async getAll(tenantId: string, query?: { userId?: string; status?: string }) {
-    let where = 'e.tenant_id = $1';
-    const params: any[] = [tenantId];
-    let idx = 2;
+  // ─── Issued Equipment ─────────────────────────────────────────────
 
-    if (query?.userId) { where += ` AND e.user_id = $${idx++}`; params.push(query.userId); }
-    if (query?.status) { where += ` AND e.status = $${idx++}`; params.push(query.status); }
-
+  async getIssuedByUser(tenantId: string, userId: string, includeInactive = false) {
+    const statusFilter = includeInactive ? '' : `AND ei.status = 'active'`;
     const { rows } = await this.pool.query(
-      `SELECT e.*, u.full_name as user_name, u.avatar as user_avatar
-       FROM equipment e
-       JOIN users u ON u.id = e.user_id
-       WHERE ${where}
-       ORDER BY e.status = 'active' DESC, e.issued_at DESC
-       LIMIT 500`,
-      params,
+      `SELECT ei.*, u.full_name as user_name, u.avatar as user_avatar
+       FROM equipment_issued ei JOIN users u ON u.id = ei.user_id
+       WHERE ei.tenant_id = $1 AND ei.user_id = $2 ${statusFilter}
+       ORDER BY ei.category_type, ei.issued_at DESC LIMIT 200`,
+      [tenantId, userId],
     );
-    return rows.map(r => this.mapItem(r));
+    return rows.map(r => this.mapIssued(r));
   }
 
-  async getById(id: string, tenantId: string) {
+  async getEmployeeSummary(tenantId: string) {
     const { rows } = await this.pool.query(
-      `SELECT e.*, u.full_name as user_name, u.avatar as user_avatar
-       FROM equipment e
-       JOIN users u ON u.id = e.user_id
-       WHERE e.id = $1 AND e.tenant_id = $2`,
-      [id, tenantId],
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Имущество не найдено' });
-    return this.mapItem(rows[0]);
-  }
-
-  async getSummaryByUser(tenantId: string) {
-    const { rows } = await this.pool.query(
-      `SELECT u.id as user_id, u.full_name, u.avatar,
-              COUNT(e.id) FILTER (WHERE e.status = 'active') as active_count,
-              COALESCE(SUM(e.cost) FILTER (WHERE e.status = 'active'), 0) as total_cost,
-              COUNT(e.id) FILTER (WHERE e.expires_at IS NOT NULL AND e.expires_at < now() AND e.status = 'active') as expired_count
+      `SELECT u.id, u.full_name, u.avatar, u.role,
+              COUNT(ei.id) FILTER (WHERE ei.status = 'active') as active_count,
+              COALESCE(SUM(ei.cost) FILTER (WHERE ei.status = 'active'), 0) as total_cost,
+              COUNT(ei.id) FILTER (WHERE ei.status = 'active' AND ei.category_type = 'tools') as tools_count,
+              COUNT(ei.id) FILTER (WHERE ei.status = 'active' AND ei.category_type = 'uniform') as uniform_count,
+              COUNT(ei.id) FILTER (WHERE ei.expires_at < now() AND ei.status = 'active') as expired_count
        FROM users u
-       LEFT JOIN equipment e ON e.user_id = u.id AND e.tenant_id = $1
+       LEFT JOIN equipment_issued ei ON ei.user_id = u.id AND ei.tenant_id = $1
        WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
-       GROUP BY u.id, u.full_name, u.avatar
-       ORDER BY u.full_name`,
+       GROUP BY u.id ORDER BY u.full_name`,
       [tenantId],
     );
     return rows.map(r => ({
-      userId: r.user_id,
-      fullName: r.full_name,
-      avatar: r.avatar,
+      userId: r.id, fullName: r.full_name, avatar: r.avatar, role: r.role,
       activeCount: parseInt(r.active_count) || 0,
       totalCost: parseFloat(r.total_cost) || 0,
+      toolsCount: parseInt(r.tools_count) || 0,
+      uniformCount: parseInt(r.uniform_count) || 0,
       expiredCount: parseInt(r.expired_count) || 0,
     }));
   }
 
-  async create(tenantId: string, dto: any) {
+  async issueToEmployee(tenantId: string, dto: any) {
     const expiresAt = dto.serviceLifeMonths
-      ? new Date(Date.now() + dto.serviceLifeMonths * 30 * 24 * 60 * 60 * 1000).toISOString()
+      ? new Date(Date.now() + dto.serviceLifeMonths * 30 * 24 * 3600000).toISOString()
       : null;
 
-    // If sourcing from warehouse, deduct stock
-    if (dto.source === 'warehouse' && dto.productId) {
+    // Deduct from storage if linked
+    if (dto.storageItemId) {
       await this.pool.query(
-        `UPDATE products SET stock = GREATEST(stock - 1, 0) WHERE id = $1 AND tenant_id = $2`,
-        [dto.productId, tenantId],
+        `UPDATE storage_items SET quantity = GREATEST(quantity - 1, 0) WHERE id = $1 AND tenant_id = $2`,
+        [dto.storageItemId, tenantId],
       );
-      // Create stock movement
-      const { rows: prodRows } = await this.pool.query(
-        'SELECT stock FROM products WHERE id = $1', [dto.productId],
-      );
-      if (prodRows.length > 0) {
-        await this.pool.query(
-          `INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id)
-           VALUES ($1, 'expense', 1, $2, $3, $4, $5)`,
-          [dto.productId, parseFloat(prodRows[0].stock) + 1, parseFloat(prodRows[0].stock), `Выдано: ${dto.name} сотруднику`, tenantId],
-        );
-      }
     }
 
     const { rows } = await this.pool.query(
-      `INSERT INTO equipment (tenant_id, user_id, name, description, photo, cost, source, product_id, service_life_months, expires_at)
+      `INSERT INTO equipment_issued (tenant_id, user_id, storage_item_id, name, description, photo, cost, category_type, service_life_months, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [tenantId, dto.userId, dto.name, dto.description, dto.photo, dto.cost || 0,
-       dto.source || 'new', dto.productId || null, dto.serviceLifeMonths || null, expiresAt],
+      [tenantId, dto.userId, dto.storageItemId || null, dto.name, dto.description,
+       dto.photo, dto.cost || 0, dto.categoryType || 'tools', dto.serviceLifeMonths || null, expiresAt],
     );
-
-    return this.mapItem(rows[0]);
+    return this.mapIssued(rows[0]);
   }
 
-  async update(id: string, tenantId: string, dto: any) {
-    const sets: string[] = [];
-    const vals: any[] = [];
-    let idx = 1;
+  async replaceItem(id: string, tenantId: string, dto: any) {
+    // Get old item
+    const { rows: oldRows } = await this.pool.query(
+      'SELECT * FROM equipment_issued WHERE id = $1 AND tenant_id = $2', [id, tenantId],
+    );
+    if (oldRows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
+    const old = oldRows[0];
 
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.description !== undefined) { sets.push(`description=$${idx++}`); vals.push(dto.description); }
-    if (dto.photo !== undefined) { sets.push(`photo=$${idx++}`); vals.push(dto.photo); }
-    if (dto.cost !== undefined) { sets.push(`cost=$${idx++}`); vals.push(dto.cost); }
-    if (dto.serviceLifeMonths !== undefined) {
-      sets.push(`service_life_months=$${idx++}`); vals.push(dto.serviceLifeMonths);
-      if (dto.serviceLifeMonths) {
-        const expiresAt = new Date(Date.now() + dto.serviceLifeMonths * 30 * 24 * 60 * 60 * 1000).toISOString();
-        sets.push(`expires_at=$${idx++}`); vals.push(expiresAt);
-      }
+    // Move old to chosen destination
+    if (dto.oldDestination === 'storage' && old.storage_item_id) {
+      // Return to storage
+      await this.pool.query(
+        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1', [old.storage_item_id],
+      );
+      await this.pool.query(
+        `UPDATE equipment_issued SET status = 'returned', return_reason = $2, trashed_at = now() WHERE id = $1`,
+        [id, dto.reason || 'Возврат на склад'],
+      );
+    } else {
+      // Trash old
+      const trashExpires = new Date(Date.now() + 7 * 24 * 3600000).toISOString();
+      await this.pool.query(
+        `UPDATE equipment_issued SET status = 'trashed', return_reason = $2, trashed_at = now(), trash_expires_at = $3 WHERE id = $1`,
+        [id, dto.reason || 'Замена', trashExpires],
+      );
     }
 
-    if (sets.length === 0) return this.getById(id, tenantId);
-
-    vals.push(id, tenantId);
-    const { rows } = await this.pool.query(
-      `UPDATE equipment SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
-      vals,
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
-    return this.mapItem(rows[0]);
-  }
-
-  async replace(id: string, tenantId: string, dto: any) {
-    // Mark old item as replaced
-    await this.pool.query(
-      `UPDATE equipment SET status = 'replaced', replaced_at = now(), return_reason = $3
-       WHERE id = $1 AND tenant_id = $2`,
-      [id, tenantId, dto.reason || 'Замена'],
-    );
-
-    // Get old item info
-    const old = await this.getById(id, tenantId);
-
-    // Create new item
-    const newItem = await this.create(tenantId, {
-      userId: old.userId,
+    // Issue new
+    return this.issueToEmployee(tenantId, {
+      userId: old.user_id,
+      storageItemId: dto.newStorageItemId || null,
       name: dto.name || old.name,
       description: dto.description || old.description,
       photo: dto.photo || old.photo,
-      cost: dto.cost ?? old.cost,
-      source: dto.source || 'new',
-      productId: dto.productId,
-      serviceLifeMonths: dto.serviceLifeMonths ?? old.serviceLifeMonths,
+      cost: dto.cost ?? parseFloat(old.cost),
+      categoryType: old.category_type,
+      serviceLifeMonths: dto.serviceLifeMonths ?? old.service_life_months,
     });
+  }
 
-    // Link old to new
+  async trashItem(id: string, tenantId: string, reason?: string) {
+    const trashExpires = new Date(Date.now() + 7 * 24 * 3600000).toISOString();
     await this.pool.query(
-      'UPDATE equipment SET replaced_by = $1 WHERE id = $2',
-      [newItem.id, id],
+      `UPDATE equipment_issued SET status = 'trashed', return_reason = $3, trashed_at = now(), trash_expires_at = $4
+       WHERE id = $1 AND tenant_id = $2`,
+      [id, tenantId, reason || 'Списание', trashExpires],
     );
-
-    return newItem;
+    return { message: 'В корзину' };
   }
 
-  async writeOff(id: string, tenantId: string, reason?: string) {
+  async restoreFromTrash(id: string, tenantId: string) {
+    await this.pool.query(
+      `UPDATE equipment_issued SET status = 'active', trashed_at = NULL, trash_expires_at = NULL, return_reason = NULL
+       WHERE id = $1 AND tenant_id = $2 AND status = 'trashed'`,
+      [id, tenantId],
+    );
+    return { message: 'Восстановлено' };
+  }
+
+  async getTrash(tenantId: string) {
     const { rows } = await this.pool.query(
-      `UPDATE equipment SET status = 'written_off', return_reason = $3, replaced_at = now()
-       WHERE id = $1 AND tenant_id = $2 RETURNING *`,
-      [id, tenantId, reason || 'Списание'],
+      `SELECT ei.*, u.full_name as user_name
+       FROM equipment_issued ei JOIN users u ON u.id = ei.user_id
+       WHERE ei.tenant_id = $1 AND ei.status = 'trashed' AND (ei.trash_expires_at IS NULL OR ei.trash_expires_at > now())
+       ORDER BY ei.trashed_at DESC LIMIT 100`,
+      [tenantId],
+    );
+    return rows.map(r => this.mapIssued(r));
+  }
+
+  async permanentDelete(id: string, tenantId: string) {
+    await this.pool.query('DELETE FROM equipment_issued WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+    return { message: 'Удалено навсегда' };
+  }
+
+  async returnToStorage(id: string, tenantId: string) {
+    const { rows } = await this.pool.query(
+      'SELECT * FROM equipment_issued WHERE id = $1 AND tenant_id = $2', [id, tenantId],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
-    return this.mapItem(rows[0]);
-  }
-
-  async returnItem(id: string, tenantId: string, reason?: string) {
-    const { rows } = await this.pool.query(
-      `UPDATE equipment SET status = 'returned', return_reason = $3, replaced_at = now()
-       WHERE id = $1 AND tenant_id = $2 RETURNING *`,
-      [id, tenantId, reason || 'Возврат'],
+    if (rows[0].storage_item_id) {
+      await this.pool.query(
+        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1', [rows[0].storage_item_id],
+      );
+    }
+    await this.pool.query(
+      `UPDATE equipment_issued SET status = 'returned', return_reason = 'Возврат на склад', trashed_at = now() WHERE id = $1`,
+      [id],
     );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
-    return this.mapItem(rows[0]);
+    return { message: 'Возвращено на склад' };
   }
 
-  async remove(id: string, tenantId: string) {
-    await this.pool.query('DELETE FROM equipment WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
-    return { message: 'Удалено' };
+  // My equipment (for masters)
+  async getMyEquipment(tenantId: string, userId: string) {
+    return this.getIssuedByUser(tenantId, userId, false);
+  }
+
+  private mapIssued(r: any) {
+    return {
+      id: r.id, userId: r.user_id, userName: r.user_name || null, userAvatar: r.user_avatar || null,
+      storageItemId: r.storage_item_id, name: r.name, description: r.description,
+      photo: r.photo, cost: parseFloat(r.cost) || 0, categoryType: r.category_type,
+      issuedAt: r.issued_at, serviceLifeMonths: r.service_life_months,
+      expiresAt: r.expires_at, status: r.status,
+      trashedAt: r.trashed_at, trashExpiresAt: r.trash_expires_at,
+      returnReason: r.return_reason, replacedBy: r.replaced_by,
+    };
   }
 }

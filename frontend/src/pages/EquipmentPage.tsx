@@ -1,378 +1,469 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Wrench, Plus, Package, User, Calendar, AlertTriangle, RefreshCw,
-  Trash2, ChevronRight, ChevronDown, X, Search, Archive, Clock, CheckCircle,
+  Package, Plus, Users, Warehouse, Trash2, RefreshCw, ArrowLeft,
+  Search, ChevronRight, Clock, AlertTriangle, FolderPlus, X,
+  Wrench, Shirt, RotateCcw, Archive, Image as ImageIcon, Eye,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { equipmentApi, productsApi, usersApi, uploadsApi } from '../api/services';
+import { equipmentApi, usersApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import { formatMoney } from '../../../shared/utils/formatters';
-import type { Product, User as UserType } from '../types';
+import type { User as UserType } from '../types';
 
-const STATUS_MAP: Record<string, { label: string; color: string; bg: string }> = {
-  active: { label: 'Активно', color: 'text-green-700', bg: 'bg-green-50' },
-  replaced: { label: 'Заменено', color: 'text-blue-700', bg: 'bg-blue-50' },
-  returned: { label: 'Возвращено', color: 'text-gray-700', bg: 'bg-gray-100' },
-  written_off: { label: 'Списано', color: 'text-red-700', bg: 'bg-red-50' },
-};
+type Tab = 'employees' | 'storage' | 'trash';
+const CATEGORY_TYPES = [
+  { key: 'tools', label: 'Инструменты', icon: Wrench, color: 'text-blue-600', bg: 'bg-blue-50' },
+  { key: 'uniform', label: 'Форма', icon: Shirt, color: 'text-purple-600', bg: 'bg-purple-50' },
+  { key: 'other', label: 'Прочее', icon: Package, color: 'text-gray-600', bg: 'bg-gray-100' },
+];
 
-export default function EquipmentPage() {
-  const { hasPermission, isRole } = useAuth();
-  const queryClient = useQueryClient();
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editItem, setEditItem] = useState<any>(null);
-  const [expandedUser, setExpandedUser] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-
-  const canEdit = isRole('director' as any, 'admin' as any, 'superadmin' as any);
-
-  const { data: summary = [] } = useQuery({
-    queryKey: ['equipment-summary'],
-    queryFn: async () => { const res = await equipmentApi.getSummary(); return res.data; },
-  });
-
-  const { data: items = [], isLoading } = useQuery({
-    queryKey: ['equipment', selectedUserId],
-    queryFn: async () => {
-      const params: any = { status: 'active' };
-      if (selectedUserId) params.userId = selectedUserId;
-      const res = await equipmentApi.getAll(params);
-      return res.data;
-    },
-  });
-
-  const { data: allItems = [] } = useQuery({
-    queryKey: ['equipment-all', expandedUser],
-    queryFn: async () => {
-      if (!expandedUser) return [];
-      const res = await equipmentApi.getAll({ userId: expandedUser });
-      return res.data;
-    },
-    enabled: !!expandedUser,
-  });
-
-  const { data: masters = [] } = useQuery({
-    queryKey: ['users-masters'],
-    queryFn: async () => { const res = await usersApi.getAll(); return (res.data as UserType[]).filter(u => u.isActive && (u.role === 'master' || u.role === 'admin')); },
-    staleTime: 60_000,
-  });
-
-  const { data: products = [] } = useQuery({
-    queryKey: ['products-for-equipment'],
-    queryFn: async () => { const res = await productsApi.getAll({ limit: 500 }); return (res.data as any)?.data || res.data || []; },
-    staleTime: 60_000,
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (data: any) => equipmentApi.create(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['equipment'] }); queryClient.invalidateQueries({ queryKey: ['equipment-summary'] }); toast.success('Имущество выдано'); setShowCreateModal(false); },
-    onError: () => toast.error('Ошибка'),
-  });
-
-  const writeOffMutation = useMutation({
-    mutationFn: (id: string) => equipmentApi.writeOff(id, 'Списание'),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['equipment'] }); queryClient.invalidateQueries({ queryKey: ['equipment-summary'] }); toast.success('Списано'); },
-  });
-
-  const replaceMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => equipmentApi.replace(id, data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['equipment'] }); queryClient.invalidateQueries({ queryKey: ['equipment-summary'] }); toast.success('Заменено'); },
-  });
-
-  const totalCost = summary.reduce((s: number, u: any) => s + u.totalCost, 0);
-  const totalActive = summary.reduce((s: number, u: any) => s + u.activeCount, 0);
-  const totalExpired = summary.reduce((s: number, u: any) => s + u.expiredCount, 0);
-
-  const filteredSummary = search
-    ? summary.filter((u: any) => u.fullName.toLowerCase().includes(search.toLowerCase()))
-    : summary;
-
+// ─── Photo Viewer Modal ─────────────────────────────────────────────
+function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Имущество</h1>
-          <p className="text-xs text-gray-400 mt-0.5">Учёт выданного оборудования и инструментов</p>
-        </div>
-        {canEdit && (
-          <button onClick={() => setShowCreateModal(true)} className="btn-primary text-sm">
-            <Plus className="h-4 w-4" />Выдать
-          </button>
-        )}
-      </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={onClose}>
+      <button onClick={onClose} className="absolute top-4 right-4 p-2 rounded-full bg-white/20 text-white hover:bg-white/40"><X className="h-6 w-6" /></button>
+      <img src={url} alt="" className="max-w-[90vw] max-h-[85vh] rounded-xl object-contain" onClick={e => e.stopPropagation()} />
+    </div>
+  );
+}
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
-          <Package className="h-5 w-5 text-primary-500 mx-auto mb-1" />
-          <p className="text-lg font-bold text-gray-900">{totalActive}</p>
-          <p className="text-[10px] text-gray-400">Активных</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
-          <Wrench className="h-5 w-5 text-green-500 mx-auto mb-1" />
-          <p className="text-lg font-bold text-green-600">{formatMoney(totalCost)}</p>
-          <p className="text-[10px] text-gray-400">Общая стоимость</p>
-        </div>
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
-          <AlertTriangle className="h-5 w-5 text-orange-500 mx-auto mb-1" />
-          <p className="text-lg font-bold text-orange-600">{totalExpired}</p>
-          <p className="text-[10px] text-gray-400">Истёк срок</p>
-        </div>
-      </div>
+// ─── Employee Detail Page ───────────────────────────────────────────
+function EmployeeDetail({ userId, userName, userAvatar, onBack, canEdit }: {
+  userId: string; userName: string; userAvatar?: string; onBack: () => void; canEdit: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [showIssue, setShowIssue] = useState(false);
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Поиск сотрудника..."
-          className="input pl-9"
-        />
-      </div>
+  const { data: items = [] } = useQuery({
+    queryKey: ['equipment-user', userId],
+    queryFn: async () => { const res = await equipmentApi.getByUser(userId, true); return res.data; },
+  });
 
-      {/* Employee cards */}
-      <div className="space-y-3">
-        {filteredSummary.map((emp: any) => {
-          const isExpanded = expandedUser === emp.userId;
-          const empItems = isExpanded ? allItems : [];
+  const { data: storageItems = [] } = useQuery({
+    queryKey: ['equipment-storage-all'],
+    queryFn: async () => { const res = await equipmentApi.getStorageItems(); return res.data; },
+    enabled: showIssue,
+  });
+
+  const issueMutation = useMutation({
+    mutationFn: (data: any) => equipmentApi.issue(data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['equipment'] }); toast.success('Выдано'); setShowIssue(false); },
+  });
+
+  const trashMutation = useMutation({
+    mutationFn: (id: string) => equipmentApi.trash(id, 'Списание'),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['equipment'] }); toast.success('В корзину'); },
+  });
+
+  const returnMutation = useMutation({
+    mutationFn: (id: string) => equipmentApi.returnToStorage(id),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['equipment'] }); toast.success('Возвращено на склад'); },
+  });
+
+  const activeItems = items.filter((i: any) => i.status === 'active');
+  const tools = activeItems.filter((i: any) => i.categoryType === 'tools');
+  const uniforms = activeItems.filter((i: any) => i.categoryType === 'uniform');
+  const other = activeItems.filter((i: any) => i.categoryType === 'other');
+  const totalCost = activeItems.reduce((s: number, i: any) => s + i.cost, 0);
+  const initials = userName?.split(' ').map((w: string) => w[0]).join('').slice(0, 2) || '?';
+
+  const renderSection = (title: string, icon: any, items: any[], color: string) => {
+    const Icon = icon;
+    if (items.length === 0) return null;
+    return (
+      <div className="space-y-2" key={title}>
+        <div className="flex items-center gap-2">
+          <Icon className={`h-4 w-4 ${color}`} />
+          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+          <span className="text-xs text-gray-400">{items.length}</span>
+        </div>
+        {items.map((item: any) => {
+          const expired = item.expiresAt && new Date(item.expiresAt) < new Date();
           return (
-            <div key={emp.userId} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <button
-                onClick={() => setExpandedUser(isExpanded ? null : emp.userId)}
-                className="w-full flex items-center gap-4 px-5 py-4 hover:bg-gray-50 transition-colors text-left"
-              >
-                {emp.avatar ? (
-                  <img src={emp.avatar} alt="" className="h-11 w-11 rounded-full object-cover border-2 border-gray-100" />
-                ) : (
-                  <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-100 text-primary-700 font-bold text-sm">
-                    {emp.fullName?.charAt(0) || '?'}
+            <div key={item.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm">
+              {item.photo ? (
+                <button onClick={() => setPhotoUrl(item.photo)} className="flex-shrink-0 group relative">
+                  <img src={item.photo} alt="" className="h-14 w-14 rounded-lg object-cover" />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-lg flex items-center justify-center transition-all">
+                    <Eye className="h-4 w-4 text-white opacity-0 group-hover:opacity-100" />
                   </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{emp.fullName}</p>
-                  <div className="flex items-center gap-3 mt-0.5">
-                    <span className="text-xs text-gray-500">{emp.activeCount} предметов</span>
-                    <span className="text-xs font-semibold text-primary-600">{formatMoney(emp.totalCost)}</span>
-                    {emp.expiredCount > 0 && (
-                      <span className="text-[10px] font-medium text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded-full">
-                        {emp.expiredCount} истёк срок
-                      </span>
-                    )}
-                  </div>
+                </button>
+              ) : (
+                <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0">
+                  <Package className="h-6 w-6 text-gray-200" />
                 </div>
-                <ChevronDown className={`h-5 w-5 text-gray-300 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-              </button>
-
-              {isExpanded && (
-                <div className="border-t border-gray-100 px-5 py-3 space-y-2">
-                  {empItems.length === 0 ? (
-                    <p className="text-sm text-gray-400 text-center py-4">Нет выданного имущества</p>
-                  ) : (
-                    empItems.map((item: any) => {
-                      const st = STATUS_MAP[item.status] || STATUS_MAP.active;
-                      const isExpiredDate = item.expiresAt && new Date(item.expiresAt) < new Date();
-                      return (
-                        <div key={item.id} className={`flex items-center gap-3 p-3 rounded-xl ${item.status === 'active' ? 'bg-gray-50' : 'bg-gray-50/50 opacity-60'}`}>
-                          {item.photo ? (
-                            <img src={item.photo} alt="" className="h-12 w-12 rounded-lg object-cover flex-shrink-0" />
-                          ) : (
-                            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-100 flex-shrink-0">
-                              <Package className="h-5 w-5 text-gray-300" />
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-xs font-semibold text-gray-700">{formatMoney(item.cost)}</span>
-                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${st.bg} ${st.color}`}>{st.label}</span>
-                              {isExpiredDate && item.status === 'active' && (
-                                <span className="text-[10px] font-medium text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded-full">Истёк срок</span>
-                              )}
-                            </div>
-                            {item.serviceLifeMonths && (
-                              <p className="text-[10px] text-gray-400 mt-0.5">
-                                <Clock className="inline h-3 w-3 mr-0.5" />
-                                Срок: {item.serviceLifeMonths} мес.
-                              </p>
-                            )}
-                          </div>
-                          {canEdit && item.status === 'active' && (
-                            <div className="flex gap-1 flex-shrink-0">
-                              <button
-                                onClick={() => replaceMutation.mutate({ id: item.id, data: { reason: 'Замена' } })}
-                                className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500"
-                                title="Заменить"
-                              >
-                                <RefreshCw className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                onClick={() => writeOffMutation.mutate(item.id)}
-                                className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"
-                                title="Списать"
-                              >
-                                <Archive className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
-                  )}
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900 truncate">{item.name}</p>
+                <p className="text-xs font-medium text-primary-600">{formatMoney(item.cost)}</p>
+                {item.serviceLifeMonths && (
+                  <p className={`text-[10px] mt-0.5 ${expired ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>
+                    <Clock className="inline h-3 w-3 mr-0.5" />
+                    {expired ? 'Истёк срок' : `${item.serviceLifeMonths} мес.`}
+                  </p>
+                )}
+              </div>
+              {canEdit && (
+                <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={() => returnMutation.mutate(item.id)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-400" title="На склад">
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => trashMutation.mutate(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400" title="Списать">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
             </div>
           );
         })}
       </div>
+    );
+  };
 
-      {/* Create modal */}
-      {showCreateModal && (
-        <CreateEquipmentModal
-          masters={masters}
-          products={products as Product[]}
-          onClose={() => setShowCreateModal(false)}
-          onSave={(data: any) => createMutation.mutate(data)}
-          saving={createMutation.isPending}
-        />
+  return (
+    <div className="space-y-5">
+      <button onClick={onBack} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700">
+        <ArrowLeft className="h-4 w-4" />Назад
+      </button>
+
+      {/* Employee header */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+        <div className="flex items-center gap-4">
+          {userAvatar ? (
+            <img src={userAvatar} alt="" className="h-16 w-16 rounded-full object-cover border-2 border-gray-100" />
+          ) : (
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary-100 text-primary-700 font-bold text-xl">{initials}</div>
+          )}
+          <div className="flex-1">
+            <h2 className="text-lg font-bold text-gray-900">{userName}</h2>
+            <div className="flex items-center gap-4 mt-1">
+              <span className="text-sm text-gray-500">{activeItems.length} предметов</span>
+              <span className="text-sm font-bold text-primary-600">{formatMoney(totalCost)}</span>
+            </div>
+          </div>
+          {canEdit && (
+            <button onClick={() => setShowIssue(true)} className="btn-primary text-sm">
+              <Plus className="h-4 w-4" />Выдать
+            </button>
+          )}
+        </div>
+      </div>
+
+      {activeItems.length === 0 ? (
+        <div className="text-center py-12">
+          <Package className="h-10 w-10 text-gray-200 mx-auto mb-3" />
+          <p className="text-sm text-gray-400">Нет выданного имущества</p>
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {renderSection('Инструменты', Wrench, tools, 'text-blue-600')}
+          {renderSection('Форма', Shirt, uniforms, 'text-purple-600')}
+          {renderSection('Прочее', Package, other, 'text-gray-600')}
+        </div>
       )}
+
+      {showIssue && <IssueModal userId={userId} storageItems={storageItems} onClose={() => setShowIssue(false)} onSave={(d: any) => issueMutation.mutate(d)} saving={issueMutation.isPending} />}
+      {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
     </div>
   );
 }
 
-function CreateEquipmentModal({ masters, products, onClose, onSave, saving }: {
-  masters: UserType[];
-  products: Product[];
-  onClose: () => void;
-  onSave: (data: any) => void;
-  saving: boolean;
-}) {
-  const [userId, setUserId] = useState('');
+// ─── Issue Modal ────────────────────────────────────────────────────
+function IssueModal({ userId, storageItems, onClose, onSave, saving }: any) {
+  const [source, setSource] = useState<'storage' | 'new'>('storage');
+  const [storageItemId, setStorageItemId] = useState('');
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
   const [cost, setCost] = useState('');
-  const [source, setSource] = useState<'new' | 'warehouse'>('new');
-  const [productId, setProductId] = useState('');
-  const [serviceLifeMonths, setServiceLifeMonths] = useState('');
+  const [categoryType, setCategoryType] = useState('tools');
+  const [serviceLife, setServiceLife] = useState('');
   const [photo, setPhoto] = useState('');
   const [uploading, setUploading] = useState(false);
 
-  const handlePhotoUpload = async (file: File) => {
-    setUploading(true);
-    try {
-      const res = await uploadsApi.upload(file);
-      setPhoto(res.data.url);
-    } catch { }
-    setUploading(false);
-  };
-
-  const handleProductSelect = (pid: string) => {
-    setProductId(pid);
-    const p = products.find(pr => pr.id === pid);
-    if (p) {
-      setName(p.name);
-      setCost(String(p.costPrice || p.sellPrice || 0));
-      if (p.photo) setPhoto(p.photo);
-    }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!userId) { toast.error('Выберите сотрудника'); return; }
-    if (!name.trim()) { toast.error('Укажите название'); return; }
-    onSave({
-      userId, name: name.trim(), description: description.trim() || undefined,
-      cost: parseFloat(cost) || 0, source,
-      productId: source === 'warehouse' ? productId : undefined,
-      serviceLifeMonths: parseInt(serviceLifeMonths) || undefined,
-      photo: photo || undefined,
-    });
+  const handleStorageSelect = (id: string) => {
+    setStorageItemId(id);
+    const item = storageItems.find((s: any) => s.id === id);
+    if (item) { setName(item.name); setCost(String(item.purchasePrice)); if (item.photo) setPhoto(item.photo); if (item.serviceLifeMonths) setServiceLife(String(item.serviceLifeMonths)); }
   };
 
   return (
     <Modal isOpen onClose={onClose} title="Выдать имущество" size="lg">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {/* Employee */}
-        <div>
-          <label className="label">Сотрудник</label>
-          <select value={userId} onChange={e => setUserId(e.target.value)} className="input">
-            <option value="">Выберите</option>
-            {masters.map(m => <option key={m.id} value={m.id}>{m.fullName}</option>)}
+      <div className="space-y-4">
+        <div className="flex gap-2">
+          {[{ k: 'storage', l: 'Со склада' }, { k: 'new', l: 'Новый' }].map(s => (
+            <button key={s.k} type="button" onClick={() => setSource(s.k as any)}
+              className={`flex-1 py-2 rounded-lg text-sm font-medium ${source === s.k ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-50 text-gray-500'}`}>{s.l}</button>
+          ))}
+        </div>
+
+        {source === 'storage' && (
+          <select value={storageItemId} onChange={e => handleStorageSelect(e.target.value)} className="input">
+            <option value="">Выберите со склада</option>
+            {storageItems.filter((s: any) => s.quantity > 0).map((s: any) => (
+              <option key={s.id} value={s.id}>{s.name} — {formatMoney(s.purchasePrice)} (ост: {s.quantity})</option>
+            ))}
           </select>
-        </div>
-
-        {/* Source */}
-        <div>
-          <label className="label">Источник</label>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setSource('new')}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${source === 'new' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-50 text-gray-500 border border-gray-200'}`}>
-              Новый
-            </button>
-            <button type="button" onClick={() => setSource('warehouse')}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all ${source === 'warehouse' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-50 text-gray-500 border border-gray-200'}`}>
-              Со склада
-            </button>
-          </div>
-        </div>
-
-        {/* From warehouse — product picker */}
-        {source === 'warehouse' && (
-          <div>
-            <label className="label">Товар со склада</label>
-            <select value={productId} onChange={e => handleProductSelect(e.target.value)} className="input">
-              <option value="">Выберите товар</option>
-              {products.filter(p => p.stock > 0).map(p => (
-                <option key={p.id} value={p.id}>{p.name} — {formatMoney(p.costPrice)} (ост: {p.stock})</option>
-              ))}
-            </select>
-          </div>
         )}
 
-        {/* Name + Cost */}
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label">Название</label>
-            <input value={name} onChange={e => setName(e.target.value)} className="input" placeholder="Набор инструментов" />
-          </div>
-          <div>
-            <label className="label">Стоимость, ₽</label>
-            <input value={cost} onChange={e => setCost(e.target.value)} className="input" placeholder="0" type="number" />
-          </div>
+          <div><label className="label">Название</label><input value={name} onChange={e => setName(e.target.value)} className="input" /></div>
+          <div><label className="label">Стоимость ₽</label><input value={cost} onChange={e => setCost(e.target.value)} className="input" type="number" /></div>
         </div>
 
-        {/* Description */}
-        <div>
-          <label className="label">Описание</label>
-          <input value={description} onChange={e => setDescription(e.target.value)} className="input" placeholder="Необязательно" />
-        </div>
-
-        {/* Service life */}
-        <div>
-          <label className="label">Срок службы (мес.)</label>
-          <input value={serviceLifeMonths} onChange={e => setServiceLifeMonths(e.target.value)} className="input" placeholder="12" type="number" />
-        </div>
-
-        {/* Photo */}
-        <div>
-          <label className="label">Фото</label>
-          <div className="flex items-center gap-3">
-            {photo && <img src={photo} alt="" className="h-16 w-16 rounded-lg object-cover" />}
-            <label className="btn-secondary text-xs cursor-pointer">
-              {uploading ? 'Загрузка...' : 'Загрузить фото'}
-              <input type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handlePhotoUpload(f); }} />
-            </label>
+        <div><label className="label">Категория</label>
+          <div className="flex gap-2">
+            {CATEGORY_TYPES.map(ct => (
+              <button key={ct.key} type="button" onClick={() => setCategoryType(ct.key)}
+                className={`flex-1 py-2 rounded-lg text-xs font-medium ${categoryType === ct.key ? `${ct.bg} ${ct.color} border border-current/20` : 'bg-gray-50 text-gray-400'}`}>{ct.label}</button>
+            ))}
           </div>
         </div>
 
-        <button type="submit" disabled={saving} className="btn-primary w-full">
-          {saving ? 'Сохранение...' : 'Выдать имущество'}
-        </button>
-      </form>
+        <div><label className="label">Срок службы (мес.)</label><input value={serviceLife} onChange={e => setServiceLife(e.target.value)} className="input" type="number" placeholder="12" /></div>
+
+        <div className="flex items-center gap-3">
+          {photo && <img src={photo} className="h-14 w-14 rounded-lg object-cover" />}
+          <label className="btn-secondary text-xs cursor-pointer">
+            {uploading ? '...' : 'Фото'}
+            <input type="file" accept="image/*" className="hidden" onChange={async e => {
+              const f = e.target.files?.[0]; if (!f) return;
+              setUploading(true); try { const r = await uploadsApi.upload(f); setPhoto(r.data.url); } catch {} setUploading(false);
+            }} />
+          </label>
+        </div>
+
+        <button onClick={() => {
+          if (!name.trim()) { toast.error('Укажите название'); return; }
+          onSave({ userId, name: name.trim(), cost: parseFloat(cost) || 0, categoryType, storageItemId: source === 'storage' ? storageItemId : undefined, serviceLifeMonths: parseInt(serviceLife) || undefined, photo: photo || undefined });
+        }} disabled={saving} className="btn-primary w-full">{saving ? 'Сохранение...' : 'Выдать'}</button>
+      </div>
     </Modal>
+  );
+}
+
+// ─── Storage Room Tab ───────────────────────────────────────────────
+function StorageTab() {
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [catName, setCatName] = useState('');
+  const [selectedCat, setSelectedCat] = useState<string | null>(null);
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+
+  const { data: categories = [] } = useQuery({ queryKey: ['eq-categories'], queryFn: async () => (await equipmentApi.getCategories()).data });
+  const { data: items = [] } = useQuery({ queryKey: ['eq-storage', selectedCat, search], queryFn: async () => (await equipmentApi.getStorageItems({ categoryId: selectedCat || undefined, search: search || undefined })).data });
+
+  const createCatMut = useMutation({ mutationFn: (name: string) => equipmentApi.createCategory({ name }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq-categories'] }); setCatName(''); } });
+  const removeCatMut = useMutation({ mutationFn: (id: string) => equipmentApi.removeCategory(id), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq-categories'] }); setSelectedCat(null); } });
+  const createItemMut = useMutation({ mutationFn: (data: any) => equipmentApi.createStorageItem(data), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq-storage'] }); setShowCreate(false); toast.success('Добавлено'); } });
+  const removeItemMut = useMutation({ mutationFn: (id: string) => equipmentApi.removeStorageItem(id), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq-storage'] }); toast.success('Удалено'); } });
+
+  return (
+    <div className="space-y-4">
+      {/* Categories */}
+      <div className="flex gap-2 flex-wrap">
+        <button onClick={() => setSelectedCat(null)} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${!selectedCat ? 'bg-primary-50 text-primary-700' : 'bg-gray-50 text-gray-500'}`}>Все</button>
+        {categories.map((c: any) => (
+          <button key={c.id} onClick={() => setSelectedCat(c.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 ${selectedCat === c.id ? 'bg-primary-50 text-primary-700' : 'bg-gray-50 text-gray-500'}`}>
+            {c.name}
+            {selectedCat === c.id && <X className="h-3 w-3 ml-1 hover:text-red-500" onClick={e => { e.stopPropagation(); removeCatMut.mutate(c.id); }} />}
+          </button>
+        ))}
+        <div className="flex items-center gap-1">
+          <input value={catName} onChange={e => setCatName(e.target.value)} placeholder="Новая папка" className="input text-xs py-1 px-2 w-28" onKeyDown={e => { if (e.key === 'Enter' && catName.trim()) createCatMut.mutate(catName.trim()); }} />
+          {catName && <button onClick={() => createCatMut.mutate(catName.trim())} className="p-1 rounded bg-primary-50 text-primary-600"><FolderPlus className="h-4 w-4" /></button>}
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск..." className="input pl-9" /></div>
+        <button onClick={() => setShowCreate(true)} className="btn-primary text-sm"><Plus className="h-4 w-4" /></button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="text-center py-12"><Warehouse className="h-10 w-10 text-gray-200 mx-auto mb-3" /><p className="text-sm text-gray-400">Подсобка пуста</p></div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {items.map((item: any) => (
+            <div key={item.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm">
+              {item.photo ? (
+                <button onClick={() => setPhotoUrl(item.photo)} className="flex-shrink-0"><img src={item.photo} className="h-12 w-12 rounded-lg object-cover" /></button>
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0"><Package className="h-5 w-5 text-gray-200" /></div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
+                <div className="flex gap-2 text-xs mt-0.5">
+                  <span className="text-primary-600 font-semibold">{formatMoney(item.purchasePrice)}</span>
+                  <span className="text-gray-400">×{item.quantity} {item.unit}</span>
+                </div>
+              </div>
+              <button onClick={() => removeItemMut.mutate(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showCreate && <CreateStorageItemModal categoryId={selectedCat} onClose={() => setShowCreate(false)} onSave={(d: any) => createItemMut.mutate(d)} saving={createItemMut.isPending} />}
+      {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
+    </div>
+  );
+}
+
+function CreateStorageItemModal({ categoryId, onClose, onSave, saving }: any) {
+  const [name, setName] = useState('');
+  const [price, setPrice] = useState('');
+  const [qty, setQty] = useState('1');
+  const [serviceLife, setServiceLife] = useState('');
+  const [photo, setPhoto] = useState('');
+  const [uploading, setUploading] = useState(false);
+
+  return (
+    <Modal isOpen onClose={onClose} title="Добавить на склад" size="md">
+      <div className="space-y-3">
+        <div><label className="label">Название</label><input value={name} onChange={e => setName(e.target.value)} className="input" /></div>
+        <div className="grid grid-cols-3 gap-2">
+          <div><label className="label">Цена ₽</label><input value={price} onChange={e => setPrice(e.target.value)} className="input" type="number" /></div>
+          <div><label className="label">Кол-во</label><input value={qty} onChange={e => setQty(e.target.value)} className="input" type="number" /></div>
+          <div><label className="label">Срок мес.</label><input value={serviceLife} onChange={e => setServiceLife(e.target.value)} className="input" type="number" /></div>
+        </div>
+        <div className="flex items-center gap-3">
+          {photo && <img src={photo} className="h-12 w-12 rounded-lg object-cover" />}
+          <label className="btn-secondary text-xs cursor-pointer">{uploading ? '...' : 'Фото'}
+            <input type="file" accept="image/*" className="hidden" onChange={async e => { const f = e.target.files?.[0]; if (!f) return; setUploading(true); try { const r = await uploadsApi.upload(f); setPhoto(r.data.url); } catch {} setUploading(false); }} />
+          </label>
+        </div>
+        <button onClick={() => { if (!name.trim()) return; onSave({ name: name.trim(), purchasePrice: parseFloat(price) || 0, quantity: parseInt(qty) || 1, categoryId, serviceLifeMonths: parseInt(serviceLife) || undefined, photo: photo || undefined }); }} disabled={saving} className="btn-primary w-full">{saving ? '...' : 'Добавить'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Trash Tab ──────────────────────────────────────────────────────
+function TrashTab() {
+  const queryClient = useQueryClient();
+  const { data: trashItems = [] } = useQuery({ queryKey: ['eq-trash'], queryFn: async () => (await equipmentApi.getTrash()).data });
+  const restoreMut = useMutation({ mutationFn: (id: string) => equipmentApi.restore(id), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq'] }); toast.success('Восстановлено'); } });
+  const deleteMut = useMutation({ mutationFn: (id: string) => equipmentApi.remove(id), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq'] }); toast.success('Удалено навсегда'); } });
+
+  return trashItems.length === 0 ? (
+    <div className="text-center py-12"><Trash2 className="h-10 w-10 text-gray-200 mx-auto mb-3" /><p className="text-sm text-gray-400">Корзина пуста</p></div>
+  ) : (
+    <div className="space-y-2">
+      <p className="text-xs text-gray-400">Автоудаление через 7 дней</p>
+      {trashItems.map((item: any) => {
+        const daysLeft = item.trashExpiresAt ? Math.max(0, Math.ceil((new Date(item.trashExpiresAt).getTime() - Date.now()) / 86400000)) : '?';
+        return (
+          <div key={item.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 opacity-70">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
+              <p className="text-xs text-gray-400">{item.userName} · {formatMoney(item.cost)} · {daysLeft}д</p>
+            </div>
+            <button onClick={() => restoreMut.mutate(item.id)} className="p-1.5 rounded-lg hover:bg-green-50 text-green-500" title="Восстановить"><RotateCcw className="h-4 w-4" /></button>
+            <button onClick={() => deleteMut.mutate(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-400" title="Удалить навсегда"><X className="h-4 w-4" /></button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Main Page ──────────────────────────────────────────────────────
+export default function EquipmentPage() {
+  const { user, isRole } = useAuth();
+  const [tab, setTab] = useState<Tab>('employees');
+  const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
+  const canEdit = isRole('director' as any, 'admin' as any, 'superadmin' as any);
+  const isMaster = user?.role === 'master';
+
+  const { data: summary = [] } = useQuery({
+    queryKey: ['equipment-summary'],
+    queryFn: async () => { const res = await equipmentApi.getSummary(); return res.data; },
+    enabled: !isMaster,
+  });
+
+  const { data: myEquipment } = useQuery({
+    queryKey: ['equipment-my'],
+    queryFn: async () => { const res = await equipmentApi.getMyEquipment(); return res.data; },
+    enabled: isMaster,
+  });
+
+  // Master view — only their own equipment
+  if (isMaster) {
+    const items = myEquipment || [];
+    const total = items.reduce((s: number, i: any) => s + i.cost, 0);
+    return (
+      <div className="space-y-5">
+        <div><h1 className="text-xl font-bold text-gray-900">Моё имущество</h1><p className="text-xs text-gray-400">{items.length} предметов на {formatMoney(total)}</p></div>
+        {items.length === 0 ? (
+          <div className="text-center py-12"><Package className="h-10 w-10 text-gray-200 mx-auto mb-3" /><p className="text-sm text-gray-400">Нет выданного имущества</p></div>
+        ) : items.map((item: any) => (
+          <div key={item.id} className="flex items-center gap-3 p-4 bg-white rounded-xl border border-gray-100 shadow-sm">
+            {item.photo ? <img src={item.photo} className="h-14 w-14 rounded-lg object-cover" /> : <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50"><Package className="h-6 w-6 text-gray-200" /></div>}
+            <div className="flex-1"><p className="text-sm font-semibold text-gray-900">{item.name}</p><p className="text-xs text-primary-600 font-medium">{formatMoney(item.cost)}</p></div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Employee detail view
+  if (selectedEmployee) {
+    return <EmployeeDetail userId={selectedEmployee.userId} userName={selectedEmployee.fullName} userAvatar={selectedEmployee.avatar} onBack={() => setSelectedEmployee(null)} canEdit={canEdit} />;
+  }
+
+  const tabs: { key: Tab; label: string; icon: typeof Users }[] = [
+    { key: 'employees', label: 'Сотрудники', icon: Users },
+    { key: 'storage', label: 'Подсобка', icon: Warehouse },
+    { key: 'trash', label: 'Корзина', icon: Trash2 },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <h1 className="text-xl font-bold text-gray-900">Имущество</h1>
+
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all ${tab === t.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>
+            <t.icon className="h-4 w-4" />{t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'employees' && (
+        <div className="space-y-3">
+          {summary.map((emp: any) => (
+            <button key={emp.userId} onClick={() => setSelectedEmployee(emp)}
+              className="w-full flex items-center gap-4 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm hover:border-primary-200 hover:shadow-md transition-all text-left">
+              {emp.avatar ? (
+                <img src={emp.avatar} alt="" className="h-12 w-12 rounded-full object-cover border-2 border-gray-100" />
+              ) : (
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 text-primary-700 font-bold">{emp.fullName?.charAt(0)}</div>
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900">{emp.fullName}</p>
+                <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                  {emp.toolsCount > 0 && <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full"><Wrench className="inline h-3 w-3 mr-0.5" />{emp.toolsCount}</span>}
+                  {emp.uniformCount > 0 && <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full"><Shirt className="inline h-3 w-3 mr-0.5" />{emp.uniformCount}</span>}
+                  {emp.expiredCount > 0 && <span className="text-[10px] text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded-full"><AlertTriangle className="inline h-3 w-3 mr-0.5" />{emp.expiredCount}</span>}
+                </div>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="text-sm font-bold text-primary-600">{formatMoney(emp.totalCost)}</p>
+                <p className="text-[10px] text-gray-400">{emp.activeCount} предм.</p>
+              </div>
+              <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {tab === 'storage' && <StorageTab />}
+      {tab === 'trash' && <TrashTab />}
+    </div>
   );
 }

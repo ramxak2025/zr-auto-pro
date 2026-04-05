@@ -260,23 +260,27 @@ export function createCallsApi(api: AxiosInstance) {
 
 export function createEquipmentApi(api: AxiosInstance) {
   return {
-    getAll: (params?: { userId?: string; status?: string }) =>
-      api.get<any[]>('/equipment', { params }),
-    getSummary: () =>
-      api.get<any[]>('/equipment/summary'),
-    getById: (id: string) =>
-      api.get<any>(`/equipment/${id}`),
-    create: (data: any) =>
-      api.post<any>('/equipment', data),
-    update: (id: string, data: any) =>
-      api.patch<any>(`/equipment/${id}`, data),
-    replace: (id: string, data: any) =>
-      api.post<any>(`/equipment/${id}/replace`, data),
-    writeOff: (id: string, reason?: string) =>
-      api.post(`/equipment/${id}/write-off`, { reason }),
-    returnItem: (id: string, reason?: string) =>
-      api.post(`/equipment/${id}/return`, { reason }),
-    remove: (id: string) =>
-      api.delete(`/equipment/${id}`),
+    // Storage room
+    getCategories: () => api.get<any[]>('/equipment/categories'),
+    createCategory: (data: any) => api.post('/equipment/categories', data),
+    removeCategory: (id: string) => api.delete(`/equipment/categories/${id}`),
+    getStorageItems: (params?: any) => api.get<any[]>('/equipment/storage', { params }),
+    createStorageItem: (data: any) => api.post('/equipment/storage', data),
+    updateStorageItem: (id: string, data: any) => api.patch(`/equipment/storage/${id}`, data),
+    removeStorageItem: (id: string) => api.delete(`/equipment/storage/${id}`),
+    // Employees
+    getSummary: () => api.get<any[]>('/equipment/summary'),
+    getByUser: (userId: string, includeInactive?: boolean) =>
+      api.get<any[]>(`/equipment/user/${userId}`, { params: includeInactive ? { includeInactive: 'true' } : {} }),
+    getMyEquipment: () => api.get<any[]>('/equipment/my'),
+    // Actions
+    issue: (data: any) => api.post('/equipment/issue', data),
+    replace: (id: string, data: any) => api.post(`/equipment/${id}/replace`, data),
+    trash: (id: string, reason?: string) => api.post(`/equipment/${id}/trash`, { reason }),
+    restore: (id: string) => api.post(`/equipment/${id}/restore`),
+    returnToStorage: (id: string) => api.post(`/equipment/${id}/return-storage`),
+    remove: (id: string) => api.delete(`/equipment/${id}`),
+    // Trash
+    getTrash: () => api.get<any[]>('/equipment/trash'),
   };
 }
