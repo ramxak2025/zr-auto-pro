@@ -125,9 +125,6 @@ export default function SchedulePage() {
   const todayStatuses = todayData ?? [];
   const users = usersData ?? [];
 
-  // Local overrides for instant UI updates
-  const [localOverrides, setLocalOverrides] = useState<Record<string, ScheduleEntry>>({});
-
   // Days of the current month
   const monthDays = useMemo(() => {
     try {
@@ -137,9 +134,10 @@ export default function SchedulePage() {
     }
   }, [dateFrom, dateTo]);
 
-  // Build user -> date -> entry map (with local overrides for instant UI)
-  // Using a function instead of useMemo to ensure fresh computation on every render
-  const buildEntryMap = () => {
+  const scheduleQueryKey = ['schedule', dateFrom, dateTo];
+
+  // Build user -> date -> entry map
+  const entryMap = useMemo(() => {
     const map: Record<string, Record<string, ScheduleEntry>> = {};
     entries.forEach((entry) => {
       const uid = entry.userId;
@@ -147,16 +145,8 @@ export default function SchedulePage() {
       if (!map[uid]) map[uid] = {};
       map[uid][d] = entry;
     });
-    // Apply local overrides on top
-    Object.values(localOverrides).forEach((entry) => {
-      const uid = entry.userId;
-      const d = entry.date.slice(0, 10);
-      if (!map[uid]) map[uid] = {};
-      map[uid][d] = entry;
-    });
     return map;
-  };
-  const entryMap = buildEntryMap();
+  }, [entries]);
 
   // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
@@ -179,30 +169,54 @@ export default function SchedulePage() {
   const goToNextMonth = useCallback(() => setCurrentMonth((m) => addMonths(m, 1)), []);
   const goToToday = useCallback(() => setCurrentMonth(new Date()), []);
 
-  // Mutations
+  // Helper: optimistically update schedule cache
+  const optimisticUpdate = (userId: string, date: string, payload: any, existingEntry?: ScheduleEntry) => {
+    const previousData = queryClient.getQueryData(scheduleQueryKey);
+    queryClient.setQueryData(scheduleQueryKey, (old: any) => {
+      if (!old?.data) return old;
+      const entries = old.data as ScheduleEntry[];
+      const tempEntry = { id: existingEntry?.id || `temp-${userId}-${date}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry;
+      if (existingEntry) {
+        return { ...old, data: entries.map(e => e.id === existingEntry.id ? { ...e, ...tempEntry } : e) };
+      }
+      return { ...old, data: [...entries, tempEntry] };
+    });
+    return previousData;
+  };
+
+  // Mutations with optimistic updates (React Query documented pattern)
   const createMutation = useMutation({
     mutationFn: (data: any) => scheduleApi.create(data),
-    onSuccess: () => {
+    onMutate: async (data: any) => {
+      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
+      return optimisticUpdate(data.userId, data.date, data);
+    },
+    onError: (_err: any, _data: any, context: any) => {
+      if (context) queryClient.setQueryData(scheduleQueryKey, context);
+      toast.error('Ошибка');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      setLocalOverrides({});
       closeModal();
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка');
     },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onSuccess: () => {
+    onMutate: async ({ id, data }: { id: string; data: any }) => {
+      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
+      const entry = entries.find(e => e.id === id);
+      return optimisticUpdate(data.userId || entry?.userId || '', data.date || entry?.date || '', data, entry);
+    },
+    onError: (_err: any, _data: any, context: any) => {
+      if (context) queryClient.setQueryData(scheduleQueryKey, context);
+      toast.error('Ошибка обновления');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      setLocalOverrides({});
       closeModal();
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка обновления');
     },
   });
 
@@ -340,23 +354,16 @@ export default function SchedulePage() {
       lateMinutes: lateMinutes || 0,
     };
 
+    setQuickPopup(null);
     if (entry) {
       if (!isDayOff && entry.shiftStart) {
         payload.shiftStart = entry.shiftStart;
         payload.shiftEnd = entry.shiftEnd;
       }
-      // Instant local override — UI updates immediately
-      const overrideKey = `${userId}-${date}`;
-      setLocalOverrides(prev => ({ ...prev, [overrideKey]: { ...entry, ...payload } as ScheduleEntry }));
-      updateMutation.mutate({ id: entry.id, data: payload });
+      updateMutation.mutate({ id: entry.id, data: { ...payload, userId, date } });
     } else {
-      // For new entries, create a temporary local override
-      const overrideKey = `${userId}-${date}`;
-      const tempEntry = { id: `temp-${overrideKey}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry;
-      setLocalOverrides(prev => ({ ...prev, [overrideKey]: tempEntry }));
       createMutation.mutate(payload);
     }
-    setQuickPopup(null);
   };
 
   // Cell rendering helpers
