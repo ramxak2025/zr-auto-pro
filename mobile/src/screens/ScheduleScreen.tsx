@@ -147,19 +147,53 @@ function GridTab() {
     return stats;
   }, [activeUsers, days, entryMap]);
 
+  const scheduleQueryKey = ['schedule', dateFrom, dateTo];
+
+  // Optimistic update helper (React Query documented pattern)
+  const optimisticUpdate = (userId: string, date: string, payload: any, existingEntry?: ScheduleEntry) => {
+    const previous = queryClient.getQueryData(scheduleQueryKey);
+    queryClient.setQueryData(scheduleQueryKey, (old: any) => {
+      const arr = (old ?? []) as ScheduleEntry[];
+      const temp = { id: existingEntry?.id || `temp-${userId}-${date}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry;
+      if (existingEntry) {
+        return arr.map(e => e.id === existingEntry.id ? { ...e, ...temp } : e);
+      }
+      return [...arr, temp];
+    });
+    return previous;
+  };
+
   const createMutation = useMutation({
     mutationFn: (d: any) => scheduleApi.create(d),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+    onMutate: async (d: any) => {
+      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
+      return optimisticUpdate(d.userId, d.date, d);
+    },
+    onError: (_e: any, _d: any, ctx: any) => { if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+    onMutate: async ({ id, data }: { id: string; data: any }) => {
+      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
+      const entry = (entries ?? []).find(e => e.id === id);
+      return optimisticUpdate(data.userId || entry?.userId || '', data.date || entry?.date || '', data, entry);
+    },
+    onError: (_e: any, _d: any, ctx: any) => { if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => scheduleApi.remove(id),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
+      const previous = queryClient.getQueryData(scheduleQueryKey);
+      queryClient.setQueryData(scheduleQueryKey, (old: any) => ((old ?? []) as ScheduleEntry[]).filter(e => e.id !== id));
+      return previous;
+    },
+    onError: (_e: any, _d: any, ctx: any) => { if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx); },
+    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
   });
 
   const quickAction = (type: string) => {
@@ -175,8 +209,9 @@ function GridTab() {
     else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; }
     else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
 
+    const popup = quickPopup;
     setQuickPopup(null);
-    if (entry) { updateMutation.mutate({ id: entry.id, data: base }); }
+    if (entry) { updateMutation.mutate({ id: entry.id, data: { ...base, userId: popup.userId, date: popup.date } }); }
     else { createMutation.mutate(base); }
   };
 
