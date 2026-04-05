@@ -138,7 +138,8 @@ export default function SchedulePage() {
   }, [dateFrom, dateTo]);
 
   // Build user -> date -> entry map (with local overrides for instant UI)
-  const entryMap = useMemo(() => {
+  // Using a function instead of useMemo to ensure fresh computation on every render
+  const buildEntryMap = () => {
     const map: Record<string, Record<string, ScheduleEntry>> = {};
     entries.forEach((entry) => {
       const uid = entry.userId;
@@ -146,7 +147,7 @@ export default function SchedulePage() {
       if (!map[uid]) map[uid] = {};
       map[uid][d] = entry;
     });
-    // Apply local overrides
+    // Apply local overrides on top
     Object.values(localOverrides).forEach((entry) => {
       const uid = entry.userId;
       const d = entry.date.slice(0, 10);
@@ -154,7 +155,8 @@ export default function SchedulePage() {
       map[uid][d] = entry;
     });
     return map;
-  }, [entries, localOverrides]);
+  };
+  const entryMap = buildEntryMap();
 
   // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
