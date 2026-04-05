@@ -56,7 +56,7 @@ export class ScheduleService {
     const today = new Date().toISOString().split('T')[0];
 
     const { rows } = await this.pool.query(
-      `SELECT u.id as user_id, u.full_name, u.role,
+      `SELECT DISTINCT ON (u.id) u.id as user_id, u.full_name, u.role, u.avatar,
               se.is_day_off, se.shift_start, se.shift_end,
               se.actual_arrival, se.late_minutes, se.late_status, se.note,
               CASE WHEN s.id IS NOT NULL AND s.closed_at IS NULL THEN true ELSE false END as is_working,
@@ -65,7 +65,7 @@ export class ScheduleService {
        LEFT JOIN schedule_entries se ON se.user_id = u.id AND se.date = $2 AND se.tenant_id = $1
        LEFT JOIN shifts s ON s.user_id = u.id AND s.date = $2 AND s.tenant_id = $1 AND s.closed_at IS NULL
        WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
-       ORDER BY u.full_name`,
+       ORDER BY u.id, u.full_name`,
       [tenantID, today],
     );
 

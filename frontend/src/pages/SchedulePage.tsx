@@ -1,5 +1,4 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
@@ -621,21 +620,55 @@ export default function SchedulePage() {
                             return (
                               <div
                                 key={dateStr}
-                                onClick={() => {
-                                  if (!canEdit) return;
-                                  setQuickPopup({ userId: u.id, date: dateStr, entry });
-                                }}
-                                className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors ${
+                                className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors relative ${
                                   canEdit ? 'cursor-pointer hover:bg-blue-50/50' : ''
                                 } ${isTodayDate ? 'bg-blue-50/40' : isWeekend ? 'bg-red-50/20' : ''}`}
                               >
-                                {cellData ? (
-                                  <div className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}>
-                                    <span className={`text-[10px] font-bold ${cellData.textColor}`}>
-                                      {cellData.label}
-                                    </span>
+                                <div onClick={() => {
+                                  if (!canEdit) return;
+                                  if (quickPopup?.userId === u.id && quickPopup?.date === dateStr) {
+                                    setQuickPopup(null);
+                                  } else {
+                                    setQuickPopup({ userId: u.id, date: dateStr, entry });
+                                  }
+                                }}>
+                                  {cellData ? (
+                                    <div className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}>
+                                      <span className={`text-[10px] font-bold ${cellData.textColor}`}>
+                                        {cellData.label}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-lg border border-dashed border-gray-200 flex items-center justify-center">
+                                      <Plus className="h-3 w-3 text-gray-300" />
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Inline dropdown */}
+                                {quickPopup?.userId === u.id && quickPopup?.date === dateStr && (
+                                  <div className="absolute top-full left-1/2 -translate-x-1/2 z-50 mt-1 bg-white rounded-xl shadow-2xl border border-gray-200 py-1 w-36 animate-in fade-in slide-in-from-top-1 duration-150">
+                                    {[
+                                      { status: 'shift' as const, label: '✅ Смена', hover: 'hover:bg-green-50' },
+                                      { status: 'dayoff' as const, label: '🌙 Выходной', hover: 'hover:bg-gray-50' },
+                                      { status: 'sick' as const, label: '🏥 Больничный', hover: 'hover:bg-rose-50' },
+                                      { status: 'late_minor' as const, label: '⏰ Опозд. <1ч', hover: 'hover:bg-yellow-50' },
+                                      { status: 'late_major' as const, label: '⚠️ Опозд. >1ч', hover: 'hover:bg-orange-50' },
+                                      { status: 'absent' as const, label: '❌ Прогул', hover: 'hover:bg-red-50' },
+                                    ].map(item => (
+                                      <button key={item.status} onClick={() => quickSetStatus(item.status)}
+                                        className={`w-full text-left px-3 py-1.5 text-xs font-medium text-gray-700 ${item.hover} transition-colors`}>
+                                        {item.label}
+                                      </button>
+                                    ))}
+                                    {entry && (
+                                      <button onClick={() => quickSetStatus('delete')}
+                                        className="w-full text-left px-3 py-1.5 text-xs font-medium text-red-500 hover:bg-red-50 border-t border-gray-100 mt-1">
+                                        🗑 Удалить
+                                      </button>
+                                    )}
                                   </div>
-                                ) : null}
+                                )}
                               </div>
                             );
                           })}
@@ -750,76 +783,7 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* Quick Status Popup — simple tap to set status */}
-      {quickPopup && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center" onClick={() => setQuickPopup(null)}>
-          <div className="absolute inset-0 bg-black/30" />
-          <div
-            className="relative bg-white rounded-t-2xl sm:rounded-2xl w-full sm:max-w-sm mx-auto shadow-2xl overflow-hidden animate-fade-in-down"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-5 pt-4 pb-2">
-              <p className="text-sm font-bold text-gray-900">
-                {users.find(u => u.id === quickPopup.userId)?.fullName || ''} — {quickPopup.date.slice(5).replace('-', '.')}
-              </p>
-            </div>
-            <div className="px-3 pb-4 space-y-1">
-              <button
-                onClick={() => quickSetStatus('shift')}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-green-50 transition-colors text-left"
-              >
-                <span className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center text-sm">✅</span>
-                <span className="text-sm font-medium text-gray-800">Смена</span>
-              </button>
-              <button
-                onClick={() => quickSetStatus('dayoff')}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-gray-50 transition-colors text-left"
-              >
-                <span className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center text-sm">🌙</span>
-                <span className="text-sm font-medium text-gray-800">Выходной</span>
-              </button>
-              <button
-                onClick={() => quickSetStatus('sick')}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-rose-50 transition-colors text-left"
-              >
-                <span className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center text-sm">🏥</span>
-                <span className="text-sm font-medium text-gray-800">Больничный</span>
-              </button>
-              <button
-                onClick={() => quickSetStatus('late_minor')}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-yellow-50 transition-colors text-left"
-              >
-                <span className="w-8 h-8 rounded-lg bg-yellow-100 flex items-center justify-center text-sm">⏰</span>
-                <span className="text-sm font-medium text-gray-800">Опоздал до часа</span>
-              </button>
-              <button
-                onClick={() => quickSetStatus('late_major')}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-orange-50 transition-colors text-left"
-              >
-                <span className="w-8 h-8 rounded-lg bg-orange-100 flex items-center justify-center text-sm">⚠️</span>
-                <span className="text-sm font-medium text-gray-800">Опоздал больше часа</span>
-              </button>
-              <button
-                onClick={() => quickSetStatus('absent')}
-                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 transition-colors text-left"
-              >
-                <span className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center text-sm">❌</span>
-                <span className="text-sm font-medium text-gray-800">Прогул</span>
-              </button>
-              {quickPopup.entry && (
-                <button
-                  onClick={() => quickSetStatus('delete')}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 transition-colors text-left"
-                >
-                  <span className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center"><Trash2 className="w-4 h-4 text-red-500" /></span>
-                  <span className="text-sm font-medium text-red-600">Удалить запись</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
+      {/* Quick Status — now inline dropdown, no portal needed */}
 
       {/* Settings Tab — Modern Minimalist */}
       {tab === 'settings' && (
