@@ -15,6 +15,10 @@ import {
   ChevronUp,
   ChevronDown,
   Users,
+  BarChart3,
+  Trophy,
+  TrendingUp,
+  Medal,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -38,10 +42,141 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 
-type TabType = 'schedule' | 'today' | 'mystats' | 'settings';
+type TabType = 'schedule' | 'today' | 'mystats' | 'attendance' | 'settings';
 
 // Correct Russian day abbreviations (date-fns 'EE' locale gives wrong 2-char prefix for Сб)
 const DAY_ABBR = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+
+function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
+  entries: ScheduleEntry[]; users: User[]; dateFrom: string; dateTo: string;
+}) {
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const queryClient = useQueryClient();
+
+  // Fetch entries for selected month
+  const monthStart = `${selectedMonth}-01`;
+  const monthEnd = (() => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
+  })();
+
+  const { data: monthEntries } = useQuery<ScheduleEntry[]>({
+    queryKey: ['schedule', monthStart, monthEnd],
+    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd }); return res.data as ScheduleEntry[]; },
+  });
+
+  const allEntries = monthEntries ?? entries;
+
+  // Compute stats per user
+  const stats = useMemo(() => {
+    const map: Record<string, { full: number; late: number; lateMinor: number; lateMajor: number; absent: number; sick: number; dayOff: number; total: number }> = {};
+    allEntries.forEach(e => {
+      if (!map[e.userId]) map[e.userId] = { full: 0, late: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, dayOff: 0, total: 0 };
+      const s = map[e.userId];
+      const note = (e.note || '').toLowerCase();
+      if (note.includes('больнич')) { s.sick++; return; }
+      if (note.includes('прогул')) { s.absent++; s.total++; return; }
+      if (e.isDayOff) { s.dayOff++; return; }
+      s.total++;
+      if (e.lateStatus === 'late_major' || e.lateMinutes >= 60) { s.lateMajor++; s.late++; }
+      else if (e.lateStatus === 'late_minor' || (e.lateMinutes > 0 && e.lateMinutes < 60)) { s.lateMinor++; s.late++; }
+      else if (e.actualArrival || e.lateStatus === 'on_time') { s.full++; }
+      else {
+        // Past date with no arrival = absent
+        const d = new Date(e.date + 'T23:59:59');
+        if (d < new Date()) s.absent++;
+        else s.full++; // future = planned
+      }
+    });
+    return map;
+  }, [allEntries]);
+
+  // Rank users by attendance score
+  const ranked = useMemo(() => {
+    return users.map(u => {
+      const s = stats[u.id] || { full: 0, late: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, dayOff: 0, total: 0 };
+      const score = s.total > 0 ? Math.round((s.full / s.total) * 100) : 0;
+      return { ...u, stats: s, score };
+    }).sort((a, b) => b.score - a.score || b.stats.full - a.stats.full);
+  }, [users, stats]);
+
+  const shiftMonth = (dir: number) => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + dir);
+    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+
+  const monthLabel = (() => {
+    const [y, m] = selectedMonth.split('-');
+    return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  })();
+
+  return (
+    <div className="space-y-4">
+      {/* Month picker */}
+      <div className="flex items-center justify-center gap-3">
+        <button onClick={() => shiftMonth(-1)} className="p-2 rounded-lg hover:bg-gray-100"><ChevronLeft className="h-5 w-5 text-gray-500" /></button>
+        <span className="text-sm font-bold text-gray-900 capitalize min-w-[150px] text-center">{monthLabel}</span>
+        <button onClick={() => shiftMonth(1)} className="p-2 rounded-lg hover:bg-gray-100"><ChevronRight className="h-5 w-5 text-gray-500" /></button>
+      </div>
+
+      {/* Ranking */}
+      <div className="space-y-2">
+        {ranked.map((u, idx) => {
+          const s = u.stats;
+          const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
+          const scoreColor = u.score >= 90 ? 'text-green-600' : u.score >= 70 ? 'text-yellow-600' : 'text-red-600';
+          const scoreBg = u.score >= 90 ? 'bg-green-50' : u.score >= 70 ? 'bg-yellow-50' : 'bg-red-50';
+
+          return (
+            <div key={u.id} className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-4 ${idx < 3 ? 'ring-1 ring-amber-200' : ''}`}>
+              <div className="flex items-center gap-3">
+                {/* Rank */}
+                <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                  idx === 0 ? 'bg-amber-100 text-amber-700' : idx === 1 ? 'bg-gray-200 text-gray-700' : idx === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-400'
+                }`}>
+                  {medal || idx + 1}
+                </div>
+
+                {/* Name */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold text-gray-900 truncate">{u.fullName}</p>
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                    <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">✅ {s.full}</span>
+                    {s.lateMinor > 0 && <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-medium">⏰ {s.lateMinor}</span>}
+                    {s.lateMajor > 0 && <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">⚠️ {s.lateMajor}</span>}
+                    {s.absent > 0 && <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full font-medium">❌ {s.absent}</span>}
+                    {s.sick > 0 && <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded-full font-medium">🏥 {s.sick}</span>}
+                  </div>
+                </div>
+
+                {/* Score */}
+                <div className={`flex-shrink-0 ${scoreBg} rounded-xl px-3 py-1.5 text-center`}>
+                  <p className={`text-lg font-bold ${scoreColor}`}>{u.score}%</p>
+                  <p className="text-[9px] text-gray-400">посещ.</p>
+                </div>
+              </div>
+
+              {/* Progress bar */}
+              {s.total > 0 && (
+                <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden flex">
+                  {s.full > 0 && <div className="bg-green-500 h-full" style={{ width: `${(s.full / s.total) * 100}%` }} />}
+                  {s.lateMinor > 0 && <div className="bg-yellow-400 h-full" style={{ width: `${(s.lateMinor / s.total) * 100}%` }} />}
+                  {s.lateMajor > 0 && <div className="bg-orange-500 h-full" style={{ width: `${(s.lateMajor / s.total) * 100}%` }} />}
+                  {s.absent > 0 && <div className="bg-red-500 h-full" style={{ width: `${(s.absent / s.total) * 100}%` }} />}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function SchedulePage() {
   const queryClient = useQueryClient();
@@ -214,13 +349,20 @@ export default function SchedulePage() {
 
   const createMutation = useMutation({
     mutationFn: (data: any) => scheduleApi.create(data),
-    onSuccess: () => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); closeModal(); },
+    onSuccess: () => {
+      // Delayed refetch — let server process first, patched cache is already showing
+      setTimeout(() => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); }, 1500);
+      closeModal();
+    },
     onError: () => { refetchSchedule(); toast.error('Ошибка'); },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onSuccess: () => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); closeModal(); },
+    onSuccess: () => {
+      setTimeout(() => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); }, 1500);
+      closeModal();
+    },
     onError: () => { refetchSchedule(); toast.error('Ошибка'); },
   });
 
@@ -356,6 +498,8 @@ export default function SchedulePage() {
       note: note || '',
       lateStatus: lateStatus || null,
       lateMinutes: lateMinutes || 0,
+      // When admin sets "Shift" manually — it means master arrived on time
+      ...(status === 'shift' ? { actualArrival: new Date().toISOString() } : {}),
     };
 
     // 1. Patch cache + close popup in flushSync — forces synchronous DOM paint
@@ -486,6 +630,15 @@ export default function SchedulePage() {
           >
             <Users className="w-4 h-4 inline-block mr-1 -mt-0.5" />
             Смены
+          </button>
+          <button
+            onClick={() => setTab('attendance')}
+            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+              tab === 'attendance' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            Рейтинг
           </button>
           {canEdit && (
             <button
@@ -800,6 +953,9 @@ export default function SchedulePage() {
           </div>
         </div>
       )}
+
+      {/* Attendance Rating Tab */}
+      {tab === 'attendance' && <AttendanceRatingTab entries={entries} users={scheduleUsers} dateFrom={dateFrom} dateTo={dateTo} />}
 
       {/* Settings Tab — Modern Minimalist */}
       {tab === 'settings' && (
