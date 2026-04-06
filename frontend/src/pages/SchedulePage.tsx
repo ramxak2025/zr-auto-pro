@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
+import { flushSync } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   CalendarDays,
@@ -11,6 +12,8 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -145,12 +148,32 @@ export default function SchedulePage() {
     return map;
   }, [entries]);
 
+  // Custom master order — saved in localStorage
+  const [masterOrder, setMasterOrder] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('schedule-master-order') || '[]'); } catch { return []; }
+  });
+
+  const saveMasterOrder = (order: string[]) => {
+    setMasterOrder(order);
+    localStorage.setItem('schedule-master-order', JSON.stringify(order));
+  };
+
+  const moveMaster = (userId: string, direction: 'up' | 'down') => {
+    const current = scheduleUsers.map(u => u.id);
+    const idx = current.indexOf(userId);
+    if (idx < 0) return;
+    const newIdx = direction === 'up' ? Math.max(0, idx - 1) : Math.min(current.length - 1, idx + 1);
+    if (idx === newIdx) return;
+    const reordered = [...current];
+    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
+    saveMasterOrder(reordered);
+  };
+
   // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
     const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
     const activeIds = new Set(activeUsers.map(u => u.id));
 
-    // Add any users from entries that aren't in the active users list (e.g., recently deactivated)
     entries.forEach((e) => {
       if (e.user && !activeIds.has(e.userId)) {
         activeUsers.push(e.user as User);
@@ -158,8 +181,20 @@ export default function SchedulePage() {
       }
     });
 
+    // Apply custom order if saved
+    if (masterOrder.length > 0) {
+      activeUsers.sort((a, b) => {
+        const ai = masterOrder.indexOf(a.id);
+        const bi = masterOrder.indexOf(b.id);
+        if (ai === -1 && bi === -1) return 0;
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      });
+    }
+
     return activeUsers;
-  }, [entries, users]);
+  }, [entries, users, masterOrder]);
 
   // Month navigation
   const goToPrevMonth = useCallback(() => setCurrentMonth((m) => subMonths(m, 1)), []);
@@ -323,13 +358,13 @@ export default function SchedulePage() {
       lateMinutes: lateMinutes || 0,
     };
 
-    // 1. Close popup immediately
-    setQuickPopup(null);
+    // 1. Patch cache + close popup in flushSync — forces synchronous DOM paint
+    flushSync(() => {
+      patchCache(userId, date, payload, !entry);
+      setQuickPopup(null);
+    });
 
-    // 2. Patch cache INSTANTLY — UI updates on this frame
-    patchCache(userId, date, payload, !entry);
-
-    // 3. Send to server in background
+    // 2. Send to server in background
     if (entry) {
       if (!isDayOff && entry.shiftStart) {
         payload.shiftStart = entry.shiftStart;
@@ -541,12 +576,18 @@ export default function SchedulePage() {
                       <span className="text-[10px] font-semibold text-gray-500 uppercase">Сотрудник</span>
                     </div>
                     {/* Employee rows */}
-                    {scheduleUsers.map((u) => (
+                    {scheduleUsers.map((u, idx) => (
                       <div
                         key={u.id}
-                        className="h-12 border-b border-gray-50 px-3 flex items-center"
+                        className="h-12 border-b border-gray-50 px-2 flex items-center gap-1 group"
                       >
-                        <span className="text-xs font-medium text-gray-800 truncate max-w-[100px] sm:max-w-[140px]">
+                        {canEdit && (
+                          <div className="flex flex-col opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={() => moveMaster(u.id, 'up')} disabled={idx === 0} className="text-gray-300 hover:text-gray-600 disabled:invisible"><ChevronUp className="h-3 w-3" /></button>
+                            <button onClick={() => moveMaster(u.id, 'down')} disabled={idx === scheduleUsers.length - 1} className="text-gray-300 hover:text-gray-600 disabled:invisible"><ChevronDown className="h-3 w-3" /></button>
+                          </div>
+                        )}
+                        <span className="text-xs font-medium text-gray-800 truncate max-w-[100px] sm:max-w-[130px]">
                           {u.fullName}
                         </span>
                       </div>
