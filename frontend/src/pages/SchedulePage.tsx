@@ -84,17 +84,15 @@ export default function SchedulePage() {
   // Settings tab state
   const [settingsTab, setSettingsTab] = useState<'service' | 'masters'>('service');
 
-  // Queries
+  // Queries — queryFn returns plain data (NOT AxiosResponse) so setQueryData works
   const { data: scheduleData, isLoading: scheduleLoading } = useQuery({
     queryKey: ['schedule', dateFrom, dateTo],
-    queryFn: () => scheduleApi.getAll({ dateFrom, dateTo }),
-    select: (res) => res.data as ScheduleEntry[],
+    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom, dateTo }); return res.data as ScheduleEntry[]; },
   });
 
   const { data: todayData, isLoading: todayLoading } = useQuery({
     queryKey: ['schedule-today'],
-    queryFn: () => scheduleApi.getToday(),
-    select: (res) => res.data as TodayEmployeeStatus[],
+    queryFn: async () => { const res = await scheduleApi.getToday(); return res.data as TodayEmployeeStatus[]; },
     enabled: tab === 'today',
   });
 
@@ -169,16 +167,16 @@ export default function SchedulePage() {
   const goToToday = useCallback(() => setCurrentMonth(new Date()), []);
 
   // Helper: optimistically update schedule cache
+  // Cache stores ScheduleEntry[] directly (queryFn extracts .data)
   const optimisticUpdate = (userId: string, date: string, payload: any, existingEntry?: ScheduleEntry) => {
-    const previousData = queryClient.getQueryData(scheduleQueryKey);
-    queryClient.setQueryData(scheduleQueryKey, (old: any) => {
-      if (!old?.data) return old;
-      const entries = old.data as ScheduleEntry[];
+    const previousData = queryClient.getQueryData<ScheduleEntry[]>(scheduleQueryKey);
+    queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
+      const arr = old ?? [];
       const tempEntry = { id: existingEntry?.id || `temp-${userId}-${date}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry;
       if (existingEntry) {
-        return { ...old, data: entries.map(e => e.id === existingEntry.id ? { ...e, ...tempEntry } : e) };
+        return arr.map(e => e.id === existingEntry.id ? { ...e, ...tempEntry } : e);
       }
-      return { ...old, data: [...entries, tempEntry] };
+      return [...arr, tempEntry];
     });
     return previousData;
   };
@@ -620,55 +618,20 @@ export default function SchedulePage() {
                             return (
                               <div
                                 key={dateStr}
-                                className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors relative ${
+                                onClick={() => { if (canEdit) setQuickPopup({ userId: u.id, date: dateStr, entry }); }}
+                                className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors ${
                                   canEdit ? 'cursor-pointer hover:bg-blue-50/50' : ''
                                 } ${isTodayDate ? 'bg-blue-50/40' : isWeekend ? 'bg-red-50/20' : ''}`}
                               >
-                                <div onClick={() => {
-                                  if (!canEdit) return;
-                                  if (quickPopup?.userId === u.id && quickPopup?.date === dateStr) {
-                                    setQuickPopup(null);
-                                  } else {
-                                    setQuickPopup({ userId: u.id, date: dateStr, entry });
-                                  }
-                                }}>
-                                  {cellData ? (
-                                    <div className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}>
-                                      <span className={`text-[10px] font-bold ${cellData.textColor}`}>
-                                        {cellData.label}
-                                      </span>
-                                    </div>
-                                  ) : (
-                                    <div className="w-8 h-8 rounded-lg border border-dashed border-gray-200 flex items-center justify-center">
-                                      <Plus className="h-3 w-3 text-gray-300" />
-                                    </div>
-                                  )}
-                                </div>
-
-                                {/* Inline dropdown */}
-                                {quickPopup?.userId === u.id && quickPopup?.date === dateStr && (
-                                  <div className="absolute top-full left-1/2 -translate-x-1/2 z-50 mt-1 bg-white rounded-xl shadow-2xl border border-gray-200 py-1 w-36 animate-in fade-in slide-in-from-top-1 duration-150">
-                                    {[
-                                      { status: 'shift' as const, label: '✅ Смена', hover: 'hover:bg-green-50' },
-                                      { status: 'dayoff' as const, label: '🌙 Выходной', hover: 'hover:bg-gray-50' },
-                                      { status: 'sick' as const, label: '🏥 Больничный', hover: 'hover:bg-rose-50' },
-                                      { status: 'late_minor' as const, label: '⏰ Опозд. <1ч', hover: 'hover:bg-yellow-50' },
-                                      { status: 'late_major' as const, label: '⚠️ Опозд. >1ч', hover: 'hover:bg-orange-50' },
-                                      { status: 'absent' as const, label: '❌ Прогул', hover: 'hover:bg-red-50' },
-                                    ].map(item => (
-                                      <button key={item.status} onClick={() => quickSetStatus(item.status)}
-                                        className={`w-full text-left px-3 py-1.5 text-xs font-medium text-gray-700 ${item.hover} transition-colors`}>
-                                        {item.label}
-                                      </button>
-                                    ))}
-                                    {entry && (
-                                      <button onClick={() => quickSetStatus('delete')}
-                                        className="w-full text-left px-3 py-1.5 text-xs font-medium text-red-500 hover:bg-red-50 border-t border-gray-100 mt-1">
-                                        🗑 Удалить
-                                      </button>
-                                    )}
+                                {cellData ? (
+                                  <div className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}>
+                                    <span className={`text-[10px] font-bold ${cellData.textColor}`}>{cellData.label}</span>
                                   </div>
-                                )}
+                                ) : !isWeekend ? (
+                                  <div className="w-8 h-8 rounded-lg bg-green-50/50 border border-green-100 flex items-center justify-center">
+                                    <span className="text-[10px] text-green-400">✓</span>
+                                  </div>
+                                ) : null}
                               </div>
                             );
                           })}
@@ -783,7 +746,40 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* Quick Status — now inline dropdown, no portal needed */}
+      {/* Quick Status Popup */}
+      {quickPopup && (
+        <div className="fixed inset-0 z-50" onClick={() => setQuickPopup(null)}>
+          <div className="absolute inset-0 bg-black/20" />
+          <div className="absolute bottom-0 left-0 right-0 sm:bottom-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 bg-white rounded-t-2xl sm:rounded-2xl sm:max-w-xs shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="px-4 pt-3 pb-1">
+              <p className="text-xs font-bold text-gray-900">
+                {users.find(u => u.id === quickPopup.userId)?.fullName} — {quickPopup.date.slice(5).replace('-', '.')}
+              </p>
+            </div>
+            <div className="px-2 pb-3 grid grid-cols-3 gap-1">
+              {[
+                { status: 'shift' as const, emoji: '✅', label: 'Смена', bg: 'hover:bg-green-50' },
+                { status: 'dayoff' as const, emoji: '🌙', label: 'Выходной', bg: 'hover:bg-gray-100' },
+                { status: 'sick' as const, emoji: '🏥', label: 'Больничный', bg: 'hover:bg-rose-50' },
+                { status: 'late_minor' as const, emoji: '⏰', label: '<1ч', bg: 'hover:bg-yellow-50' },
+                { status: 'late_major' as const, emoji: '⚠️', label: '>1ч', bg: 'hover:bg-orange-50' },
+                { status: 'absent' as const, emoji: '❌', label: 'Прогул', bg: 'hover:bg-red-50' },
+              ].map(item => (
+                <button key={item.status} onClick={() => quickSetStatus(item.status)}
+                  className={`flex flex-col items-center gap-0.5 py-2 rounded-xl ${item.bg} transition-colors`}>
+                  <span className="text-lg">{item.emoji}</span>
+                  <span className="text-[10px] font-medium text-gray-600">{item.label}</span>
+                </button>
+              ))}
+            </div>
+            {quickPopup.entry && (
+              <button onClick={() => quickSetStatus('delete')} className="w-full text-center py-2 text-xs text-red-500 border-t border-gray-100 hover:bg-red-50">
+                Удалить запись
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Settings Tab — Modern Minimalist */}
       {tab === 'settings' && (
