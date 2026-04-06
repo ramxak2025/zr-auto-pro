@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Package, Plus, Users, Warehouse, Trash2, RefreshCw, ArrowLeft,
@@ -260,50 +260,111 @@ function StorageTab() {
   const createItemMut = useMutation({ mutationFn: (data: any) => equipmentApi.createStorageItem(data), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq-storage'] }); setShowCreate(false); toast.success('Добавлено'); } });
   const removeItemMut = useMutation({ mutationFn: (id: string) => equipmentApi.removeStorageItem(id), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['eq-storage'] }); toast.success('Удалено'); } });
 
+  // Count items per category
+  const catCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    items.forEach((i: any) => { if (i.categoryId) map[i.categoryId] = (map[i.categoryId] || 0) + 1; });
+    return map;
+  }, [items]);
+
   return (
     <div className="space-y-4">
-      {/* Categories */}
-      <div className="flex gap-2 flex-wrap">
-        <button onClick={() => setSelectedCat(null)} className={`px-3 py-1.5 rounded-lg text-xs font-medium ${!selectedCat ? 'bg-primary-50 text-primary-700' : 'bg-gray-50 text-gray-500'}`}>Все</button>
-        {categories.map((c: any) => (
-          <button key={c.id} onClick={() => setSelectedCat(c.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 ${selectedCat === c.id ? 'bg-primary-50 text-primary-700' : 'bg-gray-50 text-gray-500'}`}>
-            {c.name}
-            {selectedCat === c.id && <X className="h-3 w-3 ml-1 hover:text-red-500" onClick={e => { e.stopPropagation(); removeCatMut.mutate(c.id); }} />}
+      {/* Breadcrumb */}
+      {selectedCat && (
+        <div className="flex items-center gap-2 text-sm">
+          <button onClick={() => setSelectedCat(null)} className="text-primary-600 hover:underline flex items-center gap-1">
+            <Warehouse className="h-4 w-4" />Подсобка
           </button>
-        ))}
-        <div className="flex items-center gap-1">
-          <input value={catName} onChange={e => setCatName(e.target.value)} placeholder="Новая папка" className="input text-xs py-1 px-2 w-28" onKeyDown={e => { if (e.key === 'Enter' && catName.trim()) createCatMut.mutate(catName.trim()); }} />
-          {catName && <button onClick={() => createCatMut.mutate(catName.trim())} className="p-1 rounded bg-primary-50 text-primary-600"><FolderPlus className="h-4 w-4" /></button>}
+          <ChevronRight className="h-3 w-3 text-gray-400" />
+          <span className="font-semibold text-gray-900">{categories.find((c: any) => c.id === selectedCat)?.name}</span>
         </div>
-      </div>
+      )}
 
-      <div className="flex gap-2">
-        <div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск..." className="input pl-9" /></div>
-        <button onClick={() => setShowCreate(true)} className="btn-primary text-sm"><Plus className="h-4 w-4" /></button>
-      </div>
-
-      {items.length === 0 ? (
-        <div className="text-center py-12"><Warehouse className="h-10 w-10 text-gray-200 mx-auto mb-3" /><p className="text-sm text-gray-400">Подсобка пуста</p></div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {items.map((item: any) => (
-            <div key={item.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm">
-              {item.photo ? (
-                <button onClick={() => setPhotoUrl(item.photo)} className="flex-shrink-0"><img src={item.photo} className="h-12 w-12 rounded-lg object-cover" /></button>
-              ) : (
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0"><Package className="h-5 w-5 text-gray-200" /></div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
-                <div className="flex gap-2 text-xs mt-0.5">
-                  <span className="text-primary-600 font-semibold">{formatMoney(item.purchasePrice)}</span>
-                  <span className="text-gray-400">×{item.quantity} {item.unit}</span>
-                </div>
+      {/* Folders view — when no category selected */}
+      {!selectedCat && !search && categories.length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          {categories.map((c: any) => (
+            <button key={c.id} onClick={() => setSelectedCat(c.id)}
+              className="w-full flex items-center gap-4 px-4 py-3.5 hover:bg-gray-50 active:bg-gray-100 transition-colors text-left border-b border-gray-50 last:border-0">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
+                <Warehouse className="h-5 w-5 text-amber-600" />
               </div>
-              <button onClick={() => removeItemMut.mutate(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
-            </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900">{c.name}</p>
+                <p className="text-xs text-gray-400">{catCounts[c.id] || 0} предметов</p>
+              </div>
+              <ChevronRight className="h-5 w-5 text-gray-300" />
+            </button>
           ))}
         </div>
+      )}
+
+      {/* New folder input */}
+      {!selectedCat && (
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <FolderPlus className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input value={catName} onChange={e => setCatName(e.target.value)} placeholder="Название новой папки..." className="input pl-9 text-sm"
+              onKeyDown={e => { if (e.key === 'Enter' && catName.trim()) createCatMut.mutate(catName.trim()); }} />
+          </div>
+          {catName.trim() && (
+            <button onClick={() => createCatMut.mutate(catName.trim())} className="btn-primary text-sm">Создать</button>
+          )}
+        </div>
+      )}
+
+      {/* Search + Add button — when inside a folder */}
+      {(selectedCat || search) && (
+        <div className="flex gap-2">
+          <div className="relative flex-1"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск..." className="input pl-9" /></div>
+          <button onClick={() => setShowCreate(true)} className="btn-primary text-sm"><Plus className="h-4 w-4" />Добавить</button>
+        </div>
+      )}
+
+      {/* Items list — when inside a folder or searching */}
+      {(selectedCat || search) && (
+        items.length === 0 ? (
+          <div className="text-center py-12">
+            <Package className="h-10 w-10 text-gray-200 mx-auto mb-3" />
+            <p className="text-sm text-gray-400">Пусто</p>
+            <button onClick={() => setShowCreate(true)} className="btn-secondary text-xs mt-3"><Plus className="h-3 w-3" />Добавить</button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {items.map((item: any) => (
+              <div key={item.id} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+                {item.photo ? (
+                  <button onClick={() => setPhotoUrl(item.photo)} className="flex-shrink-0 group relative">
+                    <img src={item.photo} className="h-14 w-14 rounded-lg object-cover" />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-lg flex items-center justify-center transition-all">
+                      <Eye className="h-4 w-4 text-white opacity-0 group-hover:opacity-100" />
+                    </div>
+                  </button>
+                ) : (
+                  <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50 flex-shrink-0"><Package className="h-6 w-6 text-gray-200" /></div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 truncate">{item.name}</p>
+                  <div className="flex items-center gap-3 text-xs mt-0.5">
+                    <span className="text-emerald-600 font-bold">{formatMoney(item.purchasePrice)}</span>
+                    <span className="text-gray-400">В наличии: {item.quantity} {item.unit}</span>
+                  </div>
+                  {item.serviceLifeMonths && (
+                    <p className="text-[10px] text-gray-400 mt-0.5"><Clock className="inline h-3 w-3 mr-0.5" />Срок: {item.serviceLifeMonths} мес.</p>
+                  )}
+                </div>
+                <button onClick={() => removeItemMut.mutate(item.id)} className="p-2 rounded-lg hover:bg-red-50 text-red-300 hover:text-red-500 transition-colors"><Trash2 className="h-4 w-4" /></button>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {/* Delete folder button */}
+      {selectedCat && (
+        <button onClick={() => removeCatMut.mutate(selectedCat)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1 mx-auto">
+          <Trash2 className="h-3 w-3" />Удалить папку
+        </button>
       )}
 
       {showCreate && <CreateStorageItemModal categoryId={selectedCat} onClose={() => setShowCreate(false)} onSave={(d: any) => createItemMut.mutate(d)} saving={createItemMut.isPending} />}
