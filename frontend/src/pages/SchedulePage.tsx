@@ -85,7 +85,7 @@ export default function SchedulePage() {
   const [settingsTab, setSettingsTab] = useState<'service' | 'masters'>('service');
 
   // Queries — queryFn returns plain data (NOT AxiosResponse) so setQueryData works
-  const { data: scheduleData, isLoading: scheduleLoading } = useQuery({
+  const { data: scheduleData, isLoading: scheduleLoading, refetch: refetchSchedule } = useQuery({
     queryKey: ['schedule', dateFrom, dateTo],
     queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom, dateTo }); return res.data as ScheduleEntry[]; },
   });
@@ -166,55 +166,25 @@ export default function SchedulePage() {
   const goToNextMonth = useCallback(() => setCurrentMonth((m) => addMonths(m, 1)), []);
   const goToToday = useCallback(() => setCurrentMonth(new Date()), []);
 
-  // Helper: optimistically update schedule cache
-  // Cache stores ScheduleEntry[] directly (queryFn extracts .data)
-  const optimisticUpdate = (userId: string, date: string, payload: any, existingEntry?: ScheduleEntry) => {
-    const previousData = queryClient.getQueryData<ScheduleEntry[]>(scheduleQueryKey);
-    queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
-      const arr = old ?? [];
-      const tempEntry = { id: existingEntry?.id || `temp-${userId}-${date}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry;
-      if (existingEntry) {
-        return arr.map(e => e.id === existingEntry.id ? { ...e, ...tempEntry } : e);
-      }
-      return [...arr, tempEntry];
-    });
-    return previousData;
-  };
-
-  // Mutations with optimistic updates (React Query documented pattern)
+  // Mutations — wait for server, then refetch immediately
   const createMutation = useMutation({
-    mutationFn: (data: any) => scheduleApi.create(data),
-    onMutate: async (data: any) => {
-      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
-      return optimisticUpdate(data.userId, data.date, data);
-    },
-    onError: (_err: any, _data: any, context: any) => {
-      if (context) queryClient.setQueryData(scheduleQueryKey, context);
-      toast.error('Ошибка');
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+    mutationFn: async (data: any) => { await scheduleApi.create(data); },
+    onSuccess: async () => {
+      await refetchSchedule();
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
       closeModal();
     },
+    onError: () => toast.error('Ошибка'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onMutate: async ({ id, data }: { id: string; data: any }) => {
-      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
-      const entry = entries.find(e => e.id === id);
-      return optimisticUpdate(data.userId || entry?.userId || '', data.date || entry?.date || '', data, entry);
-    },
-    onError: (_err: any, _data: any, context: any) => {
-      if (context) queryClient.setQueryData(scheduleQueryKey, context);
-      toast.error('Ошибка обновления');
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+    mutationFn: async ({ id, data }: { id: string; data: any }) => { await scheduleApi.update(id, data); },
+    onSuccess: async () => {
+      await refetchSchedule();
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
       closeModal();
     },
+    onError: () => toast.error('Ошибка обновления'),
   });
 
   const deleteMutation = useMutation({
@@ -351,15 +321,16 @@ export default function SchedulePage() {
       lateMinutes: lateMinutes || 0,
     };
 
-    setQuickPopup(null);
     if (entry) {
       if (!isDayOff && entry.shiftStart) {
         payload.shiftStart = entry.shiftStart;
         payload.shiftEnd = entry.shiftEnd;
       }
-      updateMutation.mutate({ id: entry.id, data: { ...payload, userId, date } });
+      setQuickPopup(null);
+      updateMutation.mutateAsync({ id: entry.id, data: { ...payload, userId, date } });
     } else {
-      createMutation.mutate(payload);
+      setQuickPopup(null);
+      createMutation.mutateAsync(payload);
     }
   };
 
@@ -746,34 +717,35 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* Quick Status Popup */}
+      {/* Quick Status Popup — bottom sheet on mobile */}
       {quickPopup && (
         <div className="fixed inset-0 z-50" onClick={() => setQuickPopup(null)}>
           <div className="absolute inset-0 bg-black/20" />
-          <div className="absolute bottom-0 left-0 right-0 sm:bottom-auto sm:top-1/2 sm:left-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 bg-white rounded-t-2xl sm:rounded-2xl sm:max-w-xs shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="px-4 pt-3 pb-1">
-              <p className="text-xs font-bold text-gray-900">
+          <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-2xl safe-area-pb" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mt-2" />
+            <div className="px-4 pt-2 pb-1">
+              <p className="text-sm font-bold text-gray-900">
                 {users.find(u => u.id === quickPopup.userId)?.fullName} — {quickPopup.date.slice(5).replace('-', '.')}
               </p>
             </div>
-            <div className="px-2 pb-3 grid grid-cols-3 gap-1">
+            <div className="px-3 pb-4 grid grid-cols-3 gap-1.5">
               {[
-                { status: 'shift' as const, emoji: '✅', label: 'Смена', bg: 'hover:bg-green-50' },
-                { status: 'dayoff' as const, emoji: '🌙', label: 'Выходной', bg: 'hover:bg-gray-100' },
-                { status: 'sick' as const, emoji: '🏥', label: 'Больничный', bg: 'hover:bg-rose-50' },
-                { status: 'late_minor' as const, emoji: '⏰', label: '<1ч', bg: 'hover:bg-yellow-50' },
-                { status: 'late_major' as const, emoji: '⚠️', label: '>1ч', bg: 'hover:bg-orange-50' },
-                { status: 'absent' as const, emoji: '❌', label: 'Прогул', bg: 'hover:bg-red-50' },
+                { status: 'shift' as const, emoji: '✅', label: 'Смена', bg: 'bg-green-50 active:bg-green-100' },
+                { status: 'dayoff' as const, emoji: '🌙', label: 'Выходной', bg: 'bg-gray-50 active:bg-gray-200' },
+                { status: 'sick' as const, emoji: '🏥', label: 'Больничный', bg: 'bg-rose-50 active:bg-rose-100' },
+                { status: 'late_minor' as const, emoji: '⏰', label: '<1ч', bg: 'bg-yellow-50 active:bg-yellow-100' },
+                { status: 'late_major' as const, emoji: '⚠️', label: '>1ч', bg: 'bg-orange-50 active:bg-orange-100' },
+                { status: 'absent' as const, emoji: '❌', label: 'Прогул', bg: 'bg-red-50 active:bg-red-100' },
               ].map(item => (
                 <button key={item.status} onClick={() => quickSetStatus(item.status)}
-                  className={`flex flex-col items-center gap-0.5 py-2 rounded-xl ${item.bg} transition-colors`}>
-                  <span className="text-lg">{item.emoji}</span>
-                  <span className="text-[10px] font-medium text-gray-600">{item.label}</span>
+                  className={`flex flex-col items-center gap-1 py-3 rounded-xl ${item.bg} transition-colors`}>
+                  <span className="text-xl">{item.emoji}</span>
+                  <span className="text-[10px] font-semibold text-gray-700">{item.label}</span>
                 </button>
               ))}
             </div>
             {quickPopup.entry && (
-              <button onClick={() => quickSetStatus('delete')} className="w-full text-center py-2 text-xs text-red-500 border-t border-gray-100 hover:bg-red-50">
+              <button onClick={() => quickSetStatus('delete')} className="w-full text-center py-3 text-xs font-medium text-red-500 border-t border-gray-100 active:bg-red-50">
                 Удалить запись
               </button>
             )}
