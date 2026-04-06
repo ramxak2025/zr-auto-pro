@@ -166,25 +166,27 @@ export default function SchedulePage() {
   const goToNextMonth = useCallback(() => setCurrentMonth((m) => addMonths(m, 1)), []);
   const goToToday = useCallback(() => setCurrentMonth(new Date()), []);
 
-  // Mutations — wait for server, then refetch immediately
+  // Instant cache update — mutates React Query cache directly
+  const patchCache = (userId: string, date: string, changes: Partial<ScheduleEntry>, isNew: boolean) => {
+    queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
+      if (!old) return old;
+      if (isNew) {
+        return [...old, { id: `t-${Date.now()}`, tenantId: '', userId, date, shiftStart: '09:00', shiftEnd: '18:00', isDayOff: false, lateMinutes: 0, isManualOverride: false, ...changes } as ScheduleEntry];
+      }
+      return old.map(e => (e.userId === userId && e.date.slice(0, 10) === date) ? { ...e, ...changes } : e);
+    });
+  };
+
   const createMutation = useMutation({
-    mutationFn: async (data: any) => { await scheduleApi.create(data); },
-    onSuccess: async () => {
-      await refetchSchedule();
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      closeModal();
-    },
-    onError: () => toast.error('Ошибка'),
+    mutationFn: (data: any) => scheduleApi.create(data),
+    onSuccess: () => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); closeModal(); },
+    onError: () => { refetchSchedule(); toast.error('Ошибка'); },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => { await scheduleApi.update(id, data); },
-    onSuccess: async () => {
-      await refetchSchedule();
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      closeModal();
-    },
-    onError: () => toast.error('Ошибка обновления'),
+    mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
+    onSuccess: () => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); closeModal(); },
+    onError: () => { refetchSchedule(); toast.error('Ошибка'); },
   });
 
   const deleteMutation = useMutation({
@@ -321,16 +323,21 @@ export default function SchedulePage() {
       lateMinutes: lateMinutes || 0,
     };
 
+    // 1. Close popup immediately
+    setQuickPopup(null);
+
+    // 2. Patch cache INSTANTLY — UI updates on this frame
+    patchCache(userId, date, payload, !entry);
+
+    // 3. Send to server in background
     if (entry) {
       if (!isDayOff && entry.shiftStart) {
         payload.shiftStart = entry.shiftStart;
         payload.shiftEnd = entry.shiftEnd;
       }
-      setQuickPopup(null);
-      updateMutation.mutateAsync({ id: entry.id, data: { ...payload, userId, date } });
+      updateMutation.mutate({ id: entry.id, data: { ...payload, userId, date } });
     } else {
-      setQuickPopup(null);
-      createMutation.mutateAsync(payload);
+      createMutation.mutate(payload);
     }
   };
 
@@ -717,16 +724,16 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {/* Quick Status Popup — bottom sheet on mobile */}
+      {/* Quick Status Popup — centered */}
       {quickPopup && (
-        <div className="fixed inset-0 z-50" onClick={() => setQuickPopup(null)}>
-          <div className="absolute inset-0 bg-black/20" />
-          <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-2xl safe-area-pb" onClick={e => e.stopPropagation()}>
-            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mt-2" />
-            <div className="px-4 pt-2 pb-1">
-              <p className="text-sm font-bold text-gray-900">
-                {users.find(u => u.id === quickPopup.userId)?.fullName} — {quickPopup.date.slice(5).replace('-', '.')}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setQuickPopup(null)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[280px]" onClick={e => e.stopPropagation()}>
+            <div className="px-4 pt-4 pb-2">
+              <p className="text-sm font-bold text-gray-900 text-center">
+                {users.find(u => u.id === quickPopup.userId)?.fullName}
               </p>
+              <p className="text-xs text-gray-400 text-center">{quickPopup.date.split('-').reverse().join('.')}</p>
             </div>
             <div className="px-3 pb-4 grid grid-cols-3 gap-1.5">
               {[
@@ -745,7 +752,7 @@ export default function SchedulePage() {
               ))}
             </div>
             {quickPopup.entry && (
-              <button onClick={() => quickSetStatus('delete')} className="w-full text-center py-3 text-xs font-medium text-red-500 border-t border-gray-100 active:bg-red-50">
+              <button onClick={() => quickSetStatus('delete')} className="w-full text-center py-3 text-xs font-medium text-red-500 border-t border-gray-100 rounded-b-2xl active:bg-red-50">
                 Удалить запись
               </button>
             )}
