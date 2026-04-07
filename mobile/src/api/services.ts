@@ -21,6 +21,7 @@ import {
   createMarketingApi,
   createPublicReviewApi,
   createCallsApi,
+  createEquipmentApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -44,6 +45,7 @@ export const warehouseCategoriesApi = createWarehouseCategoriesApi(api);
 export const marketingApi = createMarketingApi(api);
 export const publicReviewApi = createPublicReviewApi(api);
 export const callsApi = createCallsApi(api);
+export const equipmentApi = createEquipmentApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

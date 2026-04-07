@@ -99,6 +99,7 @@ function GridTab() {
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [quickPopup, setQuickPopup] = useState<{ userId: string; date: string; entry?: ScheduleEntry; userName?: string } | null>(null);
+  const [reorderUser, setReorderUser] = useState<{ userId: string; name: string; index: number } | null>(null);
 
   // Synced vertical scroll refs
   const leftScrollRef = useRef<ScrollView>(null);
@@ -123,28 +124,34 @@ function GridTab() {
     queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
   });
 
-  // Custom master order — saved in AsyncStorage
-  const [masterOrder, setMasterOrder] = useState<string[]>([]);
-  useEffect(() => {
-    AsyncStorage.getItem('schedule-master-order').then(v => { if (v) try { setMasterOrder(JSON.parse(v)); } catch {} });
-  }, []);
-  const saveMasterOrder = (order: string[]) => {
-    setMasterOrder(order);
-    AsyncStorage.setItem('schedule-master-order', JSON.stringify(order));
-  };
-
-  const activeUsersBase = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
+  // Global master order — uses backend sortOrder field
   const activeUsers = useMemo(() => {
-    if (masterOrder.length === 0) return activeUsersBase;
-    return [...activeUsersBase].sort((a, b) => {
-      const ai = masterOrder.indexOf(a.id);
-      const bi = masterOrder.indexOf(b.id);
-      if (ai === -1 && bi === -1) return 0;
-      if (ai === -1) return 1;
-      if (bi === -1) return -1;
-      return ai - bi;
+    const list = (usersData || []).filter(u => u.isActive);
+    return list.sort((a: any, b: any) => {
+      const ao = a.sortOrder ?? 0;
+      const bo = b.sortOrder ?? 0;
+      if (ao !== bo) return ao - bo;
+      return (a.fullName || '').localeCompare(b.fullName || '');
     });
-  }, [activeUsersBase, masterOrder]);
+  }, [usersData]);
+
+  const updateOrderMut = useMutation({
+    mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
+    onMutate: async (orderedIds: string[]) => {
+      await queryClient.cancelQueries({ queryKey: ['users'] });
+      const prev = queryClient.getQueryData<any>(['users']);
+      queryClient.setQueryData<any>(['users'], (old: any) => {
+        if (!old) return old;
+        return old.map((u: any) => {
+          const idx = orderedIds.indexOf(u.id);
+          return idx >= 0 ? { ...u, sortOrder: idx } : u;
+        });
+      });
+      return prev;
+    },
+    onError: (_e, _v, ctx) => { if (ctx) queryClient.setQueryData(['users'], ctx); },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
 
   const moveMaster = (userId: string, dir: 'up' | 'down') => {
     const ids = activeUsers.map(u => u.id);
@@ -154,7 +161,7 @@ function GridTab() {
     if (idx === newIdx) return;
     const next = [...ids];
     [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
-    saveMasterOrder(next);
+    updateOrderMut.mutate(next);
   };
 
   const days = getDaysInMonth(year, month);
@@ -255,8 +262,8 @@ function GridTab() {
   };
 
   const CELL_W = 44;
-  const NAME_W = 110;
-  const ROW_H = 48;
+  const NAME_W = 140;
+  const ROW_H = 52;
 
   // Sync vertical scroll between left (names) and right (cells)
   const handleLeftScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -330,7 +337,12 @@ function GridTab() {
                 const stats = userStats.get(u.id);
                 const avatarColors = getAvatarColors(u.fullName);
                 return (
-                  <View key={u.id} style={[styles.gridNameCell, { width: NAME_W, height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}>
+                  <TouchableOpacity
+                    key={u.id}
+                    onLongPress={() => canEdit && setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx })}
+                    activeOpacity={canEdit ? 0.7 : 1}
+                    style={[styles.gridNameCell, { width: NAME_W, height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}
+                  >
                     <View style={styles.gridNameInner}>
                       <LinearGradient
                         colors={avatarColors as [string, string]}
@@ -340,8 +352,8 @@ function GridTab() {
                       >
                         <Text style={styles.gridAvatarText}>{getInitials(u.fullName)}</Text>
                       </LinearGradient>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.gridName} numberOfLines={1}>{u.fullName?.split(' ')[0]}</Text>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={styles.gridName} numberOfLines={1} ellipsizeMode="tail">{u.fullName}</Text>
                         {stats && (
                           <View style={styles.gridStatsRow}>
                             <View style={styles.gridStatPill}>
@@ -355,18 +367,8 @@ function GridTab() {
                           </View>
                         )}
                       </View>
-                      {canEdit && (
-                        <View style={{ flexDirection: 'column', justifyContent: 'center' }}>
-                          <TouchableOpacity onPress={() => moveMaster(u.id, 'up')} disabled={rowIdx === 0} style={{ opacity: rowIdx === 0 ? 0.2 : 1, padding: 1 }}>
-                            <Ionicons name="chevron-up" size={12} color={colors.gray[400]} />
-                          </TouchableOpacity>
-                          <TouchableOpacity onPress={() => moveMaster(u.id, 'down')} disabled={rowIdx === activeUsers.length - 1} style={{ opacity: rowIdx === activeUsers.length - 1 ? 0.2 : 1, padding: 1 }}>
-                            <Ionicons name="chevron-down" size={12} color={colors.gray[400]} />
-                          </TouchableOpacity>
-                        </View>
-                      )}
                     </View>
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
             </ScrollView>
@@ -459,6 +461,27 @@ function GridTab() {
           </ScrollView>
         </View>
       )}
+
+      <Modal visible={!!reorderUser} onClose={() => setReorderUser(null)} title={reorderUser ? `Переместить: ${reorderUser.name?.split(' ')[0] || ''}` : ''}>
+        {reorderUser && (
+          <View style={{ gap: 10, padding: 8 }}>
+            <TouchableOpacity
+              onPress={() => { moveMaster(reorderUser.userId, 'up'); setReorderUser(null); }}
+              disabled={reorderUser.index === 0}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: reorderUser.index === 0 ? colors.gray[100] : colors.primary[50], paddingVertical: 16, borderRadius: 12 }}>
+              <Ionicons name="arrow-up-circle" size={24} color={reorderUser.index === 0 ? colors.gray[400] : colors.primary[600]} />
+              <Text style={{ fontSize: 15, fontWeight: '600', color: reorderUser.index === 0 ? colors.gray[400] : colors.primary[700] }}>Поднять выше</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { moveMaster(reorderUser.userId, 'down'); setReorderUser(null); }}
+              disabled={reorderUser.index === activeUsers.length - 1}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: reorderUser.index === activeUsers.length - 1 ? colors.gray[100] : colors.primary[50], paddingVertical: 16, borderRadius: 12 }}>
+              <Ionicons name="arrow-down-circle" size={24} color={reorderUser.index === activeUsers.length - 1 ? colors.gray[400] : colors.primary[600]} />
+              <Text style={{ fontSize: 15, fontWeight: '600', color: reorderUser.index === activeUsers.length - 1 ? colors.gray[400] : colors.primary[700] }}>Опустить ниже</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </Modal>
 
       <Modal visible={!!quickPopup} onClose={() => setQuickPopup(null)} title={quickPopup?.userName ? `${quickPopup.userName} — ${quickPopup.date?.split('-').reverse().join('.')}` : 'Быстрое действие'}>
         {quickPopup && (

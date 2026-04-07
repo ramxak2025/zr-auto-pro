@@ -48,6 +48,7 @@ const menuItems: MenuItem[] = [
   { label: 'Расходы', description: 'Аренда, маркетинг и др.', screen: 'Expenses', roles: ['director', 'superadmin'], icon: 'trending-down-outline', iconBg: colors.rose[50], iconColor: colors.rose[600] },
   { label: 'Отчёты', description: 'Финансовые отчёты', screen: 'Reports', permission: 'financial_reports', featureKey: 'reports_view', icon: 'bar-chart-outline', iconBg: colors.purple[50], iconColor: colors.purple[700] },
   { label: 'Звонки', description: 'Журнал звонков и записи', screen: 'Calls', roles: ['director', 'superadmin'], icon: 'call-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
+  { label: 'Имущество', description: 'Инструменты и оборудование', screen: 'Equipment', icon: 'cube-outline', iconBg: colors.emerald[50], iconColor: colors.emerald[700] },
   { label: 'Маркетинг', description: 'Отзывы и рассылки', screen: 'Marketing', icon: 'megaphone-outline', iconBg: colors.violet[50], iconColor: colors.violet[600] },
   { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', featureKey: 'users_manage', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
   { label: 'Настройки компании', description: 'Реквизиты и данные для чеков', screen: 'CompanySettings', roles: ['director', 'superadmin'], icon: 'business-outline', iconBg: colors.slate[100], iconColor: colors.slate[600] },
