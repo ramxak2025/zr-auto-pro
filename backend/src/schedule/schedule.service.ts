@@ -118,6 +118,22 @@ export class ScheduleService {
     };
   }
 
+  // Helper: ensure shift is opened when admin manually sets attendance status
+  private async ensureShiftOpen(tenantID: string, userID: string, date: string, lateStatus: string | null) {
+    if (!['on_time', 'late_minor', 'late_major'].includes(lateStatus || '')) return;
+    // Check if shift already exists for this user/date
+    const { rows: existing } = await this.pool.query(
+      `SELECT id FROM shifts WHERE user_id=$1 AND date=$2 AND tenant_id=$3 LIMIT 1`,
+      [userID, date, tenantID],
+    );
+    if (existing.length > 0) return;
+    // Auto-open shift — opened_at adjusted based on late status
+    await this.pool.query(
+      `INSERT INTO shifts (user_id, date, tenant_id, opened_at) VALUES ($1, $2, $3, now())`,
+      [userID, date, tenantID],
+    );
+  }
+
   async create(tenantID: string, dto: any) {
     const { rows } = await this.pool.query(
       `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, late_status, late_minutes, actual_arrival, tenant_id)
@@ -127,6 +143,8 @@ export class ScheduleService {
        dto.isDayOff || false, dto.note, dto.lateStatus || null, dto.lateMinutes || 0,
        dto.actualArrival || null, tenantID],
     );
+    // Auto-open shift if manually marked as attending
+    await this.ensureShiftOpen(tenantID, dto.userId, dto.date, dto.lateStatus);
     return this.mapEntry(rows[0]);
   }
 
@@ -154,6 +172,11 @@ export class ScheduleService {
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Запись не найдена' });
+    // Auto-open shift if manually marked as attending
+    if (dto.lateStatus && rows[0].user_id && rows[0].date) {
+      const dateStr = typeof rows[0].date === 'string' ? rows[0].date.slice(0, 10) : new Date(rows[0].date).toISOString().slice(0, 10);
+      await this.ensureShiftOpen(tenantID, rows[0].user_id, dateStr, dto.lateStatus);
+    }
     return this.mapEntry(rows[0]);
   }
 

@@ -176,9 +176,12 @@ function StaffStatusCircles() {
     return null;
   };
 
-  // Group employees — manual status counts
-  const onShift = statuses.filter(s => isOnShift(s) && !s.isDayOff && !isSick(s) && !isAbsent(s));
-  const notArrived = statuses.filter(s => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s));
+  // Group employees — split by attendance sub-status
+  const onTime = statuses.filter(s => isOnShift(s) && !s.isDayOff && !isSick(s) && !isAbsent(s) && s.lateStatus !== 'late_minor' && s.lateStatus !== 'late_major');
+  const lateMinor = statuses.filter(s => !s.isDayOff && !isSick(s) && s.lateStatus === 'late_minor');
+  const lateMajor = statuses.filter(s => !s.isDayOff && !isSick(s) && s.lateStatus === 'late_major');
+  const notArrived = statuses.filter(s => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s) && !s.lateStatus);
+  const absent = statuses.filter(s => isAbsent(s));
   const dayOff = statuses.filter(s => s.isDayOff && !isSick(s));
   const sick = statuses.filter(s => isSick(s));
 
@@ -213,18 +216,24 @@ function StaffStatusCircles() {
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-900">Сотрудники сегодня</h3>
-        <div className="flex items-center gap-3 text-[11px] text-gray-400">
-          {onShift.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onShift.length}</span>}
+        <div className="flex items-center gap-2 text-[11px] text-gray-400 flex-wrap">
+          {onTime.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onTime.length}</span>}
+          {lateMinor.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-400" /> {lateMinor.length}</span>}
+          {lateMajor.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-600" /> {lateMajor.length}</span>}
           {notArrived.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> {notArrived.length}</span>}
+          {absent.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> {absent.length}</span>}
           {dayOff.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {dayOff.length}</span>}
           {sick.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400" /> {sick.length}</span>}
         </div>
       </div>
 
-      {renderGroup('На смене', '🟢', onShift)}
+      {renderGroup('На смене', '✅', onTime)}
+      {renderGroup('Опоздал <1ч', '⏰', lateMinor)}
+      {renderGroup('Опоздал >1ч', '⚠️', lateMajor)}
       {renderGroup('Ещё не пришёл', '⏳', notArrived)}
-      {renderGroup('Выходной', '🌙', dayOff)}
+      {renderGroup('Прогул', '❌', absent)}
       {renderGroup('Больничный', '🏥', sick)}
+      {renderGroup('Выходной', '🌙', dayOff)}
     </div>
   );
 }

@@ -44,6 +44,7 @@ export function createUsersApi(api: AxiosInstance) {
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
     setProductCommissions: (id: string, data: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> }) =>
       api.post(`/users/${id}/product-commissions`, data),
+    updateOrder: (orderedIds: string[]) => api.post('/users/order', { orderedIds }),
   };
 }
 

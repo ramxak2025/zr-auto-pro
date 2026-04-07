@@ -69,6 +69,7 @@ export interface User {
   productSalaryPercent?: number;
   permissions: UserPermissions;
   daysOff?: number[];
+  sortOrder?: number;
   isActive: boolean;
   tenantId?: string;
   tenant?: Tenant;

@@ -20,6 +20,11 @@ export class UsersController {
     return this.usersService.getMasters(user.tenantID);
   }
 
+  @Post('order')
+  updateOrder(@CurrentUser() user: JwtPayload, @Body() dto: { orderedIds: string[] }) {
+    return this.usersService.updateOrder(user.tenantID, dto.orderedIds);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.usersService.getById(id, user.tenantID);

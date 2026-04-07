@@ -283,15 +283,28 @@ export default function SchedulePage() {
     return map;
   }, [entries]);
 
-  // Custom master order — saved in localStorage
-  const [masterOrder, setMasterOrder] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('schedule-master-order') || '[]'); } catch { return []; }
+  // Global master order — saved in backend via users.sortOrder
+  const updateOrderMutation = useMutation({
+    mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
+    onMutate: async (orderedIds: string[]) => {
+      await queryClient.cancelQueries({ queryKey: ['users'] });
+      const prev = queryClient.getQueryData<any>(['users']);
+      queryClient.setQueryData<any>(['users'], (old: any) => {
+        if (!old?.data) return old;
+        const byId = new Map(old.data.map((u: any) => [u.id, u]));
+        const reordered = orderedIds.map((id, i) => {
+          const u = byId.get(id);
+          return u ? { ...u, sortOrder: i } : null;
+        }).filter(Boolean);
+        // Add any users not in orderedIds (new users)
+        const remaining = old.data.filter((u: any) => !orderedIds.includes(u.id));
+        return { ...old, data: [...reordered, ...remaining] };
+      });
+      return prev;
+    },
+    onError: (_e, _v, ctx) => { if (ctx) queryClient.setQueryData(['users'], ctx); },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
-
-  const saveMasterOrder = (order: string[]) => {
-    setMasterOrder(order);
-    localStorage.setItem('schedule-master-order', JSON.stringify(order));
-  };
 
   const moveMaster = (userId: string, direction: 'up' | 'down') => {
     const current = scheduleUsers.map(u => u.id);
@@ -301,7 +314,7 @@ export default function SchedulePage() {
     if (idx === newIdx) return;
     const reordered = [...current];
     [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
-    saveMasterOrder(reordered);
+    updateOrderMutation.mutate(reordered);
   };
 
   // All active users — use users list as primary source, supplement with entry users
@@ -316,20 +329,16 @@ export default function SchedulePage() {
       }
     });
 
-    // Apply custom order if saved
-    if (masterOrder.length > 0) {
-      activeUsers.sort((a, b) => {
-        const ai = masterOrder.indexOf(a.id);
-        const bi = masterOrder.indexOf(b.id);
-        if (ai === -1 && bi === -1) return 0;
-        if (ai === -1) return 1;
-        if (bi === -1) return -1;
-        return ai - bi;
-      });
-    }
+    // Sort by backend sortOrder field
+    activeUsers.sort((a, b) => {
+      const ao = (a as any).sortOrder ?? 0;
+      const bo = (b as any).sortOrder ?? 0;
+      if (ao !== bo) return ao - bo;
+      return a.fullName.localeCompare(b.fullName);
+    });
 
     return activeUsers;
-  }, [entries, users, masterOrder]);
+  }, [entries, users]);
 
   // Month navigation
   const goToPrevMonth = useCallback(() => setCurrentMonth((m) => subMonths(m, 1)), []);

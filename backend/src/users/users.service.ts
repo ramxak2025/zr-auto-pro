@@ -26,6 +26,7 @@ export class UsersService {
       productSalaryPercent: parseFloat(row.product_salary_percent) || 0,
       permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : (row.permissions || {}),
       daysOff,
+      sortOrder: parseInt(row.sort_order) || 0,
       isActive: row.is_active,
       tenantId: row.tenant_id,
       createdAt: row.created_at,
@@ -39,11 +40,23 @@ export class UsersService {
               COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
+              COALESCE(sort_order, 0) as sort_order,
               is_active, tenant_id, created_at
-       FROM users WHERE tenant_id = $1 ORDER BY created_at`,
+       FROM users WHERE tenant_id = $1 ORDER BY sort_order, created_at`,
       [tenantID],
     );
     return rows.map(this.mapUser);
+  }
+
+  async updateOrder(tenantID: string, orderedIds: string[]) {
+    // Update sort_order for each user based on position in array
+    for (let i = 0; i < orderedIds.length; i++) {
+      await this.pool.query(
+        `UPDATE users SET sort_order = $1 WHERE id = $2 AND tenant_id = $3`,
+        [i, orderedIds[i], tenantID],
+      );
+    }
+    return { message: 'Порядок обновлён' };
   }
 
   async getMasters(tenantID: string) {
