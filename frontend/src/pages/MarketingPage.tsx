@@ -169,6 +169,18 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedMasterId, setSelectedMasterId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<'all' | 'positive' | 'negative'>('all');
+
+  const filteredReviews = reviews.filter(r => {
+    if (filter === 'positive') return r.rating >= 4;
+    if (filter === 'negative') return r.rating <= 3;
+    return true;
+  });
+
+  const totalReviews = reviews.length;
+  const avgRating = totalReviews > 0 ? (reviews.reduce((s, r) => s + r.rating, 0) / totalReviews).toFixed(1) : '0.0';
+  const positiveCount = reviews.filter(r => r.rating >= 4).length;
+  const negativeCount = reviews.filter(r => r.rating <= 3).length;
 
   const monthLabel = (() => {
     const [y, m] = month.split('-');
@@ -202,15 +214,48 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
   return (
     <div className="space-y-4">
       {/* Month picker */}
-      <div className="flex items-center justify-center gap-3">
-        <button onClick={() => shiftMonth(-1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+      <div className="flex items-center justify-between bg-white rounded-2xl border border-gray-100 shadow-sm px-3 py-2">
+        <button onClick={() => shiftMonth(-1)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500">
           <ChevronLeft className="h-5 w-5" />
         </button>
-        <span className="text-sm font-semibold text-gray-900 capitalize min-w-[140px] text-center">{monthLabel}</span>
-        <button onClick={() => shiftMonth(1)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500">
+        <span className="text-sm font-bold text-gray-900 capitalize">{monthLabel}</span>
+        <button onClick={() => shiftMonth(1)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500">
           <ChevronRight className="h-5 w-5" />
         </button>
       </div>
+
+      {/* Summary stats */}
+      {reviews.length > 0 && (
+        <div className="grid grid-cols-3 gap-2">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 text-center">
+            <p className="text-2xl font-bold text-gray-900">{totalReviews}</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Всего</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 text-center">
+            <p className="text-2xl font-bold text-amber-500">{avgRating}<span className="text-sm">★</span></p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Средний</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 text-center">
+            <p className="text-2xl font-bold text-green-600">{Math.round((positiveCount / totalReviews) * 100)}%</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Позитивных</p>
+          </div>
+        </div>
+      )}
+
+      {/* Filter chips */}
+      {reviews.length > 0 && (
+        <div className="flex gap-2">
+          <button onClick={() => setFilter('all')} className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'all' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-50 text-gray-500'}`}>
+            Все ({totalReviews})
+          </button>
+          <button onClick={() => setFilter('positive')} className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'positive' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-50 text-gray-500'}`}>
+            👍 ({positiveCount})
+          </button>
+          <button onClick={() => setFilter('negative')} className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'negative' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-gray-50 text-gray-500'}`}>
+            👎 ({negativeCount})
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>
@@ -316,7 +361,7 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Все отзывы</h3>
             <div className="space-y-1">
-              {reviews.map(r => {
+              {filteredReviews.map(r => {
                 const isGood = r.rating >= 4;
                 const isExpanded = expandedId === r.id;
                 return (

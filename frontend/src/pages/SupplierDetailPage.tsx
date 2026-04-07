@@ -16,6 +16,7 @@ import {
   X,
   Trash2,
   FolderOpen,
+  Calendar,
   ChevronLeft,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -569,35 +570,28 @@ export default function SupplierDetailPage() {
               action={{ label: 'Новая поставка', onClick: openDeliveryModal }}
             />
           ) : (
-            <div className="table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Дата</th>
-                    <th className="text-right">Сумма</th>
-                    <th>Статус</th>
-                    <th>Комментарий</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {deliveries.map((delivery) => (
-                    <tr key={delivery.id}>
-                      <td className="text-gray-900">
-                        {format(new Date(delivery.date), 'dd.MM.yyyy', {
-                          locale: ru,
-                        })}
-                      </td>
-                      <td className="text-right font-medium text-gray-900">
-                        {formatMoney(delivery.totalAmount)}
-                      </td>
-                      <td>{statusBadge(delivery.paymentStatus)}</td>
-                      <td className="text-gray-500 text-sm">
-                        {delivery.comment || '\u2014'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-2">
+              {deliveries.map((delivery) => (
+                <div key={delivery.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="h-3.5 w-3.5 text-gray-400" />
+                        <p className="text-sm font-semibold text-gray-900">
+                          {format(new Date(delivery.date), 'dd MMM yyyy', { locale: ru })}
+                        </p>
+                      </div>
+                      {delivery.comment && (
+                        <p className="text-xs text-gray-500 mt-1.5 truncate">{delivery.comment}</p>
+                      )}
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-base font-bold text-primary-600">{formatMoney(delivery.totalAmount)}</p>
+                      <div className="mt-1">{statusBadge(delivery.paymentStatus)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -621,33 +615,27 @@ export default function SupplierDetailPage() {
               action={{ label: 'Новая оплата', onClick: openPaymentModal }}
             />
           ) : (
-            <div className="table-container">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Дата</th>
-                    <th className="text-right">Сумма</th>
-                    <th>Комментарий</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payments.map((payment) => (
-                    <tr key={payment.id}>
-                      <td className="text-gray-900">
-                        {format(new Date(payment.date), 'dd.MM.yyyy', {
-                          locale: ru,
-                        })}
-                      </td>
-                      <td className="text-right font-medium text-green-600">
-                        {formatMoney(payment.amount)}
-                      </td>
-                      <td className="text-gray-500 text-sm">
-                        {payment.comment || '\u2014'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-2">
+              {payments.map((payment) => (
+                <div key={payment.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="h-3.5 w-3.5 text-gray-400" />
+                        <p className="text-sm font-semibold text-gray-900">
+                          {format(new Date(payment.date), 'dd MMM yyyy', { locale: ru })}
+                        </p>
+                      </div>
+                      {payment.comment && (
+                        <p className="text-xs text-gray-500 mt-1.5 truncate">{payment.comment}</p>
+                      )}
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-base font-bold text-green-600">{formatMoney(payment.amount)}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

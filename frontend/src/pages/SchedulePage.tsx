@@ -525,6 +525,9 @@ export default function SchedulePage() {
     if (!entry) return null;
     const note = (entry.note || '').toLowerCase();
     const lateMin = entry.lateMinutes || 0;
+    const isPast = dateStr ? new Date(dateStr + 'T23:59:59') < new Date() : false;
+    const isToday = dateStr === format(new Date(), 'yyyy-MM-dd');
+
     // Больничный
     if (note.includes('больнич')) {
       return { label: '🏥', bgColor: 'bg-rose-50', textColor: 'text-rose-500', borderColor: 'border-rose-200' };
@@ -537,29 +540,28 @@ export default function SchedulePage() {
     if (entry.isDayOff) {
       return { label: '🌙', bgColor: 'bg-gray-800', textColor: 'text-white', borderColor: 'border-gray-700' };
     }
-    // Опоздание >1ч
+    // Опоздание >1ч (восклицательный в треугольнике)
     if (entry.lateStatus === 'late_major' || lateMin >= 60) {
-      return { label: '⚠️', bgColor: 'bg-orange-50', textColor: 'text-orange-600', borderColor: 'border-orange-300' };
+      return { label: '⚠', bgColor: 'bg-yellow-100', textColor: 'text-yellow-700', borderColor: 'border-yellow-400' };
     }
-    // Опоздание <1ч
+    // Опоздание <1ч (будильник на жёлтом)
     if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) {
       return { label: '⏰', bgColor: 'bg-yellow-50', textColor: 'text-yellow-600', borderColor: 'border-yellow-300' };
     }
-    // На смене (пришёл)
+    // Открыл смену вовремя — показываем время начала смены зелёным
     if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
       const time = entry.shiftStart?.slice(0, 5) || '✓';
-      return { label: time, bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' };
+      return { label: time, bgColor: 'bg-green-100', textColor: 'text-green-700', borderColor: 'border-green-300' };
     }
-    // Запланирована но не пришёл — прогул (прошедшая дата)
-    if (entry.shiftStart && !entry.isDayOff && dateStr) {
-      const entryDate = new Date(dateStr + 'T23:59:59');
-      if (entryDate < new Date()) {
-        return { label: '❌', bgColor: 'bg-red-50', textColor: 'text-red-600', borderColor: 'border-red-300' };
-      }
+    // Прогул для прошедших дней без смены
+    if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) {
+      return { label: '❌', bgColor: 'bg-red-50', textColor: 'text-red-600', borderColor: 'border-red-300' };
     }
-    // Будущая запланированная смена
-    const time = entry.shiftStart?.slice(0, 5) || '✓';
-    return { label: time, bgColor: 'bg-green-50', textColor: 'text-green-700', borderColor: 'border-green-200' };
+    // Запланирована смена (сегодня или будущее) — зелёная галочка
+    if (entry.shiftStart) {
+      return { label: '✓', bgColor: 'bg-green-50', textColor: 'text-green-600', borderColor: 'border-green-200' };
+    }
+    return null;
   };
 
   // Today tab helpers
@@ -602,49 +604,49 @@ export default function SchedulePage() {
       </div>
 
       {/* Tabs */}
-      <div className="overflow-x-auto -mx-1 px-1 mb-6 scrollbar-hide">
-        <div className="inline-flex gap-1 bg-gray-100 rounded-2xl p-1 min-w-0">
+      <div className="overflow-x-auto -mx-2 px-2 mb-5 scrollbar-hide">
+        <div className="inline-flex items-center gap-1.5 bg-gray-100 rounded-2xl p-1.5 min-w-max">
           <button
             onClick={() => setTab('schedule')}
-            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-              tab === 'schedule' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
+              tab === 'schedule' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
             }`}
           >
-            <CalendarDays className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            <CalendarDays className="w-4 h-4" />
             График
           </button>
           <button
             onClick={() => setTab('today')}
-            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-              tab === 'today' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
+              tab === 'today' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
             }`}
           >
-            <Clock className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            <Clock className="w-4 h-4" />
             Сегодня
           </button>
           <button
             onClick={() => setTab('mystats')}
-            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-              tab === 'mystats' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
+              tab === 'mystats' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
             }`}
           >
-            <Users className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            <Users className="w-4 h-4" />
             Смены
           </button>
           <button
             onClick={() => setTab('attendance')}
-            className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-              tab === 'attendance' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
+              tab === 'attendance' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
             }`}
           >
-            <BarChart3 className="w-4 h-4 inline-block mr-1 -mt-0.5" />
+            <BarChart3 className="w-4 h-4" />
             Рейтинг
           </button>
           {canEdit && (
             <button
               onClick={() => setTab('settings')}
-              className={`whitespace-nowrap py-2 px-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-                tab === 'settings' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
+                tab === 'settings' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
               }`}
             >
               Настройки
@@ -1285,9 +1287,15 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
           ))}
         </select>
 
-        <div className="grid grid-cols-2 gap-2">
-          <input type="date" className="input text-sm" value={applyFrom} onChange={(e) => setApplyFrom(e.target.value)} />
-          <input type="date" className="input text-sm" value={applyTo} onChange={(e) => setApplyTo(e.target.value)} />
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-gray-500 w-10 flex-shrink-0">С</label>
+            <input type="date" className="input text-xs py-2 px-2.5 flex-1 min-w-0" value={applyFrom} onChange={(e) => setApplyFrom(e.target.value)} />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-medium text-gray-500 w-10 flex-shrink-0">По</label>
+            <input type="date" className="input text-xs py-2 px-2.5 flex-1 min-w-0" value={applyTo} onChange={(e) => setApplyTo(e.target.value)} />
+          </div>
         </div>
 
         <button

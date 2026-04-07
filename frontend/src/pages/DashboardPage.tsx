@@ -143,14 +143,18 @@ function StaffStatusCircles() {
   if (statuses.length === 0) return null;
 
   const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
+  const isAbsent = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('прогул');
+  // Manual "Shift" or actual arrival counts as on shift
+  const isOnShift = (s: TodayEmployeeStatus) => s.isWorking || !!s.actualArrival || s.lateStatus === 'on_time';
 
   const getCircleColor = (s: TodayEmployeeStatus) => {
     if (isSick(s)) return 'bg-rose-400 ring-rose-300';
     if (s.isDayOff) return 'bg-gray-400 ring-gray-300';
-    if (s.lateStatus === 'late_major') return 'bg-orange-500 ring-orange-400';
+    if (s.lateStatus === 'late_major') return 'bg-yellow-500 ring-yellow-400';
     if (s.lateStatus === 'late_minor') return 'bg-yellow-400 ring-yellow-300';
-    if (s.isWorking) return 'bg-green-500 ring-green-400';
-    if (!s.isWorking && s.hasSchedule) return 'bg-gray-300 ring-gray-200 grayscale';
+    if (isOnShift(s)) return 'bg-green-500 ring-green-400';
+    if (isAbsent(s)) return 'bg-red-500 ring-red-400';
+    if (s.hasSchedule) return 'bg-gray-300 ring-gray-200';
     return 'bg-gray-200 ring-gray-100';
   };
 
@@ -159,7 +163,8 @@ function StaffStatusCircles() {
     if (s.isDayOff) return 'Выходной';
     if (s.lateStatus === 'late_major') return `Опозд. >${'\u00A0'}1ч`;
     if (s.lateStatus === 'late_minor') return `Опозд. <${'\u00A0'}1ч`;
-    if (s.isWorking) return 'На смене';
+    if (isOnShift(s)) return 'На смене';
+    if (isAbsent(s)) return 'Прогул';
     if (s.hasSchedule) return 'Не пришёл';
     return '';
   };
@@ -167,12 +172,13 @@ function StaffStatusCircles() {
   const getStatusEmoji = (s: TodayEmployeeStatus) => {
     if (isSick(s)) return '🏥';
     if (s.isDayOff) return '🌙';
+    if (isAbsent(s)) return '❌';
     return null;
   };
 
-  // Group employees
-  const onShift = statuses.filter(s => s.isWorking && !s.isDayOff && !isSick(s));
-  const notArrived = statuses.filter(s => !s.isWorking && !s.isDayOff && s.hasSchedule && !isSick(s));
+  // Group employees — manual status counts
+  const onShift = statuses.filter(s => isOnShift(s) && !s.isDayOff && !isSick(s) && !isAbsent(s));
+  const notArrived = statuses.filter(s => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s));
   const dayOff = statuses.filter(s => s.isDayOff && !isSick(s));
   const sick = statuses.filter(s => isSick(s));
 
