@@ -18,7 +18,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
 
-type TabType = 'grid' | 'today' | 'shifts' | 'settings';
+type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAY_ABBR = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -127,7 +127,7 @@ function GridTab() {
 
   // Global master order — uses backend sortOrder field
   const activeUsers = useMemo(() => {
-    const list = (usersData || []).filter(u => u.isActive);
+    const list = (usersData || []).filter(u => u.isActive && u.role === 'master');
     return list.sort((a: any, b: any) => {
       const ao = a.sortOrder ?? 0;
       const bo = b.sortOrder ?? 0;
@@ -319,8 +319,7 @@ function GridTab() {
           style={styles.monthCenter}
           activeOpacity={0.7}
         >
-          <Text style={styles.monthTitle}>{MONTH_NAMES[month]}</Text>
-          <Text style={styles.monthYear}>{year}</Text>
+          <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
           <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
@@ -478,7 +477,7 @@ function GridTab() {
                           key={ds}
                           style={[
                             styles.gridCell,
-                            { width: CELL_W },
+                            { width: CELL_W, height: ROW_H },
                             isWeekend && !cell.hasEntry && { backgroundColor: colors.red[50] + '40' },
                             isToday && styles.gridCellToday,
                           ]}
@@ -747,8 +746,7 @@ function ShiftsTab() {
           style={styles.monthCenter}
           activeOpacity={0.7}
         >
-          <Text style={styles.monthTitle}>{MONTH_NAMES[month]}</Text>
-          <Text style={styles.monthYear}>{year}</Text>
+          <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
           <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
@@ -834,6 +832,118 @@ function ShiftsTab() {
   );
 }
 
+// ============== RATING TAB ==============
+function RatingTab() {
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const monthStart = `${selectedMonth}-01`;
+  const monthEnd = (() => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
+  })();
+
+  const { data: monthEntries = [] } = useQuery<ScheduleEntry[]>({
+    queryKey: ['schedule', monthStart, monthEnd],
+    queryFn: async () => (await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd })).data,
+  });
+
+  const { data: usersData } = useQuery<User[]>({
+    queryKey: ['users'],
+    queryFn: async () => (await usersApi.getAll()).data,
+  });
+
+  const users = useMemo(() => (usersData || []).filter(u => u.isActive && u.role === 'master'), [usersData]);
+
+  const stats = useMemo(() => {
+    const map: Record<string, { full: number; lateMinor: number; lateMajor: number; absent: number; sick: number; total: number }> = {};
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    monthEntries.forEach(e => {
+      const ed = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
+      if (ed > todayEnd) return;
+      if (!map[e.userId]) map[e.userId] = { full: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, total: 0 };
+      const s = map[e.userId];
+      const note = (e.note || '').toLowerCase();
+      if (note.includes('больнич')) { s.sick++; return; }
+      if (note.includes('прогул')) { s.absent++; s.total++; return; }
+      if (e.isDayOff) return;
+      s.total++;
+      if (e.lateStatus === 'late_major' || (e.lateMinutes || 0) >= 60) s.lateMajor++;
+      else if (e.lateStatus === 'late_minor' || ((e.lateMinutes || 0) > 0 && (e.lateMinutes || 0) < 60)) s.lateMinor++;
+      else if (e.actualArrival || e.lateStatus === 'on_time') s.full++;
+      else {
+        const d = new Date(e.date + 'T23:59:59');
+        if (d < new Date()) s.absent++;
+      }
+    });
+    return map;
+  }, [monthEntries]);
+
+  const ranked = useMemo(() => users.map(u => {
+    const s = stats[u.id] || { full: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, total: 0 };
+    const score = s.total > 0 ? Math.round((s.full / s.total) * 100) : 0;
+    return { ...u, stats: s, score };
+  }).sort((a, b) => b.score - a.score || b.stats.full - a.stats.full), [users, stats]);
+
+  const shiftMonth = (dir: number) => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + dir);
+    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+  const monthLabel = (() => {
+    const [y, m] = selectedMonth.split('-');
+    return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' });
+  })();
+
+  return (
+    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3] }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], borderWidth: 1, borderColor: colors.gray[100] }}>
+        <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ padding: spacing[1] }}>
+          <Ionicons name="chevron-back" size={20} color={colors.gray[500]} />
+        </TouchableOpacity>
+        <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], textTransform: 'capitalize' as const, minWidth: 140, textAlign: 'center' }}>{monthLabel}</Text>
+        <TouchableOpacity onPress={() => shiftMonth(1)} style={{ padding: spacing[1] }}>
+          <Ionicons name="chevron-forward" size={20} color={colors.gray[500]} />
+        </TouchableOpacity>
+      </View>
+
+      {ranked.map((u, idx) => {
+        const s = u.stats;
+        const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
+        const scoreColor = u.score >= 90 ? colors.green[600] : u.score >= 70 ? colors.yellow[600] : colors.red[500];
+        const scoreBg = u.score >= 90 ? colors.green[50] : u.score >= 70 ? colors.yellow[50] : colors.red[50];
+
+        return (
+          <View key={u.id} style={{ backgroundColor: colors.white, borderRadius: borderRadius['2xl'], padding: spacing[3], borderWidth: 1, borderColor: idx < 3 ? colors.amber[200] : colors.gray[100] }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
+              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: idx < 3 ? colors.amber[100] : colors.gray[100], alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: idx < 3 ? colors.amber[600] : colors.gray[500] }}>{medal || (idx + 1)}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }} numberOfLines={1}>{u.fullName}</Text>
+                <View style={{ flexDirection: 'row', gap: spacing[1.5], marginTop: 4, flexWrap: 'wrap' }}>
+                  <Text style={{ fontSize: 9, backgroundColor: colors.green[50], color: colors.green[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>✓ {s.full}</Text>
+                  {s.lateMinor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.yellow[50], color: colors.yellow[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⏰ {s.lateMinor}</Text>}
+                  {s.lateMajor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.orange[50], color: colors.orange[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⚠ {s.lateMajor}</Text>}
+                  {s.absent > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.red[50], color: colors.red[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>❌ {s.absent}</Text>}
+                  {s.sick > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.rose[50], color: colors.rose[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>🏥 {s.sick}</Text>}
+                </View>
+              </View>
+              <View style={{ backgroundColor: scoreBg, borderRadius: borderRadius.lg, paddingHorizontal: spacing[2.5], paddingVertical: spacing[1.5], alignItems: 'center' }}>
+                <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: scoreColor }}>{u.score}%</Text>
+                <Text style={{ fontSize: 8, color: colors.gray[400] }}>посещ.</Text>
+              </View>
+            </View>
+          </View>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
 // ============== SETTINGS TAB ==============
 function SettingsTab() {
   const queryClient = useQueryClient();
@@ -849,7 +959,7 @@ function SettingsTab() {
     queryFn: async () => { const res = await scheduleApi.getWorkModes(); return res.data; },
   });
 
-  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
+  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive && u.role === 'master'), [usersData]);
 
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
     const user = activeUsers.find(u => u.id === userId);
@@ -1101,6 +1211,7 @@ export default function ScheduleScreen() {
     { key: 'grid', label: 'График', icon: 'grid-outline', activeIcon: 'grid' },
     { key: 'today', label: 'Сегодня', icon: 'today-outline', activeIcon: 'today' },
     { key: 'shifts', label: 'Смены', icon: 'stats-chart-outline', activeIcon: 'stats-chart' },
+    { key: 'rating', label: 'Рейтинг', icon: 'trophy-outline', activeIcon: 'trophy' },
     ...(isAdmin ? [{ key: 'settings' as TabType, label: 'Настройки', icon: 'settings-outline' as keyof typeof Ionicons.glyphMap, activeIcon: 'settings' as keyof typeof Ionicons.glyphMap }] : []),
   ];
 
@@ -1165,6 +1276,7 @@ export default function ScheduleScreen() {
       {tab === 'grid' && <GridTab />}
       {tab === 'today' && <TodayTab />}
       {tab === 'shifts' && <ShiftsTab />}
+      {tab === 'rating' && <RatingTab />}
       {tab === 'settings' && <SettingsTab />}
     </SafeAreaView>
   );
@@ -1460,7 +1572,6 @@ const styles = StyleSheet.create({
   gridCell: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing[2.5],
     borderRightWidth: 0.5,
     borderRightColor: colors.gray[100],
     borderBottomWidth: 0.5,

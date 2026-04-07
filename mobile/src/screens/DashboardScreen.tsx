@@ -10,11 +10,11 @@ import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line } from 'react-na
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
-import { checksApi, salaryApi, shiftsApi, scheduleApi, reportsApi, marketingApi } from '../api/services';
+import { checksApi, salaryApi, shiftsApi, scheduleApi, reportsApi, marketingApi, usersApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import AnimatedCard from '../components/AnimatedCard';
-import type { SalarySummary, EmployeeRanking, TodayEmployeeStatus, Shift } from '../../../shared/types';
+import type { SalarySummary, EmployeeRanking, TodayEmployeeStatus, Shift, ScheduleEntry, User } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -631,6 +631,82 @@ function MasterRecentChecks() {
   );
 }
 
+function MyAttendanceRankWidget({ userId }: { userId?: string }) {
+  const navigation = useNavigation<any>();
+  const [selectedMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const monthStart = `${selectedMonth}-01`;
+  const monthEnd = (() => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
+  })();
+
+  const { data: monthEntries = [] } = useQuery<ScheduleEntry[]>({
+    queryKey: ['schedule', monthStart, monthEnd],
+    queryFn: async () => (await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd })).data,
+    enabled: !!userId,
+  });
+
+  const { data: usersData } = useQuery<User[]>({
+    queryKey: ['users'],
+    queryFn: async () => (await usersApi.getAll()).data,
+  });
+
+  const masters = useMemo(() => (usersData || []).filter(u => u.isActive && u.role === 'master'), [usersData]);
+
+  const ranked = useMemo(() => {
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    return masters.map(u => {
+      let full = 0, total = 0;
+      monthEntries.forEach(e => {
+        if (e.userId !== u.id) return;
+        const ed = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
+        if (ed > todayEnd) return;
+        const note = (e.note || '').toLowerCase();
+        if (note.includes('больнич')) return;
+        if (e.isDayOff) return;
+        if (note.includes('прогул')) { total++; return; }
+        total++;
+        if (e.actualArrival || e.lateStatus === 'on_time') full++;
+      });
+      const score = total > 0 ? Math.round((full / total) * 100) : 0;
+      return { id: u.id, score, full, total };
+    }).sort((a, b) => b.score - a.score || b.full - a.full);
+  }, [masters, monthEntries]);
+
+  if (!userId || ranked.length === 0) return null;
+  const myRank = ranked.findIndex(r => r.id === userId) + 1;
+  const me = ranked.find(r => r.id === userId);
+  if (!me) return null;
+
+  const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : myRank === 3 ? '🥉' : null;
+  const scoreColor = me.score >= 90 ? colors.green[600] : me.score >= 70 ? colors.yellow[600] : colors.red[500];
+  const monthName = new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]) - 1).toLocaleDateString('ru-RU', { month: 'long' });
+
+  return (
+    <AnimatedCard index={6}>
+      <TouchableOpacity onPress={() => navigation.navigate('Schedule')} activeOpacity={0.8} style={{ backgroundColor: colors.white, borderRadius: borderRadius['2xl'], padding: spacing[4], borderWidth: 1, borderColor: colors.gray[100] }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
+          <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: myRank <= 3 ? colors.amber[50] : colors.gray[50], alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: myRank <= 3 ? colors.amber[200] : colors.gray[200] }}>
+            <Text style={{ fontSize: 26 }}>{medal || `#${myRank}`}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 11, fontWeight: '700', color: colors.gray[400], textTransform: 'uppercase' as const, letterSpacing: 0.5 }}>Мой рейтинг</Text>
+            <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: 2, textTransform: 'capitalize' as const }}>{monthName}</Text>
+            <Text style={{ fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 }}>
+              <Text style={{ color: scoreColor, fontWeight: '700' }}>{me.score}%</Text> посещаемость · {me.full}/{me.total} смен
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.gray[300]} />
+        </View>
+      </TouchableOpacity>
+    </AnimatedCard>
+  );
+}
+
 function MasterDashboard() {
   const { user } = useAuth();
   const { data, isLoading } = useQuery<SalarySummary>({
@@ -770,6 +846,8 @@ function MasterDashboard() {
           )}
         </AnimatedCard>
       )}
+
+      <MyAttendanceRankWidget userId={user?.id} />
     </View>
   );
 }
