@@ -1,8 +1,9 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -121,7 +122,40 @@ function GridTab() {
     queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
   });
 
-  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
+  // Custom master order — saved in AsyncStorage
+  const [masterOrder, setMasterOrder] = useState<string[]>([]);
+  useEffect(() => {
+    AsyncStorage.getItem('schedule-master-order').then(v => { if (v) try { setMasterOrder(JSON.parse(v)); } catch {} });
+  }, []);
+  const saveMasterOrder = (order: string[]) => {
+    setMasterOrder(order);
+    AsyncStorage.setItem('schedule-master-order', JSON.stringify(order));
+  };
+
+  const activeUsersBase = useMemo(() => (usersData || []).filter(u => u.isActive), [usersData]);
+  const activeUsers = useMemo(() => {
+    if (masterOrder.length === 0) return activeUsersBase;
+    return [...activeUsersBase].sort((a, b) => {
+      const ai = masterOrder.indexOf(a.id);
+      const bi = masterOrder.indexOf(b.id);
+      if (ai === -1 && bi === -1) return 0;
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }, [activeUsersBase, masterOrder]);
+
+  const moveMaster = (userId: string, dir: 'up' | 'down') => {
+    const ids = activeUsers.map(u => u.id);
+    const idx = ids.indexOf(userId);
+    if (idx < 0) return;
+    const newIdx = dir === 'up' ? Math.max(0, idx - 1) : Math.min(ids.length - 1, idx + 1);
+    if (idx === newIdx) return;
+    const next = [...ids];
+    [next[idx], next[newIdx]] = [next[newIdx], next[idx]];
+    saveMasterOrder(next);
+  };
+
   const days = getDaysInMonth(year, month);
 
   const entryMap = useMemo(() => {
@@ -163,25 +197,27 @@ function GridTab() {
     return previous;
   };
 
+  // patchCache directly mutates RQ cache for instant UI
+  const patchCache = (userId: string, date: string, payload: any, isNew: boolean) => {
+    queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
+      const arr = old ?? [];
+      if (isNew) {
+        return [...arr, { id: `t-${Date.now()}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry];
+      }
+      return arr.map(e => (e.userId === userId && e.date.slice(0, 10) === date) ? { ...e, ...payload } : e);
+    });
+  };
+
   const createMutation = useMutation({
     mutationFn: (d: any) => scheduleApi.create(d),
-    onMutate: async (d: any) => {
-      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
-      return optimisticUpdate(d.userId, d.date, d);
-    },
-    onError: (_e: any, _d: any, ctx: any) => { if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+    onSuccess: () => { setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500); },
+    onError: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onMutate: async ({ id, data }: { id: string; data: any }) => {
-      await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
-      const entry = (entries ?? []).find(e => e.id === id);
-      return optimisticUpdate(data.userId || entry?.userId || '', data.date || entry?.date || '', data, entry);
-    },
-    onError: (_e: any, _d: any, ctx: any) => { if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+    onSuccess: () => { setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500); },
+    onError: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }),
   });
 
   const deleteMutation = useMutation({
@@ -209,9 +245,11 @@ function GridTab() {
     else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; }
     else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
 
-    const popup = quickPopup;
+    // Patch cache instantly + close popup
+    patchCache(userId, date, base, !entry);
     setQuickPopup(null);
-    if (entry) { updateMutation.mutate({ id: entry.id, data: { ...base, userId: popup.userId, date: popup.date } }); }
+
+    if (entry) { updateMutation.mutate({ id: entry.id, data: { ...base, userId, date } }); }
     else { createMutation.mutate(base); }
   };
 
@@ -316,6 +354,16 @@ function GridTab() {
                           </View>
                         )}
                       </View>
+                      {canEdit && (
+                        <View style={{ flexDirection: 'column', justifyContent: 'center' }}>
+                          <TouchableOpacity onPress={() => moveMaster(u.id, 'up')} disabled={rowIdx === 0} style={{ opacity: rowIdx === 0 ? 0.2 : 1, padding: 1 }}>
+                            <Ionicons name="chevron-up" size={12} color={colors.gray[400]} />
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => moveMaster(u.id, 'down')} disabled={rowIdx === activeUsers.length - 1} style={{ opacity: rowIdx === activeUsers.length - 1 ? 0.2 : 1, padding: 1 }}>
+                            <Ionicons name="chevron-down" size={12} color={colors.gray[400]} />
+                          </TouchableOpacity>
+                        </View>
+                      )}
                     </View>
                   </View>
                 );
