@@ -61,34 +61,35 @@ function getAvatarColors(name?: string): string[] {
 }
 
 function getCellDot(entry?: ScheduleEntry) {
-  if (!entry) return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
+  if (!entry) return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
   const note = (entry.note || '').toLowerCase();
   const lateMin = entry.lateMinutes || 0;
-  const hasLate = entry.lateStatus === 'late_major' || entry.lateStatus === 'late_minor' || lateMin > 0;
+  const isPast = new Date(entry.date + 'T23:59:59') < new Date();
+  const isToday = entry.date.slice(0, 10) === new Date().toISOString().slice(0, 10);
 
   // 1. Больничный
-  if (note.includes('больнич')) return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50] };
-  // 2. Прогул (note содержит "прогул")
-  if (note.includes('прогул')) return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50] };
+  if (note.includes('больнич')) return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50], label: '' };
+  // 2. Прогул из note
+  if (note.includes('прогул')) return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50], label: '' };
   // 3. Выходной
-  if (entry.isDayOff) return { dotColor: colors.gray[400], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100] };
-  // 4. Опоздание >1ч
-  if (entry.lateStatus === 'late_major' || lateMin >= 60) return { dotColor: colors.orange[500], hasEntry: true, icon: 'warning' as const, bgColor: colors.orange[50] };
-  // 5. Опоздание <1ч
-  if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50] };
-  // 6. На смене (пришёл, без опозданий)
-  if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark-circle' as const, bgColor: colors.green[50] };
-  // 7. Запланирована но не пришёл — проверяем прошла ли дата
-  if (entry.shiftStart && !entry.isDayOff) {
-    const entryDate = new Date(entry.date + 'T23:59:59');
-    if (entryDate < new Date()) {
-      // Прошедшая дата, не пришёл = прогул
-      return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50] };
-    }
-    // Будущая смена
-    return { dotColor: colors.primary[400], hasEntry: true, icon: 'time' as const, bgColor: colors.primary[50] };
+  if (entry.isDayOff) return { dotColor: colors.gray[500], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100], label: '' };
+  // 4. Опоздание >1ч (треугольник)
+  if (entry.lateStatus === 'late_major' || lateMin >= 60) return { dotColor: colors.yellow[600], hasEntry: true, icon: 'warning' as const, bgColor: colors.yellow[50], label: '' };
+  // 5. Опоздание <1ч (будильник)
+  if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50], label: '' };
+  // 6. Открыл смену вовремя — показываем время
+  if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
+    return { dotColor: colors.green[600], hasEntry: true, icon: null, bgColor: colors.green[100], label: entry.shiftStart.slice(0, 5) };
   }
-  return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent' };
+  // 7. Прогул для прошедших дней без смены
+  if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) {
+    return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50], label: '' };
+  }
+  // 8. Запланирована смена (сегодня или будущее) — зелёная галочка
+  if (entry.shiftStart) {
+    return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark' as const, bgColor: colors.green[50], label: '' };
+  }
+  return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
 }
 
 // ============== GRID TAB ==============
@@ -436,8 +437,10 @@ function GridTab() {
                           activeOpacity={canEdit ? 0.5 : 1}
                         >
                           {cell.hasEntry ? (
-                            <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30' }]}>
-                              {cell.icon ? (
+                            <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30', minWidth: cell.label ? 28 : 18, paddingHorizontal: cell.label ? 3 : 0 }]}>
+                              {cell.label ? (
+                                <Text style={{ fontSize: 8, fontWeight: '700', color: cell.dotColor }}>{cell.label}</Text>
+                              ) : cell.icon ? (
                                 <Ionicons name={cell.icon} size={10} color={cell.dotColor} />
                               ) : (
                                 <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: cell.dotColor }} />

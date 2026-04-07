@@ -370,12 +370,17 @@ function StaffStatus() {
   if (statuses.length === 0) return null;
 
   const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
+  const isAbsent = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('прогул');
+  // Manual "Shift" or actualArrival counts as on shift
+  const isOnShift = (s: TodayEmployeeStatus) => s.isWorking || !!s.actualArrival || s.lateStatus === 'on_time';
+
   const getColor = (s: TodayEmployeeStatus) => {
     if (isSick(s)) return colors.rose[400];
     if (s.isDayOff) return colors.gray[400];
-    if (s.lateStatus === 'late_major') return colors.orange[500];
-    if (s.lateStatus === 'late_minor') return colors.yellow[300];
-    if (s.isWorking) return colors.green[500];
+    if (s.lateStatus === 'late_major') return colors.yellow[600];
+    if (s.lateStatus === 'late_minor') return colors.yellow[400];
+    if (isOnShift(s)) return colors.green[500];
+    if (isAbsent(s)) return colors.red[500];
     return colors.gray[300];
   };
 
