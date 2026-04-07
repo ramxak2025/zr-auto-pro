@@ -100,6 +100,7 @@ function GridTab() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [quickPopup, setQuickPopup] = useState<{ userId: string; date: string; entry?: ScheduleEntry; userName?: string } | null>(null);
   const [reorderUser, setReorderUser] = useState<{ userId: string; name: string; index: number } | null>(null);
+  const [pendingChanges, setPendingChanges] = useState<Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>>({});
 
   // Synced vertical scroll refs
   const leftScrollRef = useRef<ScrollView>(null);
@@ -172,8 +173,15 @@ function GridTab() {
       const d = e.date?.split('T')[0] || '';
       map.set(`${e.userId}-${d}`, e);
     });
+    // Overlay pending changes
+    Object.values(pendingChanges).forEach(c => {
+      const d = c.date.slice(0, 10);
+      const key = `${c.userId}-${d}`;
+      const existing = map.get(key);
+      map.set(key, { ...(existing || { id: `pending-${key}`, tenantId: '', userId: c.userId, date: c.date, isManualOverride: true }), ...c.payload } as ScheduleEntry);
+    });
     return map;
-  }, [entries]);
+  }, [entries, pendingChanges]);
 
   const userStats = useMemo(() => {
     const stats = new Map<string, { worked: number; off: number }>();
@@ -253,13 +261,32 @@ function GridTab() {
     else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; }
     else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
 
-    // Patch cache instantly + close popup
-    patchCache(userId, date, base, !entry);
+    // Save to pending changes — applied in batch via Apply button
+    const key = `${userId}-${date}`;
+    setPendingChanges(prev => ({
+      ...prev,
+      [key]: { userId, date, payload: base, existingEntryId: entry?.id },
+    }));
     setQuickPopup(null);
-
-    if (entry) { updateMutation.mutate({ id: entry.id, data: { ...base, userId, date } }); }
-    else { createMutation.mutate(base); }
   };
+
+  const applyPending = async () => {
+    const items = Object.values(pendingChanges);
+    if (items.length === 0) return;
+    let failed = 0;
+    for (const c of items) {
+      try {
+        if (c.existingEntryId) await scheduleApi.update(c.existingEntryId, c.payload);
+        else await scheduleApi.create(c.payload);
+      } catch { failed++; }
+    }
+    setPendingChanges({});
+    queryClient.invalidateQueries({ queryKey: ['schedule'] });
+    queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+    if (failed > 0) Alert.alert('Ошибка', `Не применено: ${failed}`);
+  };
+
+  const discardPending = () => setPendingChanges({});
 
   const CELL_W = 44;
   const NAME_W = 140;
@@ -299,6 +326,26 @@ function GridTab() {
           <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
       </View>
+
+      {/* Pending changes Apply bar */}
+      {Object.keys(pendingChanges).length > 0 && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fde68a', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, marginHorizontal: 16, marginBottom: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+            <Ionicons name="warning" size={14} color="#d97706" />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400e' }}>
+              Не сохранено: {Object.keys(pendingChanges).length}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity onPress={discardPending} style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: '#6b7280' }}>Отмена</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={applyPending} style={{ backgroundColor: '#d97706', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>Применить</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Legend */}
       <View style={styles.legendRow}>
@@ -439,13 +486,13 @@ function GridTab() {
                           activeOpacity={canEdit ? 0.5 : 1}
                         >
                           {cell.hasEntry ? (
-                            <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30', minWidth: cell.label ? 28 : 18, paddingHorizontal: cell.label ? 3 : 0 }]}>
+                            <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30', minWidth: cell.label ? 32 : 24, paddingHorizontal: cell.label ? 4 : 0 }]}>
                               {cell.label ? (
-                                <Text style={{ fontSize: 8, fontWeight: '700', color: cell.dotColor }}>{cell.label}</Text>
+                                <Text style={{ fontSize: 10, fontWeight: '700', color: cell.dotColor }}>{cell.label}</Text>
                               ) : cell.icon ? (
-                                <Ionicons name={cell.icon} size={10} color={cell.dotColor} />
+                                <Ionicons name={cell.icon} size={16} color={cell.dotColor} />
                               ) : (
-                                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: cell.dotColor }} />
+                                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: cell.dotColor }} />
                               )}
                             </View>
                           ) : (
@@ -1423,9 +1470,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50] + '50',
   },
   gridDot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -377,11 +377,41 @@ function StaffStatus() {
   const getColor = (s: TodayEmployeeStatus) => {
     if (isSick(s)) return colors.rose[400];
     if (s.isDayOff) return colors.gray[400];
-    if (s.lateStatus === 'late_major') return colors.yellow[600];
-    if (s.lateStatus === 'late_minor') return colors.yellow[400];
+    if (s.lateStatus === 'late_major') return colors.orange[500];
+    if (s.lateStatus === 'late_minor') return colors.yellow[300];
     if (isOnShift(s)) return colors.green[500];
     if (isAbsent(s)) return colors.red[500];
     return colors.gray[300];
+  };
+
+  // Groups: on-shift (all who came including late), not arrived, absent, sick, dayOff
+  const onShiftAll = statuses.filter(s => (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') && !s.isDayOff && !isSick(s) && !isAbsent(s));
+  const notArrivedGroup = statuses.filter(s => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s) && !s.lateStatus);
+  const absentGroup = statuses.filter(s => isAbsent(s));
+  const dayOffGroup = statuses.filter(s => s.isDayOff && !isSick(s));
+  const sickGroup = statuses.filter(s => isSick(s));
+
+  const renderGroup = (title: string, items: TodayEmployeeStatus[]) => {
+    if (items.length === 0) return null;
+    return (
+      <View style={{ marginBottom: spacing[3] }}>
+        <Text style={{ fontSize: 10, fontWeight: '700', color: colors.gray[400], marginBottom: 6, letterSpacing: 0.5, textTransform: 'uppercase' as const }}>
+          {title} · {items.length}
+        </Text>
+        <View style={styles.staffGrid}>
+          {items.map((s) => (
+            <View key={s.userId} style={styles.staffItem}>
+              <View style={[styles.staffCircle, { backgroundColor: getColor(s) }]}>
+                <Text style={styles.staffInitials}>
+                  {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                </Text>
+              </View>
+              <Text style={styles.staffName} numberOfLines={1}>{s.fullName.split(' ')[0]}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
   };
 
   return (
@@ -390,18 +420,11 @@ function StaffStatus() {
         <Ionicons name="people-outline" size={16} color={colors.gray[900]} />
         <Text style={styles.sectionTitle}>Сотрудники сегодня</Text>
       </View>
-      <View style={styles.staffGrid}>
-        {statuses.map((s) => (
-          <View key={s.userId} style={styles.staffItem}>
-            <View style={[styles.staffCircle, { backgroundColor: getColor(s) }]}>
-              <Text style={styles.staffInitials}>
-                {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2)}
-              </Text>
-            </View>
-            <Text style={styles.staffName} numberOfLines={1}>{s.fullName.split(' ')[0]}</Text>
-          </View>
-        ))}
-      </View>
+      {renderGroup('На смене', onShiftAll)}
+      {renderGroup('Ещё не пришёл', notArrivedGroup)}
+      {renderGroup('Прогул', absentGroup)}
+      {renderGroup('Выходной', dayOffGroup)}
+      {renderGroup('Больничный', sickGroup)}
     </AnimatedCard>
   );
 }

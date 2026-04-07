@@ -150,8 +150,8 @@ function StaffStatusCircles() {
   const getCircleColor = (s: TodayEmployeeStatus) => {
     if (isSick(s)) return 'bg-rose-400 ring-rose-300';
     if (s.isDayOff) return 'bg-gray-400 ring-gray-300';
-    if (s.lateStatus === 'late_major') return 'bg-yellow-500 ring-yellow-400';
-    if (s.lateStatus === 'late_minor') return 'bg-yellow-400 ring-yellow-300';
+    if (s.lateStatus === 'late_major') return 'bg-orange-500 ring-orange-400';
+    if (s.lateStatus === 'late_minor') return 'bg-yellow-300 ring-yellow-200';
     if (isOnShift(s)) return 'bg-green-500 ring-green-400';
     if (isAbsent(s)) return 'bg-red-500 ring-red-400';
     if (s.hasSchedule) return 'bg-gray-300 ring-gray-200';
@@ -176,10 +176,8 @@ function StaffStatusCircles() {
     return null;
   };
 
-  // Group employees — split by attendance sub-status
-  const onTime = statuses.filter(s => isOnShift(s) && !s.isDayOff && !isSick(s) && !isAbsent(s) && s.lateStatus !== 'late_minor' && s.lateStatus !== 'late_major');
-  const lateMinor = statuses.filter(s => !s.isDayOff && !isSick(s) && s.lateStatus === 'late_minor');
-  const lateMajor = statuses.filter(s => !s.isDayOff && !isSick(s) && s.lateStatus === 'late_major');
+  // Group: 1) on-shift (on-time + late, all counted as present), 2) not arrived, 3) absent, 4) sick, 5) day off
+  const onShiftAll = statuses.filter(s => (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') && !s.isDayOff && !isSick(s) && !isAbsent(s));
   const notArrived = statuses.filter(s => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s) && !s.lateStatus);
   const absent = statuses.filter(s => isAbsent(s));
   const dayOff = statuses.filter(s => s.isDayOff && !isSick(s));
@@ -217,9 +215,7 @@ function StaffStatusCircles() {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-900">Сотрудники сегодня</h3>
         <div className="flex items-center gap-2 text-[11px] text-gray-400 flex-wrap">
-          {onTime.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onTime.length}</span>}
-          {lateMinor.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-400" /> {lateMinor.length}</span>}
-          {lateMajor.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-yellow-600" /> {lateMajor.length}</span>}
+          {onShiftAll.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onShiftAll.length}</span>}
           {notArrived.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> {notArrived.length}</span>}
           {absent.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> {absent.length}</span>}
           {dayOff.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {dayOff.length}</span>}
@@ -227,13 +223,11 @@ function StaffStatusCircles() {
         </div>
       </div>
 
-      {renderGroup('На смене', '✅', onTime)}
-      {renderGroup('Опоздал <1ч', '⏰', lateMinor)}
-      {renderGroup('Опоздал >1ч', '⚠️', lateMajor)}
+      {renderGroup('На смене', '✅', onShiftAll)}
       {renderGroup('Ещё не пришёл', '⏳', notArrived)}
       {renderGroup('Прогул', '❌', absent)}
-      {renderGroup('Больничный', '🏥', sick)}
       {renderGroup('Выходной', '🌙', dayOff)}
+      {renderGroup('Больничный', '🏥', sick)}
     </div>
   );
 }

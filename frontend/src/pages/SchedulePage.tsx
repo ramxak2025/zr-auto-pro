@@ -19,6 +19,7 @@ import {
   Trophy,
   TrendingUp,
   Medal,
+  Settings,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -71,10 +72,14 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
 
   const allEntries = monthEntries ?? entries;
 
-  // Compute stats per user
+  // Compute stats per user — only for past and current days (not future)
   const stats = useMemo(() => {
     const map: Record<string, { full: number; late: number; lateMinor: number; lateMajor: number; absent: number; sick: number; dayOff: number; total: number }> = {};
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
     allEntries.forEach(e => {
+      const entryDate = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
+      if (entryDate > todayEnd) return; // skip future
       if (!map[e.userId]) map[e.userId] = { full: 0, late: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, dayOff: 0, total: 0 };
       const s = map[e.userId];
       const note = (e.note || '').toLowerCase();
@@ -89,7 +94,6 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
         // Past date with no arrival = absent
         const d = new Date(e.date + 'T23:59:59');
         if (d < new Date()) s.absent++;
-        else s.full++; // future = planned
       }
     });
     return map;
@@ -209,6 +213,10 @@ export default function SchedulePage() {
     entry?: ScheduleEntry;
   } | null>(null);
 
+  // Local pending changes — applied in batch via "Apply" button
+  // Key format: `${userId}-${date}`
+  const [pendingChanges, setPendingChanges] = useState<Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>>({});
+
   const [entryForm, setEntryForm] = useState({
     userId: '',
     date: format(today, 'yyyy-MM-dd'),
@@ -280,8 +288,16 @@ export default function SchedulePage() {
       if (!map[uid]) map[uid] = {};
       map[uid][d] = entry;
     });
+    // Overlay pending changes
+    Object.values(pendingChanges).forEach(c => {
+      const uid = c.userId;
+      const d = c.date.slice(0, 10);
+      if (!map[uid]) map[uid] = {};
+      const existing = map[uid][d];
+      map[uid][d] = { ...(existing || { id: `pending-${uid}-${d}`, tenantId: '', userId: uid, date: c.date, isManualOverride: true }), ...c.payload } as ScheduleEntry;
+    });
     return map;
-  }, [entries]);
+  }, [entries, pendingChanges]);
 
   // Global master order — saved in backend via users.sortOrder
   const updateOrderMutation = useMutation({
@@ -511,22 +527,53 @@ export default function SchedulePage() {
       ...(status === 'shift' ? { actualArrival: new Date().toISOString() } : {}),
     };
 
-    // 1. Patch cache + close popup in flushSync — forces synchronous DOM paint
+    if (entry && !isDayOff && entry.shiftStart) {
+      payload.shiftStart = entry.shiftStart;
+      payload.shiftEnd = entry.shiftEnd;
+    }
+
+    // Save to pending changes — NOT sent to server until "Apply" clicked
+    const key = `${userId}-${date}`;
     flushSync(() => {
-      patchCache(userId, date, payload, !entry);
+      setPendingChanges(prev => ({
+        ...prev,
+        [key]: { userId, date, payload, existingEntryId: entry?.id },
+      }));
       setQuickPopup(null);
     });
+  };
 
-    // 2. Send to server in background
-    if (entry) {
-      if (!isDayOff && entry.shiftStart) {
-        payload.shiftStart = entry.shiftStart;
-        payload.shiftEnd = entry.shiftEnd;
+  // Apply all pending changes at once
+  const applyPendingChanges = async () => {
+    const entries = Object.values(pendingChanges);
+    if (entries.length === 0) return;
+
+    const failures: string[] = [];
+    for (const change of entries) {
+      try {
+        if (change.existingEntryId) {
+          await scheduleApi.update(change.existingEntryId, change.payload);
+        } else {
+          await scheduleApi.create(change.payload);
+        }
+      } catch {
+        failures.push(change.userId);
       }
-      updateMutation.mutate({ id: entry.id, data: { ...payload, userId, date } });
-    } else {
-      createMutation.mutate(payload);
     }
+
+    setPendingChanges({});
+    queryClient.invalidateQueries({ queryKey: ['schedule'] });
+    queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+
+    if (failures.length === 0) {
+      toast.success(`Применено ${entries.length} изм.`);
+    } else {
+      toast.error(`Ошибок: ${failures.length}`);
+    }
+  };
+
+  const discardPendingChanges = () => {
+    setPendingChanges({});
   };
 
   // Cell rendering helpers
@@ -551,7 +598,7 @@ export default function SchedulePage() {
     }
     // Опоздание >1ч (восклицательный в треугольнике)
     if (entry.lateStatus === 'late_major' || lateMin >= 60) {
-      return { label: '⚠', bgColor: 'bg-yellow-100', textColor: 'text-yellow-700', borderColor: 'border-yellow-400' };
+      return { label: '⚠️', bgColor: 'bg-yellow-100', textColor: 'text-yellow-700', borderColor: 'border-yellow-400' };
     }
     // Опоздание <1ч (будильник на жёлтом)
     if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) {
@@ -612,56 +659,50 @@ export default function SchedulePage() {
         )}
       </div>
 
-      {/* Tabs */}
-      <div className="overflow-x-auto -mx-2 px-2 mb-5 scrollbar-hide">
-        <div className="inline-flex items-center gap-1.5 bg-gray-100 rounded-2xl p-1.5 min-w-max">
-          <button
-            onClick={() => setTab('schedule')}
-            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
-              tab === 'schedule' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
-            }`}
-          >
-            <CalendarDays className="w-4 h-4" />
-            График
-          </button>
-          <button
-            onClick={() => setTab('today')}
-            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
-              tab === 'today' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
-            }`}
-          >
-            <Clock className="w-4 h-4" />
-            Сегодня
-          </button>
-          <button
-            onClick={() => setTab('mystats')}
-            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
-              tab === 'mystats' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            Смены
-          </button>
-          <button
-            onClick={() => setTab('attendance')}
-            className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
-              tab === 'attendance' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4" />
-            Рейтинг
-          </button>
-          {canEdit && (
+      {/* Pending changes Apply bar */}
+      {Object.keys(pendingChanges).length > 0 && (
+        <div className="sticky top-0 z-40 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600" />
+            <span className="text-xs font-semibold text-amber-800">
+              Несохранённых изменений: {Object.keys(pendingChanges).length}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={discardPendingChanges} className="text-xs font-medium text-gray-500 hover:text-gray-700 px-2 py-1">
+              Отмена
+            </button>
+            <button onClick={applyPendingChanges} className="text-xs font-bold bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700">
+              Применить
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Tabs — icon-first on mobile, icon+label on desktop */}
+      <div className="mb-5 bg-gray-100 rounded-2xl p-1 flex items-center gap-0.5">
+        {([
+          { key: 'schedule', label: 'График', icon: CalendarDays },
+          { key: 'today', label: 'Сегодня', icon: Clock },
+          { key: 'mystats', label: 'Смены', icon: Users },
+          { key: 'attendance', label: 'Рейтинг', icon: BarChart3 },
+          ...(canEdit ? [{ key: 'settings' as const, label: 'Настр.', icon: Settings }] : []),
+        ] as const).map(t => {
+          const Icon = t.icon;
+          const active = tab === (t.key as TabType);
+          return (
             <button
-              onClick={() => setTab('settings')}
-              className={`whitespace-nowrap inline-flex items-center gap-1.5 py-2 px-3.5 text-xs sm:text-sm font-semibold rounded-xl transition-all ${
-                tab === 'settings' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
+              key={t.key}
+              onClick={() => setTab(t.key as TabType)}
+              className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 px-1 rounded-xl transition-all ${
+                active ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500'
               }`}
             >
-              Настройки
+              <Icon className="w-[18px] h-[18px]" />
+              <span className="text-[10px] font-semibold leading-none truncate max-w-full">{t.label}</span>
             </button>
-          )}
-        </div>
+          );
+        })}
       </div>
 
       {/* Schedule Tab - Grid: rows=employees, columns=dates */}
@@ -808,7 +849,7 @@ export default function SchedulePage() {
                               >
                                 {cellData ? (
                                   <div className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}>
-                                    <span className={`text-[10px] font-bold ${cellData.textColor}`}>{cellData.label}</span>
+                                    <span className={`${/^[\d:]+$/.test(cellData.label) ? 'text-[10px] font-bold' : 'text-[15px] leading-none'} ${cellData.textColor}`}>{cellData.label}</span>
                                   </div>
                                 ) : !isWeekend ? (
                                   <div className="w-8 h-8 rounded-lg bg-green-50/50 border border-green-100 flex items-center justify-center">
