@@ -722,12 +722,14 @@ export default function SchedulePage() {
                   <h2 className="text-white font-semibold text-lg capitalize">
                     {format(currentMonth, 'LLLL yyyy', { locale: ru })}
                   </h2>
-                  <button
-                    onClick={goToToday}
-                    className="text-white/80 hover:text-white text-xs mt-0.5 transition-colors underline decoration-white/40"
-                  >
-                    Сегодня
-                  </button>
+                  {format(currentMonth, 'yyyy-MM') !== format(new Date(), 'yyyy-MM') && (
+                    <button
+                      onClick={goToToday}
+                      className="text-white/80 hover:text-white text-[10px] mt-0.5 transition-colors underline decoration-white/40"
+                    >
+                      К текущему
+                    </button>
+                  )}
                 </div>
                 <button
                   onClick={goToNextMonth}
