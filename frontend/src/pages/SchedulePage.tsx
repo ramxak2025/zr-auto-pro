@@ -217,6 +217,9 @@ export default function SchedulePage() {
   // Key format: `${userId}-${date}`
   const [pendingChanges, setPendingChanges] = useState<Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>>({});
 
+  // Master reorder dialog
+  const [reorderDialog, setReorderDialog] = useState<{ userId: string; name: string; currentIndex: number } | null>(null);
+
   const [entryForm, setEntryForm] = useState({
     userId: '',
     date: format(today, 'yyyy-MM-dd'),
@@ -331,6 +334,16 @@ export default function SchedulePage() {
     const reordered = [...current];
     [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
     updateOrderMutation.mutate(reordered);
+  };
+
+  const moveMasterToPosition = (userId: string, newPos: number) => {
+    const current = scheduleUsers.map(u => u.id);
+    const idx = current.indexOf(userId);
+    if (idx < 0 || idx === newPos) return;
+    const reordered = current.filter(id => id !== userId);
+    reordered.splice(newPos, 0, userId);
+    updateOrderMutation.mutate(reordered);
+    setReorderDialog(null);
   };
 
   // All active users — use users list as primary source, supplement with entry users
@@ -784,20 +797,16 @@ export default function SchedulePage() {
                     </div>
                     {/* Employee rows */}
                     {scheduleUsers.map((u, idx) => (
-                      <div
+                      <button
                         key={u.id}
-                        className="h-12 border-b border-gray-50 px-2 flex items-center gap-1 group"
+                        onClick={() => canEdit && setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })}
+                        className="h-12 border-b border-gray-50 px-3 flex items-center gap-2 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors"
                       >
-                        {canEdit && (
-                          <div className="flex flex-col opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button onClick={() => moveMaster(u.id, 'up')} disabled={idx === 0} className="text-gray-300 hover:text-gray-600 disabled:invisible"><ChevronUp className="h-3 w-3" /></button>
-                            <button onClick={() => moveMaster(u.id, 'down')} disabled={idx === scheduleUsers.length - 1} className="text-gray-300 hover:text-gray-600 disabled:invisible"><ChevronDown className="h-3 w-3" /></button>
-                          </div>
-                        )}
-                        <span className="text-xs font-medium text-gray-800 truncate max-w-[100px] sm:max-w-[130px]">
+                        <span className="text-[10px] font-bold text-gray-300 w-5 flex-shrink-0">{idx + 1}</span>
+                        <span className="text-xs font-medium text-gray-800 truncate flex-1">
                           {u.fullName}
                         </span>
-                      </div>
+                      </button>
                     ))}
                   </div>
 
@@ -969,6 +978,38 @@ export default function SchedulePage() {
           ) : (
             <LoadingSpinner />
           )}
+        </div>
+      )}
+
+      {/* Master reorder dialog */}
+      {reorderDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setReorderDialog(null)}>
+          <div className="absolute inset-0 bg-black/30" />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xs max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="px-4 pt-4 pb-2 border-b border-gray-100">
+              <p className="text-sm font-bold text-gray-900 text-center">Позиция мастера</p>
+              <p className="text-xs text-gray-400 text-center truncate">{reorderDialog.name}</p>
+            </div>
+            <div className="overflow-y-auto py-1">
+              {scheduleUsers.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => moveMasterToPosition(reorderDialog.userId, idx)}
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${
+                    idx === reorderDialog.currentIndex ? 'bg-primary-50 text-primary-700 font-semibold' : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  <span className="w-6 text-[11px] font-bold text-gray-400">{idx + 1}</span>
+                  <span className="flex-1">
+                    {idx === reorderDialog.currentIndex ? '— текущая позиция —' : `Переместить на ${idx + 1}`}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setReorderDialog(null)} className="w-full text-center py-3 text-xs font-medium text-gray-500 border-t border-gray-100">
+              Отмена
+            </button>
+          </div>
         </div>
       )}
 

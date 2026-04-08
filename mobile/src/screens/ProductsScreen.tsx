@@ -95,13 +95,26 @@ export default function ProductsScreen() {
     queryFn: async () => { const res = await warehouseCategoriesApi.getAll(); return res.data; },
   });
 
-  // Fetch inventory movements for folder annotations
+  // Fetch inventory movements for folder annotations (always enabled)
   const { data: inventoryMovements } = useQuery<StockMovement[]>({
     queryKey: ['inventory-movements'],
     queryFn: async () => { const res = await productsApi.getMovements({ limit: 1000 }); return res.data; },
-    enabled: showInventoryPicker || showInventoryModal,
     staleTime: 60_000,
   });
+
+  // Map: productId -> last inventory check date
+  const lastInventoryMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!inventoryMovements) return map;
+    for (const m of inventoryMovements as any[]) {
+      if (m.type !== 'inventory') continue;
+      const existing = map.get(m.productId);
+      if (!existing || new Date(m.createdAt) > new Date(existing)) {
+        map.set(m.productId, m.createdAt);
+      }
+    }
+    return map;
+  }, [inventoryMovements]);
 
   const createMutation = useMutation({
     mutationFn: (d: any) => productsApi.create(d),
@@ -359,6 +372,27 @@ export default function ProductsScreen() {
   }, [allProducts, activePath, search, extraFolders]);
 
   const sortedFolders = Array.from(subfolders.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
+  // Folder -> last inventory check date
+  const folderLastCheck = useMemo(() => {
+    const map = new Map<string, string>();
+    if (lastInventoryMap.size === 0) return map;
+    const prefix = activePath.length > 0 ? activePath.join('/') : '';
+    const list = allProducts as any[];
+    for (const [folderName] of sortedFolders) {
+      const folderPrefix = prefix ? `${prefix}/${folderName}` : folderName;
+      let latest: string | undefined;
+      for (const p of list) {
+        const cat = p.category || '';
+        if (cat === folderPrefix || cat.startsWith(folderPrefix + '/')) {
+          const d = lastInventoryMap.get(p.id);
+          if (d && (!latest || new Date(d) > new Date(latest))) latest = d;
+        }
+      }
+      if (latest) map.set(folderName, latest);
+    }
+    return map;
+  }, [lastInventoryMap, sortedFolders, allProducts, activePath]);
 
   const enterFolder = (name: string) => setActivePath(prev => [...prev, name]);
   const goToLevel = (level: number) => setActivePath(prev => prev.slice(0, level));
@@ -738,7 +772,14 @@ export default function ProductsScreen() {
                     </View>
                     <View style={styles.folderRowInfo}>
                       <Text style={styles.folderRowName} numberOfLines={1}>{folderName}</Text>
-                      <Text style={styles.folderRowCount}>{info.count} шт</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.folderRowCount}>{info.count} шт</Text>
+                        {folderLastCheck.get(folderName) && (
+                          <Text style={[styles.folderRowCount, { color: colors.green[600] }]}>
+                            · проверка {new Date(folderLastCheck.get(folderName)!).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                          </Text>
+                        )}
+                      </View>
                     </View>
                     {info.hasLow && (
                       <View style={styles.folderRowAlert}>

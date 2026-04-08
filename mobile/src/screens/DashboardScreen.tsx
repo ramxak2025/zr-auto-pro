@@ -384,8 +384,15 @@ function StaffStatus() {
     return colors.gray[300];
   };
 
-  // Groups: on-shift (all who came including late), not arrived, absent, sick, dayOff
-  const onShiftAll = statuses.filter(s => (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') && !s.isDayOff && !isSick(s) && !isAbsent(s));
+  // Groups: on-shift sorted by lateness (on-time first), not arrived, absent, sick, dayOff
+  const sortByLate = (a: TodayEmployeeStatus, b: TodayEmployeeStatus) => {
+    const rank = (s: TodayEmployeeStatus) =>
+      s.lateStatus === 'late_major' ? 3 : s.lateStatus === 'late_minor' ? 2 : 1;
+    return rank(a) - rank(b);
+  };
+  const onShiftAll = statuses
+    .filter(s => (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') && !s.isDayOff && !isSick(s) && !isAbsent(s))
+    .sort(sortByLate);
   const notArrivedGroup = statuses.filter(s => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s) && !s.lateStatus);
   const absentGroup = statuses.filter(s => isAbsent(s));
   const dayOffGroup = statuses.filter(s => s.isDayOff && !isSick(s));

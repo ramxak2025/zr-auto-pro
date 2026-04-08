@@ -197,12 +197,27 @@ export class ChecksService {
         }
       }
 
+      // Fetch service master_percent overrides
+      const serviceIds = services.map((s: any) => s.serviceId).filter(Boolean);
+      const serviceMasterPct: Record<string, number | null> = {};
+      if (serviceIds.length > 0) {
+        const { rows: srvRows } = await client.query(
+          `SELECT id, master_percent FROM services WHERE id = ANY($1) AND tenant_id = $2`,
+          [serviceIds, tenantID],
+        );
+        for (const r of srvRows) {
+          serviceMasterPct[r.id] = r.master_percent !== null && r.master_percent !== undefined ? parseFloat(r.master_percent) : null;
+        }
+      }
+
       const serviceLines: any[] = [];
       for (const svc of services) {
         const total = (svc.price || 0) * (svc.quantity || 1);
         serviceTotal += total;
         const masterId = svc.masterId || dto.masterId;
-        const salaryPct = salaryMap[masterId] || 0;
+        // Service-specific percent takes priority over master default
+        const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
+        const salaryPct = serviceOverride !== null ? serviceOverride : (salaryMap[masterId] || 0);
         serviceSalaryTotal += total * salaryPct / 100;
         serviceLines.push({ ...svc, total, masterId });
       }
@@ -406,13 +421,27 @@ export class ChecksService {
         }
       }
 
+      // Service-specific percent overrides
+      const serviceIds = services.map((s: any) => s.serviceId).filter(Boolean);
+      const serviceMasterPct: Record<string, number | null> = {};
+      if (serviceIds.length > 0) {
+        const { rows: srvRows } = await client.query(
+          `SELECT id, master_percent FROM services WHERE id = ANY($1) AND tenant_id = $2`,
+          [serviceIds, tenantID],
+        );
+        for (const r of srvRows) {
+          serviceMasterPct[r.id] = r.master_percent !== null && r.master_percent !== undefined ? parseFloat(r.master_percent) : null;
+        }
+      }
+
       const serviceLines: any[] = [];
       const primaryMasterId = dto.masterId || existingMasterId;
       for (const svc of services) {
         const total = (svc.price || 0) * (svc.quantity || 1);
         serviceTotal += total;
         const masterId = svc.masterId || primaryMasterId;
-        const salaryPct = salaryMap[masterId] || 0;
+        const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
+        const salaryPct = serviceOverride !== null ? serviceOverride : (salaryMap[masterId] || 0);
         serviceSalaryTotal += total * salaryPct / 100;
         serviceLines.push({ ...svc, total, masterId });
       }

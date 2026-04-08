@@ -29,6 +29,7 @@ export default function ServicesPage() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [defaultPrice, setDefaultPrice] = useState('');
+  const [masterPercent, setMasterPercent] = useState('');
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -49,7 +50,7 @@ export default function ServicesPage() {
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; category?: string; defaultPrice: number }) =>
+    mutationFn: (data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null }) =>
       servicesApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
@@ -62,7 +63,7 @@ export default function ServicesPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name: string; category?: string; defaultPrice: number } }) =>
+    mutationFn: ({ id, data }: { id: string; data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null } }) =>
       servicesApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
@@ -91,6 +92,7 @@ export default function ServicesPage() {
     setName('');
     setCategory('');
     setDefaultPrice('');
+    setMasterPercent('');
     setModalOpen(true);
   };
 
@@ -100,6 +102,7 @@ export default function ServicesPage() {
     setName(service.name);
     setCategory(service.category || '');
     setDefaultPrice(String(service.defaultPrice));
+    setMasterPercent(service.masterPercent != null ? String(service.masterPercent) : '');
     setModalOpen(true);
   };
 
@@ -110,10 +113,12 @@ export default function ServicesPage() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    const pctVal = masterPercent.trim();
     const payload = {
       name,
       category: category || undefined,
       defaultPrice: Number(defaultPrice),
+      masterPercent: pctVal === '' ? null : Number(pctVal),
     };
     if (editingService) {
       updateMutation.mutate({ id: editingService.id, data: payload });
@@ -329,6 +334,23 @@ export default function ServicesPage() {
               min="0"
               required
             />
+          </div>
+
+          <div>
+            <label className="label">Особый % мастера</label>
+            <input
+              type="number"
+              value={masterPercent}
+              onChange={(e) => setMasterPercent(e.target.value)}
+              className="input"
+              placeholder="Оставьте пустым для стандартного процента"
+              min="0"
+              max="100"
+              step="0.5"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Если заполнено — используется вместо стандартного процента мастера для этой услуги
+            </p>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">

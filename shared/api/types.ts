@@ -127,12 +127,14 @@ export interface CreateServiceRequest {
   name: string;
   category?: string;
   defaultPrice: number;
+  masterPercent?: number | null;
 }
 
 export interface UpdateServiceRequest {
   name?: string;
   category?: string;
   defaultPrice?: number;
+  masterPercent?: number | null;
 }
 
 export interface CreateCheckRequest {

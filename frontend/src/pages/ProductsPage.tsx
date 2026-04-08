@@ -2003,6 +2003,11 @@ export default function ProductsPage() {
       {showImportModal && importData && (
         <Modal isOpen onClose={() => { setShowImportModal(false); setImportData(null); }} title="Импорт товаров" size="lg">
           <div className="space-y-4">
+            <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
+              <p className="text-xs font-semibold text-blue-900 mb-1">Формат файла CSV (разделитель ; или ,):</p>
+              <p className="text-[11px] text-blue-800 font-mono">Название;Категория;Закупка;Розница;Остаток;Мин;Ед</p>
+              <p className="text-[10px] text-blue-600 mt-1">Экспортируйте из Excel в CSV (UTF-8). Папки в категории через /</p>
+            </div>
             <p className="text-sm text-gray-600">
               Найдено <span className="font-bold text-gray-900">{importData.length}</span> товаров для импорта.
               Товары с совпадающими названиями будут обновлены.

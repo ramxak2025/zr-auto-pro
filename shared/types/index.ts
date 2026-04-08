@@ -150,6 +150,8 @@ export interface Service {
   name: string;
   category?: string;
   defaultPrice: number;
+  /** Custom master commission percent (overrides user.salaryPercent when set) */
+  masterPercent?: number | null;
   createdAt: string;
 }
 

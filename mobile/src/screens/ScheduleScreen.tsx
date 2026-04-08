@@ -368,7 +368,7 @@ function GridTab() {
           {/* Sticky left column -- employee names with avatar initials */}
           <View style={styles.stickyColumn}>
             {/* Header cell */}
-            <View style={[styles.gridNameCell, { width: NAME_W, height: ROW_H, borderBottomWidth: 2, borderBottomColor: colors.gray[200] }]}>
+            <View style={[styles.gridNameCell, { width: NAME_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] }]}>
               <Text style={styles.gridHeaderLabel}>Сотрудник</Text>
             </View>
             {/* Name cells */}
@@ -385,7 +385,7 @@ function GridTab() {
                 return (
                   <TouchableOpacity
                     key={u.id}
-                    onLongPress={() => canEdit && setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx })}
+                    onPress={() => canEdit && setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx })}
                     activeOpacity={canEdit ? 0.7 : 1}
                     style={[styles.gridNameCell, { width: NAME_W, height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}
                   >
@@ -433,7 +433,7 @@ function GridTab() {
                   return (
                     <View key={ds} style={[
                       styles.gridHeaderCell,
-                      { width: CELL_W, height: ROW_H },
+                      { width: CELL_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
                       isWeekend && { backgroundColor: colors.red[50] },
                       isToday && styles.gridHeaderToday,
                     ]}>
@@ -508,24 +508,38 @@ function GridTab() {
         </View>
       )}
 
-      <Modal visible={!!reorderUser} onClose={() => setReorderUser(null)} title={reorderUser ? `Переместить: ${reorderUser.name?.split(' ')[0] || ''}` : ''}>
+      <Modal visible={!!reorderUser} onClose={() => setReorderUser(null)} title={reorderUser ? `Позиция: ${reorderUser.name?.split(' ')[0] || ''}` : ''}>
         {reorderUser && (
-          <View style={{ gap: 10, padding: 8 }}>
-            <TouchableOpacity
-              onPress={() => { moveMaster(reorderUser.userId, 'up'); setReorderUser(null); }}
-              disabled={reorderUser.index === 0}
-              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: reorderUser.index === 0 ? colors.gray[100] : colors.primary[50], paddingVertical: 16, borderRadius: 12 }}>
-              <Ionicons name="arrow-up-circle" size={24} color={reorderUser.index === 0 ? colors.gray[400] : colors.primary[600]} />
-              <Text style={{ fontSize: 15, fontWeight: '600', color: reorderUser.index === 0 ? colors.gray[400] : colors.primary[700] }}>Поднять выше</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => { moveMaster(reorderUser.userId, 'down'); setReorderUser(null); }}
-              disabled={reorderUser.index === activeUsers.length - 1}
-              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: reorderUser.index === activeUsers.length - 1 ? colors.gray[100] : colors.primary[50], paddingVertical: 16, borderRadius: 12 }}>
-              <Ionicons name="arrow-down-circle" size={24} color={reorderUser.index === activeUsers.length - 1 ? colors.gray[400] : colors.primary[600]} />
-              <Text style={{ fontSize: 15, fontWeight: '600', color: reorderUser.index === activeUsers.length - 1 ? colors.gray[400] : colors.primary[700] }}>Опустить ниже</Text>
-            </TouchableOpacity>
-          </View>
+          <ScrollView style={{ maxHeight: 400 }}>
+            {activeUsers.map((_, idx) => {
+              const isCurrent = idx === reorderUser.index;
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  onPress={() => {
+                    if (!isCurrent) {
+                      const ids = activeUsers.map(u => u.id);
+                      const filtered = ids.filter(id => id !== reorderUser.userId);
+                      filtered.splice(idx, 0, reorderUser.userId);
+                      updateOrderMut.mutate(filtered);
+                    }
+                    setReorderUser(null);
+                  }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 12,
+                    paddingVertical: 14, paddingHorizontal: 16,
+                    backgroundColor: isCurrent ? colors.primary[50] : 'transparent',
+                    borderBottomWidth: 0.5, borderBottomColor: colors.gray[100],
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: isCurrent ? colors.primary[600] : colors.gray[400], width: 24 }}>{idx + 1}</Text>
+                  <Text style={{ fontSize: 14, color: isCurrent ? colors.primary[700] : colors.gray[700], flex: 1, fontWeight: isCurrent ? '600' : '500' }}>
+                    {isCurrent ? '— текущая позиция —' : `Переместить на ${idx + 1}`}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         )}
       </Modal>
 
