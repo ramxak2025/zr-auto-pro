@@ -335,7 +335,7 @@ export default function SchedulePage() {
 
   // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
-    const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
+    const activeUsers = users.filter(u => u.isActive && u.role === 'master');
     const activeIds = new Set(activeUsers.map(u => u.id));
 
     entries.forEach((e) => {
@@ -1207,7 +1207,7 @@ const ORDERED_DAYS = [1, 2, 3, 4, 5, 6, 0]; // Пн-Вс
 
 function MasterDaysOffCard({ users }: { users: User[] }) {
   const queryClient = useQueryClient();
-  const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
+  const activeUsers = users.filter(u => u.isActive && u.role === 'master');
 
   const updateMutation = useMutation({
     mutationFn: ({ userId, daysOff }: { userId: string; daysOff: number[] }) =>
@@ -1315,7 +1315,7 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
     });
   };
 
-  const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
+  const activeUsers = users.filter(u => u.isActive && u.role === 'master');
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">

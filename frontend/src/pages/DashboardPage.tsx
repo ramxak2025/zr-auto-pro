@@ -27,7 +27,7 @@ import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { formatMoney } from '../../../shared/utils/formatters';
-import { checksApi, salaryApi, shiftsApi, scheduleApi } from '../api/services';
+import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi } from '../api/services';
 import type { SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 
@@ -816,7 +816,82 @@ function MasterDashboard() {
           )}
         </div>
       )}
+
+      <MasterRankWidget userId={user?.id} />
     </div>
+  );
+}
+
+function MasterRankWidget({ userId }: { userId?: string }) {
+  const [selectedMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const monthStart = `${selectedMonth}-01`;
+  const monthEnd = (() => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
+  })();
+
+  const { data: monthEntries = [] } = useQuery({
+    queryKey: ['schedule', monthStart, monthEnd],
+    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd }); return res.data as any[]; },
+    enabled: !!userId,
+  });
+
+  const { data: usersData = [] } = useQuery({
+    queryKey: ['users'],
+    queryFn: async () => { const res = await usersApi.getAll(); return res.data as any[]; },
+  });
+
+  const masters = (usersData as any[]).filter((u: any) => u.isActive && u.role === 'master');
+
+  const ranked = (() => {
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    return masters.map((u: any) => {
+      let full = 0, total = 0;
+      (monthEntries as any[]).forEach((e: any) => {
+        if (e.userId !== u.id) return;
+        const ed = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
+        if (ed > todayEnd) return;
+        const note = (e.note || '').toLowerCase();
+        if (note.includes('больнич')) return;
+        if (e.isDayOff) return;
+        if (note.includes('прогул')) { total++; return; }
+        total++;
+        if (e.actualArrival || e.lateStatus === 'on_time') full++;
+      });
+      const score = total > 0 ? Math.round((full / total) * 100) : 0;
+      return { id: u.id, score, full, total };
+    }).sort((a: any, b: any) => b.score - a.score || b.full - a.full);
+  })();
+
+  if (!userId || ranked.length === 0) return null;
+  const myRank = ranked.findIndex((r: any) => r.id === userId) + 1;
+  const me = ranked.find((r: any) => r.id === userId);
+  if (!me || myRank === 0) return null;
+
+  const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : myRank === 3 ? '🥉' : null;
+  const scoreColor = me.score >= 90 ? 'text-green-600' : me.score >= 70 ? 'text-yellow-600' : 'text-red-500';
+  const monthName = new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]) - 1).toLocaleDateString('ru-RU', { month: 'long' });
+
+  return (
+    <Link to="/schedule" className="block rounded-2xl border border-gray-100 bg-white shadow-sm p-4 hover:shadow-md transition-shadow">
+      <div className="flex items-center gap-4">
+        <div className={`flex items-center justify-center w-14 h-14 rounded-full border-2 ${myRank <= 3 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+          <span className="text-2xl">{medal || `#${myRank}`}</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Мой рейтинг</p>
+          <p className="text-base font-bold text-gray-900 capitalize mt-0.5">{monthName}</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            <span className={`font-bold ${scoreColor}`}>{me.score}%</span> посещаемость · {me.full}/{me.total} смен
+          </p>
+        </div>
+        <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
+      </div>
+    </Link>
   );
 }
 
