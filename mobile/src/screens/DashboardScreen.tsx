@@ -1025,8 +1025,8 @@ const styles = StyleSheet.create({
   shiftOpenBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], backgroundColor: colors.green[50], borderRadius: borderRadius.xl },
   shiftOpenBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.green[600] },
   // Staff
-  staffGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
-  staffItem: { alignItems: 'center', gap: spacing[1] },
+  staffGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  staffItem: { width: '20%', alignItems: 'center', gap: spacing[1], marginBottom: spacing[3] },
   staffCircle: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   staffInitials: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.white },
   staffName: { fontSize: 10, color: colors.gray[500], maxWidth: 60, textAlign: 'center' },

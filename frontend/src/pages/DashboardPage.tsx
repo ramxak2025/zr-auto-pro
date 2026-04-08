@@ -197,9 +197,9 @@ function StaffStatusCircles() {
         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
           <span>{icon}</span> {title} <span className="text-gray-300">({items.length})</span>
         </p>
-        <div className="flex flex-wrap gap-3">
+        <div className="grid grid-cols-5 gap-3">
           {items.map((s) => (
-            <div key={s.userId} className="flex flex-col items-center gap-1" title={getStatusLabel(s)}>
+            <div key={s.userId} className="flex flex-col items-center gap-1 min-w-0" title={getStatusLabel(s)}>
               <div className="relative">
                 <div className={`w-11 h-11 rounded-full ring-2 flex items-center justify-center text-xs font-bold text-white ${getCircleColor(s)}`}>
                   {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2)}
@@ -208,8 +208,8 @@ function StaffStatusCircles() {
                   <span className="absolute -bottom-0.5 -right-0.5 text-xs">{getStatusEmoji(s)}</span>
                 )}
               </div>
-              <span className="text-[10px] text-gray-500 max-w-[60px] truncate text-center">{s.fullName.split(' ')[0]}</span>
-              <span className="text-[9px] text-gray-400">{getStatusLabel(s)}</span>
+              <span className="text-[10px] text-gray-500 w-full truncate text-center">{s.fullName.split(' ')[0]}</span>
+              <span className="text-[9px] text-gray-400 w-full truncate text-center">{getStatusLabel(s)}</span>
             </div>
           ))}
         </div>

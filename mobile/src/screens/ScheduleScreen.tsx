@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
@@ -92,6 +92,68 @@ function getCellDot(entry?: ScheduleEntry) {
   return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
 }
 
+// Memoized grid row to avoid re-rendering all cells on unrelated state changes.
+interface GridDayRowProps {
+  userId: string;
+  userName?: string;
+  days: Date[];
+  entryMap: Map<string, ScheduleEntry>;
+  rowIdx: number;
+  today: string;
+  canEdit: boolean;
+  CELL_W: number;
+  ROW_H: number;
+  onCellPress: (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => void;
+}
+
+const GridDayRow = memo(function GridDayRow({ userId, userName, days, entryMap, rowIdx, today, canEdit, CELL_W, ROW_H, onCellPress }: GridDayRowProps) {
+  const firstName = userName?.split(' ')[0];
+  return (
+    <View style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}>
+      {days.map(d => {
+        const ds = formatDate(d);
+        const entry = entryMap.get(`${userId}-${ds}`);
+        const cell = getCellDot(entry);
+        const dow = (d.getDay() + 6) % 7;
+        const isWeekend = dow >= 5;
+        const isToday = ds === today;
+
+        return (
+          <TouchableOpacity
+            key={ds}
+            style={[
+              styles.gridCell,
+              { width: CELL_W, height: ROW_H },
+              isWeekend && !cell.hasEntry && { backgroundColor: colors.red[50] + '40' },
+              isToday && styles.gridCellToday,
+            ]}
+            onPress={() => onCellPress(userId, ds, entry, firstName)}
+            activeOpacity={canEdit ? 0.5 : 1}
+          >
+            {cell.hasEntry ? (
+              <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30' }, cell.label ? styles.gridDotLabel : styles.gridDotRound]}>
+                {cell.label ? (
+                  <Text
+                    style={{ fontSize: 9, fontWeight: '700', color: cell.dotColor }}
+                    numberOfLines={1}
+                    allowFontScaling={false}
+                  >{cell.label}</Text>
+                ) : cell.icon ? (
+                  <Ionicons name={cell.icon} size={14} color={cell.dotColor} />
+                ) : (
+                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: cell.dotColor }} />
+                )}
+              </View>
+            ) : (
+              canEdit && <View style={styles.gridCellEmpty} />
+            )}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+});
+
 // ============== GRID TAB ==============
 function GridTab() {
   const queryClient = useQueryClient();
@@ -165,7 +227,7 @@ function GridTab() {
     updateOrderMut.mutate(next);
   };
 
-  const days = getDaysInMonth(year, month);
+  const days = useMemo(() => getDaysInMonth(year, month), [year, month]);
 
   const entryMap = useMemo(() => {
     const map = new Map<string, ScheduleEntry>();
@@ -293,19 +355,23 @@ function GridTab() {
   const ROW_H = 52;
 
   // Sync vertical scroll between left (names) and right (cells)
-  const handleLeftScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleLeftScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (isRightScrolling.current) return;
     isLeftScrolling.current = true;
     rightScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
     setTimeout(() => { isLeftScrolling.current = false; }, 16);
-  };
+  }, []);
 
-  const handleRightScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleRightScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (isLeftScrolling.current) return;
     isRightScrolling.current = true;
     leftScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
     setTimeout(() => { isRightScrolling.current = false; }, 16);
-  };
+  }, []);
+
+  const handleCellPress = useCallback((userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => {
+    if (canEdit) setQuickPopup({ userId, date, entry, userName });
+  }, [canEdit]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -463,44 +529,19 @@ function GridTab() {
                 bounces={false}
               >
                 {activeUsers.map((u, rowIdx) => (
-                  <View key={u.id} style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}>
-                    {days.map(d => {
-                      const ds = formatDate(d);
-                      const entry = entryMap.get(`${u.id}-${ds}`);
-                      const cell = getCellDot(entry);
-                      const dow = (d.getDay() + 6) % 7;
-                      const isWeekend = dow >= 5;
-                      const isToday = ds === today;
-
-                      return (
-                        <TouchableOpacity
-                          key={ds}
-                          style={[
-                            styles.gridCell,
-                            { width: CELL_W, height: ROW_H },
-                            isWeekend && !cell.hasEntry && { backgroundColor: colors.red[50] + '40' },
-                            isToday && styles.gridCellToday,
-                          ]}
-                          onPress={() => canEdit && setQuickPopup({ userId: u.id, date: ds, entry, userName: u.fullName?.split(' ')[0] })}
-                          activeOpacity={canEdit ? 0.5 : 1}
-                        >
-                          {cell.hasEntry ? (
-                            <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30', minWidth: cell.label ? 32 : 24, paddingHorizontal: cell.label ? 4 : 0 }]}>
-                              {cell.label ? (
-                                <Text style={{ fontSize: 10, fontWeight: '700', color: cell.dotColor }}>{cell.label}</Text>
-                              ) : cell.icon ? (
-                                <Ionicons name={cell.icon} size={16} color={cell.dotColor} />
-                              ) : (
-                                <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: cell.dotColor }} />
-                              )}
-                            </View>
-                          ) : (
-                            canEdit && <View style={styles.gridCellEmpty} />
-                          )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                  <GridDayRow
+                    key={u.id}
+                    userId={u.id}
+                    userName={u.fullName}
+                    days={days}
+                    entryMap={entryMap}
+                    rowIdx={rowIdx}
+                    today={today}
+                    canEdit={canEdit}
+                    CELL_W={CELL_W}
+                    ROW_H={ROW_H}
+                    onCellPress={handleCellPress}
+                  />
                 ))}
               </ScrollView>
             </View>
@@ -1272,13 +1313,13 @@ export default function ScheduleScreen() {
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                   >
-                    <Ionicons name={t.activeIcon} size={17} color={colors.white} />
-                    <Text style={styles.tabItemTextActive}>{t.label}</Text>
+                    <Ionicons name={t.activeIcon} size={16} color={colors.white} />
+                    <Text style={styles.tabItemTextActive} numberOfLines={1} adjustsFontSizeToFit>{t.label}</Text>
                   </LinearGradient>
                 ) : (
                   <View style={styles.tabItemInner}>
-                    <Ionicons name={t.icon} size={17} color={colors.gray[400]} />
-                    <Text style={styles.tabItemText}>{t.label}</Text>
+                    <Ionicons name={t.icon} size={16} color={colors.gray[400]} />
+                    <Text style={styles.tabItemText} numberOfLines={1} adjustsFontSizeToFit>{t.label}</Text>
                   </View>
                 )}
               </TouchableOpacity>
@@ -1351,12 +1392,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.gray[100],
     borderRadius: borderRadius.xl,
     padding: 3,
-    gap: 3,
+    gap: 2,
   },
   tabItem: {
     flex: 1,
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
+    minWidth: 0,
   },
   tabItemActive: {
     shadowColor: colors.primary[700],
@@ -1366,29 +1408,33 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   tabItemGradient: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing[1],
-    paddingVertical: spacing[2],
+    gap: 2,
+    paddingVertical: spacing[1.5],
+    paddingHorizontal: 2,
     borderRadius: borderRadius.lg,
   },
   tabItemInner: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing[1],
-    paddingVertical: spacing[2],
+    gap: 2,
+    paddingVertical: spacing[1.5],
+    paddingHorizontal: 2,
   },
   tabItemText: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: fontWeight.medium,
     color: colors.gray[500],
+    textAlign: 'center',
   },
   tabItemTextActive: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: fontWeight.bold,
     color: colors.white,
+    textAlign: 'center',
   },
 
   // ── Tab content ──
@@ -1595,11 +1641,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50] + '50',
   },
   gridDot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    height: 22,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  gridDotRound: {
+    width: 22,
+  },
+  gridDotLabel: {
+    minWidth: 36,
+    paddingHorizontal: 5,
   },
   gridCellEmpty: {
     width: 6,
