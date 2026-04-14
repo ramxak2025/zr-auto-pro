@@ -31,6 +31,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import VirtualProductGrid from '../components/VirtualProductGrid';
 import VirtualList from '../components/VirtualList';
 import { formatMoney } from '../../../shared/utils/formatters';
+import * as XLSX from 'xlsx';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1376,69 +1377,89 @@ export default function ProductsPage() {
     }
   }
 
+  // Parse rows from a 2D array (header + data rows) — shared between Excel and CSV
+  function parseImportRows(rawRows: string[][]) {
+    if (rawRows.length < 2) {
+      toast.error('Файл пустой или содержит только заголовок');
+      return;
+    }
+
+    const headerCols = rawRows[0].map((c) => String(c ?? '').trim().toLowerCase());
+
+    // Auto-detect column mapping by header names
+    const colMap = { name: -1, category: -1, unit: -1, sellPrice: -1, costPrice: -1, stock: -1, minStock: -1 };
+
+    headerCols.forEach((h, i) => {
+      if (/наименование|название|name/.test(h)) colMap.name = i;
+      else if (/групп|категори|category|group/.test(h)) colMap.category = i;
+      else if (/единиц|ед\b|unit/.test(h)) colMap.unit = i;
+      else if (/продаж|розниц|sell/.test(h)) colMap.sellPrice = i;
+      else if (/закуп|себестоим|cost|purchase/.test(h)) colMap.costPrice = i;
+      else if (/остаток|stock|количество|кол/.test(h) && !/мин/.test(h)) colMap.stock = i;
+      else if (/мин.*остат|min.*stock/.test(h)) colMap.minStock = i;
+    });
+
+    // Fallback: if no header matched for name, assume old positional format
+    if (colMap.name < 0) {
+      colMap.name = 0; colMap.category = 1; colMap.costPrice = 2;
+      colMap.sellPrice = 3; colMap.stock = 4; colMap.minStock = 5; colMap.unit = 6;
+    }
+
+    const col = (row: string[], idx: number) => (idx >= 0 ? String(row[idx] ?? '').trim() : '');
+
+    const rows = rawRows.slice(1).map((row) => ({
+      name: col(row, colMap.name),
+      category: col(row, colMap.category),
+      costPrice: colMap.costPrice >= 0 ? (parseFloat(col(row, colMap.costPrice)) || 0) : 0,
+      sellPrice: colMap.sellPrice >= 0 ? (parseFloat(col(row, colMap.sellPrice)) || 0) : 0,
+      stock: colMap.stock >= 0 ? (parseFloat(col(row, colMap.stock)) || 0) : 0,
+      minStock: colMap.minStock >= 0 ? (parseFloat(col(row, colMap.minStock)) || 0) : 0,
+      unit: col(row, colMap.unit) || 'pcs',
+    })).filter((r) => r.name);
+
+    if (rows.length === 0) {
+      toast.error('Не найдено товаров для импорта');
+      return;
+    }
+
+    setImportData(rows);
+    setShowImportModal(true);
+  }
+
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const text = ev.target?.result as string;
-      const lines = text.split('\n').filter((l) => l.trim());
-      if (lines.length < 2) {
-        toast.error('Файл пустой или содержит только заголовок');
-        return;
-      }
-      // Detect separator (semicolon or comma or tab)
-      const sep = lines[0].includes('\t') ? '\t' : lines[0].includes(';') ? ';' : ',';
-      const headerCols = lines[0].split(sep).map((c) => c.trim().toLowerCase().replace(/"/g, ''));
 
-      // Auto-detect column mapping by header names
-      const colMap = {
-        name: -1,
-        category: -1,
-        unit: -1,
-        sellPrice: -1,
-        costPrice: -1,
-        stock: -1,
-        minStock: -1,
+    const isExcel = /\.(xlsx?|xls)$/i.test(file.name);
+
+    if (isExcel) {
+      // Excel: read as ArrayBuffer, parse with SheetJS
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const rawRows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+          parseImportRows(rawRows);
+        } catch {
+          toast.error('Ошибка чтения Excel файла');
+        }
       };
+      reader.readAsArrayBuffer(file);
+    } else {
+      // CSV/TXT: read as text
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target?.result as string;
+        const lines = text.split('\n').filter((l) => l.trim());
+        const sep = lines[0]?.includes('\t') ? '\t' : lines[0]?.includes(';') ? ';' : ',';
+        const rawRows = lines.map((line) => line.split(sep).map((c) => c.trim().replace(/^"|"$/g, '')));
+        parseImportRows(rawRows);
+      };
+      reader.readAsText(file);
+    }
 
-      headerCols.forEach((h, i) => {
-        if (/наименование|название|name/.test(h)) colMap.name = i;
-        else if (/групп|категори|category|group/.test(h)) colMap.category = i;
-        else if (/единиц|ед\.|unit/.test(h)) colMap.unit = i;
-        else if (/продаж|розниц|sell/.test(h)) colMap.sellPrice = i;
-        else if (/закуп|себестоим|cost|purchase/.test(h)) colMap.costPrice = i;
-        else if (/остаток|stock|количество|кол/.test(h) && !/мин/.test(h)) colMap.stock = i;
-        else if (/мин.*остат|min.*stock/.test(h)) colMap.minStock = i;
-      });
-
-      // Fallback: if no header matched for name, assume old positional format
-      if (colMap.name < 0) {
-        colMap.name = 0;
-        colMap.category = 1;
-        colMap.costPrice = 2;
-        colMap.sellPrice = 3;
-        colMap.stock = 4;
-        colMap.minStock = 5;
-        colMap.unit = 6;
-      }
-
-      const rows = lines.slice(1).map((line) => {
-        const cols = line.split(sep).map((c) => c.trim().replace(/^"|"$/g, ''));
-        return {
-          name: cols[colMap.name] || '',
-          category: colMap.category >= 0 ? (cols[colMap.category] || '') : '',
-          costPrice: colMap.costPrice >= 0 ? (parseFloat(cols[colMap.costPrice]) || 0) : 0,
-          sellPrice: colMap.sellPrice >= 0 ? (parseFloat(cols[colMap.sellPrice]) || 0) : 0,
-          stock: colMap.stock >= 0 ? (parseFloat(cols[colMap.stock]) || 0) : 0,
-          minStock: colMap.minStock >= 0 ? (parseFloat(cols[colMap.minStock]) || 0) : 0,
-          unit: colMap.unit >= 0 ? (cols[colMap.unit] || 'pcs') : 'pcs',
-        };
-      }).filter((r) => r.name);
-      setImportData(rows);
-      setShowImportModal(true);
-    };
-    reader.readAsText(file);
     // Reset input so same file can be selected again
     e.target.value = '';
   }
@@ -1520,11 +1541,11 @@ export default function ProductsPage() {
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-              title="Импорт CSV"
+              title="Импорт из Excel / CSV"
             >
               <Upload className="h-4 w-4" />
             </button>
-            <input ref={fileInputRef} type="file" accept=".csv,.txt" onChange={handleImportFile} className="hidden" />
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" onChange={handleImportFile} className="hidden" />
             <button
               type="button"
               onClick={() => setWarehouseOpsOpen(true)}
@@ -2038,9 +2059,9 @@ export default function ProductsPage() {
         <Modal isOpen onClose={() => { setShowImportModal(false); setImportData(null); }} title="Импорт товаров" size="lg">
           <div className="space-y-4">
             <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
-              <p className="text-xs font-semibold text-blue-900 mb-1">Формат CSV — колонки определяются автоматически по заголовку:</p>
-              <p className="text-[11px] text-blue-800 font-mono">Наименование;Группа;Единица измерения;Цена продажи;Цена закупки</p>
-              <p className="text-[10px] text-blue-600 mt-1">Разделитель: ; или , или Tab. Сохраняйте из Excel как CSV (UTF-8). Группы/папки через /</p>
+              <p className="text-xs font-semibold text-blue-900 mb-1">Поддерживаются Excel (.xlsx, .xls) и CSV файлы</p>
+              <p className="text-[11px] text-blue-800 font-mono">Наименование | Группа | Единица измерения | Цена продажи | Цена закупки</p>
+              <p className="text-[10px] text-blue-600 mt-1">Колонки определяются автоматически по заголовку. Группы/папки через /</p>
             </div>
             <p className="text-sm text-gray-600">
               Найдено <span className="font-bold text-gray-900">{importData.length}</span> товаров для импорта.

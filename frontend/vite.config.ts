@@ -33,6 +33,8 @@ export default defineConfig({
           'ui-vendor': ['lucide-react', 'react-hot-toast', 'react-hook-form'],
           // HTTP + dates
           'utils': ['axios', 'date-fns'],
+          // Excel parsing — loaded on-demand when importing
+          'xlsx': ['xlsx'],
         },
       },
     },
