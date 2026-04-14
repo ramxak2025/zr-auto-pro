@@ -1387,18 +1387,52 @@ export default function ProductsPage() {
         toast.error('Файл пустой или содержит только заголовок');
         return;
       }
-      // Detect separator (semicolon or comma)
-      const sep = lines[0].includes(';') ? ';' : ',';
+      // Detect separator (semicolon or comma or tab)
+      const sep = lines[0].includes('\t') ? '\t' : lines[0].includes(';') ? ';' : ',';
+      const headerCols = lines[0].split(sep).map((c) => c.trim().toLowerCase().replace(/"/g, ''));
+
+      // Auto-detect column mapping by header names
+      const colMap = {
+        name: -1,
+        category: -1,
+        unit: -1,
+        sellPrice: -1,
+        costPrice: -1,
+        stock: -1,
+        minStock: -1,
+      };
+
+      headerCols.forEach((h, i) => {
+        if (/наименование|название|name/.test(h)) colMap.name = i;
+        else if (/групп|категори|category|group/.test(h)) colMap.category = i;
+        else if (/единиц|ед\.|unit/.test(h)) colMap.unit = i;
+        else if (/продаж|розниц|sell/.test(h)) colMap.sellPrice = i;
+        else if (/закуп|себестоим|cost|purchase/.test(h)) colMap.costPrice = i;
+        else if (/остаток|stock|количество|кол/.test(h) && !/мин/.test(h)) colMap.stock = i;
+        else if (/мин.*остат|min.*stock/.test(h)) colMap.minStock = i;
+      });
+
+      // Fallback: if no header matched for name, assume old positional format
+      if (colMap.name < 0) {
+        colMap.name = 0;
+        colMap.category = 1;
+        colMap.costPrice = 2;
+        colMap.sellPrice = 3;
+        colMap.stock = 4;
+        colMap.minStock = 5;
+        colMap.unit = 6;
+      }
+
       const rows = lines.slice(1).map((line) => {
-        const cols = line.split(sep).map((c) => c.trim());
+        const cols = line.split(sep).map((c) => c.trim().replace(/^"|"$/g, ''));
         return {
-          name: cols[0] || '',
-          category: cols[1] || '',
-          costPrice: parseFloat(cols[2]) || 0,
-          sellPrice: parseFloat(cols[3]) || 0,
-          stock: parseFloat(cols[4]) || 0,
-          minStock: parseFloat(cols[5]) || 0,
-          unit: cols[6] || 'pcs',
+          name: cols[colMap.name] || '',
+          category: colMap.category >= 0 ? (cols[colMap.category] || '') : '',
+          costPrice: colMap.costPrice >= 0 ? (parseFloat(cols[colMap.costPrice]) || 0) : 0,
+          sellPrice: colMap.sellPrice >= 0 ? (parseFloat(cols[colMap.sellPrice]) || 0) : 0,
+          stock: colMap.stock >= 0 ? (parseFloat(cols[colMap.stock]) || 0) : 0,
+          minStock: colMap.minStock >= 0 ? (parseFloat(cols[colMap.minStock]) || 0) : 0,
+          unit: colMap.unit >= 0 ? (cols[colMap.unit] || 'pcs') : 'pcs',
         };
       }).filter((r) => r.name);
       setImportData(rows);
@@ -2004,9 +2038,9 @@ export default function ProductsPage() {
         <Modal isOpen onClose={() => { setShowImportModal(false); setImportData(null); }} title="Импорт товаров" size="lg">
           <div className="space-y-4">
             <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
-              <p className="text-xs font-semibold text-blue-900 mb-1">Формат файла CSV (разделитель ; или ,):</p>
-              <p className="text-[11px] text-blue-800 font-mono">Название;Категория;Закупка;Розница;Остаток;Мин;Ед</p>
-              <p className="text-[10px] text-blue-600 mt-1">Экспортируйте из Excel в CSV (UTF-8). Папки в категории через /</p>
+              <p className="text-xs font-semibold text-blue-900 mb-1">Формат CSV — колонки определяются автоматически по заголовку:</p>
+              <p className="text-[11px] text-blue-800 font-mono">Наименование;Группа;Единица измерения;Цена продажи;Цена закупки</p>
+              <p className="text-[10px] text-blue-600 mt-1">Разделитель: ; или , или Tab. Сохраняйте из Excel как CSV (UTF-8). Группы/папки через /</p>
             </div>
             <p className="text-sm text-gray-600">
               Найдено <span className="font-bold text-gray-900">{importData.length}</span> товаров для импорта.
@@ -2018,10 +2052,11 @@ export default function ProductsPage() {
                 <thead className="sticky top-0 bg-gray-50">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium text-gray-600">Название</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600">Категория</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600">Группа</th>
+                    <th className="px-3 py-2 text-center font-medium text-gray-600">Ед.</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Продажа</th>
                     <th className="px-3 py-2 text-right font-medium text-gray-600">Закупка</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">Розница</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">Кол-во</th>
+                    <th className="px-3 py-2 text-right font-medium text-gray-600">Остаток</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -2029,9 +2064,10 @@ export default function ProductsPage() {
                     <tr key={idx} className="hover:bg-gray-50">
                       <td className="px-3 py-2 font-medium text-gray-900">{item.name}</td>
                       <td className="px-3 py-2 text-gray-500">{item.category || '—'}</td>
-                      <td className="px-3 py-2 text-right text-gray-700">{item.costPrice}</td>
-                      <td className="px-3 py-2 text-right text-gray-700">{item.sellPrice}</td>
-                      <td className="px-3 py-2 text-right text-gray-700">{item.stock}</td>
+                      <td className="px-3 py-2 text-center text-gray-500">{item.unit !== 'pcs' ? item.unit : '—'}</td>
+                      <td className="px-3 py-2 text-right text-gray-700">{item.sellPrice || 0}</td>
+                      <td className="px-3 py-2 text-right text-gray-700">{item.costPrice || 0}</td>
+                      <td className="px-3 py-2 text-right text-gray-700">{item.stock || 0}</td>
                     </tr>
                   ))}
                 </tbody>

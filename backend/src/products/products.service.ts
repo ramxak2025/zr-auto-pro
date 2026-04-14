@@ -277,20 +277,20 @@ export class ProductsService {
 
   async exportCsv(tenantID: string) {
     const { rows } = await this.pool.query(
-      `SELECT name, category, cost_price, sell_price, stock, min_stock, unit
+      `SELECT name, category, unit, sell_price, cost_price, stock, min_stock
        FROM products WHERE tenant_id = $1 ORDER BY category, name`,
       [tenantID],
     );
-    const header = 'Название;Категория;Закупочная цена;Розничная цена;Остаток;Мин. остаток;Единица';
+    const header = 'Наименование;Группа;Единица измерения;Цена продажи;Цена закупки;Остаток;Мин. остаток';
     const lines = rows.map(r => {
       const vals = [
         r.name || '',
         r.category || '',
-        parseFloat(r.cost_price) || 0,
+        r.unit || '',
         parseFloat(r.sell_price) || 0,
+        parseFloat(r.cost_price) || 0,
         parseFloat(r.stock) || 0,
         parseFloat(r.min_stock) || 0,
-        r.unit || 'pcs',
       ];
       return vals.join(';');
     });
