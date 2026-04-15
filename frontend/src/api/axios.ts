@@ -28,9 +28,13 @@ api.interceptors.response.use(
     }
 
     const status = error.response.status;
+    const url = error.config?.url || '';
 
-    // Unauthorized — clear token and redirect (debounce 2s to avoid multiple redirects)
-    if (status === 401) {
+    // Unauthorized — clear token and redirect (debounce 2s to avoid multiple redirects).
+    // EXCEPTION: never auto-logout on /auth/me failures — that endpoint is the
+    // one we use to validate the token, and a transient hiccup must not log out
+    // an otherwise-valid session. AuthContext handles 401 from /me itself.
+    if (status === 401 && !url.includes('/auth/me')) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
 
@@ -39,6 +43,11 @@ api.interceptors.response.use(
         lastRedirectTime = now;
         window.location.href = '/login';
       }
+    }
+
+    // Rate-limited — log so we can see in console, but don't logout
+    if (status === 429) {
+      console.warn('Rate limited:', error.response.data);
     }
 
     // Server error — generic message

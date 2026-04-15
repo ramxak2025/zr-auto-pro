@@ -2,12 +2,19 @@ import { Injectable, CanActivate, ExecutionContext, HttpException, HttpStatus } 
 import { Request } from 'express';
 
 /**
- * Global rate limiter with different limits per endpoint type.
- * - Auth endpoints: 10 requests/minute
- * - Write operations (POST/PATCH/DELETE): 30 requests/minute
- * - Read operations (GET): 120 requests/minute
+ * Global rate limiter with different limits per endpoint TYPE.
  *
- * Uses in-memory storage with automatic cleanup every 5 minutes.
+ * Login/register only: 20/min  (brute-force protection)
+ * Read endpoints:      600/min (handles SPAs that fan out 5-10 parallel queries
+ *                               per page, multiplied by office NAT shared IPs)
+ * Write endpoints:     150/min
+ *
+ * Bucket key = IP + Authorization (first 16 chars of token), so that multiple
+ * users behind the same NAT (autoservice office Wi-Fi) don't share a quota.
+ *
+ * /auth/me, /auth/avatar, /auth/refresh are NOT rate-limited as auth — they
+ * use the regular read/write buckets. Only /auth/login and /auth/register
+ * have the strict brute-force limit.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -31,19 +38,26 @@ export class RateLimitGuard implements CanActivate {
     const path = request.path || request.url || '';
     const now = Date.now();
 
-    // Determine limit based on endpoint type
+    // Identify the user behind a shared NAT by their JWT (first 16 chars
+    // is enough for uniqueness and avoids storing the full secret in memory).
+    const auth = (request.headers['authorization'] as string | undefined) || '';
+    const userKey = auth.startsWith('Bearer ') ? auth.slice(7, 23) : 'anon';
+    const idKey = `${ip}:${userKey}`;
+
+    // Determine bucket and limit
     let maxAttempts: number;
     let bucketKey: string;
 
-    if (path.includes('/auth/')) {
-      maxAttempts = 10;
-      bucketKey = `auth:${ip}`;
+    // Brute-force protection ONLY on credential-exchange endpoints
+    if (/\/auth\/(login|register)\b/.test(path)) {
+      maxAttempts = 20;
+      bucketKey = `auth:${ip}`; // by IP only — login is unauthenticated
     } else if (method === 'GET') {
-      maxAttempts = 120;
-      bucketKey = `read:${ip}`;
+      maxAttempts = 600;
+      bucketKey = `read:${idKey}`;
     } else {
-      maxAttempts = 30;
-      bucketKey = `write:${ip}`;
+      maxAttempts = 150;
+      bucketKey = `write:${idKey}`;
     }
 
     const entry = this.attempts.get(bucketKey);

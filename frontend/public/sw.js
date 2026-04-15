@@ -1,13 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v7
-//  - API GET: network-first, cache ONLY for offline fallback (no stale-while-revalidate)
-//  - Static assets (JS/CSS/images): cache-first for speed
-//  - Navigation: network-first, offline fallback to cached shell
-//  - Offline mutations: queued and replayed when back online
+//  Autexa PWA Service Worker v8
+//  - /api/auth/* — bypassed entirely (always go straight to network)
+//  - GET /api/*  — network-first, cache as offline-only fallback
+//  - Static assets — cache-first for speed
+//  - Navigation — network-first, offline fallback to cached shell
+//  - Offline mutations — queued in IndexedDB and replayed when back online
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v8';
-const API_CACHE = 'autexa-api-v2';
+const STATIC_CACHE = 'autexa-static-v9';
+const API_CACHE = 'autexa-api-v3';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 
 const PRECACHE_ASSETS = [
@@ -49,6 +50,12 @@ self.addEventListener('fetch', (event) => {
 
   // API requests
   if (url.pathname.startsWith('/api')) {
+    // Auth endpoints — NEVER touched by the SW. Sessions must always go
+    // straight to the network so a transient SW offline response cannot
+    // accidentally log the user out (Auth uses 401/403 to mean "log out",
+    // any non-200 from the SW would be misinterpreted).
+    if (url.pathname.startsWith('/api/auth')) return;
+
     if (request.method !== 'GET') {
       event.respondWith(networkWithOfflineQueue(request));
       return;

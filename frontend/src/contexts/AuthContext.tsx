@@ -28,9 +28,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authApi
         .me()
         .then((res: any) => setUser(res.data))
-        .catch(() => {
-          localStorage.removeItem('token');
-          setToken(null);
+        .catch((err: any) => {
+          // Only clear the token on a genuine auth failure (401/403).
+          // Network errors, 5xx, or transient SW offline responses must NOT
+          // log the user out — otherwise a 1-second network blip kicks them
+          // back to the login screen.
+          const status = err?.response?.status;
+          if (status === 401 || status === 403) {
+            localStorage.removeItem('token');
+            setToken(null);
+          } else {
+            console.warn('Failed to fetch user (kept session):', status, err?.message);
+          }
         })
         .finally(() => setLoading(false));
     } else {

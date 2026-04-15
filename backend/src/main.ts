@@ -10,6 +10,17 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
 
+  // Trust the reverse proxy (nginx) so request.ip reflects the real client IP,
+  // not the Docker bridge IP. Without this, ALL users share one rate-limit
+  // bucket and get throttled into "Too many requests" → forced logout.
+  const httpAdapter = app.getHttpAdapter();
+  if (httpAdapter && typeof (httpAdapter as any).getInstance === 'function') {
+    const expressApp = (httpAdapter as any).getInstance();
+    if (expressApp && typeof expressApp.set === 'function') {
+      expressApp.set('trust proxy', 'loopback, linklocal, uniquelocal');
+    }
+  }
+
   app.setGlobalPrefix('api');
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
