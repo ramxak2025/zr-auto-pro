@@ -1430,25 +1430,50 @@ export default function ProductsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Use SheetJS for BOTH Excel and CSV — handles BOM, quoted cells,
-    // comma/semicolon/tab separators, UTF-8, and Russian locale properly.
-    const reader = new FileReader();
-    reader.onload = (ev) => {
+    const isCsv = /\.(csv|txt)$/i.test(file.name) || file.type === 'text/csv';
+
+    const parseWithSheetJS = (data: ArrayBuffer | string, type: 'array' | 'string') => {
       try {
-        const data = new Uint8Array(ev.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array', raw: false, cellDates: false });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const input = type === 'array' ? new Uint8Array(data as ArrayBuffer) : (data as string);
+        const workbook = XLSX.read(input as any, { type, raw: false, cellDates: false, codepage: 65001 });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = sheetName ? workbook.Sheets[sheetName] : null;
         if (!sheet) {
-          toast.error('Файл не содержит листов');
+          toast.error('Файл не содержит листов с данными');
           return;
         }
         const rawRows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
         parseImportRows(rawRows);
-      } catch {
-        toast.error('Ошибка чтения файла');
+      } catch (err: any) {
+        toast.error(`Ошибка парсинга: ${err?.message || 'неизвестная ошибка'}`);
       }
     };
-    reader.readAsArrayBuffer(file);
+
+    if (isCsv) {
+      // CSV: try UTF-8 first. If we detect mojibake (replacement chars from bad decode),
+      // retry with Windows-1251 — the default Excel CSV encoding in Russian locale.
+      const readAs = (encoding: string) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const text = (ev.target?.result as string) || '';
+          if (encoding === 'utf-8' && /\uFFFD/.test(text)) {
+            // Replacement chars = wrong encoding, retry as Windows-1251
+            readAs('windows-1251');
+            return;
+          }
+          parseWithSheetJS(text, 'string');
+        };
+        reader.onerror = () => toast.error('Не удалось прочитать файл');
+        reader.readAsText(file, encoding);
+      };
+      readAs('utf-8');
+    } else {
+      // Excel (.xlsx / .xls): binary read
+      const reader = new FileReader();
+      reader.onload = (ev) => parseWithSheetJS(ev.target?.result as ArrayBuffer, 'array');
+      reader.onerror = () => toast.error('Не удалось прочитать файл');
+      reader.readAsArrayBuffer(file);
+    }
 
     // Reset input so same file can be selected again
     e.target.value = '';
@@ -1464,8 +1489,9 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setShowImportModal(false);
       setImportData(null);
-    } catch {
-      toast.error('Ошибка импорта');
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || 'Ошибка импорта';
+      toast.error(typeof msg === 'string' ? msg : 'Ошибка импорта');
     } finally {
       setImporting(false);
     }
