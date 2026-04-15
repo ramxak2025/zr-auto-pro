@@ -103,12 +103,20 @@ export class CallsService {
             `SELECT id, plate_number, make_model, client_id FROM cars WHERE client_id = ANY($1) AND tenant_id=$2`,
             [clientIds, tenantId],
           );
+          // Build O(N) reverse index: clientId -> client refs in clientPhones
+          // Previously this was O(cars * phones) = quadratic. With ~5000 clients
+          // and ~500 cars that is 2.5M comparisons; the new version does ~5500.
+          const clientById = new Map<string, Array<{ cars: any[] }>>();
+          for (const client of clientPhones.values()) {
+            const list = clientById.get(client.id) || [];
+            list.push(client);
+            clientById.set(client.id, list);
+          }
           for (const car of cars) {
-            for (const [, client] of clientPhones) {
-              if (client.id === car.client_id) {
-                client.cars.push({ plateNumber: car.plate_number, makeModel: car.make_model });
-              }
-            }
+            const targets = clientById.get(car.client_id);
+            if (!targets) continue;
+            const carRef = { plateNumber: car.plate_number, makeModel: car.make_model };
+            for (const t of targets) t.cars.push(carRef);
           }
         }
       }

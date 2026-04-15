@@ -221,12 +221,16 @@ export class SuppliersService {
           [deliveryId, item.productId, item.quantity || 0, item.price || 0, itemTotal],
         );
 
-        // Increase product stock
+        // Increase product stock — scoped to tenant (defense-in-depth so a
+        // crafted productId from another tenant cannot mutate stock here).
         if (item.productId) {
-          await client.query(
-            'UPDATE products SET stock = stock + $1 WHERE id = $2',
-            [item.quantity || 0, item.productId],
+          const upd = await client.query(
+            'UPDATE products SET stock = stock + $1 WHERE id = $2 AND tenant_id = $3',
+            [item.quantity || 0, item.productId, tenantID],
           );
+          if (upd.rowCount === 0) {
+            throw new BadRequestException({ message: `Товар ${item.productId} не найден` });
+          }
         }
       }
 
