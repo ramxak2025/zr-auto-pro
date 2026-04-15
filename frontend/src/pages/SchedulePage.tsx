@@ -72,12 +72,29 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
 
   const allEntries = monthEntries ?? entries;
 
-  // Compute stats per user — only for past and current days (not future)
+  // Compute stats per user — only for past and current days (not future).
+  // Deduplicate by userId+date so each calendar day counts at most once,
+  // even if multiple schedule_entries exist for the same day (e.g. from
+  // double-submits, race conditions, or manual DB edits).
   const stats = useMemo(() => {
     const map: Record<string, { full: number; late: number; lateMinor: number; lateMajor: number; absent: number; sick: number; dayOff: number; total: number }> = {};
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
+
+    // Pick the "best" entry per user+date: prefer newest with most data filled in.
+    // Keyed as `${userId}-${YYYY-MM-DD}`.
+    const uniqueByDay = new Map<string, ScheduleEntry>();
     allEntries.forEach(e => {
+      const dayKey = `${e.userId}-${(e.date || '').slice(0, 10)}`;
+      const existing = uniqueByDay.get(dayKey);
+      if (!existing) { uniqueByDay.set(dayKey, e); return; }
+      // Prefer the entry with actualArrival / lateStatus set (more informative)
+      const existingScore = (existing.actualArrival ? 2 : 0) + (existing.lateStatus ? 1 : 0);
+      const currentScore = (e.actualArrival ? 2 : 0) + (e.lateStatus ? 1 : 0);
+      if (currentScore > existingScore) uniqueByDay.set(dayKey, e);
+    });
+
+    uniqueByDay.forEach(e => {
       const entryDate = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
       if (entryDate > todayEnd) return; // skip future
       if (!map[e.userId]) map[e.userId] = { full: 0, late: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, dayOff: 0, total: 0 };
@@ -282,19 +299,22 @@ export default function SchedulePage() {
 
   const scheduleQueryKey = ['schedule', dateFrom, dateTo];
 
-  // Build user -> date -> entry map
+  // Build user -> date -> entry map.
+  // Defensive against missing userId/date (stale SW cache, partial payloads).
   const entryMap = useMemo(() => {
     const map: Record<string, Record<string, ScheduleEntry>> = {};
     entries.forEach((entry) => {
+      if (!entry?.userId || !entry?.date) return;
       const uid = entry.userId;
-      const d = entry.date.slice(0, 10);
+      const d = String(entry.date).slice(0, 10);
       if (!map[uid]) map[uid] = {};
       map[uid][d] = entry;
     });
     // Overlay pending changes
     Object.values(pendingChanges).forEach(c => {
+      if (!c?.userId || !c?.date) return;
       const uid = c.userId;
-      const d = c.date.slice(0, 10);
+      const d = String(c.date).slice(0, 10);
       if (!map[uid]) map[uid] = {};
       const existing = map[uid][d];
       map[uid][d] = { ...(existing || { id: `pending-${uid}-${d}`, tenantId: '', userId: uid, date: c.date, isManualOverride: true }), ...c.payload } as ScheduleEntry;
@@ -381,7 +401,7 @@ export default function SchedulePage() {
       if (isNew) {
         return [...old, { id: `t-${Date.now()}`, tenantId: '', userId, date, shiftStart: '09:00', shiftEnd: '18:00', isDayOff: false, lateMinutes: 0, isManualOverride: false, ...changes } as ScheduleEntry];
       }
-      return old.map(e => (e.userId === userId && e.date.slice(0, 10) === date) ? { ...e, ...changes } : e);
+      return old.map(e => (e.userId === userId && String(e.date || '').slice(0, 10) === date) ? { ...e, ...changes } : e);
     });
   };
 
@@ -451,7 +471,7 @@ export default function SchedulePage() {
     const isSick = (entry.note || '').toLowerCase().includes('больнич');
     setEntryForm({
       userId: entry.userId,
-      date: entry.date.slice(0, 10),
+      date: String(entry.date || '').slice(0, 10),
       shiftStart: entry.shiftStart || '09:00',
       shiftEnd: entry.shiftEnd || '18:00',
       isDayOff: entry.isDayOff && !isSick,

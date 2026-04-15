@@ -1430,35 +1430,25 @@ export default function ProductsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const isExcel = /\.(xlsx?|xls)$/i.test(file.name);
-
-    if (isExcel) {
-      // Excel: read as ArrayBuffer, parse with SheetJS
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        try {
-          const data = new Uint8Array(ev.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array' });
-          const sheet = workbook.Sheets[workbook.SheetNames[0]];
-          const rawRows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-          parseImportRows(rawRows);
-        } catch {
-          toast.error('Ошибка чтения Excel файла');
+    // Use SheetJS for BOTH Excel and CSV — handles BOM, quoted cells,
+    // comma/semicolon/tab separators, UTF-8, and Russian locale properly.
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = new Uint8Array(ev.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array', raw: false, cellDates: false });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        if (!sheet) {
+          toast.error('Файл не содержит листов');
+          return;
         }
-      };
-      reader.readAsArrayBuffer(file);
-    } else {
-      // CSV/TXT: read as text
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const text = ev.target?.result as string;
-        const lines = text.split('\n').filter((l) => l.trim());
-        const sep = lines[0]?.includes('\t') ? '\t' : lines[0]?.includes(';') ? ';' : ',';
-        const rawRows = lines.map((line) => line.split(sep).map((c) => c.trim().replace(/^"|"$/g, '')));
+        const rawRows: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
         parseImportRows(rawRows);
-      };
-      reader.readAsText(file);
-    }
+      } catch {
+        toast.error('Ошибка чтения файла');
+      }
+    };
+    reader.readAsArrayBuffer(file);
 
     // Reset input so same file can be selected again
     e.target.value = '';

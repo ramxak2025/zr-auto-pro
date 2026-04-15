@@ -135,9 +135,20 @@ export class ScheduleService {
   }
 
   async create(tenantID: string, dto: any) {
+    // Upsert — backed by unique index (tenant_id, user_id, date).
+    // Prevents duplicate entries that caused attendance rating to count
+    // a single day as multiple shifts.
     const { rows } = await this.pool.query(
       `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, note, late_status, late_minutes, actual_arrival, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (tenant_id, user_id, date) DO UPDATE SET
+         shift_start     = EXCLUDED.shift_start,
+         shift_end       = EXCLUDED.shift_end,
+         is_day_off      = EXCLUDED.is_day_off,
+         note            = EXCLUDED.note,
+         late_status     = EXCLUDED.late_status,
+         late_minutes    = EXCLUDED.late_minutes,
+         actual_arrival  = EXCLUDED.actual_arrival
        RETURNING *`,
       [dto.userId, dto.date, dto.shiftStart, dto.shiftEnd,
        dto.isDayOff || false, dto.note, dto.lateStatus || null, dto.lateMinutes || 0,

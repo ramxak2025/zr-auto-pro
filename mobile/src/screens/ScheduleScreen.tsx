@@ -916,7 +916,19 @@ function RatingTab() {
     const map: Record<string, { full: number; lateMinor: number; lateMajor: number; absent: number; sick: number; total: number }> = {};
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
+
+    // Dedupe by user+date — prefer entry with more data (actualArrival > lateStatus)
+    const uniqueByDay = new Map<string, ScheduleEntry>();
     monthEntries.forEach(e => {
+      const dayKey = `${e.userId}-${(e.date || '').slice(0, 10)}`;
+      const existing = uniqueByDay.get(dayKey);
+      if (!existing) { uniqueByDay.set(dayKey, e); return; }
+      const existingScore = (existing.actualArrival ? 2 : 0) + (existing.lateStatus ? 1 : 0);
+      const currentScore = (e.actualArrival ? 2 : 0) + (e.lateStatus ? 1 : 0);
+      if (currentScore > existingScore) uniqueByDay.set(dayKey, e);
+    });
+
+    uniqueByDay.forEach(e => {
       const ed = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
       if (ed > todayEnd) return;
       if (!map[e.userId]) map[e.userId] = { full: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, total: 0 };

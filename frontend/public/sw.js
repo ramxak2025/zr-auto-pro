@@ -1,15 +1,14 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v6
-//  - NO API caching — all API requests go straight to network
+//  Autexa PWA Service Worker v7
+//  - API GET: network-first, cache ONLY for offline fallback (no stale-while-revalidate)
 //  - Static assets (JS/CSS/images): cache-first for speed
 //  - Navigation: network-first, offline fallback to cached shell
 //  - Offline mutations: queued and replayed when back online
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v7';
-const API_CACHE = 'autexa-api-v1';
+const STATIC_CACHE = 'autexa-static-v8';
+const API_CACHE = 'autexa-api-v2';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
-const API_CACHE_TTL = 30_000; // 30 seconds
 
 const PRECACHE_ASSETS = [
   '/',
@@ -36,9 +35,8 @@ self.addEventListener('activate', (event) => {
           .filter((k) => k !== STATIC_CACHE && k !== API_CACHE)
           .map((k) => caches.delete(k))
       )
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 // ─── Fetch ───────────────────────────────────────────────────────────────────
@@ -55,8 +53,10 @@ self.addEventListener('fetch', (event) => {
       event.respondWith(networkWithOfflineQueue(request));
       return;
     }
-    // GET /api — stale-while-revalidate for speed
-    event.respondWith(apiStaleWhileRevalidate(request));
+    // GET /api — network-first, cache only as offline fallback.
+    // Avoids serving stale API responses that could crash pages when
+    // the schema has evolved between deployments.
+    event.respondWith(apiNetworkFirst(request));
     return;
   }
 
@@ -85,27 +85,25 @@ self.addEventListener('fetch', (event) => {
 
 // ─── Strategies ──────────────────────────────────────────────────────────────
 
-async function apiStaleWhileRevalidate(request) {
+async function apiNetworkFirst(request) {
   const cache = await caches.open(API_CACHE);
-  const cached = await cache.match(request);
-
-  // Always fetch in background
-  const networkPromise = fetch(request).then((response) => {
+  try {
+    const response = await fetch(request);
+    // Only cache successful responses (for offline fallback)
     if (response.ok) {
-      const clone = response.clone();
-      cache.put(request, clone);
+      cache.put(request, response.clone()).catch(() => {});
     }
     return response;
-  }).catch(() => cached || new Response('{"error":"offline"}', { status: 503, headers: { 'Content-Type': 'application/json' } }));
-
-  // Return cached immediately if fresh enough, otherwise wait for network
-  if (cached) {
-    const dateHeader = cached.headers.get('date');
-    const age = dateHeader ? Date.now() - new Date(dateHeader).getTime() : Infinity;
-    if (age < API_CACHE_TTL) return cached;
+  } catch (err) {
+    // Network failed — fall back to cache if available
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    // No cache either — return a proper 503 so React Query surfaces the error
+    return new Response(
+      JSON.stringify({ message: 'Нет соединения с сервером', offline: true }),
+      { status: 503, headers: { 'Content-Type': 'application/json', 'X-Offline': 'true' } },
+    );
   }
-
-  return networkPromise;
 }
 
 async function cacheFirst(request) {
