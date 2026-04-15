@@ -27,6 +27,7 @@ import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { formatMoney } from '../../../shared/utils/formatters';
+import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi } from '../api/services';
 import type { SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
@@ -853,26 +854,12 @@ function MasterRankWidget({ userId }: { userId?: string }) {
 
   const masters = (usersData as any[]).filter((u: any) => u.isActive && u.role === 'master');
 
-  const ranked = (() => {
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-    return masters.map((u: any) => {
-      let full = 0, total = 0;
-      (monthEntries as any[]).forEach((e: any) => {
-        if (e.userId !== u.id) return;
-        const ed = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
-        if (ed > todayEnd) return;
-        const note = (e.note || '').toLowerCase();
-        if (note.includes('больнич')) return;
-        if (e.isDayOff) return;
-        if (note.includes('прогул')) { total++; return; }
-        total++;
-        if (e.actualArrival || e.lateStatus === 'on_time') full++;
-      });
-      const score = total > 0 ? Math.round((full / total) * 100) : 0;
-      return { id: u.id, score, full, total };
-    }).sort((a: any, b: any) => b.score - a.score || b.full - a.full);
-  })();
+  // Use SHARED attendance utility — identical logic to RatingTab on schedule.
+  const stats = calculateAttendanceStats((monthEntries as any[]) || []);
+  const ranked = masters.map((u: any) => {
+    const s = stats[u.id] || emptyBreakdown();
+    return { id: u.id, score: attendanceScore(s), full: s.full, total: s.total };
+  }).sort((a: any, b: any) => b.score - a.score || b.full - a.full);
 
   if (!userId || ranked.length === 0) return null;
   const myRank = ranked.findIndex((r: any) => r.id === userId) + 1;

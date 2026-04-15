@@ -17,6 +17,7 @@ import DateTimePickerModal from '../components/DateTimePickerModal';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
+import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 
@@ -316,12 +317,24 @@ function GridTab() {
     const base: any = { userId, date };
 
     if (type === 'delete' && entry) { deleteMutation.mutate(entry.id); return; }
-    if (type === 'shift') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = ''; base.lateStatus = 'on_time'; base.lateMinutes = 0; base.actualArrival = new Date().toISOString(); }
+
+    // Pin actualArrival to the SCHEDULED date, not `now()`. Prevents past-date
+    // quick-actions from inflating rating counts with today's timestamp.
+    const shiftStartStr = entry?.shiftStart || '09:00';
+    const shiftEndStr = entry?.shiftEnd || '18:00';
+    const arrivalForDate = (offsetMin: number) => {
+      const [h, m] = shiftStartStr.split(':').map(Number);
+      const dt = new Date(`${date}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
+      dt.setMinutes(dt.getMinutes() + offsetMin);
+      return dt.toISOString();
+    };
+
+    if (type === 'shift') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.note = ''; base.lateStatus = 'on_time'; base.lateMinutes = 0; base.actualArrival = arrivalForDate(0); }
     else if (type === 'dayoff') { base.isDayOff = true; base.shiftStart = null; base.shiftEnd = null; base.note = ''; base.lateStatus = null; base.lateMinutes = 0; }
     else if (type === 'sick') { base.isDayOff = true; base.shiftStart = null; base.shiftEnd = null; base.note = 'Больничный'; base.lateStatus = null; base.lateMinutes = 0; }
-    else if (type === 'late_minor') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_minor'; base.lateMinutes = 15; base.note = ''; }
-    else if (type === 'late_major') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; }
-    else if (type === 'absent') { base.shiftStart = '09:00'; base.shiftEnd = '18:00'; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
+    else if (type === 'late_minor') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.lateStatus = 'late_minor'; base.lateMinutes = 15; base.note = ''; base.actualArrival = arrivalForDate(15); }
+    else if (type === 'late_major') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; base.actualArrival = arrivalForDate(60); }
+    else if (type === 'absent') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
 
     // Save to pending changes — applied in batch via Apply button
     const key = `${userId}-${date}`;
@@ -912,48 +925,16 @@ function RatingTab() {
 
   const users = useMemo(() => (usersData || []).filter(u => u.isActive && u.role === 'master'), [usersData]);
 
-  const stats = useMemo(() => {
-    const map: Record<string, { full: number; lateMinor: number; lateMajor: number; absent: number; sick: number; total: number }> = {};
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-
-    // Dedupe by user+date — prefer entry with more data (actualArrival > lateStatus)
-    const uniqueByDay = new Map<string, ScheduleEntry>();
-    monthEntries.forEach(e => {
-      const dayKey = `${e.userId}-${(e.date || '').slice(0, 10)}`;
-      const existing = uniqueByDay.get(dayKey);
-      if (!existing) { uniqueByDay.set(dayKey, e); return; }
-      const existingScore = (existing.actualArrival ? 2 : 0) + (existing.lateStatus ? 1 : 0);
-      const currentScore = (e.actualArrival ? 2 : 0) + (e.lateStatus ? 1 : 0);
-      if (currentScore > existingScore) uniqueByDay.set(dayKey, e);
-    });
-
-    uniqueByDay.forEach(e => {
-      const ed = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
-      if (ed > todayEnd) return;
-      if (!map[e.userId]) map[e.userId] = { full: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, total: 0 };
-      const s = map[e.userId];
-      const note = (e.note || '').toLowerCase();
-      if (note.includes('больнич')) { s.sick++; return; }
-      if (note.includes('прогул')) { s.absent++; s.total++; return; }
-      if (e.isDayOff) return;
-      s.total++;
-      if (e.lateStatus === 'late_major' || (e.lateMinutes || 0) >= 60) s.lateMajor++;
-      else if (e.lateStatus === 'late_minor' || ((e.lateMinutes || 0) > 0 && (e.lateMinutes || 0) < 60)) s.lateMinor++;
-      else if (e.actualArrival || e.lateStatus === 'on_time') s.full++;
-      else {
-        const d = new Date(e.date + 'T23:59:59');
-        if (d < new Date()) s.absent++;
-      }
-    });
-    return map;
-  }, [monthEntries]);
+  // SHARED attendance utility — same logic everywhere (web + mobile)
+  const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
 
   const ranked = useMemo(() => users.map(u => {
-    const s = stats[u.id] || { full: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, total: 0 };
-    const score = s.total > 0 ? Math.round((s.full / s.total) * 100) : 0;
+    const s = stats[u.id] || emptyBreakdown();
+    const score = attendanceScore(s);
     return { ...u, stats: s, score };
   }).sort((a, b) => b.score - a.score || b.stats.full - a.stats.full), [users, stats]);
+
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
   const shiftMonth = (dir: number) => {
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -982,28 +963,81 @@ function RatingTab() {
         const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
         const scoreColor = u.score >= 90 ? colors.green[600] : u.score >= 70 ? colors.yellow[600] : colors.red[500];
         const scoreBg = u.score >= 90 ? colors.green[50] : u.score >= 70 ? colors.yellow[50] : colors.red[50];
+        const isExpanded = expandedUserId === u.id;
+        const fmtDate = (d: string) => { const p = d.split('-'); return `${parseInt(p[2])}.${p[1]}`; };
 
         return (
-          <View key={u.id} style={{ backgroundColor: colors.white, borderRadius: borderRadius['2xl'], padding: spacing[3], borderWidth: 1, borderColor: idx < 3 ? colors.amber[200] : colors.gray[100] }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
-              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: idx < 3 ? colors.amber[100] : colors.gray[100], alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: idx < 3 ? colors.amber[600] : colors.gray[500] }}>{medal || (idx + 1)}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }} numberOfLines={1}>{u.fullName}</Text>
-                <View style={{ flexDirection: 'row', gap: spacing[1.5], marginTop: 4, flexWrap: 'wrap' }}>
-                  <Text style={{ fontSize: 9, backgroundColor: colors.green[50], color: colors.green[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>✓ {s.full}</Text>
-                  {s.lateMinor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.yellow[50], color: colors.yellow[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⏰ {s.lateMinor}</Text>}
-                  {s.lateMajor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.orange[50], color: colors.orange[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⚠ {s.lateMajor}</Text>}
-                  {s.absent > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.red[50], color: colors.red[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>❌ {s.absent}</Text>}
-                  {s.sick > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.rose[50], color: colors.rose[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>🏥 {s.sick}</Text>}
+          <View key={u.id} style={{ backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: idx < 3 ? colors.amber[200] : colors.gray[100], overflow: 'hidden' }}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => setExpandedUserId(isExpanded ? null : u.id)}
+              style={{ padding: spacing[3] }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
+                <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: idx < 3 ? colors.amber[100] : colors.gray[100], alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: idx < 3 ? colors.amber[600] : colors.gray[500] }}>{medal || (idx + 1)}</Text>
                 </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }} numberOfLines={1}>{u.fullName}</Text>
+                  <View style={{ flexDirection: 'row', gap: spacing[1.5], marginTop: 4, flexWrap: 'wrap' }}>
+                    <Text style={{ fontSize: 9, backgroundColor: colors.green[50], color: colors.green[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>✓ {s.full}</Text>
+                    {s.lateMinor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.yellow[50], color: colors.yellow[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⏰ {s.lateMinor}</Text>}
+                    {s.lateMajor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.orange[50], color: colors.orange[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⚠ {s.lateMajor}</Text>}
+                    {s.absent > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.red[50], color: colors.red[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>❌ {s.absent}</Text>}
+                    {s.sick > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.rose[50], color: colors.rose[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>🏥 {s.sick}</Text>}
+                  </View>
+                </View>
+                <View style={{ backgroundColor: scoreBg, borderRadius: borderRadius.lg, paddingHorizontal: spacing[2.5], paddingVertical: spacing[1.5], alignItems: 'center' }}>
+                  <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: scoreColor }}>{u.score}%</Text>
+                  <Text style={{ fontSize: 8, color: colors.gray[400] }}>посещ.</Text>
+                </View>
+                <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.gray[400]} />
               </View>
-              <View style={{ backgroundColor: scoreBg, borderRadius: borderRadius.lg, paddingHorizontal: spacing[2.5], paddingVertical: spacing[1.5], alignItems: 'center' }}>
-                <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: scoreColor }}>{u.score}%</Text>
-                <Text style={{ fontSize: 8, color: colors.gray[400] }}>посещ.</Text>
+            </TouchableOpacity>
+
+            {isExpanded && (
+              <View style={{ borderTopWidth: 1, borderTopColor: colors.gray[100], backgroundColor: colors.gray[50], padding: spacing[3], gap: spacing[1.5] }}>
+                {s.fullDates.length > 0 && (
+                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                    <Text style={{ fontWeight: '700', color: colors.green[700] }}>✓ Полная смена ({s.full}): </Text>
+                    {s.fullDates.map(fmtDate).join(', ')}
+                  </Text>
+                )}
+                {s.lateMinorDates.length > 0 && (
+                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                    <Text style={{ fontWeight: '700', color: colors.yellow[700] }}>⏰ Опозд. &lt;1ч ({s.lateMinor}): </Text>
+                    {s.lateMinorDates.map(fmtDate).join(', ')}
+                  </Text>
+                )}
+                {s.lateMajorDates.length > 0 && (
+                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                    <Text style={{ fontWeight: '700', color: colors.orange[600] }}>⚠ Опозд. &gt;1ч ({s.lateMajor}): </Text>
+                    {s.lateMajorDates.map(fmtDate).join(', ')}
+                  </Text>
+                )}
+                {s.absentDates.length > 0 && (
+                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                    <Text style={{ fontWeight: '700', color: colors.red[700] }}>❌ Прогул ({s.absent}): </Text>
+                    {s.absentDates.map(fmtDate).join(', ')}
+                  </Text>
+                )}
+                {s.sickDates.length > 0 && (
+                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                    <Text style={{ fontWeight: '700', color: colors.rose[600] }}>🏥 Больничный ({s.sick}): </Text>
+                    {s.sickDates.map(fmtDate).join(', ')}
+                  </Text>
+                )}
+                {s.dayOffDates.length > 0 && (
+                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                    <Text style={{ fontWeight: '700', color: colors.gray[500] }}>🌙 Выходной ({s.dayOff}): </Text>
+                    {s.dayOffDates.map(fmtDate).join(', ')}
+                  </Text>
+                )}
+                {s.total === 0 && s.sick === 0 && s.dayOff === 0 && (
+                  <Text style={{ fontSize: 11, color: colors.gray[400], textAlign: 'center' }}>Нет данных</Text>
+                )}
               </View>
-            </View>
+            )}
           </View>
         );
       })}

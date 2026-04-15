@@ -16,6 +16,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import AnimatedCard from '../components/AnimatedCard';
 import type { SalarySummary, EmployeeRanking, TodayEmployeeStatus, Shift, ScheduleEntry, User } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
+import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -663,26 +664,12 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
 
   const masters = useMemo(() => (usersData || []).filter(u => u.isActive && u.role === 'master'), [usersData]);
 
-  const ranked = useMemo(() => {
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
-    return masters.map(u => {
-      let full = 0, total = 0;
-      monthEntries.forEach(e => {
-        if (e.userId !== u.id) return;
-        const ed = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
-        if (ed > todayEnd) return;
-        const note = (e.note || '').toLowerCase();
-        if (note.includes('больнич')) return;
-        if (e.isDayOff) return;
-        if (note.includes('прогул')) { total++; return; }
-        total++;
-        if (e.actualArrival || e.lateStatus === 'on_time') full++;
-      });
-      const score = total > 0 ? Math.round((full / total) * 100) : 0;
-      return { id: u.id, score, full, total };
-    }).sort((a, b) => b.score - a.score || b.full - a.full);
-  }, [masters, monthEntries]);
+  // SHARED attendance utility — identical to schedule RatingTab
+  const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
+  const ranked = useMemo(() => masters.map(u => {
+    const s = stats[u.id] || emptyBreakdown();
+    return { id: u.id, score: attendanceScore(s), full: s.full, total: s.total };
+  }).sort((a, b) => b.score - a.score || b.full - a.full), [masters, stats]);
 
   if (!userId || ranked.length === 0) return null;
   const myRank = ranked.findIndex(r => r.id === userId) + 1;

@@ -35,6 +35,7 @@ import {
 } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
+import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { scheduleApi, usersApi } from '../api/services';
 import { ScheduleEntry, TodayEmployeeStatus, User } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -72,55 +73,17 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
 
   const allEntries = monthEntries ?? entries;
 
-  // Compute stats per user — only for past and current days (not future).
-  // Deduplicate by userId+date so each calendar day counts at most once,
-  // even if multiple schedule_entries exist for the same day (e.g. from
-  // double-submits, race conditions, or manual DB edits).
-  const stats = useMemo(() => {
-    const map: Record<string, { full: number; late: number; lateMinor: number; lateMajor: number; absent: number; sick: number; dayOff: number; total: number }> = {};
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+  // Which row is expanded to show the day-by-day breakdown
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
-    // Pick the "best" entry per user+date: prefer newest with most data filled in.
-    // Keyed as `${userId}-${YYYY-MM-DD}`.
-    const uniqueByDay = new Map<string, ScheduleEntry>();
-    allEntries.forEach(e => {
-      const dayKey = `${e.userId}-${(e.date || '').slice(0, 10)}`;
-      const existing = uniqueByDay.get(dayKey);
-      if (!existing) { uniqueByDay.set(dayKey, e); return; }
-      // Prefer the entry with actualArrival / lateStatus set (more informative)
-      const existingScore = (existing.actualArrival ? 2 : 0) + (existing.lateStatus ? 1 : 0);
-      const currentScore = (e.actualArrival ? 2 : 0) + (e.lateStatus ? 1 : 0);
-      if (currentScore > existingScore) uniqueByDay.set(dayKey, e);
-    });
-
-    uniqueByDay.forEach(e => {
-      const entryDate = new Date((e.date || '').slice(0, 10) + 'T00:00:00');
-      if (entryDate > todayEnd) return; // skip future
-      if (!map[e.userId]) map[e.userId] = { full: 0, late: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, dayOff: 0, total: 0 };
-      const s = map[e.userId];
-      const note = (e.note || '').toLowerCase();
-      if (note.includes('больнич')) { s.sick++; return; }
-      if (note.includes('прогул')) { s.absent++; s.total++; return; }
-      if (e.isDayOff) { s.dayOff++; return; }
-      s.total++;
-      if (e.lateStatus === 'late_major' || e.lateMinutes >= 60) { s.lateMajor++; s.late++; }
-      else if (e.lateStatus === 'late_minor' || (e.lateMinutes > 0 && e.lateMinutes < 60)) { s.lateMinor++; s.late++; }
-      else if (e.actualArrival || e.lateStatus === 'on_time') { s.full++; }
-      else {
-        // Past date with no arrival = absent
-        const d = new Date(e.date + 'T23:59:59');
-        if (d < new Date()) s.absent++;
-      }
-    });
-    return map;
-  }, [allEntries]);
+  // Compute stats per user via SHARED utility — same logic everywhere.
+  const stats = useMemo(() => calculateAttendanceStats(allEntries as any), [allEntries]);
 
   // Rank users by attendance score
   const ranked = useMemo(() => {
     return users.map(u => {
-      const s = stats[u.id] || { full: 0, late: 0, lateMinor: 0, lateMajor: 0, absent: 0, sick: 0, dayOff: 0, total: 0 };
-      const score = s.total > 0 ? Math.round((s.full / s.total) * 100) : 0;
+      const s = stats[u.id] || emptyBreakdown();
+      const score = attendanceScore(s);
       return { ...u, stats: s, score };
     }).sort((a, b) => b.score - a.score || b.stats.full - a.stats.full);
   }, [users, stats]);
@@ -153,42 +116,99 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
           const scoreColor = u.score >= 90 ? 'text-green-600' : u.score >= 70 ? 'text-yellow-600' : 'text-red-600';
           const scoreBg = u.score >= 90 ? 'bg-green-50' : u.score >= 70 ? 'bg-yellow-50' : 'bg-red-50';
 
+          const isExpanded = expandedUserId === u.id;
+          const fmtDate = (d: string) => {
+            const [, m, day] = d.split('-');
+            return `${parseInt(day)}.${m}`;
+          };
           return (
-            <div key={u.id} className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-4 ${idx < 3 ? 'ring-1 ring-amber-200' : ''}`}>
-              <div className="flex items-center gap-3">
-                {/* Rank */}
-                <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                  idx === 0 ? 'bg-amber-100 text-amber-700' : idx === 1 ? 'bg-gray-200 text-gray-700' : idx === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-400'
-                }`}>
-                  {medal || idx + 1}
-                </div>
-
-                {/* Name */}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-bold text-gray-900 truncate">{u.fullName}</p>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">✅ {s.full}</span>
-                    {s.lateMinor > 0 && <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-medium">⏰ {s.lateMinor}</span>}
-                    {s.lateMajor > 0 && <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">⚠️ {s.lateMajor}</span>}
-                    {s.absent > 0 && <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full font-medium">❌ {s.absent}</span>}
-                    {s.sick > 0 && <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded-full font-medium">🏥 {s.sick}</span>}
+            <div key={u.id} className={`bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden ${idx < 3 ? 'ring-1 ring-amber-200' : ''}`}>
+              <button
+                type="button"
+                onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
+                className="w-full p-4 text-left hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  {/* Rank */}
+                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                    idx === 0 ? 'bg-amber-100 text-amber-700' : idx === 1 ? 'bg-gray-200 text-gray-700' : idx === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-400'
+                  }`}>
+                    {medal || idx + 1}
                   </div>
+
+                  {/* Name */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-gray-900 truncate">{u.fullName}</p>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">✅ {s.full}</span>
+                      {s.lateMinor > 0 && <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-medium">⏰ {s.lateMinor}</span>}
+                      {s.lateMajor > 0 && <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">⚠️ {s.lateMajor}</span>}
+                      {s.absent > 0 && <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full font-medium">❌ {s.absent}</span>}
+                      {s.sick > 0 && <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded-full font-medium">🏥 {s.sick}</span>}
+                    </div>
+                  </div>
+
+                  {/* Score */}
+                  <div className={`flex-shrink-0 ${scoreBg} rounded-xl px-3 py-1.5 text-center`}>
+                    <p className={`text-lg font-bold ${scoreColor}`}>{u.score}%</p>
+                    <p className="text-[9px] text-gray-400">посещ.</p>
+                  </div>
+                  {isExpanded ? <ChevronUp className="h-4 w-4 text-gray-400 flex-shrink-0" /> : <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />}
                 </div>
 
-                {/* Score */}
-                <div className={`flex-shrink-0 ${scoreBg} rounded-xl px-3 py-1.5 text-center`}>
-                  <p className={`text-lg font-bold ${scoreColor}`}>{u.score}%</p>
-                  <p className="text-[9px] text-gray-400">посещ.</p>
-                </div>
-              </div>
+                {/* Progress bar */}
+                {s.total > 0 && (
+                  <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden flex">
+                    {s.full > 0 && <div className="bg-green-500 h-full" style={{ width: `${(s.full / s.total) * 100}%` }} />}
+                    {s.lateMinor > 0 && <div className="bg-yellow-400 h-full" style={{ width: `${(s.lateMinor / s.total) * 100}%` }} />}
+                    {s.lateMajor > 0 && <div className="bg-orange-500 h-full" style={{ width: `${(s.lateMajor / s.total) * 100}%` }} />}
+                    {s.absent > 0 && <div className="bg-red-500 h-full" style={{ width: `${(s.absent / s.total) * 100}%` }} />}
+                  </div>
+                )}
+              </button>
 
-              {/* Progress bar */}
-              {s.total > 0 && (
-                <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden flex">
-                  {s.full > 0 && <div className="bg-green-500 h-full" style={{ width: `${(s.full / s.total) * 100}%` }} />}
-                  {s.lateMinor > 0 && <div className="bg-yellow-400 h-full" style={{ width: `${(s.lateMinor / s.total) * 100}%` }} />}
-                  {s.lateMajor > 0 && <div className="bg-orange-500 h-full" style={{ width: `${(s.lateMajor / s.total) * 100}%` }} />}
-                  {s.absent > 0 && <div className="bg-red-500 h-full" style={{ width: `${(s.absent / s.total) * 100}%` }} />}
+              {/* Expandable breakdown — shows EXACTLY which dates count where */}
+              {isExpanded && (
+                <div className="border-t border-gray-100 px-4 py-3 bg-gray-50 space-y-2 text-xs">
+                  {s.fullDates.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-green-700">✅ Полная смена ({s.full}): </span>
+                      <span className="text-gray-600">{s.fullDates.map(fmtDate).join(', ')}</span>
+                    </div>
+                  )}
+                  {s.lateMinorDates.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-yellow-700">⏰ Опоздал &lt;1ч ({s.lateMinor}): </span>
+                      <span className="text-gray-600">{s.lateMinorDates.map(fmtDate).join(', ')}</span>
+                    </div>
+                  )}
+                  {s.lateMajorDates.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-orange-700">⚠️ Опоздал &gt;1ч ({s.lateMajor}): </span>
+                      <span className="text-gray-600">{s.lateMajorDates.map(fmtDate).join(', ')}</span>
+                    </div>
+                  )}
+                  {s.absentDates.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-red-700">❌ Прогул ({s.absent}): </span>
+                      <span className="text-gray-600">{s.absentDates.map(fmtDate).join(', ')}</span>
+                    </div>
+                  )}
+                  {s.sickDates.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-rose-700">🏥 Больничный ({s.sick}): </span>
+                      <span className="text-gray-600">{s.sickDates.map(fmtDate).join(', ')}</span>
+                    </div>
+                  )}
+                  {s.dayOffDates.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-gray-500">🌙 Выходной ({s.dayOff}): </span>
+                      <span className="text-gray-600">{s.dayOffDates.map(fmtDate).join(', ')}</span>
+                    </div>
+                  )}
+                  {s.total === 0 && s.sick === 0 && s.dayOff === 0 && (
+                    <p className="text-gray-400 text-center">Нет данных за этот месяц</p>
+                  )}
                 </div>
               )}
             </div>
@@ -547,17 +567,32 @@ export default function SchedulePage() {
     const lateStatus = status === 'late_minor' ? 'late_minor' : status === 'late_major' ? 'late_major' : status === 'shift' ? 'on_time' : undefined;
     const lateMinutes = status === 'late_minor' ? 15 : status === 'late_major' ? 60 : 0;
 
+    // When admin marks "arrived on time" or "late", pin actualArrival to the
+    // SCHEDULED date, not to current moment. Otherwise clicking "Смена" on a
+    // past day records arrival at today's time — which inflates rating counts.
+    const shiftStartStr = entry?.shiftStart || '09:00';
+    const arrivalForDate = (offsetMin: number) => {
+      const [h, m] = shiftStartStr.split(':').map(Number);
+      const dt = new Date(`${date}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`);
+      dt.setMinutes(dt.getMinutes() + offsetMin);
+      return dt.toISOString();
+    };
+    const actualArrival =
+      status === 'shift'       ? arrivalForDate(0) :
+      status === 'late_minor'  ? arrivalForDate(15) :
+      status === 'late_major'  ? arrivalForDate(60) :
+      undefined;
+
     const payload: any = {
       userId,
       date,
-      shiftStart: isDayOff ? null : '09:00',
-      shiftEnd: isDayOff ? null : '18:00',
+      shiftStart: isDayOff ? null : shiftStartStr,
+      shiftEnd: isDayOff ? null : (entry?.shiftEnd || '18:00'),
       isDayOff,
       note: note || '',
       lateStatus: lateStatus || null,
       lateMinutes: lateMinutes || 0,
-      // When admin sets "Shift" manually — it means master arrived on time
-      ...(status === 'shift' ? { actualArrival: new Date().toISOString() } : {}),
+      ...(actualArrival ? { actualArrival } : {}),
     };
 
     if (entry && !isDayOff && entry.shiftStart) {
