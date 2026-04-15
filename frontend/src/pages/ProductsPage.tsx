@@ -1384,36 +1384,51 @@ export default function ProductsPage() {
       return;
     }
 
-    const headerCols = rawRows[0].map((c) => String(c ?? '').trim().toLowerCase());
+    const detectMap = (row: string[]) => {
+      const cols = row.map((c) => String(c ?? '').trim().toLowerCase());
+      const m = { name: -1, category: -1, unit: -1, sellPrice: -1, costPrice: -1, stock: -1, minStock: -1 };
+      cols.forEach((h, i) => {
+        if (!h) return;
+        if (/наименование|название|name/.test(h)) m.name = i;
+        else if (/групп|категори|category|group/.test(h)) m.category = i;
+        else if (/единиц|ед\b|unit/.test(h)) m.unit = i;
+        else if (/продаж|розниц|sell/.test(h)) m.sellPrice = i;
+        else if (/закуп|себестоим|cost|purchase/.test(h)) m.costPrice = i;
+        else if (/остаток|stock|количество|кол/.test(h) && !/мин/.test(h)) m.stock = i;
+        else if (/мин.*остат|min.*stock/.test(h)) m.minStock = i;
+      });
+      return m;
+    };
 
-    // Auto-detect column mapping by header names
-    const colMap = { name: -1, category: -1, unit: -1, sellPrice: -1, costPrice: -1, stock: -1, minStock: -1 };
-
-    headerCols.forEach((h, i) => {
-      if (/наименование|название|name/.test(h)) colMap.name = i;
-      else if (/групп|категори|category|group/.test(h)) colMap.category = i;
-      else if (/единиц|ед\b|unit/.test(h)) colMap.unit = i;
-      else if (/продаж|розниц|sell/.test(h)) colMap.sellPrice = i;
-      else if (/закуп|себестоим|cost|purchase/.test(h)) colMap.costPrice = i;
-      else if (/остаток|stock|количество|кол/.test(h) && !/мин/.test(h)) colMap.stock = i;
-      else if (/мин.*остат|min.*stock/.test(h)) colMap.minStock = i;
-    });
+    // Auto-find header row: Excel sometimes has empty/merged rows before headers.
+    // Scan the first 10 rows for the one that matches most fields.
+    let headerIdx = 0;
+    let colMap = detectMap(rawRows[0]);
+    let bestScore = Object.values(colMap).filter((v) => v >= 0).length;
+    for (let i = 1; i < Math.min(rawRows.length, 10); i++) {
+      const m = detectMap(rawRows[i]);
+      const score = Object.values(m).filter((v) => v >= 0).length;
+      if (score > bestScore) { bestScore = score; colMap = m; headerIdx = i; }
+    }
 
     // Fallback: if no header matched for name, assume old positional format
     if (colMap.name < 0) {
       colMap.name = 0; colMap.category = 1; colMap.costPrice = 2;
       colMap.sellPrice = 3; colMap.stock = 4; colMap.minStock = 5; colMap.unit = 6;
+      headerIdx = 0;
     }
 
-    const col = (row: string[], idx: number) => (idx >= 0 ? String(row[idx] ?? '').trim() : '');
+    const col = (row: string[], idx: number) => (idx >= 0 && row ? String(row[idx] ?? '').trim() : '');
+    // Russian locale uses "," as decimal sep in Excel → normalize
+    const toNum = (s: string) => parseFloat(s.replace(/\s/g, '').replace(',', '.')) || 0;
 
-    const rows = rawRows.slice(1).map((row) => ({
+    const rows = rawRows.slice(headerIdx + 1).map((row) => ({
       name: col(row, colMap.name),
       category: col(row, colMap.category),
-      costPrice: colMap.costPrice >= 0 ? (parseFloat(col(row, colMap.costPrice)) || 0) : 0,
-      sellPrice: colMap.sellPrice >= 0 ? (parseFloat(col(row, colMap.sellPrice)) || 0) : 0,
-      stock: colMap.stock >= 0 ? (parseFloat(col(row, colMap.stock)) || 0) : 0,
-      minStock: colMap.minStock >= 0 ? (parseFloat(col(row, colMap.minStock)) || 0) : 0,
+      costPrice: colMap.costPrice >= 0 ? toNum(col(row, colMap.costPrice)) : 0,
+      sellPrice: colMap.sellPrice >= 0 ? toNum(col(row, colMap.sellPrice)) : 0,
+      stock: colMap.stock >= 0 ? toNum(col(row, colMap.stock)) : 0,
+      minStock: colMap.minStock >= 0 ? toNum(col(row, colMap.minStock)) : 0,
       unit: col(row, colMap.unit) || 'pcs',
     })).filter((r) => r.name);
 
@@ -1485,7 +1500,13 @@ export default function ProductsPage() {
     try {
       const res = await productsApi.importCsv(importData);
       const result = res.data;
-      toast.success(`Импортировано: ${result.created} новых, ${result.updated} обновлено`);
+      const parts = [`${result.created} новых`, `${result.updated} обновлено`];
+      if (result.skipped) parts.push(`${result.skipped} пропущено`);
+      toast.success(`Импорт: ${parts.join(', ')}`);
+      if (result.errors && result.errors.length > 0) {
+        // Show first few failing rows so user knows what went wrong
+        result.errors.forEach((e) => toast.error(e, { duration: 6000 }));
+      }
       queryClient.invalidateQueries({ queryKey: ['products'] });
       setShowImportModal(false);
       setImportData(null);

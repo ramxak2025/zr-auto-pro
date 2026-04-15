@@ -304,42 +304,69 @@ export class ProductsService {
 
     let created = 0;
     let updated = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    // Coerce to numbers safely. Russian locale may send "100,50" — normalize to dot.
+    const toNum = (v: any): number => {
+      if (v === null || v === undefined || v === '') return 0;
+      if (typeof v === 'number') return isFinite(v) ? v : 0;
+      const cleaned = String(v).replace(/\s/g, '').replace(',', '.');
+      const n = parseFloat(cleaned);
+      return isFinite(n) ? n : 0;
+    };
+    const toStr = (v: any): string => (v === null || v === undefined) ? '' : String(v).trim();
 
     for (const item of items) {
-      if (!item.name) continue;
+      const name = toStr(item?.name);
+      if (!name) { skipped++; continue; }
 
-      // Try to find existing product by name
-      const { rows: existing } = await this.pool.query(
-        `SELECT id FROM products WHERE tenant_id = $1 AND name = $2 LIMIT 1`,
-        [tenantID, item.name],
-      );
+      const category = toStr(item?.category) || null;
+      const unit = toStr(item?.unit) || 'pcs';
+      const costPrice = toNum(item?.costPrice);
+      const sellPrice = toNum(item?.sellPrice);
+      const stock = toNum(item?.stock);
+      const minStock = toNum(item?.minStock);
 
-      if (existing.length > 0) {
-        // Update existing
-        await this.pool.query(
-          `UPDATE products SET
-            category = COALESCE($3, category),
-            cost_price = COALESCE($4, cost_price),
-            sell_price = COALESCE($5, sell_price),
-            stock = COALESCE($6, stock),
-            min_stock = COALESCE($7, min_stock),
-            unit = COALESCE($8, unit)
-          WHERE id = $1 AND tenant_id = $2`,
-          [existing[0].id, tenantID, item.category || null, item.costPrice ?? null, item.sellPrice ?? null, item.stock ?? null, item.minStock ?? null, item.unit || null],
+      try {
+        const { rows: existing } = await this.pool.query(
+          `SELECT id FROM products WHERE tenant_id = $1 AND name = $2 LIMIT 1`,
+          [tenantID, name],
         );
-        updated++;
-      } else {
-        // Create new
-        await this.pool.query(
-          `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [item.name, item.category || null, item.costPrice || 0, item.sellPrice || 0, item.stock || 0, item.minStock || 0, item.unit || 'pcs', tenantID],
-        );
-        created++;
+
+        if (existing.length > 0) {
+          await this.pool.query(
+            `UPDATE products SET
+              category = $3,
+              cost_price = $4,
+              sell_price = $5,
+              stock = $6,
+              min_stock = $7,
+              unit = $8
+            WHERE id = $1 AND tenant_id = $2`,
+            [existing[0].id, tenantID, category, costPrice, sellPrice, stock, minStock, unit],
+          );
+          updated++;
+        } else {
+          await this.pool.query(
+            `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [name, category, costPrice, sellPrice, stock, minStock, unit, tenantID],
+          );
+          created++;
+        }
+      } catch (err: any) {
+        // Per-row failure — log and continue so one bad row doesn't kill the batch
+        skipped++;
+        if (errors.length < 5) {
+          errors.push(`"${name}": ${err?.message || err?.code || 'неизвестная ошибка'}`);
+        }
+        // eslint-disable-next-line no-console
+        console.error('[importCsv] row failed', { name, error: err?.message, code: err?.code });
       }
     }
 
-    return { created, updated, total: created + updated };
+    return { created, updated, skipped, total: created + updated, errors };
   }
 
   async updateStock(id: string, tenantID: string, dto: any, userId?: string) {

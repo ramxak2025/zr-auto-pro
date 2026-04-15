@@ -117,7 +117,7 @@ export function createProductsApi(api: AxiosInstance) {
     getProductPriceHistory: (id: string) => api.get<any[]>(`/products/${id}/price-history`),
     exportCsv: () => api.get('/products/export-csv', { responseType: 'blob' }),
     importCsv: (items: Array<{ name: string; category?: string; costPrice?: number; sellPrice?: number; stock?: number; minStock?: number; unit?: string }>) =>
-      api.post<{ created: number; updated: number; total: number }>('/products/import-csv', { items }),
+      api.post<{ created: number; updated: number; skipped?: number; total: number; errors?: string[] }>('/products/import-csv', { items }),
   };
 }
 
