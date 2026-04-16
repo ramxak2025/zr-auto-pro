@@ -1,0 +1,31 @@
+# Build artifacts
+dist
+build
+out
+.next
+.expo
+.cache
+
+# Dependencies
+node_modules
+package-lock.json
+
+# Generated
+*.min.js
+*.min.css
+coverage
+.nyc_output
+
+# Backups
+.backups
+
+# Mobile native
+android/app/build
+ios/Pods
+ios/build
+
+# Generated TS declarations
+*.d.ts.map
+
+# Public assets we don't format
+frontend/public/sw.js

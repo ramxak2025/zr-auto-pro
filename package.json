@@ -12,6 +12,34 @@
     "mobile:start": "cd mobile && expo start",
     "mobile:android": "cd mobile && expo run:android",
     "mobile:build:apk": "./scripts/build-apk.sh debug",
-    "mobile:build:release": "./scripts/build-apk.sh release"
+    "mobile:build:release": "./scripts/build-apk.sh release",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md,yml,yaml}\"",
+    "lint": "npm run lint --prefix backend && npm run lint --prefix frontend && npm run lint --prefix mobile",
+    "lint:fix": "npm run lint:fix --prefix backend && npm run lint:fix --prefix frontend && npm run lint:fix --prefix mobile",
+    "typecheck": "npm run typecheck --prefix backend && npm run typecheck --prefix frontend && npm run typecheck --prefix mobile",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
+    "prettier": "^3.8.3"
+  },
+  "lint-staged": {
+    "backend/**/*.{ts,js}": [
+      "prettier --write",
+      "bash -c 'cd backend && npx eslint --fix'"
+    ],
+    "frontend/**/*.{ts,tsx,js,jsx}": [
+      "prettier --write",
+      "bash -c 'cd frontend && npx eslint --fix'"
+    ],
+    "mobile/**/*.{ts,tsx,js,jsx}": [
+      "prettier --write",
+      "bash -c 'cd mobile && npx eslint --fix'"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
   }
 }
