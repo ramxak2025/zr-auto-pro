@@ -189,6 +189,19 @@ export default function UsersScreen() {
     onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка сохранения'),
   });
 
+  // Product search for commission modal.
+  // MUST be declared before any early return to satisfy rules-of-hooks.
+  const filteredProducts = useMemo(() => {
+    const products = allProducts || [];
+    const alreadyAdded = new Set(commissionItems.map((c) => c.productId));
+    const available = products.filter((p) => !alreadyAdded.has(p.id));
+    if (!productSearchText) return available;
+    const q = productSearchText.toLowerCase();
+    return available.filter(
+      (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
+    );
+  }, [allProducts, commissionItems, productSearchText]);
+
   if (!hasPermission('user_management')) {
     return (
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -303,16 +316,6 @@ export default function UsersScreen() {
     const badge = badgeColors[key] || badgeColors.gray;
     return badge;
   };
-
-  // Product search for commission modal
-  const filteredProducts = useMemo(() => {
-    const products = allProducts || [];
-    const alreadyAdded = new Set(commissionItems.map(c => c.productId));
-    const available = products.filter(p => !alreadyAdded.has(p.id));
-    if (!productSearchText) return available;
-    const q = productSearchText.toLowerCase();
-    return available.filter(p => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)));
-  }, [allProducts, commissionItems, productSearchText]);
 
   const addCommissionProduct = (product: Product) => {
     setCommissionItems(prev => [...prev, {
