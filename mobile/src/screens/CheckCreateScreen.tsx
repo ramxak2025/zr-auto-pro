@@ -70,11 +70,11 @@ export default function CheckCreateScreen() {
   // Service search
   const [serviceSearch, setServiceSearch] = useState('');
 
-  // Load data
+  // Load data — fires when plate input has ≥1 char (inline search, no modal needed)
   const { data: plateClients } = useQuery<Client[]>({
     queryKey: ['clients-plate', plateSearch],
     queryFn: async () => { const res = await clientsApi.getAll({ search: plateSearch, limit: 20 }); return res.data.data || []; },
-    enabled: showPlatePicker && plateSearch.length >= 1,
+    enabled: plateSearch.length >= 1,
   });
 
   const { data: clientData } = useQuery<Client>({
@@ -426,31 +426,53 @@ export default function CheckCreateScreen() {
               onCancel={() => setShowTimePicker(false)}
             />
 
-            {/* Client search */}
-            {/* Default retail buyer indicator */}
-            {!clientId && (
-              <View style={styles.retailDefault}>
-                <Ionicons name="storefront-outline" size={14} color={colors.green[600]} />
-                <Text style={styles.retailDefaultText}>Розничный покупатель</Text>
-                <Text style={styles.retailDefaultHint}>(по умолчанию)</Text>
+            {/* Client / plate search — inline, directly in the check */}
+            {clientId && selectedClient ? (
+              <View style={styles.selectedClientRow}>
+                <Ionicons name="person" size={16} color={colors.primary[600]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.selectedClientName}>{selectedClient.fullName}</Text>
+                  {selectedClient.phone && <Text style={styles.selectedClientPhone}>{selectedClient.phone}</Text>}
+                </View>
+                <TouchableOpacity onPress={() => { setClientId(''); setCarId(''); setPlateSearch(''); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Ionicons name="close-circle" size={20} color={colors.gray[400]} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View>
+                <RussianPlateInput
+                  value={plateSearch}
+                  onChangeText={setPlateSearch}
+                />
+                {/* Inline search results — appear right below the plate input */}
+                {plateSearch.length >= 1 && plateResults.length > 0 && (
+                  <View style={styles.inlineResults}>
+                    {plateResults.slice(0, 5).map(({ client, car }) => (
+                      <TouchableOpacity
+                        key={`${client.id}-${car.id}`}
+                        style={styles.inlineResultItem}
+                        onPress={() => { setClientId(client.id); setCarId(car.id); setPlateSearch(''); }}
+                        activeOpacity={0.7}
+                      >
+                        {car.plateNumber && (
+                          <View style={styles.plateChip}><Text style={styles.plateChipText}>{car.plateNumber}</Text></View>
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inlineResultName} numberOfLines={1}>{car.makeModel}</Text>
+                          <Text style={styles.inlineResultSub} numberOfLines={1}>{client.fullName}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+                {plateSearch.length >= 2 && plateResults.length === 0 && (
+                  <Text style={styles.inlineNoResults}>Клиент не найден</Text>
+                )}
               </View>
             )}
 
-            <TouchableOpacity style={styles.plateSearch} onPress={() => { setPlateSearch(''); setShowPlatePicker(true); }} activeOpacity={0.7}>
-              <Ionicons name="search-outline" size={16} color={colors.blue[400]} />
-              <Text style={[styles.plateSearchText, clientId && { color: colors.gray[900], fontWeight: fontWeight.medium }]}>
-                {selectedClient ? selectedClient.fullName : 'Розничный покупатель (нажмите для выбора)'}
-              </Text>
-              {clientId ? (
-                <TouchableOpacity onPress={() => { setClientId(''); setCarId(''); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                  <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
-                </TouchableOpacity>
-              ) : (
-                <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-              )}
-            </TouchableOpacity>
-
-            {/* Car selection */}
+            {/* Car selection chips */}
             {clientId && clientCars && clientCars.length > 0 && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing[1] }}>
                 <View style={{ flexDirection: 'row', gap: spacing[2] }}>
@@ -754,35 +776,6 @@ export default function CheckCreateScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Plate / Client Picker */}
-      <Modal visible={showPlatePicker} onClose={() => setShowPlatePicker(false)} title="Поиск клиента">
-        <RussianPlateInput
-          value={plateSearch}
-          onChangeText={setPlateSearch}
-          autoFocus
-        />
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4, marginTop: spacing[3] }} keyboardShouldPersistTaps="handled">
-          {plateResults.map(({ client, car }) => (
-            <TouchableOpacity key={`${client.id}-${car.id}`} style={styles.pickerItem}
-              onPress={() => { setClientId(client.id); setCarId(car.id); setShowPlatePicker(false); }}>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  {car.plateNumber && (
-                    <View style={styles.plateChip}><Text style={styles.plateChipText}>{car.plateNumber}</Text></View>
-                  )}
-                  <Text style={styles.pickerName}>{car.makeModel}</Text>
-                </View>
-                <Text style={styles.pickerSub}>{client.fullName} {client.phone ? `• ${client.phone}` : ''}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-            </TouchableOpacity>
-          ))}
-          {plateSearch.length >= 1 && plateResults.length === 0 && (
-            <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[4] }}>Ничего не найдено</Text>
-          )}
-        </ScrollView>
-      </Modal>
-
       {/* Master Picker */}
       <Modal visible={showMasterPicker !== null} onClose={() => setShowMasterPicker(null)} title="Выберите мастера">
         <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
@@ -1006,13 +999,16 @@ const styles = StyleSheet.create({
   dateBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   timeBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], paddingHorizontal: spacing[4] },
   timeBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  // Retail default
-  retailDefault: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], backgroundColor: colors.green[50], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3], paddingVertical: spacing[2], marginBottom: spacing[2] },
-  retailDefaultText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.green[700] },
-  retailDefaultHint: { fontSize: 11, color: colors.green[500] },
-  // Plate search
-  plateSearch: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5] },
-  plateSearchText: { flex: 1, fontSize: fontSize.sm, color: colors.gray[400] },
+  // Selected client row
+  selectedClientRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
+  selectedClientName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  selectedClientPhone: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
+  // Inline search results
+  inlineResults: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, marginTop: spacing[1.5], overflow: 'hidden' as const },
+  inlineResultItem: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[2], paddingHorizontal: spacing[3], paddingVertical: spacing[2.5], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
+  inlineResultName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  inlineResultSub: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
+  inlineNoResults: { fontSize: 12, color: colors.gray[400], textAlign: 'center' as const, paddingVertical: spacing[3] },
   // Car
   carChip: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], paddingVertical: spacing[2], backgroundColor: colors.white },
   carChipActive: { borderColor: colors.blue[500], backgroundColor: colors.blue[50] },

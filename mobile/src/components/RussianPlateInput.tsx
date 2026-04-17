@@ -1,77 +1,53 @@
-import React, { useState, useCallback } from 'react';
-import { View, TextInput, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useMemo } from 'react';
+import { View, TextInput, Text, StyleSheet } from 'react-native';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
-// Valid Russian plate letters (Cyrillic that have Latin lookalikes)
-const RU_LETTERS = 'АВЕКМНОРСТУХ';
-// Latin → Cyrillic map for auto-conversion
-const LAT_TO_CYR: Record<string, string> = {
-  A: 'А', B: 'В', E: 'Е', K: 'К', M: 'М', H: 'Н',
-  O: 'О', P: 'Р', C: 'С', T: 'Т', Y: 'У', X: 'Х',
-};
+const CYR_PLATE_LETTERS = new Set('АВЕКМНОРСТУХ'.split(''));
 
-function normalizePlate(raw: string): string {
-  return raw
-    .toUpperCase()
-    .split('')
-    .map((ch) => LAT_TO_CYR[ch] || ch)
-    .join('');
+/** Auto-detect by first character: Cyrillic → Russian plate design, Latin → foreign */
+function detectMode(text: string): 'ru' | 'foreign' | 'empty' {
+  const clean = text.replace(/\s/g, '').toUpperCase();
+  if (!clean) return 'empty';
+  const first = clean[0];
+  if (CYR_PLATE_LETTERS.has(first)) return 'ru';
+  return 'foreign';
 }
 
-/** Format plate into visual segments: А 123 ВС 77 */
-function formatRussianPlate(plate: string): string {
-  const clean = normalizePlate(plate.replace(/\s/g, ''));
-  if (clean.length === 0) return '';
-
-  // Standard Russian plate: X 000 XX 00(0)
-  const match = clean.match(/^([АВЕКМНОРСТУХ])(\d{0,3})([АВЕКМНОРСТУХ]{0,2})(\d{0,3})$/);
-  if (match) {
-    const parts = [match[1], match[2], match[3], match[4]].filter(Boolean);
-    return parts.join(' ');
-  }
-
+/** Format a Russian-style plate into visual segments: А 123 ВС 77 */
+function formatRuPlate(raw: string): string {
+  const clean = raw.replace(/\s/g, '').toUpperCase();
+  if (!clean) return '';
+  const m = clean.match(/^([АВЕКМНОРСТУХ])(\d{0,3})([АВЕКМНОРСТУХ]{0,2})(\d{0,3})(.*)$/);
+  if (m) return [m[1], m[2], m[3], m[4], m[5]].filter(Boolean).join(' ');
   return clean;
-}
-
-function isRussianPlateStart(text: string): boolean {
-  const norm = normalizePlate(text.replace(/\s/g, ''));
-  if (!norm) return false;
-  return RU_LETTERS.includes(norm[0]);
 }
 
 interface Props {
   value: string;
   onChangeText: (text: string) => void;
-  placeholder?: string;
+  onSubmitSearch?: (query: string) => void;
   autoFocus?: boolean;
 }
 
-export default function RussianPlateInput({ value, onChangeText, placeholder, autoFocus }: Props) {
-  const [isForeign, setIsForeign] = useState(false);
-  const isRussian = !isForeign && (value.length === 0 || isRussianPlateStart(value));
+export default function RussianPlateInput({ value, onChangeText, onSubmitSearch, autoFocus }: Props) {
+  const mode = useMemo(() => detectMode(value), [value]);
+  const isRu = mode === 'ru';
+  const isEmpty = mode === 'empty';
 
-  const handleChange = useCallback(
-    (text: string) => {
-      if (isForeign) {
-        onChangeText(text.toUpperCase());
-        return;
-      }
-      // Normalize Latin → Cyrillic, strip spaces for internal value
-      const norm = normalizePlate(text.replace(/\s/g, ''));
-      // Limit to max plate length (9 chars: X000XX000)
-      onChangeText(norm.slice(0, 9));
-    },
-    [isForeign, onChangeText],
-  );
+  const handleChange = (text: string) => {
+    const upper = text.toUpperCase();
+    // No conversion — store exactly what user typed
+    onChangeText(upper);
+  };
 
-  const displayValue = isRussian ? formatRussianPlate(value) : value;
+  // For display only: add visual spacing to Russian plates
+  const displayValue = isRu ? formatRuPlate(value) : value;
 
   return (
-    <View>
-      <View style={styles.plateContainer}>
-        {/* Russian flag strip */}
-        {isRussian && (
+    <View style={styles.wrapper}>
+      <View style={[styles.plateContainer, isRu ? styles.plateRu : isEmpty ? styles.plateEmpty : styles.plateForeign]}>
+        {/* Russian flag strip — shown when Cyrillic detected */}
+        {isRu && (
           <View style={styles.flagStrip}>
             <View style={[styles.flagBand, { backgroundColor: '#fff' }]} />
             <View style={[styles.flagBand, { backgroundColor: '#0039A6' }]} />
@@ -80,95 +56,101 @@ export default function RussianPlateInput({ value, onChangeText, placeholder, au
           </View>
         )}
 
+        {/* Foreign plate icon */}
+        {!isRu && !isEmpty && (
+          <View style={styles.foreignStrip}>
+            <Text style={styles.foreignStripText}>INT</Text>
+          </View>
+        )}
+
         <TextInput
           value={displayValue}
           onChangeText={handleChange}
-          style={[styles.plateInput, isRussian && styles.plateInputRu]}
-          placeholder={isRussian ? 'А 000 АА 00' : (placeholder || 'Номер')}
+          onSubmitEditing={() => onSubmitSearch?.(value)}
+          style={[styles.plateInput, isRu && styles.plateInputRu, !isRu && !isEmpty && styles.plateInputForeign]}
+          placeholder={'\u0413\u043E\u0441\u043D\u043E\u043C\u0435\u0440, \u0438\u043C\u044F \u0438\u043B\u0438 \u0442\u0435\u043B\u0435\u0444\u043E\u043D'}
           placeholderTextColor={colors.gray[300]}
           autoCapitalize="characters"
           autoCorrect={false}
           autoFocus={autoFocus}
-          maxLength={isForeign ? 20 : 12}
+          returnKeyType="search"
+          maxLength={20}
         />
       </View>
 
-      {/* Toggle Russian / Foreign */}
-      <TouchableOpacity
-        style={styles.toggleRow}
-        onPress={() => {
-          setIsForeign(!isForeign);
-          onChangeText('');
-        }}
-        activeOpacity={0.7}
-      >
-        <Ionicons
-          name={isForeign ? 'flag-outline' : 'globe-outline'}
-          size={14}
-          color={colors.gray[500]}
-        />
-        <Text style={styles.toggleText}>
-          {isForeign ? 'Российский номер' : 'Иностранный номер'}
-        </Text>
-      </TouchableOpacity>
+      {/* Hint text */}
+      <Text style={styles.hint}>
+        {isEmpty
+          ? 'Начните вводить кириллицей (РФ) или латиницей (иностранный)'
+          : isRu
+            ? '\u0420\u043E\u0441\u0441\u0438\u0439\u0441\u043A\u0438\u0439 \u043D\u043E\u043C\u0435\u0440'
+            : '\u0418\u043D\u043E\u0441\u0442\u0440\u0430\u043D\u043D\u044B\u0439 \u043D\u043E\u043C\u0435\u0440'}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrapper: {},
   plateContainer: {
     flexDirection: 'row',
     backgroundColor: '#fff',
     borderWidth: 2,
-    borderColor: colors.gray[900],
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
     alignItems: 'center',
   },
+  plateRu: {
+    borderColor: colors.gray[900],
+  },
+  plateForeign: {
+    borderColor: colors.blue[500],
+  },
+  plateEmpty: {
+    borderColor: colors.gray[200],
+  },
   flagStrip: {
-    width: 32,
-    backgroundColor: colors.gray[100],
+    width: 30,
+    backgroundColor: colors.gray[50],
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing[2],
     borderRightWidth: 1,
-    borderRightColor: colors.gray[300],
+    borderRightColor: colors.gray[200],
   },
-  flagBand: {
-    width: 18,
-    height: 4,
+  flagBand: { width: 16, height: 3.5, borderRadius: 0.5 },
+  flagText: { fontSize: 6.5, fontWeight: '800', color: colors.gray[700], marginTop: 1.5, letterSpacing: 0.5 },
+  foreignStrip: {
+    width: 30,
+    backgroundColor: colors.blue[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing[2],
+    borderRightWidth: 1,
+    borderRightColor: colors.blue[200],
   },
-  flagText: {
-    fontSize: 7,
-    fontWeight: '700',
-    color: colors.gray[700],
-    marginTop: 2,
-    letterSpacing: 0.5,
-  },
+  foreignStripText: { fontSize: 7, fontWeight: '800', color: colors.blue[600], letterSpacing: 0.5 },
   plateInput: {
     flex: 1,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: colors.gray[900],
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2.5],
-    letterSpacing: 2,
-    fontFamily: undefined, // system monospace-like via letterSpacing
+    letterSpacing: 1,
   },
   plateInputRu: {
     textAlign: 'center',
+    fontSize: 20,
     letterSpacing: 3,
   },
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[1.5],
-    paddingTop: spacing[2],
-    paddingLeft: spacing[1],
+  plateInputForeign: {
+    letterSpacing: 1.5,
   },
-  toggleText: {
-    fontSize: fontSize.xs,
-    color: colors.gray[500],
-    fontWeight: fontWeight.medium,
+  hint: {
+    fontSize: 11,
+    color: colors.gray[400],
+    marginTop: spacing[1.5],
+    marginLeft: spacing[1],
   },
 });
