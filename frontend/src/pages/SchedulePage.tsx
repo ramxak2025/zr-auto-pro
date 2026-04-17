@@ -850,18 +850,21 @@ export default function SchedulePage() {
                     <div className="h-10 border-b border-gray-200 bg-gray-50 px-3 flex items-center">
                       <span className="text-[10px] font-semibold text-gray-500 uppercase">Сотрудник</span>
                     </div>
-                    {/* Employee rows */}
+                    {/* Employee rows — fixed height, no wrapping */}
                     {scheduleUsers.map((u, idx) => (
-                      <button
+                      <div
                         key={u.id}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => canEdit && setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })}
-                        className="h-12 border-b border-gray-50 px-3 flex items-center gap-2 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                        onKeyDown={(e) => e.key === 'Enter' && canEdit && setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })}
+                        className="h-12 min-h-[48px] max-h-[48px] border-b border-gray-50 px-3 flex items-center gap-2 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors cursor-pointer"
                       >
                         <span className="text-[10px] font-bold text-gray-300 w-5 flex-shrink-0">{idx + 1}</span>
                         <span className="text-xs font-medium text-gray-800 truncate flex-1">
                           {u.fullName}
                         </span>
-                      </button>
+                      </div>
                     ))}
                   </div>
 
@@ -896,7 +899,7 @@ export default function SchedulePage() {
 
                       {/* Employee schedule rows */}
                       {scheduleUsers.map((u) => (
-                        <div key={u.id} className="flex border-b border-gray-50">
+                        <div key={u.id} className="flex border-b border-gray-50 h-12 min-h-[48px] max-h-[48px]">
                           {monthDays.map((day) => {
                             const dateStr = format(day, 'yyyy-MM-dd');
                             const entry = entryMap[u.id]?.[dateStr];
