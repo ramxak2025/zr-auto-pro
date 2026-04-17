@@ -180,8 +180,25 @@ export function calculateAttendanceStats<E extends RawScheduleEntry>(
 }
 
 /** Score = round((full / total) * 100). Total includes late + absent + full. */
-export function attendanceScore(s: Pick<AttendanceBreakdown, 'full' | 'total'>): number {
-  return s.total > 0 ? Math.round((s.full / s.total) * 100) : 0;
+/**
+ * Weight for a "late minor" day (< 1 hour late): gives 50% credit.
+ * Everything else is binary: full = 1, late_major / absent = 0.
+ * Sick days and days off are NOT in `total`, so they are neutral.
+ *
+ *   score = (full * 1.0 + lateMinor * 0.5) / total * 100
+ *
+ *   100% → every scheduled day the master arrived on time.
+ *   <100% → late-minor days pulled the score down; late_major / absent
+ *           drag it further, adding to the denominator without points.
+ */
+export const LATE_MINOR_WEIGHT = 0.5;
+
+export function attendanceScore(
+  s: Pick<AttendanceBreakdown, 'full' | 'lateMinor' | 'total'>,
+): number {
+  if (s.total <= 0) return 0;
+  const points = s.full + s.lateMinor * LATE_MINOR_WEIGHT;
+  return Math.round((points / s.total) * 100);
 }
 
 export function emptyBreakdown(): AttendanceBreakdown {
