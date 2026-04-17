@@ -190,7 +190,7 @@ function GridTab() {
 
   // Global master order — uses backend sortOrder field
   const activeUsers = useMemo(() => {
-    const list = (usersData || []).filter(u => u.isActive && u.role === 'master');
+    const list = (usersData || []).filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
     return list.sort((a: any, b: any) => {
       const ao = a.sortOrder ?? 0;
       const bo = b.sortOrder ?? 0;
@@ -923,7 +923,7 @@ function RatingTab() {
     queryFn: async () => (await usersApi.getAll()).data,
   });
 
-  const users = useMemo(() => (usersData || []).filter(u => u.isActive && u.role === 'master'), [usersData]);
+  const users = useMemo(() => (usersData || []).filter(u => u.isActive && (u.role === 'master' || u.role === 'admin')), [usersData]);
 
   // SHARED attendance utility — same logic everywhere (web + mobile)
   const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
@@ -1060,7 +1060,7 @@ function SettingsTab() {
     queryFn: async () => { const res = await scheduleApi.getWorkModes(); return res.data; },
   });
 
-  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive && u.role === 'master'), [usersData]);
+  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive && (u.role === 'master' || u.role === 'admin')), [usersData]);
 
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
     const user = activeUsers.find(u => u.id === userId);

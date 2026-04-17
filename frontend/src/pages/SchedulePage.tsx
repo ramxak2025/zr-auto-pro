@@ -388,7 +388,9 @@ export default function SchedulePage() {
 
   // All active users — use users list as primary source, supplement with entry users
   const scheduleUsers = useMemo(() => {
-    const activeUsers = users.filter(u => u.isActive && u.role === 'master');
+    // Include masters AND admins — both work on shifts and appear in schedule.
+    // Exclude only director/superadmin (management, not shift workers).
+    const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
     const activeIds = new Set(activeUsers.map(u => u.id));
 
     entries.forEach((e) => {
