@@ -1,5 +1,6 @@
 import './common/sentry';
 import 'reflect-metadata';
+import { json, urlencoded } from 'express';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -11,7 +12,15 @@ import { RateLimitGuard } from './common/guards/rate-limit.guard';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    // Disable default body parser so we can set higher limits below
+    // (default is 100 KB which fails CSV imports of a few hundred products).
+    bodyParser: false,
+  });
+
+  // Raise JSON body limit to 50 MB — bulk imports, CSV uploads, etc.
+  app.use(json({ limit: '50mb' }));
+  app.use(urlencoded({ extended: true, limit: '50mb' }));
 
   // Trust the reverse proxy (nginx) so request.ip reflects the real client IP.
   app.set('trust proxy', 'loopback, linklocal, uniquelocal');
