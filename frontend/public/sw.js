@@ -7,8 +7,7 @@
 //  - Offline mutations — queued in IndexedDB and replayed when back online
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v10';
-const API_CACHE = 'autexa-api-v4';
+const STATIC_CACHE = 'autexa-static-v11';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 
 const PRECACHE_ASSETS = [
@@ -33,7 +32,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k !== STATIC_CACHE && k !== API_CACHE)
+          .filter((k) => k !== STATIC_CACHE)
           .map((k) => caches.delete(k))
       )
     ).then(() => self.clients.claim())
@@ -48,22 +47,17 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin !== self.location.origin) return;
 
-  // API requests
+  // API requests — SW does NOT cache or intercept GET /api.
+  // React Query handles all data caching in memory (staleTime 2min,
+  // gcTime 15min). Double-caching in SW + RQ adds overhead, breaks
+  // on Vary headers from Helmet, and creates stale-data bugs.
+  // Only POST/PATCH/DELETE get offline-queue support.
   if (url.pathname.startsWith('/api')) {
-    // Auth endpoints — NEVER touched by the SW. Sessions must always go
-    // straight to the network so a transient SW offline response cannot
-    // accidentally log the user out (Auth uses 401/403 to mean "log out",
-    // any non-200 from the SW would be misinterpreted).
-    if (url.pathname.startsWith('/api/auth')) return;
-
     if (request.method !== 'GET') {
       event.respondWith(networkWithOfflineQueue(request));
       return;
     }
-    // GET /api — stale-while-revalidate for instant loads.
-    // Cached data served immediately; fresh data fetched in background.
-    // React Query's staleTime (60s) prevents excessive re-requests.
-    event.respondWith(apiStaleWhileRevalidate(request));
+    // GET /api → straight to network, zero SW overhead.
     return;
   }
 
@@ -91,49 +85,6 @@ self.addEventListener('fetch', (event) => {
 });
 
 // ─── Strategies ──────────────────────────────────────────────────────────────
-
-/**
- * Stale-while-revalidate for API GET requests.
- *
- * 1) If cache exists — return it IMMEDIATELY (0ms user wait)
- * 2) Fetch from network in background → update cache for next time
- * 3) If no cache — wait for network (normal latency)
- * 4) If network fails and no cache — 503
- *
- * This gives instant page loads for repeat visits while ensuring data
- * freshness within one request cycle. React Query's staleTime (60s)
- * prevents re-fetching too aggressively on top of this.
- */
-async function apiStaleWhileRevalidate(request) {
-  const cache = await caches.open(API_CACHE);
-  const cached = await cache.match(request);
-
-  // Background revalidation — always try to update cache
-  const networkPromise = fetch(request)
-    .then((response) => {
-      if (response.ok) {
-        cache.put(request, response.clone()).catch(() => {});
-      }
-      return response;
-    })
-    .catch(() => null);
-
-  // If we have a cached response, return it immediately
-  if (cached) {
-    // Fire background update, don't wait for it
-    networkPromise.catch(() => {});
-    return cached;
-  }
-
-  // No cache — must wait for network
-  const networkResponse = await networkPromise;
-  if (networkResponse) return networkResponse;
-
-  return new Response(
-    JSON.stringify({ message: 'Нет соединения с сервером', offline: true }),
-    { status: 503, headers: { 'Content-Type': 'application/json', 'X-Offline': 'true' } },
-  );
-}
 
 async function cacheFirst(request) {
   const cached = await caches.match(request);
