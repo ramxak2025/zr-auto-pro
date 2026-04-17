@@ -32,7 +32,9 @@ function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=
 
 export default function ProductsScreen() {
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
+  const isOwner = user?.role === 'director' || user?.role === 'superadmin';
+  const canManageWarehouse = hasPermission('warehouse_access');
 
   const [search, setSearch] = useState('');
   const limit = 500;
@@ -140,6 +142,23 @@ export default function ProductsScreen() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['products'] }); },
     onError: (err: any) => Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', err?.response?.data?.message || '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043E\u0441\u0442\u0430\u0442\u043A\u0430'),
   });
+
+  // Folder mutations
+  const deleteFolderMutation = useMutation({
+    mutationFn: (id: string) => warehouseCategoriesApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+    },
+    onError: () => Alert.alert('Ошибка', 'Не удалось удалить папку'),
+  });
+
+  const reorderFoldersMutation = useMutation({
+    mutationFn: (orderedIds: string[]) => warehouseCategoriesApi.updateOrder(orderedIds),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] }),
+  });
+
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ id: string; name: string } | null>(null);
 
   const allProducts = data?.data || [];
 
@@ -371,7 +390,23 @@ export default function ProductsScreen() {
     return { subfolders: subs, currentProducts: prods };
   }, [allProducts, activePath, search, extraFolders]);
 
-  const sortedFolders = Array.from(subfolders.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  // Attach catId + sortOrder from warehouse_categories and sort by sort_order.
+  const sortedFolders = useMemo(() => {
+    const prefix = activePath.join('/');
+    const catLookup = new Map<string, { id: string; sort_order: number }>();
+    if (Array.isArray(extraFolders)) {
+      for (const wc of extraFolders as Array<{ id: string; path: string; sort_order?: number }>) {
+        catLookup.set(wc.path, { id: wc.id, sort_order: wc.sort_order || 0 });
+      }
+    }
+    return Array.from(subfolders.entries())
+      .map(([name, info]) => {
+        const fullPath = prefix ? `${prefix}/${name}` : name;
+        const cat = catLookup.get(fullPath);
+        return [name, { ...info, fullPath, catId: cat?.id || '', sortOrder: cat?.sort_order || 0 }] as const;
+      })
+      .sort((a, b) => a[1].sortOrder - b[1].sortOrder || a[0].localeCompare(b[0]));
+  }, [subfolders, extraFolders, activePath]);
 
   // Folder -> last inventory check date
   const folderLastCheck = useMemo(() => {
@@ -748,7 +783,9 @@ export default function ProductsScreen() {
                     )}
                     <View style={styles.productPrices}>
                       <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
-                      <Text style={styles.productCostPrice}>{'\u0421\u0435\u0431\u0435\u0441\u0442.'} {formatMoney(item.costPrice)}</Text>
+                      {isOwner && (
+                        <Text style={styles.productCostPrice}>{'\u0421\u0435\u0431\u0435\u0441\u0442.'} {formatMoney(item.costPrice)}</Text>
+                      )}
                     </View>
                   </View>
                   <View style={styles.productStockWrap}>
@@ -765,30 +802,88 @@ export default function ProductsScreen() {
           ListHeaderComponent={
             !search && sortedFolders.length > 0 ? (
               <View style={styles.foldersList}>
-                {sortedFolders.map(([folderName, info], idx) => (
-                  <TouchableOpacity key={folderName} style={styles.folderRow} onPress={() => enterFolder(folderName)} activeOpacity={0.6}>
-                    <View style={styles.folderIconBox}>
-                      <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
-                    </View>
-                    <View style={styles.folderRowInfo}>
-                      <Text style={styles.folderRowName} numberOfLines={1}>{folderName}</Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={styles.folderRowCount}>{info.count} шт</Text>
-                        {folderLastCheck.get(folderName) && (
-                          <Text style={[styles.folderRowCount, { color: colors.green[600] }]}>
-                            · проверка {new Date(folderLastCheck.get(folderName)!).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}
-                          </Text>
+                {sortedFolders.map(([folderName, info], idx) => {
+                  const isFirst = idx === 0;
+                  const isLast = idx === sortedFolders.length - 1;
+                  const moveFolder = (dir: -1 | 1) => {
+                    const ids = sortedFolders.map(([, d]) => d.catId).filter(Boolean);
+                    if (ids.length < 2) return;
+                    const newIdx = idx + dir;
+                    if (newIdx < 0 || newIdx >= ids.length) return;
+                    [ids[idx], ids[newIdx]] = [ids[newIdx], ids[idx]];
+                    reorderFoldersMutation.mutate(ids);
+                  };
+                  return (
+                    <View key={folderName} style={styles.folderRow}>
+                      {/* Sort arrows — visible only to warehouse managers */}
+                      {canManageWarehouse && (
+                        <View style={styles.folderSortCol}>
+                          <TouchableOpacity
+                            disabled={isFirst}
+                            onPress={() => moveFolder(-1)}
+                            style={styles.folderSortBtn}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Ionicons name="chevron-up" size={14} color={isFirst ? colors.gray[200] : colors.gray[500]} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            disabled={isLast}
+                            onPress={() => moveFolder(1)}
+                            style={styles.folderSortBtn}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
+                            <Ionicons name="chevron-down" size={14} color={isLast ? colors.gray[200] : colors.gray[500]} />
+                          </TouchableOpacity>
+                        </View>
+                      )}
+
+                      {/* Main clickable area */}
+                      <TouchableOpacity
+                        onPress={() => enterFolder(folderName)}
+                        activeOpacity={0.6}
+                        style={styles.folderRowMain}
+                      >
+                        <View style={styles.folderIconBox}>
+                          <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                        </View>
+                        <View style={styles.folderRowInfo}>
+                          <Text style={styles.folderRowName} numberOfLines={1}>{folderName}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={styles.folderRowCount}>{info.count} шт</Text>
+                            {folderLastCheck.get(folderName) && (
+                              <Text style={[styles.folderRowCount, { color: colors.green[600] }]}>
+                                · проверка {new Date(folderLastCheck.get(folderName)!).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                        {info.hasLow && (
+                          <View style={styles.folderRowAlert}>
+                            <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
+                          </View>
                         )}
-                      </View>
+                        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+                      </TouchableOpacity>
+
+                      {/* Delete button */}
+                      {canManageWarehouse && (
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (!info.catId) {
+                              Alert.alert('Не удалить', 'Эту папку нельзя удалить — переместите все товары из неё');
+                              return;
+                            }
+                            setDeleteFolderTarget({ id: info.catId, name: folderName });
+                          }}
+                          style={styles.folderDeleteBtn}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          <Ionicons name="trash-outline" size={16} color={colors.gray[400]} />
+                        </TouchableOpacity>
+                      )}
                     </View>
-                    {info.hasLow && (
-                      <View style={styles.folderRowAlert}>
-                        <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
-                      </View>
-                    )}
-                    <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-                  </TouchableOpacity>
-                ))}
+                  );
+                })}
               </View>
             ) : null
           }
@@ -1245,6 +1340,20 @@ export default function ProductsScreen() {
         confirmText={'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}
         variant="danger"
       />
+
+      {/* Delete folder confirmation */}
+      <ConfirmDialog
+        visible={!!deleteFolderTarget}
+        onClose={() => setDeleteFolderTarget(null)}
+        onConfirm={() => {
+          if (deleteFolderTarget?.id) deleteFolderMutation.mutate(deleteFolderTarget.id);
+          setDeleteFolderTarget(null);
+        }}
+        title="Удалить папку"
+        message={`Удалить папку "${deleteFolderTarget?.name}"? Товары внутри будут перемещены в корень.`}
+        confirmText="Удалить"
+        variant="danger"
+      />
     </SafeAreaView>
   );
 }
@@ -1272,10 +1381,14 @@ const styles = StyleSheet.create({
   // Folders - 3 cols
   foldersList: { marginBottom: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], overflow: 'hidden' },
   folderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[3.5], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
+  folderRowMain: { flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 },
   folderRowInfo: { flex: 1, marginLeft: spacing[3] },
   folderRowName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   folderRowCount: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
   folderRowAlert: { marginRight: spacing[2] },
+  folderSortCol: { flexDirection: 'column', gap: 1, marginRight: spacing[2] },
+  folderSortBtn: { padding: 2, alignItems: 'center', justifyContent: 'center' },
+  folderDeleteBtn: { padding: spacing[1.5], marginLeft: spacing[2] },
   foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: FOLDER_GAP, marginBottom: spacing[4] },
   folderCard: {
     width: FOLDER_WIDTH,
