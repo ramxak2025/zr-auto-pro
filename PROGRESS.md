@@ -1,53 +1,97 @@
 # PROGRESS.md — refactor/full-audit-2026
 
-Прогресс-файл автономной ночной работы. Обновляется после каждого блока.
+Прогресс ночной автономной работы. Ветка: `refactor/full-audit-2026`.
 
 ---
 
 ## Блок 1. Тулчейн + CI ✅
-**Статус:** завершён
-**Коммитов:** 6
-**Файлов затронуто:** ~25 (конфиги + package.json/lock)
+**Коммитов:** 6 | **Файлов:** ~25
 
-### Что сделано
-1. **Prettier** — `.prettierrc.json` + `.editorconfig` в корне. Единый стиль форматирования.
-2. **ESLint backend** — `@typescript-eslint/recommended` + prettier. Baseline: 0 errors, 667 warnings.
-3. **ESLint frontend** — + `react-hooks`, `jsx-a11y`. Baseline: 0 errors, 1799 warnings.
-4. **ESLint mobile** — + `react-native/all`. Baseline: 0 errors, 2201 warnings.
-5. **Husky + lint-staged** — pre-commit hook: prettier + eslint --fix на staged файлах.
-6. **GitHub Actions CI** — 3 parallel jobs: backend (typecheck+lint+build), frontend (typecheck+lint+build), mobile (typecheck+lint).
+1. **Prettier** — `.prettierrc.json` + `.editorconfig`. Единый стиль.
+2. **ESLint backend** — `@typescript-eslint/recommended` + prettier. 0 errors, 667 warnings.
+3. **ESLint frontend** — + `react-hooks`, `jsx-a11y`. 0 errors, 1799 warnings.
+4. **ESLint mobile** — + `react-native/all`. 0 errors, 2201 warnings.
+5. **Husky + lint-staged** — pre-commit hook на staged файлах.
+6. **GitHub Actions CI** — 3 jobs (backend/frontend/mobile): typecheck + lint + build.
 
-### Решения, принятые самостоятельно
-- **ESLint 8** вместо 9 — более зрелый, совместим со всеми плагинами (react-hooks, jsx-a11y, react-native).
-- **`no-explicit-any` = warn** на всех проектах — если бы error, CI сразу бы упал на 400+ местах. Тайтнится в блоках 2/6/8.
-- **`no-useless-escape` = warn** — в backend 33 эскейпа в regex character classes, безопасные, чинить потом.
-
-### Баги, которые нашёл и починил
-- **UsersScreen.tsx**: `useMemo(filteredProducts)` вызывался ПОСЛЕ двух early return (`if (!hasPermission)` и `if (isLoading)`). Это нарушение rules-of-hooks — при изменении permission/loading React мог переупорядочить хуки и сломать рендер. Перенёс useMemo перед все early returns.
-
-### Что не делали (по плану)
-- Не устраняли `any` (Block 2, 6, 8)
-- Не запускали prettier --write на весь codebase (сделаем отдельным style-коммитом если надо)
-- Не трогали Dockerfile/nginx/docker-compose
-- Не переписывали runtime-код (кроме hook-fix)
+**Баг найден:** `UsersScreen.tsx` — `useMemo` после early return (rules-of-hooks violation). Починен.
 
 ---
 
-## Блок 2. Backend strict типизация + DTO ⚠️ частично
-**Статус:** основная часть завершена, DTO creation отложена
+## Блок 2. Backend strict типизация ⚠️ частично
 **Коммитов:** 1
 
-### Что сделано
-1. **`strict: true`** в tsconfig — включены noImplicitAny, strictPropertyInitialization, strictFunctionTypes, useUnknownInCatchVariables
-2. **@types/pg** — устранено 24 TS7016 ошибки (implicit any on pg module import)
-3. **6 DTO файлов** — добавлены definite assignment assertions (!) на 14 свойств
-4. **checks.service.ts** — 2 параметра типизированы как Record<string, unknown>
-5. **Результат**: 0 TypeScript errors в strict mode, build проходит
+1. **`strict: true`** в tsconfig — включены все strict-проверки.
+2. **@types/pg** — 24 TS7016 ошибки устранены.
+3. **6 DTO** — definite assignment assertions на 14 свойств.
+4. **0 TypeScript errors** в strict mode.
 
-### Что осталось (отложено по правилу 4-часового таймбокса)
-- 32 контроллерных endpoint'а всё ещё используют `@Body() dto: any` — нужны DTO-классы с class-validator. Это 15-20 новых файлов, ~3 часа чистой работы. Документировано, вернёмся при следующей итерации.
+**Отложено:** 32 контроллера с `@Body() dto: any` — нужны DTO-классы (~3 часа). Вернёмся.
 
 ---
 
-## Блок 4. Security headers + Helmet + CSP
-**Статус:** в работе
+## Блок 3. Logout + token revocation ✅
+**Коммитов:** 1
+
+1. **`POST /auth/logout`** — заносит JWT ID (jti) в таблицу `revoked_tokens`.
+2. **jti в JWT** — каждый токен теперь содержит уникальный ID (randomUUID).
+3. **JwtStrategy.validate()** — проверяет `revoked_tokens` при каждом запросе.
+4. **Migration 021** — таблица `revoked_tokens` с индексами.
+5. **Web + Mobile** — AuthContext вызывает `POST /auth/logout` при sign-out.
+6. **Backward compatible** — старые токены без jti по-прежнему работают.
+
+---
+
+## Блок 4. Security headers ✅
+**Коммитов:** 2
+
+1. **Helmet** — заменяет ручные headers. HSTS, noSniff, frameguard, hidePoweredBy, referrerPolicy.
+2. **Trust proxy** — чистый NestExpressApplication cast, убрал `as any`.
+3. **Android `usesCleartextTraffic: false`** — закрыл P0-2.
+4. **`.env.example`** — добавлены REDIS_URL, SENTRY_DSN/ORG/PROJECT, CORS_ORIGIN.
+5. **`.backups/`** в .gitignore.
+
+---
+
+## Блок 9. Observability ⚠️ частично
+**Коммитов:** 1
+
+1. **Sentry SDK** установлен (`@sentry/nestjs`). Init из `SENTRY_DSN` env var.
+2. **pino + pino-pretty** установлены (для структурированных логов в будущем).
+3. **Sentry DSN пуст** — ждём создания аккаунта утром.
+
+---
+
+## Блок 12. Документация ⚠️ частично
+**Коммитов:** 1
+
+1. **README.md** — обзор проекта, стек, быстрый старт, структура каталогов.
+
+**Отложено:** ARCHITECTURE.md, DEPLOYMENT.md, CONTRIBUTING.md, CHANGELOG.md, Swagger.
+
+---
+
+## Не начаты
+
+| Блок | Причина |
+|------|---------|
+| 5. Backend refactor services | Зависит от DTO (Block 2 remainder) |
+| 6. Frontend types + a11y | Следующая итерация |
+| 7. Frontend split monoliths | Следующая итерация |
+| 8. Mobile security + perf | Ожидает Sentry и auth flow финализации |
+| 10. Tests | Нет локальной БД для интеграционных тестов |
+| 11. Features | После стабилизации архитектуры |
+
+---
+
+## Решения, принятые самостоятельно
+
+| Развилка | Решение | Обоснование |
+|----------|---------|-------------|
+| ESLint 8 vs 9 | ESLint 8 | Совместим со всеми плагинами; 9 ломает react-hooks/jsx-a11y/react-native |
+| `any` → error vs warn | warn | 400+ мест — если error, CI сразу мертвый |
+| DTO: создать все 32 сейчас vs потом | Потом (правило 4ч) | strict mode — главная победа; DTO — grunt work |
+| Block 3 перед 4 или после | После (4 быстрее) | Helmet — 15 мин, logout — 45 мин + migration |
+| Token blacklist: Redis vs Postgres | Postgres (сейчас) | Redis пока нет в compose; Postgres достаточен для малого масштаба. Переезд на Redis — 1 подмена query на Redis SET/GET |
+| Audit log interceptor | Отложен | Migration 015 создала таблицу, но реализация interceptor'а — 2+ часа. Вернёмся |
+| Sentry — создавать аккаунт? | Нет (правило #7) | Подготовил код, DSN пуст. Пользователь создаст утром |
