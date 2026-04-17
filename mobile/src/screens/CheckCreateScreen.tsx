@@ -13,6 +13,7 @@ import { checksApi, clientsApi, carsApi, usersApi, servicesApi, productsApi } fr
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
+import RussianPlateInput from '../components/RussianPlateInput';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Client, Car, User, Service, Product, CheckServiceLine, CheckProductLine, PaymentMethod } from '../../../shared/types';
@@ -755,10 +756,10 @@ export default function CheckCreateScreen() {
 
       {/* Plate / Client Picker */}
       <Modal visible={showPlatePicker} onClose={() => setShowPlatePicker(false)} title="Поиск клиента">
-        <TextInput
-          value={plateSearch} onChangeText={setPlateSearch} style={styles.formInput}
-          placeholder="Госномер, имя или телефон..." placeholderTextColor={colors.gray[400]}
-          autoFocus autoCapitalize="characters"
+        <RussianPlateInput
+          value={plateSearch}
+          onChangeText={setPlateSearch}
+          autoFocus
         />
         <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4, marginTop: spacing[3] }} keyboardShouldPersistTaps="handled">
           {plateResults.map(({ client, car }) => (
