@@ -18,10 +18,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: any) {
-    const userID = payload.sub;
+  async validate(payload: Record<string, unknown>) {
+    const userID = payload.sub as string | undefined;
+    const jti = payload.jti as string | undefined;
     if (!userID) {
       throw new UnauthorizedException({ message: 'Неверный токен' });
+    }
+
+    // Check if token has been revoked (via POST /auth/logout)
+    if (jti) {
+      const { rows: revoked } = await this.pool.query(
+        `SELECT 1 FROM revoked_tokens WHERE jti=$1 LIMIT 1`,
+        [jti],
+      );
+      if (revoked.length > 0) {
+        throw new UnauthorizedException({ message: 'Токен отозван' });
+      }
     }
 
     const { rows } = await this.pool.query(
@@ -41,6 +53,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userID,
       tenantID: rows[0].tenant_id,
       role: rows[0].role,
+      jti,
     };
   }
 }

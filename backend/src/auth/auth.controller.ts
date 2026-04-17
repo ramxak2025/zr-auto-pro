@@ -29,6 +29,15 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(@CurrentUser() user: JwtPayload) {
+    if (user.jti) {
+      await this.authService.logout(user.jti, user.userID, user.tenantID);
+    }
+    return { message: 'Logged out' };
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Patch('avatar')
   updateAvatar(@CurrentUser() user: JwtPayload, @Body('avatar') avatar: string) {
     return this.authService.updateAvatar(user.userID, avatar);

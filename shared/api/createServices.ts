@@ -29,6 +29,7 @@ export function createAuthApi(api: AxiosInstance) {
     login: (data: LoginRequest) => api.post<LoginResponse>('/auth/login', data),
     register: (data: RegisterRequest) => api.post<LoginResponse>('/auth/register', data),
     me: () => api.get<User>('/auth/me'),
+    logout: () => api.post('/auth/logout'),
     updateAvatar: (avatar: string) => api.patch<{ avatar: string }>('/auth/avatar', { avatar }),
   };
 }

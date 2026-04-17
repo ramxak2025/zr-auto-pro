@@ -2,6 +2,7 @@ import { Injectable, Inject, UnauthorizedException, BadRequestException, Interna
 import { JwtService } from '@nestjs/jwt';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
+import { randomUUID } from 'crypto';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { LoginDto } from './dto/login.dto';
@@ -76,8 +77,29 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  private generateToken(userID: string): string {
-    return this.jwtService.sign({ sub: userID });
+  private generateToken(userID: string, tenantID?: string): string {
+    const jti = randomUUID();
+    return this.jwtService.sign({ sub: userID, tenantId: tenantID, jti });
+  }
+
+  async logout(jti: string, userId: string, tenantId: string): Promise<void> {
+    const decoded = this.jwtService.decode(
+      this.jwtService.sign({ sub: userId, jti }),
+    ) as Record<string, unknown> | null;
+    const exp = decoded?.exp ? new Date((decoded.exp as number) * 1000) : new Date(Date.now() + 7 * 86400000);
+    await this.pool.query(
+      `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+      [jti, userId, tenantId, exp],
+    );
+  }
+
+  async isTokenRevoked(jti: string): Promise<boolean> {
+    const { rows } = await this.pool.query(`SELECT 1 FROM revoked_tokens WHERE jti=$1 LIMIT 1`, [jti]);
+    return rows.length > 0;
+  }
+
+  async cleanExpiredTokens(): Promise<void> {
+    await this.pool.query(`DELETE FROM revoked_tokens WHERE expires_at < now()`);
   }
 
   async login(dto: LoginDto) {
@@ -116,7 +138,7 @@ export class AuthService {
 
     this.logger.log(`Login OK: phone=${phone} role=${row.role} tenant=${row.tenant_id || 'none'}`);
 
-    const token = this.generateToken(row.id);
+    const token = this.generateToken(row.id, row.tenant_id);
     return { token, user: mapUserRow(row) };
   }
 
@@ -164,7 +186,7 @@ export class AuthService {
 
       await client.query('COMMIT');
 
-      const token = this.generateToken(userRows[0].id);
+      const token = this.generateToken(userRows[0].id, tenantID);
       return { token, user: mapUserRow(userRows[0]) };
     } catch (err) {
       await client.query('ROLLBACK');
