@@ -3,7 +3,7 @@
     "name": "Autexa",
     "slug": "autexa-mobile",
     "owner": "ramxak",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,7 +18,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.autexa.mobile",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "infoPlist": {
         "NSCameraUsageDescription": "Приложению нужен доступ к камере для фотографирования документов и автомобилей",
         "NSPhotoLibraryUsageDescription": "Приложению нужен доступ к галерее для выбора фотографий"
@@ -31,7 +31,7 @@
         "backgroundColor": "#2563eb"
       },
       "package": "com.autexa.mobile",
-      "versionCode": 2
+      "versionCode": 3
     },
     "extra": {
       "apiUrl": "https://autexa.pw/api",
