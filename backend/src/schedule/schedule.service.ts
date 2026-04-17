@@ -53,8 +53,19 @@ export class ScheduleService {
   }
 
   async getToday(tenantID: string) {
-    const today = new Date().toISOString().split('T')[0];
+    // Safety net: if the nightly cron didn't run, sweep any stale open shifts
+    // (date earlier than "today" in Moscow) before we render today's status.
+    // Idempotent and cheap — only updates rows that actually need closing.
+    await this.pool.query(
+      `UPDATE shifts SET closed_at = now(), is_auto_closed = true
+       WHERE tenant_id = $1 AND closed_at IS NULL
+         AND date < (now() AT TIME ZONE 'Europe/Moscow')::date`,
+      [tenantID],
+    );
 
+    // "Today" is computed in Moscow time inside Postgres, not the container's
+    // locale. Previously used UTC date which caused 3-hour window every day
+    // where Moscow shifts wouldn't match.
     const { rows } = await this.pool.query(
       `SELECT DISTINCT ON (u.id) u.id as user_id, u.full_name, u.role, u.avatar,
               se.is_day_off, se.shift_start, se.shift_end,
@@ -62,11 +73,18 @@ export class ScheduleService {
               CASE WHEN s.id IS NOT NULL AND s.closed_at IS NULL THEN true ELSE false END as is_working,
               CASE WHEN se.id IS NOT NULL THEN true ELSE false END as has_schedule
        FROM users u
-       LEFT JOIN schedule_entries se ON se.user_id = u.id AND se.date = $2 AND se.tenant_id = $1
-       LEFT JOIN shifts s ON s.user_id = u.id AND s.date = $2 AND s.tenant_id = $1 AND s.closed_at IS NULL
+       LEFT JOIN schedule_entries se
+              ON se.user_id = u.id
+             AND se.date = (now() AT TIME ZONE 'Europe/Moscow')::date
+             AND se.tenant_id = $1
+       LEFT JOIN shifts s
+              ON s.user_id = u.id
+             AND s.date = (now() AT TIME ZONE 'Europe/Moscow')::date
+             AND s.tenant_id = $1
+             AND s.closed_at IS NULL
        WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
        ORDER BY u.id, u.full_name`,
-      [tenantID, today],
+      [tenantID],
     );
 
     return rows.map((r) => ({

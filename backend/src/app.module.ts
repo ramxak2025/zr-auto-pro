@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
 import { DatabaseModule } from './database.module';
 import { MigrationRunner } from './migration-runner';
 import { AuthModule } from './auth/auth.module';
@@ -25,6 +26,7 @@ import { EquipmentModule } from './equipment/equipment.module';
 
 @Module({
   imports: [
+    NestScheduleModule.forRoot(),
     DatabaseModule,
     AuthModule,
     UsersModule,
