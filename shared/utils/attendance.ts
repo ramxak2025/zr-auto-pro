@@ -182,23 +182,29 @@ export function calculateAttendanceStats<E extends RawScheduleEntry>(
 /** Score = round((full / total) * 100). Total includes late + absent + full. */
 /**
  * Weight for a "late minor" day (< 1 hour late): gives 50% credit.
- * Everything else is binary: full = 1, late_major / absent = 0.
- * Sick days and days off are NOT in `total`, so they are neutral.
- *
- *   score = (full * 1.0 + lateMinor * 0.5) / total * 100
- *
- *   100% → every scheduled day the master arrived on time.
- *   <100% → late-minor days pulled the score down; late_major / absent
- *           drag it further, adding to the denominator without points.
+ * Everything else is binary: full = 1, late_major / absent / sick / dayOff = 0.
  */
 export const LATE_MINOR_WEIGHT = 0.5;
 
+/**
+ * Monthly target: 22 full shifts = 100%.
+ * Based on standard Russian work month (5 days/week × ~4.4 weeks).
+ */
+export const MONTHLY_TARGET_SHIFTS = 22;
+
+/**
+ * Score = (full + lateMinor × 0.5) / 22 × 100, capped at 100.
+ *
+ *   22 full on-time shifts → 100%
+ *   20 full + 2 late minor → (20 + 1) / 22 = 95%
+ *   15 full shifts only → 68%
+ *   0 shifts → 0%
+ */
 export function attendanceScore(
-  s: Pick<AttendanceBreakdown, 'full' | 'lateMinor' | 'total'>,
+  s: Pick<AttendanceBreakdown, 'full' | 'lateMinor'>,
 ): number {
-  if (s.total <= 0) return 0;
   const points = s.full + s.lateMinor * LATE_MINOR_WEIGHT;
-  return Math.round((points / s.total) * 100);
+  return Math.min(100, Math.round((points / MONTHLY_TARGET_SHIFTS) * 100));
 }
 
 export function emptyBreakdown(): AttendanceBreakdown {
