@@ -239,7 +239,7 @@ export class ChecksService {
       // Fetch product-specific commissions for this master
       const productCommissionMap: Record<string, number> = {};
       if (products.length > 0) {
-        const prodIds = products.map(p => p.productId).filter(Boolean);
+        const prodIds = products.map((p: Record<string, unknown>) => p.productId).filter(Boolean);
         if (prodIds.length > 0) {
           const { rows: pcRows } = await client.query(
             `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
@@ -461,7 +461,7 @@ export class ChecksService {
 
       const productCommissionMap: Record<string, number> = {};
       if (products.length > 0) {
-        const prodIds = products.map(p => p.productId).filter(Boolean);
+        const prodIds = products.map((p: Record<string, unknown>) => p.productId).filter(Boolean);
         if (prodIds.length > 0) {
           const { rows: pcRows } = await client.query(
             `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,

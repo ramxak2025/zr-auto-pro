@@ -3,14 +3,14 @@ import { IsString, IsNotEmpty, IsNumber, IsOptional, IsIn } from 'class-validato
 export class CreateSalaryPaymentDto {
   @IsString()
   @IsNotEmpty()
-  userId: string;
+  userId!: string;
 
   @IsNumber()
-  amount: number;
+  amount!: number;
 
   @IsString()
   @IsNotEmpty()
-  monthYear: string;
+  monthYear!: string;
 
   @IsString()
   @IsOptional()

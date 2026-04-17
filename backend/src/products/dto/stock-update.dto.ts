@@ -3,10 +3,10 @@ import { IsString, IsNotEmpty, IsNumber, IsOptional, IsIn } from 'class-validato
 export class StockUpdateDto {
   @IsString()
   @IsIn(['income', 'expense', 'writeoff', 'inventory'])
-  type: string;
+  type!: string;
 
   @IsNumber()
-  quantity: number;
+  quantity!: number;
 
   @IsString()
   @IsOptional()
