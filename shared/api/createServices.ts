@@ -213,9 +213,11 @@ export function createExpensesApi(api: AxiosInstance) {
 
 export function createWarehouseCategoriesApi(api: AxiosInstance) {
   return {
-    getAll: () => api.get<Array<{ id: string; path: string }>>('/warehouse/categories'),
+    getAll: () => api.get<Array<{ id: string; path: string; sort_order: number }>>('/warehouse/categories'),
     create: (path: string) => api.post<{ id: string; path: string }>('/warehouse/categories', { path }),
-    remove: (id: string) => api.delete(`/warehouse/categories/${id}`),
+    remove: (id: string, moveTo?: string) => api.delete(`/warehouse/categories/${id}${moveTo !== undefined ? `?moveTo=${encodeURIComponent(moveTo)}` : ''}`),
+    updateOrder: (orderedIds: string[]) => api.patch('/warehouse/categories/order', { orderedIds }),
+    rename: (id: string, newPath: string) => api.patch(`/warehouse/categories/${id}/rename`, { newPath }),
   };
 }
 

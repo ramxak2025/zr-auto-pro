@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Query } from '@nestjs/common';
 import { WarehouseService } from './warehouse.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -19,7 +19,25 @@ export class WarehouseController {
   }
 
   @Delete('categories/:id')
-  removeCategory(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.warehouseService.removeCategory(id, user.tenantID);
+  removeCategory(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('moveTo') moveTo?: string,
+  ) {
+    return this.warehouseService.removeCategory(id, user.tenantID, moveTo);
+  }
+
+  @Patch('categories/order')
+  updateOrder(@CurrentUser() user: JwtPayload, @Body('orderedIds') orderedIds: string[]) {
+    return this.warehouseService.updateOrder(user.tenantID, orderedIds);
+  }
+
+  @Patch('categories/:id/rename')
+  renameCategory(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body('newPath') newPath: string,
+  ) {
+    return this.warehouseService.renameCategory(id, user.tenantID, newPath);
   }
 }

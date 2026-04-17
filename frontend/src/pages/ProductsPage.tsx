@@ -21,6 +21,8 @@ import {
   Warehouse,
   Download,
   Upload,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse, StockMovement } from '../types';
@@ -719,6 +721,12 @@ function FolderTile({
   count,
   hasLow,
   onClick,
+  onDelete,
+  onMoveUp,
+  onMoveDown,
+  isFirst,
+  isLast,
+  canManage,
   recentlyChecked,
   lastCheckDate,
 }: {
@@ -726,42 +734,85 @@ function FolderTile({
   count: number;
   hasLow: boolean;
   onClick: () => void;
+  onDelete?: () => void;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
+  isFirst?: boolean;
+  isLast?: boolean;
+  canManage?: boolean;
   recentlyChecked?: boolean;
   lastCheckDate?: string;
 }) {
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border active:bg-gray-50 transition-all cursor-pointer ${
+      className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all ${
         recentlyChecked ? 'border-green-200 bg-green-50/50' : 'border-gray-100 bg-white'
       }`}
     >
-      <div className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}>
-        <FolderOpen className={`h-4.5 w-4.5 ${recentlyChecked ? 'text-green-500' : 'text-primary-500'}`} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-900 truncate">{name}</p>
-        <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-xs text-gray-400">{count} шт</span>
-          {lastCheckDate && !recentlyChecked && (
-            <span className="text-[10px] text-gray-400">проверка {formatDateShort(lastCheckDate)}</span>
+      {/* Sort arrows */}
+      {canManage && (
+        <div className="flex flex-col gap-0.5 flex-shrink-0">
+          <button
+            type="button"
+            disabled={isFirst}
+            onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }}
+            className="p-0.5 rounded hover:bg-gray-100 disabled:opacity-20"
+          >
+            <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
+          </button>
+          <button
+            type="button"
+            disabled={isLast}
+            onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }}
+            className="p-0.5 rounded hover:bg-gray-100 disabled:opacity-20"
+          >
+            <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+          </button>
+        </div>
+      )}
+
+      {/* Main area — clickable to navigate */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => e.key === 'Enter' && onClick()}
+        className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer active:opacity-70"
+      >
+        <div className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}>
+          <FolderOpen className={`h-4.5 w-4.5 ${recentlyChecked ? 'text-green-500' : 'text-primary-500'}`} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-900 truncate">{name}</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-xs text-gray-400">{count} шт</span>
+            {lastCheckDate && !recentlyChecked && (
+              <span className="text-[10px] text-gray-400">проверка {formatDateShort(lastCheckDate)}</span>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {recentlyChecked && (
+            <div className="flex items-center gap-0.5 bg-green-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full">
+              <CheckIcon className="h-2.5 w-2.5" />
+            </div>
           )}
+          {hasLow && <AlertTriangle className="h-4 w-4 text-orange-500" />}
+          <ChevronLeft className="h-4 w-4 text-gray-300 rotate-180" />
         </div>
       </div>
-      <div className="flex items-center gap-1.5 flex-shrink-0">
-        {recentlyChecked && (
-          <div className="flex items-center gap-0.5 bg-green-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded-full">
-            <CheckIcon className="h-2.5 w-2.5" />
-          </div>
-        )}
-        {hasLow && (
-          <AlertTriangle className="h-4 w-4 text-orange-500" />
-        )}
-        <ChevronLeft className="h-4 w-4 text-gray-300 rotate-180" />
-      </div>
+
+      {/* Delete button */}
+      {canManage && onDelete && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="p-2 rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+          title="Удалить папку"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      )}
     </div>
   );
 }
@@ -1144,6 +1195,23 @@ export default function ProductsPage() {
     },
   });
 
+  const deleteCategoryMutation = useMutation({
+    mutationFn: (id: string) => warehouseCategoriesApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      toast.success('Папка удалена');
+    },
+    onError: () => toast.error('Ошибка удаления папки'),
+  });
+
+  const reorderCategoriesMutation = useMutation({
+    mutationFn: (orderedIds: string[]) => warehouseCategoriesApi.updateOrder(orderedIds),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] }),
+  });
+
+  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ id: string; name: string; path: string } | null>(null);
+
   const categories = useMemo(() => {
     const cats = new Set<string>();
     allProducts.forEach((p: Product) => { if (p.category) cats.add(p.category); });
@@ -1202,9 +1270,19 @@ export default function ProductsPage() {
       }
     }
 
+    // Build full path for each subfolder; look up warehouse category id + sort_order.
+    const catLookup = new Map<string, { id: string; sort_order: number }>();
+    if (warehouseCats) {
+      for (const wc of warehouseCats) catLookup.set(wc.path, { id: wc.id, sort_order: (wc as any).sort_order || 0 });
+    }
+
     const sortedSubfolders = Array.from(subfolderSet.entries())
-      .map(([name, data]) => ({ name, ...data }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .map(([name, data]) => {
+        const fullPath = prefix ? `${prefix}/${name}` : name;
+        const catInfo = catLookup.get(fullPath);
+        return { name, fullPath, catId: catInfo?.id || '', sortOrder: catInfo?.sort_order || 0, ...data };
+      })
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 
     return { subfolders: sortedSubfolders, currentProducts: prods };
   }, [allProducts, activePath, warehouseCats]);
@@ -1536,23 +1614,89 @@ export default function ProductsPage() {
   const showingRoot = !searchText && !isInFolder;
   const currentPathStr = activePath.join('/');
 
-  // Render product grid helper — uses virtual scrolling for large lists
-  function renderProductGrid(products: Product[], isSearch?: boolean) {
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+
+  // Render product list — each row: thumbnail | name | stock | costPrice? | sellPrice
+  function renderProductList(products: Product[], isSearch?: boolean) {
     return (
-      <VirtualProductGrid
-        products={products}
-        renderItem={(product) => (
-          <ProductCard
-            key={product.id}
-            product={product}
-            onClick={() => setDetailTarget(product)}
-            selectMode={!isSearch && selectMode}
-            selected={selectedProducts.has(product.id)}
-            onToggleSelect={() => toggleSelect(product.id)}
-            lastInventoryDate={lastInventoryMap.get(product.id)}
-          />
-        )}
-      />
+      <div className="space-y-1">
+        {products.map((product) => {
+          const isLow = product.stock <= product.minStock;
+          const isSelected = selectedProducts.has(product.id);
+          return (
+            <div
+              key={product.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                if (!isSearch && selectMode) toggleSelect(product.id);
+                else setDetailTarget(product);
+              }}
+              onKeyDown={(e) => e.key === 'Enter' && setDetailTarget(product)}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer active:bg-gray-50 transition-all ${
+                isSelected ? 'border-primary-500 bg-primary-50/50' : 'border-gray-100 bg-white'
+              }`}
+            >
+              {/* Select checkbox */}
+              {!isSearch && selectMode && (
+                <div className={`flex h-5 w-5 items-center justify-center rounded-full border-2 flex-shrink-0 ${
+                  isSelected ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
+                }`}>
+                  {isSelected && <CheckIcon className="h-3 w-3 text-white" />}
+                </div>
+              )}
+
+              {/* Thumbnail — long-press opens full photo */}
+              <div
+                className="h-10 w-10 rounded-lg bg-gray-50 overflow-hidden flex-shrink-0 flex items-center justify-center"
+                onContextMenu={(e) => {
+                  if (product.photo) { e.preventDefault(); setPhotoPreview(product.photo); }
+                }}
+                onTouchStart={() => {
+                  if (!product.photo) return;
+                  const timer = setTimeout(() => setPhotoPreview(product.photo!), 400);
+                  const cancel = () => clearTimeout(timer);
+                  document.addEventListener('touchend', cancel, { once: true });
+                  document.addEventListener('touchmove', cancel, { once: true });
+                }}
+              >
+                {product.photo ? (
+                  <img src={thumbUrl(product.photo) || product.photo} alt="" className="h-full w-full object-cover" loading="lazy" />
+                ) : (
+                  <Package className="h-5 w-5 text-gray-200" />
+                )}
+              </div>
+
+              {/* Name */}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
+                {product.isBundle && (
+                  <span className="text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full">КМП</span>
+                )}
+              </div>
+
+              {/* Stock */}
+              <div className="flex-shrink-0 text-right">
+                <span className={`text-xs font-medium ${isLow ? 'text-red-500' : 'text-gray-500'}`}>
+                  {product.stock} {unitLabel(product.unit)}
+                </span>
+              </div>
+
+              {/* Cost price — only for owner */}
+              {isOwner && (
+                <div className="flex-shrink-0 w-16 text-right hidden sm:block">
+                  <span className="text-[11px] text-gray-400">{formatMoney(product.costPrice)}</span>
+                </div>
+              )}
+
+              {/* Sell price */}
+              <div className="flex-shrink-0 w-20 text-right">
+                <span className="text-sm font-bold text-gray-900">{formatMoney(product.sellPrice)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     );
   }
 
@@ -1724,7 +1868,7 @@ export default function ProductsPage() {
           {/* ── Category folders list ── */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
             <div className="space-y-1.5">
-              {subfolders.map((folder) => {
+              {subfolders.map((folder, idx) => {
                 const checkInfo = folderCheckInfo.get(folder.name);
                 return (
                   <FolderTile
@@ -1733,6 +1877,24 @@ export default function ProductsPage() {
                     count={folder.count}
                     hasLow={folder.hasLow}
                     onClick={() => enterFolder(folder.name)}
+                    canManage={canManageWarehouse}
+                    isFirst={idx === 0}
+                    isLast={idx === subfolders.length - 1}
+                    onDelete={() => setDeleteFolderTarget({ id: folder.catId, name: folder.name, path: folder.fullPath })}
+                    onMoveUp={() => {
+                      if (idx === 0) return;
+                      const ids = subfolders.map((f) => f.catId).filter(Boolean);
+                      if (ids.length < 2) return;
+                      [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
+                      reorderCategoriesMutation.mutate(ids);
+                    }}
+                    onMoveDown={() => {
+                      if (idx === subfolders.length - 1) return;
+                      const ids = subfolders.map((f) => f.catId).filter(Boolean);
+                      if (ids.length < 2) return;
+                      [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+                      reorderCategoriesMutation.mutate(ids);
+                    }}
                     recentlyChecked={checkInfo?.recentlyChecked}
                     lastCheckDate={checkInfo?.lastCheckDate}
                   />
@@ -1773,7 +1935,7 @@ export default function ProductsPage() {
 
           {/* ── Products grid ── */}
           {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (
-            renderProductGrid(currentProducts)
+            renderProductList(currentProducts)
           )}
 
           {/* Empty state */}
@@ -1792,7 +1954,7 @@ export default function ProductsPage() {
                 <p className="text-sm">Товары не найдены</p>
               </div>
             ) : (
-              renderProductGrid(searchResults, true)
+              renderProductList(searchResults, true)
             )
           )}
         </>
@@ -1870,6 +2032,25 @@ export default function ProductsPage() {
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         title="Удалить товар"
         message={`Вы уверены, что хотите удалить товар "${deleteTarget?.name}"? Это действие нельзя отменить.`}
+        confirmText="Удалить"
+        variant="danger"
+      />
+
+      {/* Delete folder confirmation */}
+      <ConfirmDialog
+        isOpen={!!deleteFolderTarget}
+        onClose={() => setDeleteFolderTarget(null)}
+        onConfirm={() => {
+          if (deleteFolderTarget?.id) {
+            deleteCategoryMutation.mutate(deleteFolderTarget.id);
+          } else if (deleteFolderTarget?.path) {
+            // If no warehouse-category id (folder was inferred from products), just show toast
+            toast.error('Эту папку нельзя удалить — переместите все товары из неё');
+          }
+          setDeleteFolderTarget(null);
+        }}
+        title="Удалить папку"
+        message={`Удалить папку "${deleteFolderTarget?.name}"? Товары внутри будут перемещены в корень.`}
         confirmText="Удалить"
         variant="danger"
       />
@@ -2158,6 +2339,21 @@ export default function ProductsPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Photo preview overlay — shown on long-press/right-click on thumbnail */}
+      {photoPreview && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+          onClick={() => setPhotoPreview(null)}
+          onTouchEnd={() => setPhotoPreview(null)}
+        >
+          <img
+            src={photoPreview}
+            alt=""
+            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain"
+          />
+        </div>
       )}
     </div>
   );
