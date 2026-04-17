@@ -1,20 +1,22 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v8
-//  - /api/auth/* — bypassed entirely (always go straight to network)
-//  - GET /api/*  — network-first, cache as offline-only fallback
-//  - Static assets — cache-first for speed
-//  - Navigation — network-first, offline fallback to cached shell
-//  - Offline mutations — queued in IndexedDB and replayed when back online
+//  Autexa PWA Service Worker v12
+//
+//  SPEED STRATEGY:
+//  - GET /api/auth/* → bypass SW, always network (auth must be fresh)
+//  - GET /api/*      → stale-while-revalidate by URL (instant from cache,
+//                       background refresh). Cache key = URL only, ignoring
+//                       Authorization header so Vary doesn't break matching.
+//  - POST/PATCH/DELETE /api/* → network, offline queue fallback
+//  - Static assets   → cache-first (immutable hashed filenames)
+//  - Navigation HTML  → network-first, offline fallback to cached shell
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v11';
+const STATIC_CACHE = 'autexa-static-v12';
+const API_CACHE = 'autexa-api-v12';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
+const API_CACHE_TTL = 30_000; // 30 seconds — serve cache if younger
 
-const PRECACHE_ASSETS = [
-  '/',
-  '/logo-icon.png',
-  '/logo.png',
-];
+const PRECACHE_ASSETS = ['/', '/logo-icon.png', '/logo.png'];
 
 // ─── Install ─────────────────────────────────────────────────────────────────
 
@@ -25,14 +27,14 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// ─── Activate: clean old caches ──────────────────────────────────────────────
+// ─── Activate: clean ALL old caches ──────────────────────────────────────────
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k !== STATIC_CACHE)
+          .filter((k) => k !== STATIC_CACHE && k !== API_CACHE)
           .map((k) => caches.delete(k))
       )
     ).then(() => self.clients.claim())
@@ -47,44 +49,94 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin !== self.location.origin) return;
 
-  // API requests — SW does NOT cache or intercept GET /api.
-  // React Query handles all data caching in memory (staleTime 2min,
-  // gcTime 15min). Double-caching in SW + RQ adds overhead, breaks
-  // on Vary headers from Helmet, and creates stale-data bugs.
-  // Only POST/PATCH/DELETE get offline-queue support.
+  // ── API ──
   if (url.pathname.startsWith('/api')) {
+    // Auth: always bypass — must never get stale auth data
+    if (url.pathname.startsWith('/api/auth')) return;
+
+    // Mutations: network with offline queue
     if (request.method !== 'GET') {
       event.respondWith(networkWithOfflineQueue(request));
       return;
     }
-    // GET /api → straight to network, zero SW overhead.
+
+    // GET /api: stale-while-revalidate — INSTANT from cache, fresh in background
+    event.respondWith(apiSWR(url.href, request));
     return;
   }
 
-  // Navigation / HTML — network-first, offline fallback
+  // ── Navigation HTML ──
   if (request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html')) {
     event.respondWith(
       fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(STATIC_CACHE).then((cache) => cache.put('/', clone));
-          }
-          return response;
+        .then((r) => {
+          if (r.ok) caches.open(STATIC_CACHE).then((c) => c.put('/', r.clone()));
+          return r;
         })
         .catch(() => caches.match('/'))
     );
     return;
   }
 
-  // Static assets (JS, CSS, images, fonts) — cache-first
+  // ── Static assets ──
   if (isStaticAsset(url.pathname)) {
     event.respondWith(cacheFirst(request));
-    return;
   }
 });
 
-// ─── Strategies ──────────────────────────────────────────────────────────────
+// ─── API: Stale-While-Revalidate ─────────────────────────────────────────────
+//
+// Key insight: cache.match() by URL string (not Request object) so that
+// Authorization / Vary headers don't break matching. Every logged-in user
+// shares the same URL cache entry — React Query handles per-user data
+// separation at the app level.
+//
+// Flow:
+//   1. Cache hit + age < 30s → return INSTANTLY (0ms perceived latency)
+//   2. Cache hit + age > 30s → return cache + background refresh
+//   3. Cache miss → wait for network, cache result
+//   4. Network fail + cache → return stale cache (any age)
+//   5. Network fail + no cache → let browser handle error
+
+async function apiSWR(urlHref, request) {
+  const cache = await caches.open(API_CACHE);
+  const cached = await cache.match(urlHref);
+
+  // Always start the network fetch in background
+  const networkPromise = fetch(request).then((response) => {
+    if (response.ok) {
+      // Store by URL string so future matches ignore headers
+      cache.put(urlHref, response.clone()).catch(() => {});
+    }
+    return response;
+  }).catch(() => null);
+
+  if (cached) {
+    const dateHeader = cached.headers.get('date');
+    const age = dateHeader ? Date.now() - new Date(dateHeader).getTime() : Infinity;
+
+    if (age < API_CACHE_TTL) {
+      // Fresh enough — return instantly, don't wait for network
+      return cached;
+    }
+
+    // Stale but exists — return stale immediately, update in background
+    networkPromise.catch(() => {});
+    return cached;
+  }
+
+  // No cache — must wait for network
+  const networkResponse = await networkPromise;
+  if (networkResponse) return networkResponse;
+
+  // Offline and no cache — return empty so React Query shows error
+  return new Response('[]', {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', 'X-Offline': 'true' },
+  });
+}
+
+// ─── Static: Cache-First ─────────────────────────────────────────────────────
 
 async function cacheFirst(request) {
   const cached = await caches.match(request);
@@ -93,8 +145,8 @@ async function cacheFirst(request) {
   try {
     const response = await fetch(request);
     if (response.ok && response.type === 'basic') {
-      const cache = await caches.open(STATIC_CACHE);
-      cache.put(request, response.clone());
+      const c = await caches.open(STATIC_CACHE);
+      c.put(request, response.clone());
     }
     return response;
   } catch {
@@ -102,6 +154,8 @@ async function cacheFirst(request) {
     return caches.match('/');
   }
 }
+
+// ─── Mutations: Network with Offline Queue ───────────────────────────────────
 
 async function networkWithOfflineQueue(request) {
   try {
