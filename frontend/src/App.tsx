@@ -19,13 +19,12 @@ import FeatureGate from './components/FeatureGate';
 
 function lazyWithRetry<T extends ComponentType<any>>(
   factory: () => Promise<{ default: T }>,
-  retries = 3,
+  retries = 2,
 ): React.LazyExoticComponent<T> {
   return lazy(() => {
-    const attempt = (remaining: number): Promise<{ default: T }> =>
+    const attempt = (remaining: number, delay: number): Promise<{ default: T }> =>
       factory().catch((err: Error) => {
         if (remaining <= 0) {
-          // All retries failed — likely stale cache, force reload once
           const reloadKey = 'lazy_chunk_reload';
           if (!sessionStorage.getItem(reloadKey)) {
             sessionStorage.setItem(reloadKey, Date.now().toString());
@@ -34,10 +33,11 @@ function lazyWithRetry<T extends ComponentType<any>>(
           throw err;
         }
         return new Promise<{ default: T }>((resolve) =>
-          setTimeout(() => resolve(attempt(remaining - 1)), 1000),
+          setTimeout(() => resolve(attempt(remaining - 1, delay * 2)), delay),
         );
       });
-    return attempt(retries);
+    // Exponential backoff: 150ms → 300ms (total 450ms max vs old 3000ms)
+    return attempt(retries, 150);
   });
 }
 

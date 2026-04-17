@@ -7,8 +7,8 @@
 //  - Offline mutations — queued in IndexedDB and replayed when back online
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v9';
-const API_CACHE = 'autexa-api-v3';
+const STATIC_CACHE = 'autexa-static-v10';
+const API_CACHE = 'autexa-api-v4';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 
 const PRECACHE_ASSETS = [
@@ -60,10 +60,10 @@ self.addEventListener('fetch', (event) => {
       event.respondWith(networkWithOfflineQueue(request));
       return;
     }
-    // GET /api — network-first, cache only as offline fallback.
-    // Avoids serving stale API responses that could crash pages when
-    // the schema has evolved between deployments.
-    event.respondWith(apiNetworkFirst(request));
+    // GET /api — stale-while-revalidate for instant loads.
+    // Cached data served immediately; fresh data fetched in background.
+    // React Query's staleTime (60s) prevents excessive re-requests.
+    event.respondWith(apiStaleWhileRevalidate(request));
     return;
   }
 
@@ -92,25 +92,47 @@ self.addEventListener('fetch', (event) => {
 
 // ─── Strategies ──────────────────────────────────────────────────────────────
 
-async function apiNetworkFirst(request) {
+/**
+ * Stale-while-revalidate for API GET requests.
+ *
+ * 1) If cache exists — return it IMMEDIATELY (0ms user wait)
+ * 2) Fetch from network in background → update cache for next time
+ * 3) If no cache — wait for network (normal latency)
+ * 4) If network fails and no cache — 503
+ *
+ * This gives instant page loads for repeat visits while ensuring data
+ * freshness within one request cycle. React Query's staleTime (60s)
+ * prevents re-fetching too aggressively on top of this.
+ */
+async function apiStaleWhileRevalidate(request) {
   const cache = await caches.open(API_CACHE);
-  try {
-    const response = await fetch(request);
-    // Only cache successful responses (for offline fallback)
-    if (response.ok) {
-      cache.put(request, response.clone()).catch(() => {});
-    }
-    return response;
-  } catch (err) {
-    // Network failed — fall back to cache if available
-    const cached = await cache.match(request);
-    if (cached) return cached;
-    // No cache either — return a proper 503 so React Query surfaces the error
-    return new Response(
-      JSON.stringify({ message: 'Нет соединения с сервером', offline: true }),
-      { status: 503, headers: { 'Content-Type': 'application/json', 'X-Offline': 'true' } },
-    );
+  const cached = await cache.match(request);
+
+  // Background revalidation — always try to update cache
+  const networkPromise = fetch(request)
+    .then((response) => {
+      if (response.ok) {
+        cache.put(request, response.clone()).catch(() => {});
+      }
+      return response;
+    })
+    .catch(() => null);
+
+  // If we have a cached response, return it immediately
+  if (cached) {
+    // Fire background update, don't wait for it
+    networkPromise.catch(() => {});
+    return cached;
   }
+
+  // No cache — must wait for network
+  const networkResponse = await networkPromise;
+  if (networkResponse) return networkResponse;
+
+  return new Response(
+    JSON.stringify({ message: 'Нет соединения с сервером', offline: true }),
+    { status: 503, headers: { 'Content-Type': 'application/json', 'X-Offline': 'true' } },
+  );
 }
 
 async function cacheFirst(request) {
