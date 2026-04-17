@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Run prettier + eslint on staged files only (fast pre-commit).
+npx lint-staged
