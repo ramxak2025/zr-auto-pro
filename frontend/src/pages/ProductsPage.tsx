@@ -1682,8 +1682,8 @@ export default function ProductsPage() {
                 </span>
               </div>
 
-              {/* Cost price — only for owner */}
-              {isOwner && (
+              {/* Cost price — visible to director, admin, superadmin */}
+              {canManageWarehouse && (
                 <div className="flex-shrink-0 w-16 text-right hidden sm:block">
                   <span className="text-[11px] text-gray-400">{formatMoney(product.costPrice)}</span>
                 </div>

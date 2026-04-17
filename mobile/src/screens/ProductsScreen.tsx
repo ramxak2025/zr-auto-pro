@@ -35,6 +35,8 @@ export default function ProductsScreen() {
   const { hasPermission, user } = useAuth();
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageWarehouse = hasPermission('warehouse_access');
+  // Directors, admins, superadmins see cost price. Masters don't.
+  const canSeeCostPrice = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
 
   const [search, setSearch] = useState('');
   const limit = 500;
@@ -783,7 +785,7 @@ export default function ProductsScreen() {
                     )}
                     <View style={styles.productPrices}>
                       <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
-                      {isOwner && (
+                      {canSeeCostPrice && (
                         <Text style={styles.productCostPrice}>{'\u0421\u0435\u0431\u0435\u0441\u0442.'} {formatMoney(item.costPrice)}</Text>
                       )}
                     </View>

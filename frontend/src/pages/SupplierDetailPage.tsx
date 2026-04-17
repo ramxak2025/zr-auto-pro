@@ -259,15 +259,21 @@ export default function SupplierDetailPage() {
   });
   const payments: SupplierPayment[] = paymentsData || [];
 
-  // Products for delivery items — only load when delivery modal is open
+  // Products for delivery items. Shares the standard ['products'] cache key
+  // with ProductsPage so mutations (create/delete/import) automatically
+  // invalidate this too — picker always reflects current warehouse.
+  // refetchOnMount: 'always' guarantees a fresh load every time the modal
+  // opens, eliminating the "sometimes empty" bug when cache was stale.
   const { data: productsData } = useQuery({
-    queryKey: ['products-all'],
-    queryFn: () => productsApi.getAll({ limit: 1000 }),
+    queryKey: ['products', 'all', 5000],
+    queryFn: () => productsApi.getAll({ limit: 5000 }),
     select: (res) => {
       const d = res.data;
       return Array.isArray(d) ? d : ((d as PaginatedResponse<Product>).data || []);
     },
     enabled: isDeliveryModalOpen || showDeliveryPicker,
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
   const products: Product[] = productsData || [];
 

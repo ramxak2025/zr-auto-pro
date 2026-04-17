@@ -43,14 +43,18 @@ export default function ProductPickerModal({
   const [productPath, setProductPath] = useState<string[]>([]);
   const [productSearch, setProductSearch] = useState('');
 
+  // Shares ['products', ...] cache with main ProductsScreen so mutations
+  // automatically invalidate the picker too. refetchOnMount:'always' ensures
+  // a fresh list every time the modal opens — prevents intermittent empty list.
   const { data: allProducts } = useQuery<Product[]>({
-    queryKey: ['all-products-picker'],
+    queryKey: ['products', 'picker', 5000],
     queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 500 });
+      const res = await productsApi.getAll({ limit: 5000 });
       return res.data?.data || res.data;
     },
     enabled: visible,
-    staleTime: 60_000,
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
 
   const { productFolders, visibleProducts } = useMemo(() => {
