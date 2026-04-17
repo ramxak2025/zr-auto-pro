@@ -19,3 +19,4 @@ backend/server
 *.apk
 downloads/*.apk
 Autexa-*.apk
+.backups/
