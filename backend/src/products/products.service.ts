@@ -302,12 +302,6 @@ export class ProductsService {
       throw new BadRequestException({ message: 'Нет данных для импорта' });
     }
 
-    let created = 0;
-    let updated = 0;
-    let skipped = 0;
-    const errors: string[] = [];
-
-    // Coerce to numbers safely. Russian locale may send "100,50" — normalize to dot.
     const toNum = (v: any): number => {
       if (v === null || v === undefined || v === '') return 0;
       if (typeof v === 'number') return isFinite(v) ? v : 0;
@@ -317,53 +311,88 @@ export class ProductsService {
     };
     const toStr = (v: any): string => (v === null || v === undefined) ? '' : String(v).trim();
 
-    for (const item of items) {
-      const name = toStr(item?.name);
-      if (!name) { skipped++; continue; }
+    // 1) Normalize all items
+    const normalized = items
+      .map((item) => ({
+        name: toStr(item?.name),
+        category: toStr(item?.category) || null,
+        unit: toStr(item?.unit) || 'pcs',
+        costPrice: toNum(item?.costPrice),
+        sellPrice: toNum(item?.sellPrice),
+        stock: toNum(item?.stock),
+        minStock: toNum(item?.minStock),
+      }))
+      .filter((r) => r.name);
 
-      const category = toStr(item?.category) || null;
-      const unit = toStr(item?.unit) || 'pcs';
-      const costPrice = toNum(item?.costPrice);
-      const sellPrice = toNum(item?.sellPrice);
-      const stock = toNum(item?.stock);
-      const minStock = toNum(item?.minStock);
+    if (normalized.length === 0) {
+      throw new BadRequestException({ message: 'Нет товаров с непустым названием' });
+    }
 
-      try {
-        const { rows: existing } = await this.pool.query(
-          `SELECT id FROM products WHERE tenant_id = $1 AND name = $2 LIMIT 1`,
-          [tenantID, name],
-        );
+    // 2) Single query: find all existing products by name
+    const names = normalized.map((r) => r.name);
+    const { rows: existingRows } = await this.pool.query(
+      `SELECT id, name FROM products WHERE tenant_id = $1 AND name = ANY($2)`,
+      [tenantID, names],
+    );
+    const existingMap = new Map<string, string>();
+    for (const row of existingRows) {
+      existingMap.set(row.name, row.id);
+    }
 
-        if (existing.length > 0) {
-          await this.pool.query(
-            `UPDATE products SET
-              category = $3,
-              cost_price = $4,
-              sell_price = $5,
-              stock = $6,
-              min_stock = $7,
-              unit = $8
-            WHERE id = $1 AND tenant_id = $2`,
-            [existing[0].id, tenantID, category, costPrice, sellPrice, stock, minStock, unit],
+    const client = await this.pool.connect();
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    try {
+      await client.query('BEGIN');
+
+      // 3) Batch INSERT new items (in chunks of 100 to avoid param limit)
+      const newItems = normalized.filter((r) => !existingMap.has(r.name));
+      for (let i = 0; i < newItems.length; i += 100) {
+        const chunk = newItems.slice(i, i + 100);
+        const values: any[] = [];
+        const placeholders: string[] = [];
+        chunk.forEach((item, idx) => {
+          const base = idx * 8;
+          placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8})`);
+          values.push(item.name, item.category, item.costPrice, item.sellPrice, item.stock, item.minStock, item.unit, tenantID);
+        });
+        try {
+          await client.query(
+            `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id) VALUES ${placeholders.join(', ')}`,
+            values,
+          );
+          created += chunk.length;
+        } catch (err: any) {
+          skipped += chunk.length;
+          if (errors.length < 5) errors.push(`batch insert failed: ${err?.message}`);
+        }
+      }
+
+      // 4) Batch UPDATE existing items (one by one, but within transaction)
+      const updateItems = normalized.filter((r) => existingMap.has(r.name));
+      for (const item of updateItems) {
+        const existingId = existingMap.get(item.name);
+        try {
+          await client.query(
+            `UPDATE products SET category=$3, cost_price=$4, sell_price=$5, stock=$6, min_stock=$7, unit=$8 WHERE id=$1 AND tenant_id=$2`,
+            [existingId, tenantID, item.category, item.costPrice, item.sellPrice, item.stock, item.minStock, item.unit],
           );
           updated++;
-        } else {
-          await this.pool.query(
-            `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [name, category, costPrice, sellPrice, stock, minStock, unit, tenantID],
-          );
-          created++;
+        } catch (err: any) {
+          skipped++;
+          if (errors.length < 5) errors.push(`"${item.name}": ${err?.message}`);
         }
-      } catch (err: any) {
-        // Per-row failure — log and continue so one bad row doesn't kill the batch
-        skipped++;
-        if (errors.length < 5) {
-          errors.push(`"${name}": ${err?.message || err?.code || 'неизвестная ошибка'}`);
-        }
-        // eslint-disable-next-line no-console
-        console.error('[importCsv] row failed', { name, error: err?.message, code: err?.code });
       }
+
+      await client.query('COMMIT');
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      throw new InternalServerErrorException({ message: `Ошибка импорта: ${err?.message}` });
+    } finally {
+      client.release();
     }
 
     return { created, updated, skipped, total: created + updated, errors };
