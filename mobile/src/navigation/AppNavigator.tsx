@@ -118,7 +118,7 @@ const MoreStack = createNativeStackNavigator();
 //  Касса — plasma glow branded center button
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const KASSA_SIZE = 68;
+const KASSA_SIZE = 62;
 
 function KassaButton({ focused }: { focused?: boolean }) {
   const wave1 = useRef(new Animated.Value(0)).current;
@@ -401,6 +401,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -6 },
     shadowOpacity: 0.1,
     shadowRadius: 16,
+    overflow: 'visible' as const,
   },
   tabLabel: {
     fontSize: 10,

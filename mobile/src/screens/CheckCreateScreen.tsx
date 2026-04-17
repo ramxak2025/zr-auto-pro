@@ -426,7 +426,43 @@ export default function CheckCreateScreen() {
               onCancel={() => setShowTimePicker(false)}
             />
 
-            {/* Client / plate search — inline, directly in the check */}
+            {/* ═══ ПОИСК ПО ГОСНОМЕРУ ═══ */}
+            <Text style={styles.sectionSubLabel}>ПОИСК ПО ГОСНОМЕРУ</Text>
+
+            {/* Realistic license plate input */}
+            <RussianPlateInput
+              value={plateSearch}
+              onChangeText={setPlateSearch}
+              autoFocus={false}
+            />
+
+            {/* Inline search results — appear right below the plate */}
+            {plateSearch.length >= 1 && plateResults.length > 0 && (
+              <View style={styles.inlineResults}>
+                {plateResults.slice(0, 5).map(({ client, car }) => (
+                  <TouchableOpacity
+                    key={`${client.id}-${car.id}`}
+                    style={styles.inlineResultItem}
+                    onPress={() => { setClientId(client.id); setCarId(car.id); setPlateSearch(''); }}
+                    activeOpacity={0.7}
+                  >
+                    {car.plateNumber && (
+                      <View style={styles.plateChip}><Text style={styles.plateChipText}>{car.plateNumber}</Text></View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.inlineResultName} numberOfLines={1}>{car.makeModel}</Text>
+                      <Text style={styles.inlineResultSub} numberOfLines={1}>{client.fullName}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            {plateSearch.length >= 2 && plateResults.length === 0 && (
+              <Text style={styles.inlineNoResults}>Клиент не найден</Text>
+            )}
+
+            {/* Client indicator */}
             {clientId && selectedClient ? (
               <View style={styles.selectedClientRow}>
                 <Ionicons name="person" size={16} color={colors.primary[600]} />
@@ -439,36 +475,12 @@ export default function CheckCreateScreen() {
                 </TouchableOpacity>
               </View>
             ) : (
-              <View>
-                <RussianPlateInput
-                  value={plateSearch}
-                  onChangeText={setPlateSearch}
-                />
-                {/* Inline search results — appear right below the plate input */}
-                {plateSearch.length >= 1 && plateResults.length > 0 && (
-                  <View style={styles.inlineResults}>
-                    {plateResults.slice(0, 5).map(({ client, car }) => (
-                      <TouchableOpacity
-                        key={`${client.id}-${car.id}`}
-                        style={styles.inlineResultItem}
-                        onPress={() => { setClientId(client.id); setCarId(car.id); setPlateSearch(''); }}
-                        activeOpacity={0.7}
-                      >
-                        {car.plateNumber && (
-                          <View style={styles.plateChip}><Text style={styles.plateChipText}>{car.plateNumber}</Text></View>
-                        )}
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.inlineResultName} numberOfLines={1}>{car.makeModel}</Text>
-                          <Text style={styles.inlineResultSub} numberOfLines={1}>{client.fullName}</Text>
-                        </View>
-                        <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-                {plateSearch.length >= 2 && plateResults.length === 0 && (
-                  <Text style={styles.inlineNoResults}>Клиент не найден</Text>
-                )}
+              <View style={styles.retailDefault}>
+                <Ionicons name="storefront-outline" size={16} color={colors.blue[500]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.retailDefaultText}>Розничный покупатель</Text>
+                  <Text style={styles.retailDefaultHint}>Наберите госномер чтобы привязать клиента</Text>
+                </View>
               </View>
             )}
 
@@ -1000,9 +1012,13 @@ const styles = StyleSheet.create({
   timeBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.white, borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], paddingHorizontal: spacing[4] },
   timeBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   // Selected client row
-  selectedClientRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
+  selectedClientRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5], marginTop: spacing[2] },
   selectedClientName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   selectedClientPhone: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
+  sectionSubLabel: { fontSize: 11, fontWeight: '700', color: colors.gray[500], letterSpacing: 1, textTransform: 'uppercase' as const, marginBottom: spacing[1.5] },
+  retailDefault: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], backgroundColor: colors.blue[50], borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], marginTop: spacing[2] },
+  retailDefaultText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.blue[700] },
+  retailDefaultHint: { fontSize: 11, color: colors.blue[400], marginTop: 1 },
   // Inline search results
   inlineResults: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, marginTop: spacing[1.5], overflow: 'hidden' as const },
   inlineResultItem: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: spacing[2], paddingHorizontal: spacing[3], paddingVertical: spacing[2.5], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
