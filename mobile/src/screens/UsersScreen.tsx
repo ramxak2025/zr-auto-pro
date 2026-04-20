@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert, Switch, Image, Dimensions,
+  RefreshControl, ActivityIndicator, Alert, Switch, Dimensions,
 } from 'react-native';
+import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -391,7 +392,7 @@ export default function UsersScreen() {
                 <TouchableOpacity style={styles.userRow} onPress={() => openEdit(user)} activeOpacity={0.7}>
                   <View style={styles.avatarWrap}>
                     {getImageUrl(user.avatar) ? (
-                      <Image source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
+                      <CachedImage source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
                     ) : (
                       <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
                         <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, RefreshControl, Image, Modal as RNModal, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, RefreshControl, Modal as RNModal, Alert, ActivityIndicator } from 'react-native';
+import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -23,7 +24,7 @@ function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
         <TouchableOpacity style={styles.photoClose} onPress={onClose}>
           <Ionicons name="close" size={24} color={colors.white} />
         </TouchableOpacity>
-        <Image source={{ uri: url }} style={styles.photoImage} resizeMode="contain" />
+        <CachedImage source={{ uri: url }} style={styles.photoImage} resizeMode="contain" />
       </TouchableOpacity>
     </RNModal>
   );
@@ -68,7 +69,7 @@ function EmployeeDetail({ emp, onBack, canEdit }: { emp: any; onBack: () => void
           <View key={item.id} style={styles.equipItem}>
             {item.photo ? (
               <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
-                <Image source={{ uri: item.photo }} style={styles.equipPhoto} />
+                <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
               </TouchableOpacity>
             ) : (
               <View style={[styles.equipPhoto, { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' }]}>
@@ -107,7 +108,7 @@ function EmployeeDetail({ emp, onBack, canEdit }: { emp: any; onBack: () => void
 
       <View style={styles.empHeader}>
         {emp.avatar ? (
-          <Image source={{ uri: emp.avatar }} style={styles.empAvatar} />
+          <CachedImage source={{ uri: emp.avatar }} style={styles.empAvatar} />
         ) : (
           <View style={[styles.empAvatar, { backgroundColor: colors.primary[100], alignItems: 'center', justifyContent: 'center' }]}>
             <Text style={{ fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[700] }}>
@@ -237,7 +238,7 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
 
           <Text style={styles.fieldLabel}>Фото</Text>
           <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn}>
-            {photo ? <Image source={{ uri: photo }} style={{ width: 80, height: 80, borderRadius: 12 }} /> : (
+            {photo ? <CachedImage source={{ uri: photo }} style={{ width: 80, height: 80, borderRadius: 12 }} /> : (
               <>
                 <Ionicons name="camera-outline" size={24} color={colors.gray[400]} />
                 <Text style={{ color: colors.gray[400], fontSize: fontSize.xs, marginTop: 4 }}>Выбрать</Text>
@@ -288,7 +289,7 @@ export default function EquipmentScreen() {
           </Text>
           {myEquipment.map((item: any) => (
             <View key={item.id} style={styles.equipItem}>
-              {item.photo ? <Image source={{ uri: item.photo }} style={styles.equipPhoto} /> : (
+              {item.photo ? <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} /> : (
                 <View style={[styles.equipPhoto, { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' }]}>
                   <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
                 </View>
@@ -339,7 +340,7 @@ export default function EquipmentScreen() {
             {summary.map((emp: any) => (
               <TouchableOpacity key={emp.userId} onPress={() => setSelectedEmp(emp)} style={styles.empCard}>
                 {emp.avatar ? (
-                  <Image source={{ uri: emp.avatar }} style={styles.empAvatarSmall} />
+                  <CachedImage source={{ uri: emp.avatar }} style={styles.empAvatarSmall} />
                 ) : (
                   <View style={[styles.empAvatarSmall, { backgroundColor: colors.primary[100], alignItems: 'center', justifyContent: 'center' }]}>
                     <Text style={{ color: colors.primary[700], fontWeight: fontWeight.bold }}>{emp.fullName?.charAt(0)}</Text>
@@ -420,7 +421,7 @@ function StorageTab() {
           <View key={item.id} style={styles.equipItem}>
             {item.photo ? (
               <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
-                <Image source={{ uri: item.photo }} style={styles.equipPhoto} />
+                <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
               </TouchableOpacity>
             ) : (
               <View style={[styles.equipPhoto, { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' }]}>

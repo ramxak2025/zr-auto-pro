@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, Alert, ActivityIndicator, Image, Dimensions,
+  RefreshControl, Alert, ActivityIndicator, Dimensions,
   Modal as RNModal,
 } from 'react-native';
+import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -771,7 +772,7 @@ export default function ProductsScreen() {
                 <View style={styles.productRow}>
                   <TouchableOpacity onPress={() => { if (pUri) setFullscreenPhoto(pUri); }}>
                     {pUri ? (
-                      <Image source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
+                      <CachedImage source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
                     ) : (
                       <View style={styles.productPhotoPlaceholder}>
                         <Ionicons name="cube-outline" size={22} color={colors.gray[300]} />
@@ -898,7 +899,7 @@ export default function ProductsScreen() {
         <View style={styles.photoSection}>
           <TouchableOpacity style={styles.photoPickerWrap} onPress={pickImage}>
             {photoUri ? (
-              <Image source={{ uri: getDisplayPhotoUri(photoUri) }} style={styles.photoPreview} resizeMode="cover" />
+              <CachedImage source={{ uri: getDisplayPhotoUri(photoUri) }} style={styles.photoPreview} resizeMode="cover" />
             ) : (
               <View style={styles.photoPickerPlaceholder}>
                 <Ionicons name="camera-outline" size={28} color={colors.gray[400]} />
@@ -1324,7 +1325,7 @@ export default function ProductsScreen() {
             <Ionicons name="close" size={28} color={colors.white} />
           </TouchableOpacity>
           {fullscreenPhoto && (
-            <Image
+            <CachedImage
               source={{ uri: fullscreenPhoto }}
               style={styles.fullscreenImage}
               resizeMode="contain"

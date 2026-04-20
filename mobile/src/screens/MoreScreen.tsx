@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Image, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator } from 'react-native';
+import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -159,7 +160,7 @@ export default function MoreScreen() {
           <View style={styles.userRow}>
             <View style={styles.avatarWrap}>
               {avatarUrl ? (
-                <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+                <CachedImage source={{ uri: avatarUrl }} style={styles.avatarImage} />
               ) : (
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>{userInitial}</Text>

@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  ActivityIndicator, RefreshControl, Animated, Dimensions, Image,
+  ActivityIndicator, RefreshControl, Animated, Dimensions,
 } from 'react-native';
+import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -813,7 +814,7 @@ function MasterDashboard() {
               return (
                 <View key={promo.productId} style={styles.promoItem}>
                   {photoUrl ? (
-                    <Image source={{ uri: photoUrl }} style={styles.promoPhoto} />
+                    <CachedImage source={{ uri: photoUrl }} style={styles.promoPhoto} />
                   ) : (
                     <View style={[styles.promoPhoto, styles.promoPhotoPlaceholder]}>
                       <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />

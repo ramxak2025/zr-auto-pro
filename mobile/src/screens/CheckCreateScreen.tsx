@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
   Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Dimensions,
-  Image, Animated, Modal as RNModal, PanResponder,
+  Animated, Modal as RNModal, PanResponder,
 } from 'react-native';
+import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -910,7 +911,7 @@ export default function CheckCreateScreen() {
                 return (
                   <TouchableOpacity key={product.id} style={styles.productItem} onPress={() => addProductLine(product)} activeOpacity={0.6}>
                     {photoUrl ? (
-                      <Image source={{ uri: photoUrl }} style={styles.productPhoto} />
+                      <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} />
                     ) : (
                       <View style={[styles.productPhoto, styles.productPhotoPlaceholder]}>
                         <Ionicons name="cube-outline" size={20} color={colors.gray[300]} />
