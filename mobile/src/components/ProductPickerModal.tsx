@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  Dimensions, Image, Animated, Modal as RNModal, PanResponder,
+  Dimensions, Animated, Modal as RNModal, PanResponder,
 } from 'react-native';
+import CachedImage from './CachedImage';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { productsApi } from '../api/services';
@@ -214,7 +215,7 @@ export default function ProductPickerModal({
               return (
                 <TouchableOpacity key={product.id} style={styles.productItem} onPress={() => onSelectProduct(product)} activeOpacity={0.6}>
                   {photoUrl ? (
-                    <Image source={{ uri: photoUrl }} style={styles.productPhoto} />
+                    <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} />
                   ) : (
                     <View style={[styles.productPhoto, styles.productPhotoPlaceholder]}>
                       <Ionicons name="cube-outline" size={20} color={colors.gray[300]} />
