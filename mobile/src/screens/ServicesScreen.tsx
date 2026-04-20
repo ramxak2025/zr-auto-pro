@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
+  View, Text, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -140,7 +141,7 @@ export default function ServicesScreen() {
       ) : services.length === 0 ? (
         <EmptyState title="Нет услуг" description={search ? 'Ничего не найдено' : 'Добавьте первую услугу'} action={!search ? { label: 'Добавить', onPress: openCreate } : undefined} />
       ) : (
-        <FlatList
+        <FlashList
           data={services}
           keyExtractor={(item) => item.id}
           renderItem={renderService}

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
+  View, Text, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -135,7 +136,7 @@ export default function SuppliersScreen() {
       {isLoading ? <LoadingSpinner /> : !suppliers?.length ? (
         <EmptyState title="Нет поставщиков" description="Добавьте первого поставщика" action={{ label: 'Добавить', onPress: openCreate }} />
       ) : (
-        <FlatList data={suppliers} keyExtractor={i => i.id} renderItem={renderSupplier} contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />} />
+        <FlashList data={suppliers} keyExtractor={i => i.id} renderItem={renderSupplier} contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />} />
       )}
 
       <Modal visible={modalOpen} onClose={closeModal} title={editingSupplier ? 'Редактировать' : 'Новый поставщик'}>

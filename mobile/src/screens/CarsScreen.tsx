@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl,
+  View, Text, TouchableOpacity, StyleSheet, RefreshControl,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -105,7 +106,7 @@ export default function CarsScreen() {
       ) : (Array.isArray(cars) ? cars : []).length === 0 ? (
         <EmptyState title="Нет автомобилей" description={search ? 'Ничего не найдено' : 'Автомобили появятся после добавления к клиентам'} />
       ) : (
-        <FlatList
+        <FlashList
           data={Array.isArray(cars) ? cars : []}
           keyExtractor={(item) => item.id}
           renderItem={renderCar}

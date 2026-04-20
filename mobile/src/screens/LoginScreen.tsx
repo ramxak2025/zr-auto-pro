@@ -10,9 +10,9 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
-  Image,
   Animated,
 } from 'react-native';
+import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -106,7 +106,7 @@ export default function LoginScreen() {
           <View style={styles.container}>
             {/* Logo */}
             <Animated.View style={[styles.logoWrap, { opacity: logoFade, transform: [{ scale: logoScale }] }]}>
-              <Image source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" defaultSource={require('../../assets/logo.png')} />
+              <CachedImage source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
             </Animated.View>
             <Animated.Text style={[styles.subtitle, { opacity: logoFade }]}>Система управления автосервисом</Animated.Text>
 

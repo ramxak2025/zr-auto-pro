@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
+  View, Text, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -204,7 +205,7 @@ export default function ClientsScreen() {
           action={{ label: 'Добавить клиента', onPress: openCreateModal }}
         />
       ) : (
-        <FlatList
+        <FlashList
           data={displayClients}
           keyExtractor={(item) => item.id}
           renderItem={renderClient}

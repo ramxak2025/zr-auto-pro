@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Modal, FlatList, TextInput, Platform } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Modal, TextInput, Platform } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -239,7 +240,7 @@ export default function CashFlowScreen() {
               <Ionicons name="people-outline" size={18} color={!masterId ? colors.primary[600] : colors.gray[500]} />
               <Text style={[styles.masterOptionText, !masterId && { color: colors.primary[600], fontWeight: fontWeight.bold }]}>Все мастера</Text>
             </TouchableOpacity>
-            <FlatList
+            <FlashList
               data={masters || []}
               keyExtractor={(item: any) => item.id}
               renderItem={({ item }) => (

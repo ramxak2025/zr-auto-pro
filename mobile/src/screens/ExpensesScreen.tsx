@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
+  View, Text, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, Alert, ActivityIndicator,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -326,7 +327,7 @@ export default function ExpensesScreen() {
       {isLoading ? <LoadingSpinner /> : !expenses?.length ? (
         <EmptyState title="Нет расходов" description="Добавьте расходы за выбранный период" action={isDirector ? { label: 'Добавить', onPress: () => setModalOpen(true) } : undefined} />
       ) : (
-        <FlatList data={expenses} keyExtractor={i => i.id} renderItem={renderExpense} contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />} />
+        <FlashList data={expenses} keyExtractor={i => i.id} renderItem={renderExpense} contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />} />
       )}
 
       {/* Add expense modal */}

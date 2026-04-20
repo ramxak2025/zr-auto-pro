@@ -1,9 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet,
+  View, Text, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, Alert, ActivityIndicator, Dimensions,
   Modal as RNModal,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -761,7 +762,7 @@ export default function ProductsScreen() {
           action={!activePath.length ? { label: '\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', onPress: openCreate } : undefined}
         />
       ) : (
-        <FlatList
+        <FlashList
           data={currentProducts}
           keyExtractor={(item) => item.id}
           renderItem={({ item, index }) => {
@@ -1075,7 +1076,7 @@ export default function ProductsScreen() {
           )}
 
           {/* Content: folders + products */}
-          <FlatList
+          <FlashList
             data={invCurrentProducts}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.invFullList}

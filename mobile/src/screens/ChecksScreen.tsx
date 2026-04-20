@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, FlatList, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView,
+  View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -530,7 +531,7 @@ export default function ChecksScreen() {
           ) : checks.length === 0 ? (
             <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
           ) : (
-            <FlatList
+            <FlashList
               data={checks}
               keyExtractor={(item) => item.id}
               renderItem={renderCheck}
@@ -549,7 +550,7 @@ export default function ChecksScreen() {
           ) : warehouseDocs.length === 0 ? (
             <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
           ) : (
-            <FlatList
+            <FlashList
               data={warehouseDocs}
               keyExtractor={(item) => item.kind === 'movement' ? `m-${item.data.id}` : `d-${item.data.id}`}
               renderItem={renderWarehouseDoc}
