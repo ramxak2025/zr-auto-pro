@@ -3,22 +3,22 @@
     "name": "Autexa",
     "slug": "autexa-mobile",
     "owner": "ramxak",
-    "version": "2.2.0",
+    "version": "3.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "jsEngine": "hermes",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#2563eb"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.autexa.mobile",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSCameraUsageDescription": "Приложению нужен доступ к камере для фотографирования документов и автомобилей",
         "NSPhotoLibraryUsageDescription": "Приложению нужен доступ к галерее для выбора фотографий"
@@ -31,7 +31,15 @@
         "backgroundColor": "#2563eb"
       },
       "package": "com.autexa.mobile",
-      "versionCode": 3
+      "versionCode": 4
+    },
+    "updates": {
+      "url": "https://u.expo.dev/2d08b9be-9503-4e31-9198-8ec7093e44d7",
+      "enabled": true,
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
     },
     "extra": {
       "apiUrl": "https://autexa.pw/api",
@@ -40,11 +48,16 @@
       }
     },
     "plugins": [
+      "expo-updates",
       [
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": false
+            "usesCleartextTraffic": false,
+            "newArchEnabled": true
+          },
+          "ios": {
+            "newArchEnabled": true
           }
         }
       ]
