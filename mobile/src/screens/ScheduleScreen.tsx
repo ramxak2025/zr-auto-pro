@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
   RefreshControl, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
+import Reanimated, { FadeIn } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -1374,11 +1375,11 @@ export default function ScheduleScreen() {
         </View>
       </View>
 
-      {tab === 'grid' && <GridTab />}
-      {tab === 'today' && <TodayTab />}
-      {tab === 'shifts' && <ShiftsTab />}
-      {tab === 'rating' && <RatingTab />}
-      {tab === 'settings' && <SettingsTab />}
+      {tab === 'grid' && <Reanimated.View entering={FadeIn.duration(200)} key="grid"><GridTab /></Reanimated.View>}
+      {tab === 'today' && <Reanimated.View entering={FadeIn.duration(200)} key="today"><TodayTab /></Reanimated.View>}
+      {tab === 'shifts' && <Reanimated.View entering={FadeIn.duration(200)} key="shifts"><ShiftsTab /></Reanimated.View>}
+      {tab === 'rating' && <Reanimated.View entering={FadeIn.duration(200)} key="rating"><RatingTab /></Reanimated.View>}
+      {tab === 'settings' && <Reanimated.View entering={FadeIn.duration(200)} key="settings"><SettingsTab /></Reanimated.View>}
     </SafeAreaView>
   );
 }
