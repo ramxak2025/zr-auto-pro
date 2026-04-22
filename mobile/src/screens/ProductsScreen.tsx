@@ -22,6 +22,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { tapMedium, notifySuccess } from '../utils/haptics';
 import type { Product, PaginatedResponse, StockMovement } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -163,6 +164,7 @@ export default function ProductsScreen() {
   });
 
   const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ id: string; name: string } | null>(null);
+  const [reorderFolderTarget, setReorderFolderTarget] = useState<{ name: string; catId: string } | null>(null);
 
   const allProducts = data?.data || [];
 
@@ -806,44 +808,18 @@ export default function ProductsScreen() {
           ListHeaderComponent={
             !search && sortedFolders.length > 0 ? (
               <View style={styles.foldersList}>
-                {sortedFolders.map(([folderName, info], idx) => {
-                  const isFirst = idx === 0;
-                  const isLast = idx === sortedFolders.length - 1;
-                  const moveFolder = (dir: -1 | 1) => {
-                    const ids = sortedFolders.map(([, d]) => d.catId).filter(Boolean);
-                    if (ids.length < 2) return;
-                    const newIdx = idx + dir;
-                    if (newIdx < 0 || newIdx >= ids.length) return;
-                    [ids[idx], ids[newIdx]] = [ids[newIdx], ids[idx]];
-                    reorderFoldersMutation.mutate(ids);
-                  };
+                {sortedFolders.map(([folderName, info]) => {
                   return (
                     <View key={folderName} style={styles.folderRow}>
-                      {/* Sort arrows — visible only to warehouse managers */}
-                      {canManageWarehouse && (
-                        <View style={styles.folderSortCol}>
-                          <TouchableOpacity
-                            disabled={isFirst}
-                            onPress={() => moveFolder(-1)}
-                            style={styles.folderSortBtn}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <Ionicons name="chevron-up" size={14} color={isFirst ? colors.gray[200] : colors.gray[500]} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            disabled={isLast}
-                            onPress={() => moveFolder(1)}
-                            style={styles.folderSortBtn}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          >
-                            <Ionicons name="chevron-down" size={14} color={isLast ? colors.gray[200] : colors.gray[500]} />
-                          </TouchableOpacity>
-                        </View>
-                      )}
-
-                      {/* Main clickable area */}
+                      {/* Main clickable area — tap to open, long-press to reorder */}
                       <TouchableOpacity
                         onPress={() => enterFolder(folderName)}
+                        onLongPress={() => {
+                          if (!canManageWarehouse || !info.catId) return;
+                          tapMedium();
+                          setReorderFolderTarget({ name: folderName, catId: info.catId });
+                        }}
+                        delayLongPress={300}
                         activeOpacity={0.6}
                         style={styles.folderRowMain}
                       >
@@ -1345,6 +1321,45 @@ export default function ProductsScreen() {
         variant="danger"
       />
 
+      {/* Folder reorder modal — long-press on folder → pick position */}
+      {reorderFolderTarget && (
+        <Modal visible onClose={() => setReorderFolderTarget(null)} title={`Позиция: ${reorderFolderTarget.name}`}>
+          <View style={{ gap: spacing[1] }}>
+            {sortedFolders.map(([name], idx) => {
+              const isCurrent = name === reorderFolderTarget.name;
+              return (
+                <TouchableOpacity
+                  key={name}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
+                    paddingHorizontal: spacing[3], paddingVertical: spacing[2.5],
+                    borderRadius: borderRadius.lg,
+                    backgroundColor: isCurrent ? colors.primary[50] : 'transparent',
+                  }}
+                  onPress={() => {
+                    if (isCurrent) { setReorderFolderTarget(null); return; }
+                    // Build new order: remove target, insert at idx
+                    const ids = sortedFolders.map(([, d]) => d.catId).filter(Boolean);
+                    const currentIdx = ids.indexOf(reorderFolderTarget.catId);
+                    if (currentIdx < 0) return;
+                    const reordered = ids.filter(id => id !== reorderFolderTarget.catId);
+                    reordered.splice(idx, 0, reorderFolderTarget.catId);
+                    reorderFoldersMutation.mutate(reordered);
+                    notifySuccess();
+                    setReorderFolderTarget(null);
+                  }}
+                >
+                  <Text style={{ width: 24, fontSize: 11, fontWeight: '700', color: colors.gray[400], textAlign: 'center' }}>{idx + 1}</Text>
+                  <Text style={{ flex: 1, fontSize: fontSize.sm, fontWeight: isCurrent ? fontWeight.bold : fontWeight.medium, color: isCurrent ? colors.primary[700] : colors.gray[700] }}>
+                    {isCurrent ? `— ${name} (сейчас) —` : name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </Modal>
+      )}
+
       {/* Delete folder confirmation */}
       <ConfirmDialog
         visible={!!deleteFolderTarget}
@@ -1390,8 +1405,6 @@ const styles = StyleSheet.create({
   folderRowName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   folderRowCount: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
   folderRowAlert: { marginRight: spacing[2] },
-  folderSortCol: { flexDirection: 'column', gap: 1, marginRight: spacing[2] },
-  folderSortBtn: { padding: 2, alignItems: 'center', justifyContent: 'center' },
   folderDeleteBtn: { padding: spacing[1.5], marginLeft: spacing[2] },
   foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: FOLDER_GAP, marginBottom: spacing[4] },
   folderCard: {
