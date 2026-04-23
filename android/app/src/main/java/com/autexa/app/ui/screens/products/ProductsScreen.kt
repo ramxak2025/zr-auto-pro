@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autexa.app.data.network.models.Product
+import com.autexa.app.ui.components.ScreenTitle
 import com.autexa.app.ui.theme.BrandBlue600
 import com.autexa.app.ui.theme.Gray100
 import com.autexa.app.ui.theme.Gray200
@@ -66,21 +67,16 @@ fun ProductsScreen(vm: ProductsViewModel = hiltViewModel()) {
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // Header
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
-                Text("Склад", color = Gray900, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-                Text(
-                    when {
-                        ui.isLoading -> "Загружаем товары…"
-                        ui.items.isEmpty() && ui.search.isBlank() -> "Товаров пока нет"
-                        ui.items.isEmpty() -> "Ничего не найдено"
-                        else -> "${ui.items.size} ${pluralProducts(ui.items.size)}"
-                    },
-                    color = Gray500,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
+            ScreenTitle(
+                title = "Склад",
+                subtitle = when {
+                    ui.isLoading -> "Загружаем товары…"
+                    ui.items.isEmpty() && ui.search.isBlank() -> "Товаров пока нет"
+                    ui.items.isEmpty() -> "Ничего не найдено"
+                    else -> "${ui.items.size} ${pluralProducts(ui.items.size)}"
+                },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+            )
 
             // Search
             SearchBar(

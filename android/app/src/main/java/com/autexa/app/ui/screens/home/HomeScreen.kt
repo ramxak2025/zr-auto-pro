@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autexa.app.ui.components.AnimatedCountText
 import com.autexa.app.ui.components.ModuleIcon
+import com.autexa.app.ui.components.ScreenTitle
 import com.autexa.app.ui.components.Sparkline
 import com.autexa.app.ui.components.StaggeredReveal
 import com.autexa.app.ui.theme.BrandBlue50
@@ -101,20 +102,10 @@ fun HomeScreen(
 
                 item {
                     StaggeredReveal(delayMs = 0) {
-                        Column {
-                            Text(
-                                "$greeting${if (firstName.isNotBlank()) ", $firstName" else ""}!",
-                                color = Gray900,
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                            )
-                            Text(
-                                "Обзор показателей автосервиса",
-                                color = Gray400,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(top = 2.dp),
-                            )
-                        }
+                        ScreenTitle(
+                            title = "$greeting${if (firstName.isNotBlank()) ", $firstName" else ""}",
+                            subtitle = "Обзор показателей автосервиса",
+                        )
                     }
                 }
 

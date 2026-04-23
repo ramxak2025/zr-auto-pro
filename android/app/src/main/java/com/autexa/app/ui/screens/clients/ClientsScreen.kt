@@ -180,8 +180,21 @@ internal fun SubscreenHeader(title: String, subtitle: String, onBack: () -> Unit
         }
         Spacer(Modifier.width(4.dp))
         Column {
-            Text(title, color = Gray900, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-            Text(subtitle, color = Gray500, fontSize = 12.sp, modifier = Modifier.padding(top = 1.dp))
+            Text(
+                title,
+                color = Gray900,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-0.3).sp,
+                lineHeight = 30.sp,
+            )
+            Text(
+                subtitle,
+                color = Gray500,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Normal,
+                modifier = Modifier.padding(top = 6.dp),
+            )
         }
     }
 }

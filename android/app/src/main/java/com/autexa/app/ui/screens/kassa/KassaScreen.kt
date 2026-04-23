@@ -46,16 +46,11 @@ fun KassaScreen() {
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            // Header
-            Column(Modifier.padding(top = 4.dp)) {
-                Text("Касса", color = Gray900, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-                Text(
-                    "Оформление нового заказ-наряда",
-                    color = Gray500,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
+            com.autexa.app.ui.components.ScreenTitle(
+                title = "Касса",
+                subtitle = "Оформление нового заказ-наряда",
+                modifier = Modifier.padding(top = 4.dp),
+            )
 
             // Hero card
             Box(

@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autexa.app.data.network.models.CheckListItem
+import com.autexa.app.ui.components.ScreenTitle
 import com.autexa.app.ui.theme.BrandBlue100
 import com.autexa.app.ui.theme.BrandBlue600
 import com.autexa.app.ui.theme.Gray100
@@ -57,17 +58,12 @@ fun ChecksScreen(vm: ChecksViewModel = hiltViewModel()) {
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // Header
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
-                Text("Журнал", color = Gray900, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
-                Text(
-                    if (ui.items.isEmpty() && !ui.isLoading) "Чеков пока нет"
-                    else "${ui.items.size} ${pluralChecks(ui.items.size)}",
-                    color = Gray500,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
+            ScreenTitle(
+                title = "Журнал",
+                subtitle = if (ui.items.isEmpty() && !ui.isLoading) "Чеков пока нет"
+                           else "${ui.items.size} ${pluralChecks(ui.items.size)}",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+            )
 
             PullToRefreshBox(
                 isRefreshing = ui.isRefreshing,
