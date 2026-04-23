@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autexa.app.R
+import com.autexa.app.ui.components.MaskedPhoneField
 import com.autexa.app.ui.theme.BrandBlue600
 import com.autexa.app.ui.theme.ErrorRed
 import com.autexa.app.ui.theme.Gray200
@@ -114,11 +115,9 @@ fun LoginScreen(
             Spacer(Modifier.height(40.dp))
 
             FieldLabel("ТЕЛЕФОН")
-            FlatField(
+            MaskedPhoneField(
                 value = ui.phone,
                 onValueChange = vm::onPhoneChange,
-                placeholder = "+7 (___) ___-__-__",
-                keyboardType = KeyboardType.Phone,
                 isError = ui.phoneError != null,
             )
             ui.phoneError?.let { ErrorLine(it) }

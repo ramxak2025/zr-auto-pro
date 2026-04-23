@@ -4,6 +4,7 @@ import com.autexa.app.BuildConfig
 import com.autexa.app.data.network.AuthApi
 import com.autexa.app.data.network.AuthInterceptor
 import com.autexa.app.data.network.ChecksApi
+import com.autexa.app.data.network.ProductsApi
 import com.autexa.app.data.network.ShiftsApi
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import dagger.Module
@@ -64,4 +65,8 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideShiftsApi(retrofit: Retrofit): ShiftsApi = retrofit.create(ShiftsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideProductsApi(retrofit: Retrofit): ProductsApi = retrofit.create(ProductsApi::class.java)
 }
