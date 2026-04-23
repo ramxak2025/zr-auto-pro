@@ -2,25 +2,42 @@ package com.autexa.app.util
 
 /**
  * Mirror of shared/validation/phone.ts — Russian phone formatting.
- * Accepts any raw string, keeps only digits, then masks into +7 (XXX) XXX-XX-XX.
- * Leading 8 is converted to 7.
+ *
+ * Accepts any raw string, strips to digits, normalizes leading digit to 7
+ * (auto-prefix for the common phone-pad case where user starts typing "9"),
+ * then formats as +7 (XXX) XXX-XX-XX progressively.
+ *
+ * All substring ranges are bound-checked with a local `slice` helper so a
+ * 10-digit or even shorter intermediate input never throws StringIndex OOB.
  */
 object PhoneFormatter {
     fun format(raw: String): String {
         var digits = raw.filter { it.isDigit() }
         if (digits.isEmpty()) return ""
-        // Normalize leading digit to 7: 8 → 7, anything else → prefix 7
         digits = when {
             digits[0] == '8' -> "7" + digits.drop(1)
             digits[0] != '7' -> "7$digits"
             else -> digits
         }
-        if (digits.length <= 1) return "+7"
-        if (digits.length <= 4) return "+7 (${digits.drop(1)}"
-        if (digits.length <= 7) return "+7 (${digits.substring(1, 4)}) ${digits.drop(4)}"
-        if (digits.length <= 9) return "+7 (${digits.substring(1, 4)}) ${digits.substring(4, 7)}-${digits.drop(7)}"
-        val d = digits.take(11)
-        return "+7 (${d.substring(1, 4)}) ${d.substring(4, 7)}-${d.substring(7, 9)}-${d.substring(9, 11)}"
+        // Hard cap to the 11-digit Russian format.
+        if (digits.length > 11) digits = digits.take(11)
+
+        val d = digits
+        val len = d.length
+        return when {
+            len <= 1 -> "+7"
+            len <= 4 -> "+7 (${d.slice2(1, 4)}"
+            len <= 7 -> "+7 (${d.slice2(1, 4)}) ${d.slice2(4, 7)}"
+            len <= 9 -> "+7 (${d.slice2(1, 4)}) ${d.slice2(4, 7)}-${d.slice2(7, 9)}"
+            else -> "+7 (${d.slice2(1, 4)}) ${d.slice2(4, 7)}-${d.slice2(7, 9)}-${d.slice2(9, 11)}"
+        }
+    }
+
+    /** JS-style slice — silently clamps to length. */
+    private fun String.slice2(start: Int, endExclusive: Int): String {
+        val s = start.coerceIn(0, length)
+        val e = endExclusive.coerceIn(s, length)
+        return substring(s, e)
     }
 
     /** Canonical form for the API: +7XXXXXXXXXX. */
