@@ -49,7 +49,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.autexa.app.ui.components.AnimatedCountText
 import com.autexa.app.ui.components.ModuleIcon
+import com.autexa.app.ui.components.Sparkline
+import com.autexa.app.ui.components.StaggeredReveal
 import com.autexa.app.ui.theme.BrandBlue50
 import com.autexa.app.ui.theme.BrandBlue600
 import com.autexa.app.ui.theme.BrandBlue700
@@ -97,60 +100,72 @@ fun HomeScreen(
                 item { Spacer(Modifier.height(4.dp)) }
 
                 item {
-                    Column {
-                        Text(
-                            "$greeting${if (firstName.isNotBlank()) ", $firstName" else ""}!",
-                            color = Gray900,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            "Обзор показателей автосервиса",
-                            color = Gray400,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
-                    }
-                }
-
-                item {
-                    AnalyticsCard(stats = ui.stats)
-                }
-
-                item {
-                    ShiftCard(
-                        opened = ui.currentShift != null,
-                        openedAt = ui.currentShift?.openedAt,
-                        busy = ui.isShiftBusy,
-                        onOpen = vm::openShift,
-                        onClose = vm::closeShift,
-                    )
-                }
-
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            StatCard(
-                                modifier = Modifier.weight(1f),
-                                label = "Чеков сегодня",
-                                value = ui.stats?.todayChecks?.toString() ?: "—",
-                                sub = "За месяц: ${ui.stats?.let { "—" } ?: "—"}",
-                                icon = Icons.Outlined.Description,
-                                iconTint = BrandBlue600,
+                    StaggeredReveal(delayMs = 0) {
+                        Column {
+                            Text(
+                                "$greeting${if (firstName.isNotBlank()) ", $firstName" else ""}!",
+                                color = Gray900,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
                             )
-                            StatCard(
-                                modifier = Modifier.weight(1f),
-                                label = "Сегодня",
-                                value = formatMoney(ui.stats?.todayRevenue),
-                                sub = "Прибыль: ${formatMoney(ui.stats?.todayProfit)}",
-                                icon = Icons.Outlined.Receipt,
-                                iconTint = Green600,
+                            Text(
+                                "Обзор показателей автосервиса",
+                                color = Gray400,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(top = 2.dp),
                             )
                         }
                     }
                 }
 
-                item { QuickActions(onOpenTab = onOpenTab, onOpenMoreRoute = onOpenMoreRoute) }
+                item {
+                    StaggeredReveal(delayMs = 60) {
+                        AnalyticsCard(stats = ui.stats, chart = ui.chart)
+                    }
+                }
+
+                item {
+                    StaggeredReveal(delayMs = 120) {
+                        ShiftCard(
+                            opened = ui.currentShift != null,
+                            openedAt = ui.currentShift?.openedAt,
+                            busy = ui.isShiftBusy,
+                            onOpen = vm::openShift,
+                            onClose = vm::closeShift,
+                        )
+                    }
+                }
+
+                item {
+                    StaggeredReveal(delayMs = 180) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                StatCard(
+                                    modifier = Modifier.weight(1f),
+                                    label = "Чеков сегодня",
+                                    value = ui.stats?.todayChecks?.toString() ?: "—",
+                                    sub = "За месяц: ${ui.stats?.let { "—" } ?: "—"}",
+                                    icon = Icons.Outlined.Description,
+                                    iconTint = BrandBlue600,
+                                )
+                                StatCard(
+                                    modifier = Modifier.weight(1f),
+                                    label = "Сегодня",
+                                    value = formatMoney(ui.stats?.todayRevenue),
+                                    sub = "Прибыль: ${formatMoney(ui.stats?.todayProfit)}",
+                                    icon = Icons.Outlined.Receipt,
+                                    iconTint = Green600,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    StaggeredReveal(delayMs = 240) {
+                        QuickActions(onOpenTab = onOpenTab, onOpenMoreRoute = onOpenMoreRoute)
+                    }
+                }
 
                 ui.errorMessage?.let { err ->
                     item {
@@ -176,7 +191,10 @@ fun HomeScreen(
 // ── Analytics card (dark premium gradient like PWA RevenueChart) ──
 
 @Composable
-private fun AnalyticsCard(stats: com.autexa.app.data.network.models.DashboardStats?) {
+private fun AnalyticsCard(
+    stats: com.autexa.app.data.network.models.DashboardStats?,
+    chart: com.autexa.app.data.network.models.DashboardChart?,
+) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -186,7 +204,7 @@ private fun AnalyticsCard(stats: com.autexa.app.data.network.models.DashboardSta
     ) {
         Column {
             Text(
-                "АНАЛИТИКА",
+                "АНАЛИТИКА · НЕДЕЛЯ",
                 color = Color(0xFF94A3B8),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -195,16 +213,12 @@ private fun AnalyticsCard(stats: com.autexa.app.data.network.models.DashboardSta
 
             Spacer(Modifier.height(12.dp))
 
-            // Period tabs — visual (non-functional until chart endpoint is wired)
-            PeriodTabs()
-
-            Spacer(Modifier.height(20.dp))
-
-            // Big number — today revenue hero
-            Text(
-                text = formatMoney(stats?.todayRevenue),
+            // Big number — today revenue, animates from 0 on first paint
+            AnimatedCountText(
+                target = stats?.todayRevenue ?: 0.0,
+                formatter = { formatMoney(it) },
                 color = Color.White,
-                fontSize = 34.sp,
+                style = androidx.compose.material3.MaterialTheme.typography.displaySmall,
                 fontWeight = FontWeight.ExtraBold,
             )
             Text(
@@ -214,7 +228,34 @@ private fun AnalyticsCard(stats: com.autexa.app.data.network.models.DashboardSta
                 modifier = Modifier.padding(top = 2.dp),
             )
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(14.dp))
+
+            // Sparkline — live mini chart of weekly revenue
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(72.dp),
+            ) {
+                val points = chart?.points
+                    ?.map { it.revenue }
+                    ?.takeIf { it.size >= 2 }
+                if (points != null) {
+                    Sparkline(
+                        values = points,
+                        lineColor = Color(0xFF60A5FA),
+                        fillColor = Color(0xFF2563EB).copy(alpha = 0.20f),
+                    )
+                } else {
+                    // Placeholder while data loads
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(72.dp),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
 
             Row(
                 modifier = Modifier
@@ -225,21 +266,21 @@ private fun AnalyticsCard(stats: com.autexa.app.data.network.models.DashboardSta
                 StatCell(
                     modifier = Modifier.weight(1f),
                     label = "Оборот",
-                    value = formatMoney(stats?.weekRevenue),
+                    value = formatMoney(chart?.totalRevenue ?: stats?.weekRevenue),
                     color = Color.White,
                 )
                 DividerCell()
                 StatCell(
                     modifier = Modifier.weight(1f),
-                    label = "Месяц",
-                    value = formatMoney(stats?.monthRevenue),
+                    label = "Прибыль",
+                    value = formatMoney(chart?.totalProfit),
                     color = Color(0xFF22D3EE),
                 )
                 DividerCell()
                 StatCell(
                     modifier = Modifier.weight(1f),
-                    label = "Прибыль",
-                    value = formatMoney(stats?.monthProfit),
+                    label = "Чеков",
+                    value = (chart?.totalChecks ?: 0).toString(),
                     color = Color(0xFF93C5FD),
                 )
             }
@@ -247,39 +288,6 @@ private fun AnalyticsCard(stats: com.autexa.app.data.network.models.DashboardSta
     }
 }
 
-@Composable
-private fun PeriodTabs() {
-    val tabs = listOf("День", "Неделя", "Месяц", "Год")
-    var selected by remember { mutableStateOf(1) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.White.copy(alpha = 0.08f))
-            .padding(3.dp),
-    ) {
-        tabs.forEachIndexed { i, t ->
-            val active = selected == i
-            val interaction = remember { MutableInteractionSource() }
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (active) Color.White.copy(alpha = 0.18f) else Color.Transparent)
-                    .clickable(interactionSource = interaction, indication = null) { selected = i }
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    t,
-                    color = if (active) Color.White else Color(0xFF94A3B8),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun StatCell(modifier: Modifier, label: String, value: String, color: Color) {

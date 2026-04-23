@@ -2,6 +2,7 @@ package com.autexa.app.ui.screens.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.autexa.app.data.network.models.DashboardChart
 import com.autexa.app.data.network.models.DashboardStats
 import com.autexa.app.data.network.models.Shift
 import com.autexa.app.data.network.models.User
@@ -18,6 +19,7 @@ import javax.inject.Inject
 data class HomeUiState(
     val user: User? = null,
     val stats: DashboardStats? = null,
+    val chart: DashboardChart? = null,
     val currentShift: Shift? = null,
     val isLoading: Boolean = true,
     val isRefreshing: Boolean = false,
@@ -66,6 +68,7 @@ class HomeViewModel @Inject constructor(
             )
             val userRes = authRepo.me()
             val statsRes = checksRepo.getDashboard()
+            val chartRes = checksRepo.getDashboardChart(period = "week", offset = 0)
             val shiftsRes = shiftsRepo.getMy()
 
             val open = shiftsRes.getOrNull()?.firstOrNull { it.closedAt.isNullOrBlank() }
@@ -73,6 +76,7 @@ class HomeViewModel @Inject constructor(
             _ui.value = _ui.value.copy(
                 user = userRes.getOrNull() ?: _ui.value.user,
                 stats = statsRes.getOrNull() ?: _ui.value.stats,
+                chart = chartRes.getOrNull() ?: _ui.value.chart,
                 currentShift = open,
                 isLoading = false,
                 isRefreshing = false,

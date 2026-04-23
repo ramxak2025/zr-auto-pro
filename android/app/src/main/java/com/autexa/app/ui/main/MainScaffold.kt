@@ -1,6 +1,8 @@
 package com.autexa.app.ui.main
 
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -29,7 +31,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -120,35 +125,66 @@ fun MainScaffold(onLogout: () -> Unit) {
     }
 }
 
+/**
+ * iOS 26-style Liquid Glass bottom bar.
+ *
+ * — Floats above content (padded 12dp from edges) with a big pill shape
+ * — Semi-transparent white tint so app background bleeds through
+ * — Hairline gradient border (white-→ low-alpha) for rim light
+ * — Soft brand-blue shadow for depth
+ * — Active tab gets an animated tinted pill underneath the icon+label
+ */
 @Composable
 private fun BottomBar(
     current: String?,
     onSelect: (String) -> Unit,
 ) {
-    Surface(
-        color = Color.White,
-        shadowElevation = 12.dp,
+    val shape = RoundedCornerShape(30.dp)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(elevation = 16.dp, clip = false),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
     ) {
-        Row(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(72.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceAround,
+                .height(72.dp)
+                .shadow(
+                    elevation = 24.dp,
+                    shape = shape,
+                    ambientColor = Color(0x331E3A8A),
+                    spotColor = Color(0x4D1E3A8A),
+                    clip = false,
+                )
+                .clip(shape)
+                .background(Color.White.copy(alpha = 0.86f))
+                .border(
+                    1.dp,
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.9f),
+                            Color.White.copy(alpha = 0.2f),
+                        ),
+                    ),
+                    shape,
+                ),
         ) {
-            tabs.forEach { tab ->
-                if (tab is Tab.Kassa) {
-                    KassaTabItem(onClick = { onSelect(tab.route) })
-                } else {
-                    BarItem(
-                        selected = current == tab.route,
-                        label = tab.label,
-                        icon = tab.icon!!,
-                        onClick = { onSelect(tab.route) },
-                    )
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceAround,
+            ) {
+                tabs.forEach { tab ->
+                    if (tab is Tab.Kassa) {
+                        KassaTabItem(onClick = { onSelect(tab.route) })
+                    } else {
+                        BarItem(
+                            selected = current == tab.route,
+                            label = tab.label,
+                            icon = tab.icon!!,
+                            onClick = { onSelect(tab.route) },
+                        )
+                    }
                 }
             }
         }
@@ -164,22 +200,40 @@ private fun RowScope.BarItem(
 ) {
     val tint = if (selected) BrandBlue600 else Gray400
     val interaction = remember { MutableInteractionSource() }
-    Column(
+    Box(
         modifier = Modifier
             .weight(1f)
             .fillMaxSize()
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(top = 10.dp, bottom = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(horizontal = 6.dp, vertical = 10.dp)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.height(22.dp))
-        Text(
-            text = label,
-            color = tint,
-            fontSize = 10.sp,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-        )
+        // Active pill background — animated appearance
+        androidx.compose.animation.AnimatedVisibility(
+            visible = selected,
+            enter = androidx.compose.animation.fadeIn(tween(180)) +
+                    androidx.compose.animation.scaleIn(tween(220), initialScale = 0.85f),
+            exit = androidx.compose.animation.fadeOut(tween(120)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(BrandBlue600.copy(alpha = 0.10f)),
+            )
+        }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.height(22.dp))
+            Text(
+                text = label,
+                color = tint,
+                fontSize = 10.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            )
+        }
     }
 }
 

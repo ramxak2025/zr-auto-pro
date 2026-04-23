@@ -70,3 +70,23 @@ data class PaginatedChecks(
     val page: Int = 1,
     val limit: Int = 50,
 )
+
+// ═══════════════════════════════════════════════════════════════════════
+//  Chart — /api/checks/dashboard/chart?period=week&offset=0
+// ═══════════════════════════════════════════════════════════════════════
+
+@Serializable
+data class DashboardChart(
+    val points: List<DashboardChartPoint> = emptyList(),
+    @SerialName("totalRevenue") val totalRevenue: Double = 0.0,
+    @SerialName("totalProfit") val totalProfit: Double = 0.0,
+    @SerialName("totalChecks") val totalChecks: Int = 0,
+)
+
+@Serializable
+data class DashboardChartPoint(
+    val date: String = "",
+    val revenue: Double = 0.0,
+    val profit: Double = 0.0,
+    @SerialName("checkCount") val checkCount: Int = 0,
+)
