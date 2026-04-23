@@ -2,7 +2,6 @@ package com.autexa.app.ui.theme
 
 import android.app.Activity
 import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -57,9 +56,10 @@ private val DarkColors = darkColorScheme(
 
 @Composable
 fun AutexaTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color — Material You on Android 12+
-    dynamicColor: Boolean = true,
+    // Force light — brand-driven design, no system follow yet
+    darkTheme: Boolean = false,
+    // Disable Material You — we want brand blue, not user wallpaper tint
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when {

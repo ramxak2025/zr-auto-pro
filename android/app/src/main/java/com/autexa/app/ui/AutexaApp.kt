@@ -12,7 +12,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.autexa.app.data.repo.AuthRepository
-import com.autexa.app.ui.screens.home.HomeScreen
+import com.autexa.app.ui.main.MainScaffold
 import com.autexa.app.ui.screens.login.LoginScreen
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -36,7 +36,7 @@ fun AutexaApp(gateVm: AuthGateViewModel = hiltViewModel()) {
         ) { CircularProgressIndicator() }
 
         AuthState.LoggedOut -> LoginScreen(onLoggedIn = {})
-        AuthState.LoggedIn -> HomeScreen(onLogout = {})
+        AuthState.LoggedIn -> MainScaffold(onLogout = {})
     }
 }
 

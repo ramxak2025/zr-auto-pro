@@ -1,98 +1,141 @@
 package com.autexa.app.ui.screens.home
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.outlined.AttachMoney
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.PeopleAlt
+import androidx.compose.material.icons.outlined.TrendingUp
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.autexa.app.ui.components.ModuleIcon
+import com.autexa.app.ui.theme.Blue50
+import com.autexa.app.ui.theme.Blue600
+import com.autexa.app.ui.theme.BrandBlue500
+import com.autexa.app.ui.theme.BrandBlue700
+import com.autexa.app.ui.theme.Gray400
+import com.autexa.app.ui.theme.Gray500
+import com.autexa.app.ui.theme.Gray900
+import com.autexa.app.ui.theme.Green50
+import com.autexa.app.ui.theme.Green600
+import com.autexa.app.ui.theme.Orange50
+import com.autexa.app.ui.theme.Orange600
+import com.autexa.app.ui.theme.Purple50
+import com.autexa.app.ui.theme.Purple600
+import java.util.Calendar
 
 @Composable
-fun HomeScreen(
-    onLogout: () -> Unit,
-    vm: HomeViewModel = hiltViewModel(),
-) {
+fun HomeScreen(vm: HomeViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsState()
+    val greeting = remember { greetingForHour(Calendar.getInstance().get(Calendar.HOUR_OF_DAY)) }
+    val firstName = ui.user?.fullName?.substringBefore(' ').orEmpty()
 
-    LaunchedEffect(ui.isLoggedOut) {
-        if (ui.isLoggedOut) onLogout()
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Autexa", fontWeight = FontWeight.Bold) },
-                actions = {
-                    IconButton(onClick = vm::logout) {
-                        Icon(Icons.Default.Logout, contentDescription = "Выйти")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        LazyColumn(
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp,
+                top = 0.dp, bottom = 96.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.fillMaxSize().statusBarsPadding(),
         ) {
-            // User card
-            ui.user?.let { user ->
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "Добро пожаловать",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            item { Spacer(Modifier.height(8.dp)) }
+
+            // Hero greeting card with brand gradient
+            item {
+                HeroCard(greeting = greeting, name = firstName.ifBlank { "" })
+            }
+
+            item {
+                SectionTitle("Сегодня")
+            }
+
+            // 2×2 KPI grid
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        KpiCard(
+                            modifier = Modifier.weight(1f),
+                            label = "Выручка",
+                            value = "—",
+                            icon = Icons.Outlined.AttachMoney,
+                            bg = Green50, tint = Green600,
                         )
-                        Text(
-                            text = user.fullName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 4.dp),
+                        KpiCard(
+                            modifier = Modifier.weight(1f),
+                            label = "Чеки",
+                            value = "—",
+                            icon = Icons.Outlined.Description,
+                            bg = Blue50, tint = Blue600,
                         )
-                        Text(
-                            text = "${roleLabel(user.role)} · ${user.phone}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 2.dp),
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        KpiCard(
+                            modifier = Modifier.weight(1f),
+                            label = "Прибыль",
+                            value = "—",
+                            icon = Icons.Outlined.TrendingUp,
+                            bg = Purple50, tint = Purple600,
                         )
-                        user.tenant?.let {
-                            Text(
-                                text = it.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 8.dp),
-                            )
-                        }
+                        KpiCard(
+                            modifier = Modifier.weight(1f),
+                            label = "Клиенты",
+                            value = "—",
+                            icon = Icons.Outlined.PeopleAlt,
+                            bg = Orange50, tint = Orange600,
+                        )
                     }
                 }
             }
 
-            // Placeholder: будущие экраны
-            ModuleCard(title = "Заказ-наряды", subtitle = "В разработке")
-            ModuleCard(title = "Склад", subtitle = "В разработке")
-            ModuleCard(title = "Расписание", subtitle = "В разработке")
-            ModuleCard(title = "Клиенты", subtitle = "В разработке")
-            ModuleCard(title = "Отчёты", subtitle = "В разработке")
+            item {
+                SectionTitle("Скоро")
+            }
 
-            if (ui.isLoading) {
-                Box(
+            item {
+                Surface(
+                    color = Color.White,
+                    shape = RoundedCornerShape(20.dp),
+                    shadowElevation = 2.dp,
                     modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = Alignment.Center,
                 ) {
-                    CircularProgressIndicator()
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Графики, расписание и быстрые действия", color = Gray900, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Дашборд с реальными цифрами появится в следующей итерации. Сейчас доступны: Касса, Журнал, Склад и все модули в Ещё.",
+                            color = Gray500, fontSize = 13.sp,
+                        )
+                    }
                 }
             }
         }
@@ -100,26 +143,72 @@ fun HomeScreen(
 }
 
 @Composable
-private fun ModuleCard(title: String, subtitle: String) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth(),
+private fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        color = Gray500,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 4.dp),
+    )
+}
+
+@Composable
+private fun HeroCard(greeting: String, name: String) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(
+                Brush.linearGradient(listOf(BrandBlue500, BrandBlue700)),
+            )
+            .padding(20.dp),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        Column {
+            Text(greeting, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
+            Spacer(Modifier.height(4.dp))
             Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                if (name.isBlank()) "Добро пожаловать" else name,
+                color = Color.White,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Готовы оформить заказ-наряд?",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 14.sp,
             )
         }
     }
 }
 
-private fun roleLabel(role: String): String = when (role) {
-    "director" -> "Владелец"
-    "admin" -> "Администратор"
-    "master" -> "Мастер"
-    "superadmin" -> "Суперадмин"
-    else -> role
+@Composable
+private fun KpiCard(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+    icon: ImageVector,
+    bg: Color,
+    tint: Color,
+) {
+    Surface(
+        color = Color.White,
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 2.dp,
+        modifier = modifier,
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            ModuleIcon(icon = icon, bg = bg, tint = tint, size = 36.dp, iconSize = 18.dp, cornerRadius = 10.dp)
+            Text(value, color = Gray900, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = Gray500, fontSize = 12.sp)
+        }
+    }
+}
+
+private fun greetingForHour(h: Int): String = when {
+    h in 5..11 -> "Доброе утро"
+    h in 12..16 -> "Добрый день"
+    h in 17..21 -> "Добрый вечер"
+    else -> "Доброй ночи"
 }
