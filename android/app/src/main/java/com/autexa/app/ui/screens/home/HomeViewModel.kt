@@ -2,8 +2,10 @@ package com.autexa.app.ui.screens.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.autexa.app.data.network.models.DashboardStats
 import com.autexa.app.data.network.models.User
 import com.autexa.app.data.repo.AuthRepository
+import com.autexa.app.data.repo.ChecksRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,32 +15,42 @@ import javax.inject.Inject
 
 data class HomeUiState(
     val user: User? = null,
+    val stats: DashboardStats? = null,
     val isLoading: Boolean = true,
-    val isLoggedOut: Boolean = false,
+    val isRefreshing: Boolean = false,
     val errorMessage: String? = null,
 )
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val authRepo: AuthRepository,
+    private val checksRepo: ChecksRepository,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(HomeUiState())
     val ui: StateFlow<HomeUiState> = _ui.asStateFlow()
 
-    init { loadMe() }
+    init { load(initial = true) }
 
-    private fun loadMe() {
-        viewModelScope.launch {
-            authRepo.me()
-                .onSuccess { _ui.value = _ui.value.copy(user = it, isLoading = false) }
-                .onFailure { _ui.value = _ui.value.copy(isLoading = false, errorMessage = it.message) }
-        }
-    }
+    fun refresh() = load(initial = false)
 
-    fun logout() {
+    private fun load(initial: Boolean) {
         viewModelScope.launch {
-            authRepo.logout()
-            _ui.value = _ui.value.copy(isLoggedOut = true)
+            _ui.value = _ui.value.copy(
+                isLoading = initial,
+                isRefreshing = !initial,
+                errorMessage = null,
+            )
+            val userRes = authRepo.me()
+            val statsRes = checksRepo.getDashboard()
+            _ui.value = _ui.value.copy(
+                user = userRes.getOrNull() ?: _ui.value.user,
+                stats = statsRes.getOrNull() ?: _ui.value.stats,
+                isLoading = false,
+                isRefreshing = false,
+                errorMessage = listOfNotNull(
+                    statsRes.exceptionOrNull()?.message,
+                ).firstOrNull(),
+            )
         }
     }
 }
