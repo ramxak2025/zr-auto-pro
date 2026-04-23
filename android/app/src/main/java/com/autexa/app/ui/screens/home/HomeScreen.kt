@@ -21,7 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddCircle
-import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Receipt
@@ -74,6 +74,7 @@ import java.util.Calendar
 @Composable
 fun HomeScreen(
     onOpenTab: (String) -> Unit = {},
+    onOpenMoreRoute: (String) -> Unit = {},
     vm: HomeViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsState()
@@ -149,7 +150,7 @@ fun HomeScreen(
                     }
                 }
 
-                item { QuickActions(onOpenTab = onOpenTab) }
+                item { QuickActions(onOpenTab = onOpenTab, onOpenMoreRoute = onOpenMoreRoute) }
 
                 ui.errorMessage?.let { err ->
                     item {
@@ -419,7 +420,10 @@ private fun StatCard(
 // ── Quick actions — grid 2×2 ──
 
 @Composable
-private fun QuickActions(onOpenTab: (String) -> Unit) {
+private fun QuickActions(
+    onOpenTab: (String) -> Unit,
+    onOpenMoreRoute: (String) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
             "Быстрые действия",
@@ -441,7 +445,7 @@ private fun QuickActions(onOpenTab: (String) -> Unit) {
                 label = "Клиенты",
                 icon = Icons.Outlined.People,
                 bg = Blue50, tint = Blue600,
-                onClick = { onOpenTab("more") },
+                onClick = { onOpenMoreRoute("clients") },
             )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -454,10 +458,10 @@ private fun QuickActions(onOpenTab: (String) -> Unit) {
             )
             QuickAction(
                 modifier = Modifier.weight(1f),
-                label = "Отчёты",
-                icon = Icons.Outlined.BarChart,
+                label = "Расписание",
+                icon = Icons.Outlined.CalendarMonth,
                 bg = Purple50, tint = Purple700,
-                onClick = { onOpenTab("more") },
+                onClick = { onOpenMoreRoute("schedule") },
             )
         }
     }

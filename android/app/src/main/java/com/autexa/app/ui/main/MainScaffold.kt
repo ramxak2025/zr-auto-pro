@@ -68,6 +68,13 @@ fun MainScaffold(onLogout: () -> Unit) {
     val backStack by nav.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
 
+    // State-hoisted More route so the dashboard can jump directly into a
+    // More sub-screen (Clients / Services / Schedule) instead of just
+    // switching tabs and leaving the user on the menu.
+    val moreRouteState = androidx.compose.runtime.saveable.rememberSaveable {
+        androidx.compose.runtime.mutableStateOf("root")
+    }
+
     val openTab: (String) -> Unit = { route ->
         nav.navigate(route) {
             popUpTo(nav.graph.findStartDestination().id) { saveState = true }
@@ -76,18 +83,25 @@ fun MainScaffold(onLogout: () -> Unit) {
         }
     }
 
+    val openMoreRoute: (String) -> Unit = { route ->
+        moreRouteState.value = route
+        openTab(Tab.More.route)
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         NavHost(
             navController = nav,
             startDestination = Tab.Home.route,
             modifier = Modifier.fillMaxSize(),
         ) {
-            composable(Tab.Home.route) { HomeScreen(onOpenTab = openTab) }
+            composable(Tab.Home.route) {
+                HomeScreen(onOpenTab = openTab, onOpenMoreRoute = openMoreRoute)
+            }
             composable(Tab.Products.route) { ProductsScreen() }
             composable(Tab.Kassa.route) { KassaScreen() }
             composable(Tab.Checks.route) { ChecksScreen() }
             composable(Tab.More.route) {
-                MoreTabHost(onLogout = onLogout)
+                MoreTabHost(onLogout = onLogout, routeState = moreRouteState)
             }
         }
 
@@ -191,10 +205,10 @@ private fun RowScope.KassaTabItem(onClick: () -> Unit) {
  * Survives config changes via rememberSaveable.
  */
 @Composable
-private fun MoreTabHost(onLogout: () -> Unit) {
-    val routeState = androidx.compose.runtime.saveable.rememberSaveable {
-        androidx.compose.runtime.mutableStateOf("root")
-    }
+private fun MoreTabHost(
+    onLogout: () -> Unit,
+    routeState: androidx.compose.runtime.MutableState<String>,
+) {
     val route = routeState.value
     val back: () -> Unit = { routeState.value = "root" }
 
