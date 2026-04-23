@@ -93,13 +93,15 @@ private data class MenuItem(
     val icon: ImageVector,
     val bg: Color,
     val tint: Color,
+    /** Route key into MoreTab nested navigation; null → "coming soon". */
+    val route: String? = null,
 )
 
 private val menuItems = listOf(
-    MenuItem("Расписание", "График работы и смены", Icons.Outlined.CalendarMonth, Indigo50, Indigo600),
-    MenuItem("Клиенты", "База клиентов", Icons.Outlined.People, Blue50, Blue600),
+    MenuItem("Расписание", "График работы и смены", Icons.Outlined.CalendarMonth, Indigo50, Indigo600, route = "schedule"),
+    MenuItem("Клиенты", "База клиентов", Icons.Outlined.People, Blue50, Blue600, route = "clients"),
     MenuItem("Автомобили", "Все автомобили клиентов", Icons.Outlined.DirectionsCar, Blue50, Blue600),
-    MenuItem("Услуги", "Каталог услуг", Icons.Outlined.Build, Orange50, Orange600),
+    MenuItem("Услуги", "Каталог услуг", Icons.Outlined.Build, Orange50, Orange600, route = "services"),
     MenuItem("Поставщики", "Поставки и расчёты", Icons.Outlined.LocalShipping, Amber50, Amber600),
     MenuItem("Движение денег", "Касса по дням и сотрудникам", Icons.Outlined.SwapHoriz, Teal50, Teal600),
     MenuItem("Зарплата", "Заработок мастеров", Icons.Outlined.Wallet, Green50, Green700),
@@ -124,6 +126,7 @@ private val roleLabels = mapOf(
 @Composable
 fun MoreScreen(
     onLogout: () -> Unit,
+    onOpenRoute: (String) -> Unit = {},
     vm: MoreViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsState()
@@ -213,7 +216,9 @@ fun MoreScreen(
                                         .background(Gray100),
                                 )
                             }
-                            MenuRow(item) { /* TODO navigate when sub-screens land */ }
+                            MenuRow(item) {
+                                item.route?.let(onOpenRoute)
+                            }
                         }
                     }
                 }
@@ -246,20 +251,32 @@ fun MoreScreen(
 
 @Composable
 private fun MenuRow(item: MenuItem, onClick: () -> Unit) {
+    val available = item.route != null
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = available, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         ModuleIcon(icon = item.icon, bg = item.bg, tint = item.tint)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(item.label, color = Gray900, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(item.label, color = if (available) Gray900 else Gray400, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             Text(item.description, color = Gray400, fontSize = 11.sp)
         }
-        Icon(Icons.Outlined.ChevronRight, null, tint = Gray400, modifier = Modifier.size(18.dp))
+        if (available) {
+            Icon(Icons.Outlined.ChevronRight, null, tint = Gray400, modifier = Modifier.size(18.dp))
+        } else {
+            androidx.compose.foundation.layout.Box(
+                Modifier
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                    .background(androidx.compose.ui.graphics.Color(0xFFF3F4F6))
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            ) {
+                Text("скоро", color = Gray400, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }
 

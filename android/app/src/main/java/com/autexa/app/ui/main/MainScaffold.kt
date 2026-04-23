@@ -42,10 +42,13 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.autexa.app.ui.components.KassaButton
 import com.autexa.app.ui.screens.checks.ChecksScreen
+import com.autexa.app.ui.screens.clients.ClientsScreen
 import com.autexa.app.ui.screens.home.HomeScreen
 import com.autexa.app.ui.screens.kassa.KassaScreen
 import com.autexa.app.ui.screens.more.MoreScreen
 import com.autexa.app.ui.screens.products.ProductsScreen
+import com.autexa.app.ui.screens.schedule.ScheduleScreen
+import com.autexa.app.ui.screens.services.ServicesScreen
 import com.autexa.app.ui.theme.BrandBlue600
 import com.autexa.app.ui.theme.Gray400
 
@@ -83,7 +86,9 @@ fun MainScaffold(onLogout: () -> Unit) {
             composable(Tab.Products.route) { ProductsScreen() }
             composable(Tab.Kassa.route) { KassaScreen() }
             composable(Tab.Checks.route) { ChecksScreen() }
-            composable(Tab.More.route) { MoreScreen(onLogout = onLogout) }
+            composable(Tab.More.route) {
+                MoreTabHost(onLogout = onLogout)
+            }
         }
 
         Column(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
@@ -177,5 +182,31 @@ private fun RowScope.KassaTabItem(onClick: () -> Unit) {
         Box(modifier = Modifier.padding(bottom = 6.dp)) {
             KassaButton()
         }
+    }
+}
+
+/**
+ * State-based nested navigator for the Ещё (More) tab.
+ * Avoids a second NavController to keep bottom-bar state sane.
+ * Survives config changes via rememberSaveable.
+ */
+@Composable
+private fun MoreTabHost(onLogout: () -> Unit) {
+    val routeState = androidx.compose.runtime.saveable.rememberSaveable {
+        androidx.compose.runtime.mutableStateOf("root")
+    }
+    val route = routeState.value
+    val back: () -> Unit = { routeState.value = "root" }
+
+    androidx.activity.compose.BackHandler(enabled = route != "root") { back() }
+
+    when (route) {
+        "clients" -> ClientsScreen(onBack = back)
+        "services" -> ServicesScreen(onBack = back)
+        "schedule" -> ScheduleScreen(onBack = back)
+        else -> MoreScreen(
+            onLogout = onLogout,
+            onOpenRoute = { routeState.value = it },
+        )
     }
 }
