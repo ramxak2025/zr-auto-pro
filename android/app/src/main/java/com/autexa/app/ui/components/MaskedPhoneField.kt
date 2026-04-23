@@ -57,9 +57,13 @@ fun MaskedPhoneField(
         mutableStateOf(TextFieldValue(value, TextRange(value.length)))
     }
 
-    // Keep local field in sync when parent resets externally (e.g. clear on submit error).
-    if (field.text != value) {
-        field = TextFieldValue(value, TextRange(value.length))
+    // Keep local field in sync when parent mutates externally (e.g. clear on error).
+    // MUST happen in a LaunchedEffect, not in composition body — writing to state
+    // during composition causes an infinite recompose loop and crashes the app.
+    androidx.compose.runtime.LaunchedEffect(value) {
+        if (field.text != value) {
+            field = TextFieldValue(value, TextRange(value.length))
+        }
     }
 
     val bg = if (isError) Color(0xFFFEF2F2) else Gray50

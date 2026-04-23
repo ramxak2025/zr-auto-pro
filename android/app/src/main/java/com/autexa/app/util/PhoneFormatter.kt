@@ -8,14 +8,19 @@ package com.autexa.app.util
 object PhoneFormatter {
     fun format(raw: String): String {
         var digits = raw.filter { it.isDigit() }
-        if (digits.isNotEmpty() && digits[0] == '8') digits = "7" + digits.drop(1)
         if (digits.isEmpty()) return ""
-        if (digits.length <= 1) return "+$digits"
-        if (digits.length <= 4) return "+${digits.take(1)} (${digits.drop(1)}"
-        if (digits.length <= 7) return "+${digits.take(1)} (${digits.substring(1, 4)}) ${digits.drop(4)}"
-        if (digits.length <= 9) return "+${digits.take(1)} (${digits.substring(1, 4)}) ${digits.substring(4, 7)}-${digits.drop(7)}"
+        // Normalize leading digit to 7: 8 → 7, anything else → prefix 7
+        digits = when {
+            digits[0] == '8' -> "7" + digits.drop(1)
+            digits[0] != '7' -> "7$digits"
+            else -> digits
+        }
+        if (digits.length <= 1) return "+7"
+        if (digits.length <= 4) return "+7 (${digits.drop(1)}"
+        if (digits.length <= 7) return "+7 (${digits.substring(1, 4)}) ${digits.drop(4)}"
+        if (digits.length <= 9) return "+7 (${digits.substring(1, 4)}) ${digits.substring(4, 7)}-${digits.drop(7)}"
         val d = digits.take(11)
-        return "+${d.take(1)} (${d.substring(1, 4)}) ${d.substring(4, 7)}-${d.substring(7, 9)}-${d.substring(9, 11)}"
+        return "+7 (${d.substring(1, 4)}) ${d.substring(4, 7)}-${d.substring(7, 9)}-${d.substring(9, 11)}"
     }
 
     /** Canonical form for the API: +7XXXXXXXXXX. */

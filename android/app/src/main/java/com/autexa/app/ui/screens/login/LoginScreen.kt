@@ -312,6 +312,7 @@ private fun SubmitButton(text: String, loading: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** PWA web-parity: py-3 rounded-xl border emerald-200/blue-200 + standard ripple. */
 @Composable
 private fun DemoButton(
     text: String,
@@ -322,21 +323,17 @@ private fun DemoButton(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    val interaction = remember { MutableInteractionSource() }
-    Box(
-        modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(bg)
-            .border(1.dp, border, RoundedCornerShape(14.dp))
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                enabled = enabled,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
+    val shape = RoundedCornerShape(12.dp)
+    androidx.compose.material3.Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = shape,
+        color = bg,
+        border = androidx.compose.foundation.BorderStroke(1.dp, border),
+        modifier = modifier.height(44.dp),
     ) {
-        Text(text, color = textColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().height(44.dp)) {
+            Text(text, color = textColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        }
     }
 }
