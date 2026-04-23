@@ -65,13 +65,21 @@ fun MainScaffold(onLogout: () -> Unit) {
     val backStack by nav.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
 
+    val openTab: (String) -> Unit = { route ->
+        nav.navigate(route) {
+            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         NavHost(
             navController = nav,
             startDestination = Tab.Home.route,
             modifier = Modifier.fillMaxSize(),
         ) {
-            composable(Tab.Home.route) { HomeScreen() }
+            composable(Tab.Home.route) { HomeScreen(onOpenTab = openTab) }
             composable(Tab.Products.route) { ProductsScreen() }
             composable(Tab.Kassa.route) { KassaScreen() }
             composable(Tab.Checks.route) { ChecksScreen() }
@@ -81,13 +89,7 @@ fun MainScaffold(onLogout: () -> Unit) {
         Column(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
             BottomBar(
                 current = current,
-                onSelect = { route ->
-                    nav.navigate(route) {
-                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                        launchSingleTop = true
-                        restoreState = true
-                    }
-                },
+                onSelect = openTab,
             )
             Box(
                 Modifier
