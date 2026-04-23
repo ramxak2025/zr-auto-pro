@@ -42,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.ContentScale
@@ -56,16 +57,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.autexa.app.R
-import com.autexa.app.ui.theme.Blue50
-import com.autexa.app.ui.theme.Blue600
+import com.autexa.app.ui.components.AnimatedMeshBackground
+import com.autexa.app.ui.components.GlassPill
+import com.autexa.app.ui.components.GlassSurface
 import com.autexa.app.ui.theme.BrandBlue600
-import com.autexa.app.ui.theme.Emerald50
-import com.autexa.app.ui.theme.Emerald700
+import com.autexa.app.ui.theme.BrandBlue700
 import com.autexa.app.ui.theme.ErrorRed
-import com.autexa.app.ui.theme.Gray200
-import com.autexa.app.ui.theme.Gray300
 import com.autexa.app.ui.theme.Gray400
-import com.autexa.app.ui.theme.Gray50
 import com.autexa.app.ui.theme.Gray500
 import com.autexa.app.ui.theme.Gray900
 
@@ -81,147 +79,147 @@ fun LoginScreen(
         if (ui.isLoginSuccessful) onLoggedIn()
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.White)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding(),
-    ) {
+    Box(Modifier.fillMaxSize()) {
+        // Living mesh — sits behind everything, blurred via GPU
+        AnimatedMeshBackground()
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp)
-                .padding(vertical = 48.dp),
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 22.dp)
+                .padding(vertical = 36.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            // Real logo
+            // Logo
             Image(
                 painter = painterResource(id = R.drawable.logo),
                 contentDescription = "Autexa",
                 contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .width(240.dp)
-                    .height(58.dp),
+                modifier = Modifier.width(220.dp).height(54.dp),
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
 
             Text(
                 text = "СИСТЕМА УПРАВЛЕНИЯ АВТОСЕРВИСОМ",
                 fontSize = 11.sp,
-                color = Gray400,
+                color = Gray500,
                 letterSpacing = 1.4.sp,
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(28.dp))
 
-            // Phone
-            FieldLabel("ТЕЛЕФОН")
-            FlatField(
-                value = ui.phone,
-                onValueChange = vm::onPhoneChange,
-                placeholder = "+7 (___) ___-__-__",
-                keyboardType = KeyboardType.Phone,
-                isError = ui.phoneError != null,
-            )
-            ui.phoneError?.let { ErrorLine(it) }
-
-            Spacer(Modifier.height(20.dp))
-
-            // Password
-            FieldLabel("ПАРОЛЬ")
-            FlatField(
-                value = ui.password,
-                onValueChange = vm::onPasswordChange,
-                placeholder = "Введите пароль",
-                keyboardType = KeyboardType.Password,
-                isError = ui.passwordError != null,
-                hidePassword = !showPassword,
-                trailingIcon = {
-                    val interaction = remember { MutableInteractionSource() }
-                    Icon(
-                        imageVector = if (showPassword) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
-                        contentDescription = null,
-                        tint = Gray400,
-                        modifier = Modifier
-                            .size(22.dp)
-                            .clickable(
-                                interactionSource = interaction,
-                                indication = null,
-                            ) { showPassword = !showPassword },
+            // Glass form card
+            GlassSurface(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                ) {
+                    FieldLabel("ТЕЛЕФОН")
+                    GlassField(
+                        value = ui.phone,
+                        onValueChange = vm::onPhoneChange,
+                        placeholder = "+7 (___) ___-__-__",
+                        keyboardType = KeyboardType.Phone,
+                        isError = ui.phoneError != null,
                     )
-                },
-            )
-            ui.passwordError?.let { ErrorLine(it) }
+                    ui.phoneError?.let { ErrorLine(it) }
 
-            ui.errorMessage?.let {
-                Spacer(Modifier.height(16.dp))
-                Text(it, color = ErrorRed, fontSize = 13.sp)
+                    Spacer(Modifier.height(18.dp))
+
+                    FieldLabel("ПАРОЛЬ")
+                    GlassField(
+                        value = ui.password,
+                        onValueChange = vm::onPasswordChange,
+                        placeholder = "Введите пароль",
+                        keyboardType = KeyboardType.Password,
+                        isError = ui.passwordError != null,
+                        hidePassword = !showPassword,
+                        trailingIcon = {
+                            val interaction = remember { MutableInteractionSource() }
+                            Icon(
+                                imageVector = if (showPassword) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                                contentDescription = null,
+                                tint = Gray500,
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .clickable(
+                                        interactionSource = interaction,
+                                        indication = null,
+                                    ) { showPassword = !showPassword },
+                            )
+                        },
+                    )
+                    ui.passwordError?.let { ErrorLine(it) }
+
+                    ui.errorMessage?.let {
+                        Spacer(Modifier.height(14.dp))
+                        Text(it, color = ErrorRed, fontSize = 13.sp)
+                    }
+
+                    Spacer(Modifier.height(22.dp))
+
+                    SubmitButton(
+                        text = "Войти",
+                        loading = ui.isLoading,
+                        onClick = { vm.login() },
+                    )
+                }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(28.dp))
 
-            // Submit
-            SubmitButton(
-                text = "Войти",
-                loading = ui.isLoading,
-                onClick = { vm.login() },
-            )
-
-            Spacer(Modifier.height(32.dp))
-
-            // Divider with demo label
+            // Demo divider
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Box(Modifier.weight(1f).height(1.dp).background(Gray200))
+                Box(Modifier.weight(1f).height(1.dp).background(Color.White.copy(alpha = 0.6f)))
                 Text(
                     "ДЕМО-ДОСТУП",
-                    color = Gray400,
+                    color = Gray500,
                     fontSize = 11.sp,
                     letterSpacing = 1.4.sp,
                     modifier = Modifier.padding(horizontal = 12.dp),
                 )
-                Box(Modifier.weight(1f).height(1.dp).background(Gray200))
+                Box(Modifier.weight(1f).height(1.dp).background(Color.White.copy(alpha = 0.6f)))
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(14.dp))
 
+            // Glass demo buttons — tinted, but iOS-style frosted
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                DemoButton(
+                GlassDemoButton(
                     text = "Владелец",
-                    bg = Emerald50,
-                    border = Color(0xFFA7F3D0),
-                    textColor = Emerald700,
+                    accent = Color(0xFF059669),
                     enabled = !ui.isLoading,
                     modifier = Modifier.weight(1f),
                     onClick = { vm.demoLogin("+7 (000) 000-00-01") },
                 )
-                DemoButton(
+                GlassDemoButton(
                     text = "Мастер",
-                    bg = Blue50,
-                    border = Color(0xFFBFDBFE),
-                    textColor = Color(0xFF1D4ED8),
+                    accent = Color(0xFF1D4ED8),
                     enabled = !ui.isLoading,
                     modifier = Modifier.weight(1f),
                     onClick = { vm.demoLogin("+7 (000) 000-00-02") },
                 )
             }
 
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(36.dp))
 
             Text(
                 "Autexa v2.1 © 2026",
-                color = Gray300,
+                color = Gray500.copy(alpha = 0.7f),
                 fontSize = 11.sp,
             )
         }
@@ -242,8 +240,9 @@ private fun FieldLabel(text: String) {
     }
 }
 
+/** Glass-style input row — translucent fill, subtle white rim, gradient sheen. */
 @Composable
-private fun FlatField(
+private fun GlassField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
@@ -252,15 +251,21 @@ private fun FlatField(
     hidePassword: Boolean = false,
     trailingIcon: (@Composable () -> Unit)? = null,
 ) {
-    val bg = if (isError) Color(0xFFFEF2F2) else Gray50
-    val borderColor = if (isError) Color(0xFFF87171) else Gray200
+    val tint = if (isError) Color(0x33FCA5A5) else Color.White.copy(alpha = 0.45f)
+    val borderBrush = if (isError) {
+        SolidColor(Color(0xFFF87171))
+    } else {
+        Brush.verticalGradient(
+            listOf(Color.White.copy(alpha = 0.85f), Color.White.copy(alpha = 0.25f)),
+        )
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(bg)
-            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+            .background(tint)
+            .border(1.dp, borderBrush, RoundedCornerShape(14.dp))
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -271,10 +276,7 @@ private fun FlatField(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
                 visualTransformation = if (hidePassword) PasswordVisualTransformation() else VisualTransformation.None,
-                textStyle = TextStyle(
-                    color = Gray900,
-                    fontSize = 15.sp,
-                ),
+                textStyle = TextStyle(color = Gray900, fontSize = 15.sp),
                 cursorBrush = SolidColor(BrandBlue600),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -296,26 +298,36 @@ private fun ErrorLine(text: String) {
     }
 }
 
+/** Brand-blue submit — gradient + drop shadow + inner highlight. */
 @Composable
-private fun SubmitButton(
-    text: String,
-    loading: Boolean,
-    onClick: () -> Unit,
-) {
+private fun SubmitButton(text: String, loading: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
+    val shape = RoundedCornerShape(16.dp)
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(52.dp)
+            .height(54.dp)
             .shadow(
-                elevation = 10.dp,
-                shape = RoundedCornerShape(14.dp),
+                elevation = 18.dp,
+                shape = shape,
                 spotColor = BrandBlue600,
                 ambientColor = BrandBlue600,
             )
-            .clip(RoundedCornerShape(14.dp))
-            .background(BrandBlue600)
-            .clickable(interactionSource = interaction, indication = null, enabled = !loading, onClick = onClick),
+            .clip(shape)
+            .background(Brush.linearGradient(listOf(BrandBlue600, BrandBlue700)))
+            .border(
+                1.dp,
+                Brush.verticalGradient(
+                    listOf(Color.White.copy(alpha = 0.55f), Color.White.copy(alpha = 0.05f)),
+                ),
+                shape,
+            )
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = !loading,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         if (loading) {
@@ -331,26 +343,33 @@ private fun SubmitButton(
 }
 
 @Composable
-private fun DemoButton(
+private fun GlassDemoButton(
     text: String,
-    bg: Color,
-    border: Color,
-    textColor: Color,
+    accent: Color,
     enabled: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val interaction = remember { MutableInteractionSource() }
-    Box(
+    GlassPill(
         modifier = modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(bg)
-            .border(1.dp, border, RoundedCornerShape(14.dp))
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .height(48.dp)
+            .clickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                onClick = onClick,
+            ),
+        tint = accent.copy(alpha = 0.18f),
+        cornerRadius = 16.dp,
     ) {
-        Text(text, color = textColor, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text,
+                color = accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
-
