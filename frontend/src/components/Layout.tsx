@@ -1,5 +1,7 @@
 import { memo, useMemo } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
+import { AnimatePresence } from 'framer-motion';
+import PageTransition from './PageTransition';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
@@ -329,10 +331,14 @@ export default function Layout() {
         {/* Mobile top bar (memoized) */}
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
-        {/* Page content */}
+        {/* Page content — fades + slight rise on route change */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
           <div className="w-full min-w-0">
-            <Outlet />
+            <AnimatePresence mode="wait">
+              <PageTransition key={location.pathname}>
+                <Outlet />
+              </PageTransition>
+            </AnimatePresence>
           </div>
         </main>
 

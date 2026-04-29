@@ -12,6 +12,7 @@ import { checksApi, usersApi, productsApi, suppliersApi } from '../api/services'
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
@@ -527,7 +528,7 @@ export default function ChecksScreen() {
       {activeTab === 'checks' ? (
         <>
           {isLoading ? (
-            <LoadingSpinner />
+            <ListSkeleton count={8} />
           ) : checks.length === 0 ? (
             <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
           ) : (

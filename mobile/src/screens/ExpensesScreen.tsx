@@ -12,6 +12,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { expensesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
@@ -324,7 +325,7 @@ export default function ExpensesScreen() {
         </View>
       )}
 
-      {isLoading ? <LoadingSpinner /> : !expenses?.length ? (
+      {isLoading ? <ListSkeleton count={6} /> : !expenses?.length ? (
         <EmptyState title="Нет расходов" description="Добавьте расходы за выбранный период" action={isDirector ? { label: 'Добавить', onPress: () => setModalOpen(true) } : undefined} />
       ) : (
         <FlashList data={expenses} keyExtractor={i => i.id} renderItem={renderExpense} contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />} />

@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
 
 interface ModalProps {
@@ -59,35 +60,51 @@ export default function Modal({
     return () => document.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
-
   return createPortal(
-    <div
-      className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center bg-black/50"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        className={`w-full ${sizeClasses[size]} bg-white rounded-t-2xl sm:rounded-xl shadow-xl animate-scale-in max-h-[90dvh] flex flex-col`}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          // Backdrop — fades in/out independently of the panel
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          className="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-[2px]"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+        >
+          <motion.div
+            // Panel — small slide-up + scale on mobile, scale on desktop. Spring feel.
+            initial={{ opacity: 0, y: 24, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 24, scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 30, mass: 0.7 }}
+            className={`w-full ${sizeClasses[size]} bg-white rounded-t-2xl sm:rounded-xl shadow-xl max-h-[90dvh] flex flex-col`}
           >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
+              <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+              <button
+                onClick={onClose}
+                className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+                aria-label="Закрыть"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-        {/* Body */}
-        <div className="px-6 pt-4 pb-8 overflow-y-auto flex-1 min-h-0" style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom, 0px))` }}>
-          {children}
-        </div>
-      </div>
-    </div>,
+            {/* Body */}
+            <div
+              className="px-6 pt-4 pb-8 overflow-y-auto flex-1 min-h-0"
+              style={{ paddingBottom: `max(2rem, env(safe-area-inset-bottom, 0px))` }}
+            >
+              {children}
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
     document.body,
   );
 }

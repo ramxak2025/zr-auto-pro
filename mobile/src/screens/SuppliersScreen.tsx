@@ -12,6 +12,7 @@ import { useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
@@ -133,7 +134,7 @@ export default function SuppliersScreen() {
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск поставщика..." />
       </View>
 
-      {isLoading ? <LoadingSpinner /> : !suppliers?.length ? (
+      {isLoading ? <ListSkeleton count={6} /> : !suppliers?.length ? (
         <EmptyState title="Нет поставщиков" description="Добавьте первого поставщика" action={{ label: 'Добавить', onPress: openCreate }} />
       ) : (
         <FlashList data={suppliers} keyExtractor={i => i.id} renderItem={renderSupplier} contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />} />

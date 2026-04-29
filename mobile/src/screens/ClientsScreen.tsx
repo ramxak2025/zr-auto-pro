@@ -13,6 +13,7 @@ import { clientsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
@@ -197,7 +198,7 @@ export default function ClientsScreen() {
 
       {/* Content */}
       {isLoading ? (
-        <LoadingSpinner />
+        <ListSkeleton count={8} />
       ) : clients.length === 0 && !search ? (
         <EmptyState
           title="Нет клиентов"

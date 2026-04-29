@@ -158,6 +158,16 @@
   .card {
     @apply bg-white rounded-xl border border-gray-200 shadow-sm;
   }
+  /* Interactive card — hover/press feedback for clickable list rows / tiles. */
+  .card-interactive {
+    @apply card cursor-pointer transition-all duration-200 ease-out;
+    @apply hover:shadow-md hover:-translate-y-0.5 hover:border-gray-300;
+    @apply active:translate-y-0 active:shadow-sm;
+  }
+  /* Soft-press utility for non-card buttons (chips, list-row links). */
+  .press-soft {
+    @apply transition-transform duration-150 ease-out active:scale-[0.97];
+  }
   .card-body {
     @apply p-5;
   }

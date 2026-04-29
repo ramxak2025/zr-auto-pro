@@ -15,6 +15,7 @@ import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -756,7 +757,7 @@ export default function ProductsScreen() {
       </View>
 
       {isLoading ? (
-        <LoadingSpinner />
+        <ListSkeleton count={8} />
       ) : !search && sortedFolders.length === 0 && currentProducts.length === 0 ? (
         <EmptyState
           title={'\u041D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}

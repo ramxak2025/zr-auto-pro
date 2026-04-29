@@ -11,6 +11,7 @@ import { useNavigation } from '@react-navigation/native';
 import { carsApi } from '../api/services';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -102,7 +103,7 @@ export default function CarsScreen() {
       </View>
 
       {isLoading ? (
-        <LoadingSpinner />
+        <ListSkeleton count={8} />
       ) : (Array.isArray(cars) ? cars : []).length === 0 ? (
         <EmptyState title="Нет автомобилей" description={search ? 'Ничего не найдено' : 'Автомобили появятся после добавления к клиентам'} />
       ) : (

@@ -12,6 +12,7 @@ import { useNavigation } from '@react-navigation/native';
 import { servicesApi } from '../api/services';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
@@ -137,7 +138,7 @@ export default function ServicesScreen() {
       </View>
 
       {isLoading ? (
-        <LoadingSpinner />
+        <ListSkeleton count={8} />
       ) : services.length === 0 ? (
         <EmptyState title="Нет услуг" description={search ? 'Ничего не найдено' : 'Добавьте первую услугу'} action={!search ? { label: 'Добавить', onPress: openCreate } : undefined} />
       ) : (

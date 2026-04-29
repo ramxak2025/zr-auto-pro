@@ -6,13 +6,13 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
   Animated,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
+import { Button } from '../components/Button';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -153,18 +153,12 @@ export default function LoginScreen() {
 
             {/* Submit */}
             <Animated.View style={{ opacity: formFade, transform: [{ translateY: formSlide }] }}>
-            <TouchableOpacity
-              style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
-              onPress={handleSubmit}
-              disabled={submitting}
-              activeOpacity={0.8}
-            >
-              {submitting ? (
-                <ActivityIndicator color={colors.white} size="small" />
-              ) : (
-                <Text style={styles.submitText}>Войти</Text>
-              )}
-            </TouchableOpacity>
+              <Button
+                title="Войти"
+                onPress={handleSubmit}
+                loading={submitting}
+                size="lg"
+              />
             </Animated.View>
 
             {/* Demo access */}
@@ -175,20 +169,26 @@ export default function LoginScreen() {
                 <View style={styles.dividerLine} />
               </View>
               <View style={styles.demoButtons}>
-                <TouchableOpacity
-                  style={[styles.demoBtn, styles.demoBtnOwner]}
-                  onPress={() => handleDemoLogin('+7 (000) 000-00-01')}
-                  disabled={submitting}
-                >
-                  <Text style={styles.demoBtnOwnerText}>Владелец</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.demoBtn, styles.demoBtnMaster]}
-                  onPress={() => handleDemoLogin('+7 (000) 000-00-02')}
-                  disabled={submitting}
-                >
-                  <Text style={styles.demoBtnMasterText}>Мастер</Text>
-                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    title="Владелец"
+                    variant="secondary"
+                    onPress={() => handleDemoLogin('+7 (000) 000-00-01')}
+                    disabled={submitting}
+                    size="md"
+                    hapticIntent="select"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    title="Мастер"
+                    variant="secondary"
+                    onPress={() => handleDemoLogin('+7 (000) 000-00-02')}
+                    disabled={submitting}
+                    size="md"
+                    hapticIntent="select"
+                  />
+                </View>
               </View>
             </Animated.View>
           </View>
