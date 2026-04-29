@@ -82,6 +82,20 @@ export function SkeletonRow() {
   );
 }
 
+/** N rows of SkeletonRow — drop-in for ListEmptyComponent or pre-data state.
+ *  Each row appears with a slight stagger so the loading itself feels alive. */
+export function ListSkeleton({ count = 6 }: { count?: number }) {
+  return (
+    <View>
+      {Array.from({ length: count }).map((_, i) => (
+        <View key={i} style={{ opacity: 1 - i * 0.06 }}>
+          <SkeletonRow />
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
