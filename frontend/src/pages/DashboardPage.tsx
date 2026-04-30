@@ -31,8 +31,7 @@ import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../..
 import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi } from '../api/services';
 import type { SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
-import EmployeeDetailModal from '../components/EmployeeDetailModal';
-import { AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
 // Skeleton loader for cards
@@ -135,15 +134,13 @@ function ErrorBanner({ message }: { message: string }) {
 // ---------------------------------------------------------------------------
 
 function StaffStatusCircles() {
+  const navigate = useNavigate();
   const { data: todayData } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
     queryFn: async () => { const res = await scheduleApi.getToday(); return res.data; },
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
-
-  // Selected employee — opens the detail modal
-  const [selected, setSelected] = useState<TodayEmployeeStatus | null>(null);
 
   const statuses = todayData ?? [];
   if (statuses.length === 0) return null;
@@ -208,7 +205,7 @@ function StaffStatusCircles() {
             <button
               type="button"
               key={s.userId}
-              onClick={() => setSelected(s)}
+              onClick={() => navigate(`/employees/${s.userId}`)}
               className="flex flex-col items-center gap-1 min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 rounded-lg p-1 -m-1 transition-transform active:scale-95"
               title={getStatusLabel(s)}
             >
@@ -247,16 +244,6 @@ function StaffStatusCircles() {
       {renderGroup('Прогул', '❌', absent)}
       {renderGroup('Выходной', '🌙', dayOff)}
       {renderGroup('Больничный', '🏥', sick)}
-
-      {/* Detail modal for the tapped employee */}
-      <AnimatePresence>
-        {selected && (
-          <EmployeeDetailModal
-            status={selected}
-            onClose={() => setSelected(null)}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }
@@ -404,8 +391,9 @@ function RevenueChart() {
       const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
       return days[d.getDay()];
     }
-    const step = total > 15 ? 5 : total > 10 ? 3 : 2;
-    if (idx % step !== 0 && idx !== total - 1) return '';
+    // Month: render the full sequence of days (1..N) — small font + tabular-nums
+    // keeps the strip readable and aligned. Earlier we skipped every 3rd/5th
+    // day which read as "1,6,11,16…"; now you see 1,2,3,4,…,30.
     return `${d.getDate()}`;
   };
 
@@ -563,7 +551,9 @@ function RevenueChart() {
                     return (
                       <span
                         key={idx}
-                        className="absolute -translate-x-1/2 text-[10px] text-slate-500 tabular-nums"
+                        className={`absolute -translate-x-1/2 tabular-nums ${
+                          period === 'month' ? 'text-[8.5px]' : 'text-[10px]'
+                        } text-slate-500`}
                         style={{ left: `${xPct}%` }}
                       >
                         {label}

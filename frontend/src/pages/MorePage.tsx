@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Users,
+  UserCircle,
   Wrench,
   Truck,
   Wallet,
@@ -40,6 +41,14 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
+  {
+    label: 'Сотрудники',
+    description: 'Карточки персонала, статус, рейтинги',
+    path: '/employees',
+    icon: UserCircle,
+    color: 'bg-cyan-50',
+    iconColor: 'text-cyan-600',
+  },
   {
     label: 'Расписание',
     description: 'График работы и смены',
