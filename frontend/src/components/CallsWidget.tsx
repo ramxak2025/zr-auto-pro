@@ -1,50 +1,28 @@
 /**
- * CallsWidget — compact dashboard preview of today's calls.
+ * CallsWidget — premium KPI-only preview of today's calls.
  *
- * Reuses the same /calls?date=YYYY-MM-DD endpoint and field shapes as the
- * full /calls page (Call.from / to / direction / status / duration / client),
- * so what the owner sees here matches the full page exactly — no shape
- * drift, no missing names.
+ * Owner asked: numbers from /calls, no individual call list, modern look.
  *
- *   - 4 KPI tiles: Всего / Входящие / Исходящие / Пропущено (matches the
- *     summary returned by the API).
- *   - 5 most recent calls, formatted phone, client name (when matched),
- *     direction icon (incoming green / outgoing blue / missed red / missed
- *     answered-back green forwarded).
- *   - Whole widget click-targets /calls so the owner lands on the full
- *     page after a tap.
+ *   ┌──────────────────────────────────────────────┐
+ *   │ ● Звонки сегодня                  10 мая →   │
+ *   │                                              │
+ *   │  Всего · Входящие · Исходящие · Пропущено    │
+ *   │   24       12          8          4 (-1)     │
+ *   │                                              │
+ *   │  ⚠ Не перезвонили: 2                         │
+ *   └──────────────────────────────────────────────┘
  *
- * Hidden when the tenant has zero calls today (clean state for tenants
- * without telephony integration).
+ * Whole card is a clickable surface that takes the user to /calls.
+ * Hidden when the tenant has no calls today (zero-state for non-telephony
+ * tenants — clean dashboard, no empty box).
  */
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
-  ArrowDownLeft, ArrowUpRight, ChevronRight, Phone, PhoneForwarded, PhoneMissed,
+  AlertCircle, ArrowDownLeft, ArrowUpRight, ChevronRight, Phone, PhoneMissed, TrendingDown, TrendingUp,
 } from 'lucide-react';
 import { callsApi } from '../api/services';
-
-// Mirror of the Call shape used on /calls — kept here so the widget compiles
-// independently. If the page contract changes, these two should be updated
-// together.
-interface Call {
-  id: string;
-  date: string;
-  direction: 'incoming' | 'outgoing';
-  from: string;
-  to: string;
-  duration: number;
-  status: 'answered' | 'missed';
-  recordingUrl: string | null;
-  clientPhone: string;
-  calledBack?: boolean;
-  client: {
-    id: string;
-    fullName: string;
-    cars: { plateNumber: string; makeModel: string }[];
-  } | null;
-}
 
 interface CallsSummary {
   incoming: number;
@@ -59,166 +37,169 @@ function todayISODate(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function formatPhone(phone: string): string {
-  if (!phone) return '';
-  let cleaned = phone.replace(/\D/g, '');
-  if (cleaned.length === 11 && cleaned[0] === '8') {
-    cleaned = '7' + cleaned.slice(1);
-  }
-  if (cleaned.length === 11) {
-    return `+${cleaned[0]} (${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7, 9)}-${cleaned.slice(9, 11)}`;
-  }
-  return phone;
+function yesterdayISODate(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function formatTime(iso?: string): string {
-  if (!iso) return '';
-  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+function todayLabel(): string {
+  const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  const d = new Date();
+  return `${d.getDate()} ${months[d.getMonth()]}`;
 }
 
 export default function CallsWidget() {
-  const { data, isLoading } = useQuery<{ calls: Call[]; summary: CallsSummary }>({
+  const { data, isLoading } = useQuery<{ calls: unknown[]; summary: CallsSummary }>({
     queryKey: ['calls-today'],
     queryFn: async () => {
       const res = await callsApi.getCalls({ date: todayISODate() });
-      return res.data as unknown as { calls: Call[]; summary: CallsSummary };
+      return res.data as unknown as { calls: unknown[]; summary: CallsSummary };
     },
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
 
-  // Hide entirely on tenants without telephony / empty days.
-  if (!isLoading && (!data || data.summary.total === 0)) {
+  // Yesterday — used to show day-over-day delta on the "total" tile so the
+  // owner sees the trend at a glance (the actual heroic stat). Not blocking
+  // — if it fails or empty we just hide the delta chip.
+  const { data: yesterday } = useQuery<{ summary: CallsSummary }>({
+    queryKey: ['calls-yesterday'],
+    queryFn: async () => {
+      const res = await callsApi.getCalls({ date: yesterdayISODate() });
+      return res.data as unknown as { summary: CallsSummary };
+    },
+    staleTime: 5 * 60_000,
+  });
+
+  // Hide entirely on tenants without telephony / nothing today + nothing yesterday.
+  if (!isLoading && (!data || data.summary.total === 0) && (!yesterday || yesterday.summary.total === 0)) {
     return null;
   }
 
   const summary = data?.summary;
-  // /calls page sorts newest-first. The endpoint already returns sorted, but
-  // be defensive in case the API order changes.
-  const recent = (data?.calls ?? [])
-    .slice()
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 5);
+  const yesterTotal = yesterday?.summary.total ?? 0;
+  const totalDelta = summary ? summary.total - yesterTotal : 0;
+  const showDelta = !!summary && yesterTotal > 0;
 
   return (
     <motion.section
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.24, ease: [0.2, 0, 0, 1] }}
-      className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden"
+      className="rounded-3xl overflow-hidden bg-gradient-to-br from-blue-950 via-slate-900 to-blue-950 shadow-xl ring-1 ring-white/5 transition-shadow hover:shadow-2xl"
     >
-      {/* Header — whole header click-targets /calls. Matches the user's
-          request: tap anywhere on the widget → full page. */}
-      <Link
-        to="/calls"
-        className="flex items-center justify-between px-5 py-4 border-b border-gray-100 hover:bg-gray-50/60 transition-colors no-underline"
-      >
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50">
-            <Phone className="h-5 w-5 text-blue-600" />
+      <Link to="/calls" className="block no-underline">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 pt-5">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 backdrop-blur ring-1 ring-white/15">
+              <Phone className="h-4.5 w-4.5 text-white" />
+            </div>
+            <div>
+              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.18em]">Звонки</p>
+              <p className="text-base font-bold text-white">{todayLabel()}</p>
+            </div>
           </div>
-          <h3 className="text-base font-bold text-gray-900">Звонки сегодня</h3>
+          <div className="flex items-center gap-1 text-xs font-semibold text-slate-300 hover:text-white transition-colors">
+            Открыть
+            <ChevronRight className="h-3.5 w-3.5" />
+          </div>
         </div>
-        <span className="text-xs font-semibold text-blue-600 flex items-center gap-0.5">
-          Все
-          <ChevronRight className="h-3.5 w-3.5" />
-        </span>
-      </Link>
 
-      {/* KPI strip — same numbers /calls shows in its summary tiles. */}
-      {summary && (
-        <div className="grid grid-cols-4 divide-x divide-gray-100 border-b border-gray-100">
-          <KpiTile label="Всего" value={summary.total} tone="default" />
-          <KpiTile label="Вх." value={summary.incoming} tone="green" />
-          <KpiTile label="Исх." value={summary.outgoing} tone="blue" />
-          <KpiTile label="Пропущ." value={summary.missed} tone="red" />
+        {/* Hero: total + delta */}
+        <div className="px-5 pt-4 pb-3">
+          <div className="flex items-baseline gap-3">
+            <p className="text-5xl font-bold text-white tabular-nums tracking-tight">
+              {isLoading ? '—' : summary?.total ?? 0}
+            </p>
+            {showDelta && (
+              <span
+                className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                  totalDelta > 0
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : totalDelta < 0
+                      ? 'bg-rose-500/15 text-rose-300'
+                      : 'bg-white/5 text-slate-400'
+                }`}
+              >
+                {totalDelta > 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                {totalDelta > 0 ? '+' : ''}{totalDelta} к вчера
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-400 mt-1">всего звонков сегодня</p>
         </div>
-      )}
 
-      {/* Recent rows */}
-      <ul className="divide-y divide-gray-50">
-        {isLoading ? (
-          <li className="px-5 py-6 text-center text-sm text-gray-400">Загрузка…</li>
-        ) : recent.length === 0 ? (
-          <li className="px-5 py-6 text-center text-sm text-gray-400">Звонков пока нет</li>
-        ) : (
-          recent.map((c) => {
-            const isIncoming = c.direction === 'incoming';
-            const isMissed = isIncoming && (c.status === 'missed' || c.duration === 0);
-            const displayPhone = isIncoming ? c.from : c.to;
+        {/* KPI strip — frosted tiles, white-on-glass.
+            3 tiles: incoming / outgoing / missed. notCalledBack lives in
+            its own pinned banner below because it's the one number that
+            actually demands action. */}
+        <div className="px-3 pb-3">
+          <div className="grid grid-cols-3 gap-2">
+            <Tile
+              icon={<ArrowDownLeft className="h-3.5 w-3.5" />}
+              label="Входящие"
+              value={summary?.incoming ?? 0}
+              tone="green"
+            />
+            <Tile
+              icon={<ArrowUpRight className="h-3.5 w-3.5" />}
+              label="Исходящие"
+              value={summary?.outgoing ?? 0}
+              tone="blue"
+            />
+            <Tile
+              icon={<PhoneMissed className="h-3.5 w-3.5" />}
+              label="Пропущено"
+              value={summary?.missed ?? 0}
+              tone="red"
+            />
+          </div>
+        </div>
 
-            // Pick icon + tone matching CallsPage's row exactly.
-            const tone = isMissed && c.calledBack
-              ? 'bg-green-50 text-green-600'
-              : isMissed
-                ? 'bg-red-50 text-red-500'
-                : isIncoming
-                  ? 'bg-green-50 text-green-600'
-                  : 'bg-blue-50 text-blue-600';
-            const Icon = isMissed && c.calledBack
-              ? PhoneForwarded
-              : isMissed
-                ? PhoneMissed
-                : isIncoming
-                  ? ArrowDownLeft
-                  : ArrowUpRight;
-
-            return (
-              <li key={c.id}>
-                <Link
-                  to="/calls"
-                  className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50/60 transition-colors no-underline"
-                >
-                  <div className={`flex h-9 w-9 items-center justify-center rounded-full ${tone} flex-shrink-0`}>
-                    <Icon className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    {c.client?.fullName ? (
-                      <>
-                        <p className="text-sm font-semibold text-gray-900 truncate">{c.client.fullName}</p>
-                        <p className="text-[11px] text-gray-400 truncate">
-                          {formatPhone(displayPhone)}
-                          <span className="mx-1.5 text-gray-300">·</span>
-                          {formatTime(c.date)}
-                          {isMissed && !c.calledBack && (
-                            <span className="text-red-500"> · пропущен</span>
-                          )}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <p className={`text-sm font-semibold truncate ${isMissed && !c.calledBack ? 'text-red-600' : 'text-gray-900'}`}>
-                          {formatPhone(displayPhone) || '—'}
-                        </p>
-                        <p className="text-[11px] text-gray-400 truncate">
-                          {formatTime(c.date)}
-                          {isMissed && !c.calledBack && (
-                            <span className="text-red-500"> · пропущен</span>
-                          )}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                </Link>
-              </li>
-            );
-          })
+        {/* Action banner — visible only when there are unreturned missed calls.
+            Grabs attention without polluting the dashboard for tenants on
+            top of their telephony. */}
+        {summary && summary.notCalledBack > 0 && (
+          <div className="mx-3 mb-3 px-4 py-3 rounded-2xl bg-amber-500/15 ring-1 ring-amber-500/30 flex items-center gap-2.5">
+            <AlertCircle className="h-4 w-4 text-amber-300 flex-shrink-0" />
+            <p className="text-xs text-amber-100 flex-1">
+              Не перезвонили: <span className="font-bold tabular-nums">{summary.notCalledBack}</span>
+            </p>
+            <span className="text-[11px] font-semibold text-amber-200">обработать →</span>
+          </div>
         )}
-      </ul>
+      </Link>
     </motion.section>
   );
 }
 
-function KpiTile({ label, value, tone }: { label: string; value: number; tone: 'default' | 'green' | 'blue' | 'red' }) {
-  const color =
-    tone === 'green' ? 'text-green-600'
-      : tone === 'blue' ? 'text-blue-600'
-        : tone === 'red' ? 'text-red-500'
-          : 'text-gray-900';
+function Tile({
+  icon, label, value, tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+  tone: 'green' | 'blue' | 'red';
+}) {
+  const tones: Record<string, { iconBg: string; iconFg: string; valFg: string }> = {
+    green: { iconBg: 'bg-emerald-500/15', iconFg: 'text-emerald-300', valFg: 'text-emerald-200' },
+    blue:  { iconBg: 'bg-sky-500/15',     iconFg: 'text-sky-300',     valFg: 'text-sky-200' },
+    red:   { iconBg: 'bg-rose-500/15',    iconFg: 'text-rose-300',    valFg: 'text-rose-200' },
+  };
+  const t = tones[tone];
   return (
-    <div className="px-3 py-3 text-center">
-      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{label}</p>
-      <p className={`text-lg font-bold tabular-nums ${color} mt-0.5`}>{value}</p>
+    <div className="rounded-2xl bg-white/5 ring-1 ring-white/10 backdrop-blur px-3 py-3">
+      <div className="flex items-center gap-1.5">
+        <span className={`flex h-5 w-5 items-center justify-center rounded ${t.iconBg} ${t.iconFg}`}>
+          {icon}
+        </span>
+        <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+          {label}
+        </span>
+      </div>
+      <p className={`text-2xl font-bold tabular-nums mt-1.5 ${t.valFg}`}>{value}</p>
     </div>
   );
 }

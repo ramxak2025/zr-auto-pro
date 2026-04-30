@@ -28,6 +28,7 @@ export class UsersService {
       daysOff,
       sortOrder: parseInt(row.sort_order) || 0,
       isActive: row.is_active,
+      team: row.team || null,
       tenantId: row.tenant_id,
       createdAt: row.created_at,
     };
@@ -41,7 +42,7 @@ export class UsersService {
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
               COALESCE(sort_order, 0) as sort_order,
-              is_active, tenant_id, created_at
+              is_active, team, tenant_id, created_at
        FROM users WHERE tenant_id = $1 ORDER BY sort_order, created_at`,
       [tenantID],
     );
@@ -66,7 +67,7 @@ export class UsersService {
               COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
-              is_active, tenant_id, created_at
+              is_active, team, tenant_id, created_at
        FROM users
        WHERE tenant_id = $1 AND is_active = true AND role IN ('master','admin')
        ORDER BY full_name`,
@@ -82,7 +83,7 @@ export class UsersService {
               COALESCE(product_salary_percent, 0) as product_salary_percent,
               COALESCE(permissions, '{}') as permissions,
               COALESCE(days_off, '[]') as days_off,
-              is_active, tenant_id, created_at
+              is_active, team, tenant_id, created_at
        FROM users WHERE id = $1 AND tenant_id = $2`,
       [id, tenantID],
     );
@@ -114,7 +115,7 @@ export class UsersService {
       const { rows } = await this.pool.query(
         `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, true, $7)
-         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
+         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, tenant_id, created_at`,
         [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, perms, tenantID],
       );
       return this.mapUser(rows[0]);
@@ -146,6 +147,11 @@ export class UsersService {
     if (dto.permissions !== undefined) { sets.push(`permissions=$${idx++}`); vals.push(JSON.stringify(dto.permissions)); }
     if (dto.isActive !== undefined) { sets.push(`is_active=$${idx++}`); vals.push(dto.isActive); }
     if (dto.daysOff !== undefined) { sets.push(`days_off=$${idx++}`); vals.push(JSON.stringify(dto.daysOff)); }
+    if (dto.team !== undefined) {
+      // Empty string → store NULL so users without a team aren't grouped under "" on the FE.
+      sets.push(`team=$${idx++}`);
+      vals.push(dto.team === '' ? null : dto.team);
+    }
     if (dto.password) {
       const hash = await bcrypt.hash(dto.password, 10);
       sets.push(`password=$${idx++}`);
@@ -161,7 +167,7 @@ export class UsersService {
 
     const { rows } = await this.pool.query(
       `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, tenant_id, created_at`,
+       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, tenant_id, created_at`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });

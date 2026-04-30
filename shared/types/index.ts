@@ -71,6 +71,8 @@ export interface User {
   daysOff?: number[];
   sortOrder?: number;
   isActive: boolean;
+  /** Free-text team grouping. Null/empty → "Без группы" on the FE. */
+  team?: string | null;
   tenantId?: string;
   tenant?: Tenant;
   createdAt: string;
