@@ -40,6 +40,7 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { label: 'Сотрудники', description: 'Карточки персонала, статус, рейтинги', screen: 'Employees', icon: 'people-circle-outline', iconBg: colors.cyan[50], iconColor: colors.cyan[600] },
+  { label: 'Корзина склада', description: 'Восстановление удалённых товаров', screen: 'Trash', permission: 'warehouse_access', icon: 'trash-outline', iconBg: colors.rose[50], iconColor: colors.rose[600] },
   { label: 'Расписание', description: 'График работы и смены', screen: 'Schedule', featureKey: 'schedule_view', icon: 'calendar-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
   { label: 'Клиенты', description: 'База клиентов', screen: 'Clients', permission: 'clients_view', featureKey: 'clients_view', icon: 'people-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
   { label: 'Автомобили', description: 'Все автомобили клиентов', screen: 'Cars', permission: 'clients_view', featureKey: 'clients_view', icon: 'car-sport-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },

@@ -113,6 +113,14 @@ export function createProductsApi(api: AxiosInstance) {
     create: (data: CreateProductRequest) => api.post<Product>('/products', data),
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
     remove: (id: string) => api.delete(`/products/${id}`),
+    // ── Trash bin ─────────────────────────────────────────────────────
+    // Soft-deleted products live in the trash. They stay searchable here
+    // until restored or hard-deleted; check history is unaffected because
+    // check_product_lines stores a snapshot of name/prices.
+    getTrash: () => api.get<Product[]>('/products/trash'),
+    restore: (id: string) => api.post<{ message: string }>(`/products/${id}/restore`),
+    hardDelete: (id: string) => api.delete<{ message: string }>(`/products/${id}/hard`),
+    emptyTrash: () => api.delete<{ message: string; count: number }>('/products/trash/empty'),
     updateStock: (id: string, data: StockUpdateRequest) => api.post<{ stock: number }>(`/products/${id}/stock`, data),
     getProductMovements: (id: string) => api.get<any[]>(`/products/${id}/movements`),
     getProductPriceHistory: (id: string) => api.get<any[]>(`/products/${id}/price-history`),

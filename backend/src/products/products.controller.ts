@@ -45,6 +45,30 @@ export class ProductsController {
     return this.productsService.importCsv(user.tenantID, dto.items);
   }
 
+  // ── Trash bin ──────────────────────────────────────────────────────────
+  // Routes are registered before the catch-all `:id` route so that
+  // /products/trash and /products/trash/empty don't get swallowed as ids.
+
+  @Get('trash')
+  getTrash(@CurrentUser() user: JwtPayload) {
+    return this.productsService.getTrash(user.tenantID);
+  }
+
+  @Delete('trash/empty')
+  emptyTrash(@CurrentUser() user: JwtPayload) {
+    return this.productsService.emptyTrash(user.tenantID);
+  }
+
+  @Post(':id/restore')
+  restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.productsService.restore(id, user.tenantID);
+  }
+
+  @Delete(':id/hard')
+  hardDelete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.productsService.hardDelete(id, user.tenantID);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.getById(id, user.tenantID);

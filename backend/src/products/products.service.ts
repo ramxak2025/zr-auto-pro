@@ -36,7 +36,7 @@ export class ProductsService {
     const offset = (page - 1) * limit;
     const search = query.search || '';
 
-    let where = 'p.tenant_id = $1';
+    let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL';
     const params: any[] = [tenantID];
     let idx = 2;
 
@@ -67,7 +67,8 @@ export class ProductsService {
     const { rows } = await this.pool.query(
       `SELECT p.*, s.name as supplier_name
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
-       WHERE p.tenant_id = $1 AND p.stock <= p.min_stock AND p.min_stock > 0
+       WHERE p.tenant_id = $1 AND p.deleted_at IS NULL
+         AND p.stock <= p.min_stock AND p.min_stock > 0
        ORDER BY p.name`,
       [tenantID],
     );
@@ -125,7 +126,7 @@ export class ProductsService {
          COALESCE(SUM(cost_price * stock), 0) as total_cost_value,
          COALESCE(SUM(sell_price * stock), 0) as total_sell_value,
          COALESCE(SUM(stock), 0) as total_items
-       FROM products WHERE tenant_id = $1`,
+       FROM products WHERE tenant_id = $1 AND deleted_at IS NULL`,
       [tenantID],
     );
 
@@ -159,7 +160,7 @@ export class ProductsService {
     const { rows } = await this.pool.query(
       `SELECT p.*, s.name as supplier_name
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
-       WHERE p.id=$1 AND p.tenant_id=$2`,
+       WHERE p.id=$1 AND p.tenant_id=$2 AND p.deleted_at IS NULL`,
       [id, tenantID],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
@@ -270,15 +271,70 @@ export class ProductsService {
     }));
   }
 
+  // Soft delete — moves to trash. The row stays in the table; checks that
+  // reference this product keep working because check_product_lines stores
+  // a snapshot (name + prices) at the time of sale.
   async remove(id: string, tenantID: string) {
-    await this.pool.query('DELETE FROM products WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
-    return { message: 'Удалено' };
+    const result = await this.pool.query(
+      'UPDATE products SET deleted_at = NOW() WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
+      [id, tenantID],
+    );
+    if (result.rowCount === 0) {
+      // Already trashed or doesn't exist — keep idempotent
+      return { message: 'Уже в корзине' };
+    }
+    return { message: 'Перемещено в корзину' };
+  }
+
+  // List items currently in trash, newest first.
+  async getTrash(tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT p.*, s.name as supplier_name
+       FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
+       WHERE p.tenant_id = $1 AND p.deleted_at IS NOT NULL
+       ORDER BY p.deleted_at DESC`,
+      [tenantID],
+    );
+    return rows.map(this.mapProduct);
+  }
+
+  async restore(id: string, tenantID: string) {
+    const result = await this.pool.query(
+      'UPDATE products SET deleted_at = NULL WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL',
+      [id, tenantID],
+    );
+    if (result.rowCount === 0) {
+      throw new NotFoundException({ message: 'Товар не найден в корзине' });
+    }
+    return { message: 'Восстановлено' };
+  }
+
+  // Permanently delete a single trashed item.
+  async hardDelete(id: string, tenantID: string) {
+    const result = await this.pool.query(
+      'DELETE FROM products WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL',
+      [id, tenantID],
+    );
+    if (result.rowCount === 0) {
+      throw new NotFoundException({ message: 'Товар не найден в корзине' });
+    }
+    return { message: 'Удалено навсегда' };
+  }
+
+  // Drain the trash. Only ever touches rows with deleted_at IS NOT NULL.
+  async emptyTrash(tenantID: string) {
+    const result = await this.pool.query(
+      'DELETE FROM products WHERE tenant_id=$1 AND deleted_at IS NOT NULL',
+      [tenantID],
+    );
+    return { message: 'Корзина очищена', count: result.rowCount ?? 0 };
   }
 
   async exportCsv(tenantID: string) {
     const { rows } = await this.pool.query(
       `SELECT name, category, unit, sell_price, cost_price, stock, min_stock
-       FROM products WHERE tenant_id = $1 ORDER BY category, name`,
+       FROM products WHERE tenant_id = $1 AND deleted_at IS NULL
+       ORDER BY category, name`,
       [tenantID],
     );
     const header = 'Наименование;Группа;Единица измерения;Цена продажи;Цена закупки;Остаток;Мин. остаток';
@@ -355,7 +411,7 @@ export class ProductsService {
       // One SELECT to find all existing names at once.
       const names = normalized.map((r) => r.name);
       const { rows: existingRows } = await this.pool.query(
-        `SELECT id, name FROM products WHERE tenant_id = $1 AND name = ANY($2::text[])`,
+        `SELECT id, name FROM products WHERE tenant_id = $1 AND name = ANY($2::text[]) AND deleted_at IS NULL`,
         [tenantID, names],
       );
       const existingMap = new Map<string, string>();

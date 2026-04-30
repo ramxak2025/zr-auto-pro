@@ -8,7 +8,9 @@ export class WarehouseService {
 
   async getCategories(tenantID: string) {
     const { rows } = await this.pool.query(
-      'SELECT id, path, COALESCE(sort_order, 0) as sort_order FROM warehouse_categories WHERE tenant_id=$1 ORDER BY sort_order, path',
+      // deleted_at filter is forward-compatible; today categories are hard-deleted
+      // but the column was added in migration 023 alongside products' trash bin.
+      'SELECT id, path, COALESCE(sort_order, 0) as sort_order FROM warehouse_categories WHERE tenant_id=$1 AND deleted_at IS NULL ORDER BY sort_order, path',
       [tenantID],
     );
     return rows;

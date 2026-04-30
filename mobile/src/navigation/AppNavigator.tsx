@@ -32,6 +32,7 @@ import CallsScreen from '../screens/CallsScreen';
 import EquipmentScreen from '../screens/EquipmentScreen';
 import EmployeesScreen from '../screens/EmployeesScreen';
 import EmployeeDetailScreen from '../screens/EmployeeDetailScreen';
+import TrashScreen from '../screens/TrashScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import FeatureGate from '../components/FeatureGate';
 
@@ -123,6 +124,7 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="MoreHome" component={MoreScreen} />
       <MoreStack.Screen name="Employees" component={EmployeesScreen} />
       <MoreStack.Screen name="EmployeeDetail" component={EmployeeDetailScreen} />
+      <MoreStack.Screen name="Trash" component={TrashScreen} />
       <MoreStack.Screen name="Subscription" component={SubscriptionScreen} />
       <MoreStack.Screen name="Schedule" component={gated('schedule_view', ScheduleScreen)} />
       <MoreStack.Screen name="Clients" component={gated('clients_view', ClientsScreen)} />

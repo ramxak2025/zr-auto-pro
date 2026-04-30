@@ -29,6 +29,7 @@ import type { Product, BundleItem, PaginatedResponse, StockMovement } from '../t
 import { UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
+import TrashModal from '../components/TrashModal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import VirtualProductGrid from '../components/VirtualProductGrid';
 import VirtualList from '../components/VirtualList';
@@ -1119,6 +1120,7 @@ export default function ProductsPage() {
 
   // Global warehouse operations
   const [warehouseOpsOpen, setWarehouseOpsOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const [warehouseOpsMode, setWarehouseOpsMode] = useState<'inventory' | 'writeoff' | null>(null);
   const [warehouseOpsProducts, setWarehouseOpsProducts] = useState<Record<string, { actual: string; reason: string }>>({});
 
@@ -1757,6 +1759,14 @@ export default function ProductsPage() {
             <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" onChange={handleImportFile} className="hidden" />
             <button
               type="button"
+              onClick={() => setTrashOpen(true)}
+              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+              title="Корзина"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
               onClick={() => setWarehouseOpsOpen(true)}
               className="flex items-center gap-2 rounded-xl bg-amber-500 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-600 active:scale-[0.97] transition-all"
               title="Складские операции"
@@ -2054,8 +2064,8 @@ export default function ProductsPage() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
         title="Удалить товар"
-        message={`Вы уверены, что хотите удалить товар "${deleteTarget?.name}"? Это действие нельзя отменить.`}
-        confirmText="Удалить"
+        message={`Переместить "${deleteTarget?.name}" в корзину? Товар можно будет восстановить.`}
+        confirmText="В корзину"
         variant="danger"
       />
 
@@ -2378,6 +2388,9 @@ export default function ProductsPage() {
           />
         </div>
       )}
+
+      {/* Trash bin — soft-deleted products with restore / hard-delete / empty */}
+      <TrashModal isOpen={trashOpen} onClose={() => setTrashOpen(false)} />
     </div>
   );
 }
