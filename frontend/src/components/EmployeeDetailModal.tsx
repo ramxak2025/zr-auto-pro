@@ -77,14 +77,15 @@ export default function EmployeeDetailModal({ status, onClose }: EmployeeDetailM
     staleTime: 5 * 60_000,
   });
 
-  // Pull master salary summary so the card shows today/month earnings + check count
+  // Pull master salary aggregate so the card shows total earnings + check count
+  // for the master in the current period.
   const { data: salaryRows } = useQuery<MasterSalary[]>({
     queryKey: ['salary-all'],
     queryFn: async () => { const res = await salaryApi.getAll(); return res.data; },
     enabled: !!status?.userId && (status?.role === 'master'),
     staleTime: 60_000,
   });
-  const salary = salaryRows?.find((m) => m.userId === status?.userId);
+  const salary = salaryRows?.find((m) => m.masterId === status?.userId);
 
   if (!status) return null;
 
@@ -181,10 +182,10 @@ export default function EmployeeDetailModal({ status, onClose }: EmployeeDetailM
             <section>
               <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">Заработок</h4>
               <div className="grid grid-cols-2 gap-2">
-                <InfoTile label="Сегодня" value={formatMoney(salary.today ?? 0)} highlight />
-                <InfoTile label="За месяц" value={formatMoney(salary.month ?? 0)} highlight />
-                <InfoTile label="Чеков сегодня" value={String(salary.todayChecks ?? 0)} />
-                <InfoTile label="Чеков за месяц" value={String(salary.monthChecks ?? 0)} />
+                <InfoTile label="Заработано" value={formatMoney(salary.totalEarnings ?? 0)} highlight />
+                <InfoTile label="Выручка" value={formatMoney(salary.totalRevenue ?? 0)} highlight />
+                <InfoTile label="Чеков" value={String(salary.checkCount ?? 0)} />
+                <InfoTile label="Остаток к выплате" value={formatMoney(salary.remainingAmount ?? 0)} />
               </div>
             </section>
           )}
