@@ -23,8 +23,14 @@ export class WarehouseController {
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
     @Query('moveTo') moveTo?: string,
+    @Query('deleteContents') deleteContents?: string,
   ) {
-    return this.warehouseService.removeCategory(id, user.tenantID, moveTo);
+    return this.warehouseService.removeCategory(
+      id,
+      user.tenantID,
+      moveTo,
+      deleteContents === 'true' || deleteContents === '1',
+    );
   }
 
   @Patch('categories/order')

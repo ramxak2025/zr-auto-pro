@@ -1226,11 +1226,13 @@ export default function ProductsPage() {
   });
 
   const deleteCategoryMutation = useMutation({
-    mutationFn: (id: string) => warehouseCategoriesApi.remove(id),
-    onSuccess: () => {
+    mutationFn: ({ id, deleteContents }: { id: string; deleteContents?: boolean }) =>
+      warehouseCategoriesApi.remove(id, { deleteContents }),
+    onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
-      toast.success('Папка удалена');
+      queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      toast.success(vars.deleteContents ? 'Папка и товары удалены' : 'Папка удалена');
     },
     onError: () => toast.error('Ошибка удаления папки'),
   });
@@ -1438,6 +1440,23 @@ export default function ProductsPage() {
       setShowMoveModal(false);
     },
     onError: () => toast.error('Не удалось переместить товары'),
+  });
+
+  // Bulk move-to-trash for selected products. Backend remove() now soft-deletes,
+  // so this fans out to one DELETE /products/:id call per selected id and the
+  // items land in the trash, restorable from the Trash button.
+  const bulkTrashMutation = useMutation({
+    mutationFn: async (productIds: string[]) => {
+      await Promise.all(productIds.map((id) => productsApi.remove(id)));
+    },
+    onSuccess: (_, productIds) => {
+      toast.success(`${productIds.length} ${productIds.length === 1 ? 'товар перемещён' : 'товаров перемещено'} в корзину`);
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      setSelectedProducts(new Set());
+      setSelectMode(false);
+    },
+    onError: () => toast.error('Не удалось переместить в корзину'),
   });
 
   // ---- Handlers ----
@@ -1996,16 +2015,33 @@ export default function ProductsPage() {
       {/* Bottom action bar when products are selected */}
       {selectMode && selectedProducts.size > 0 && (
         <div className="sticky bottom-20 md:bottom-0 z-10 -mx-4 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 rounded-xl shadow-lg">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-600">Выбрано: {selectedProducts.size}</span>
-            <button
-              type="button"
-              onClick={() => setShowMoveModal(true)}
-              className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
-            >
-              <Move className="h-4 w-4" />
-              Переместить
-            </button>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm text-gray-600 flex-shrink-0">Выбрано: {selectedProducts.size}</span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowMoveModal(true)}
+                className="flex items-center gap-1.5 rounded-xl bg-primary-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
+              >
+                <Move className="h-4 w-4" />
+                Переместить
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ids = Array.from(selectedProducts);
+                  if (ids.length === 0) return;
+                  if (confirm(`Переместить ${ids.length} ${ids.length === 1 ? 'товар' : 'товаров'} в корзину? Можно будет восстановить.`)) {
+                    bulkTrashMutation.mutate(ids);
+                  }
+                }}
+                disabled={bulkTrashMutation.isPending}
+                className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                В корзину
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2069,24 +2105,71 @@ export default function ProductsPage() {
         variant="danger"
       />
 
-      {/* Delete folder confirmation */}
-      <ConfirmDialog
-        isOpen={!!deleteFolderTarget}
-        onClose={() => setDeleteFolderTarget(null)}
-        onConfirm={() => {
-          if (deleteFolderTarget?.id) {
-            deleteCategoryMutation.mutate(deleteFolderTarget.id);
-          } else if (deleteFolderTarget?.path) {
-            // If no warehouse-category id (folder was inferred from products), just show toast
-            toast.error('Эту папку нельзя удалить — переместите все товары из неё');
-          }
-          setDeleteFolderTarget(null);
-        }}
-        title="Удалить папку"
-        message={`Удалить папку "${deleteFolderTarget?.name}"? Товары внутри будут перемещены в корень.`}
-        confirmText="Удалить"
-        variant="danger"
-      />
+      {/* Delete folder modal — two-action chooser:
+          (1) keep products, move them to root
+          (2) delete the folder AND send its products to trash (recoverable). */}
+      {deleteFolderTarget && (
+        <Modal
+          isOpen
+          onClose={() => setDeleteFolderTarget(null)}
+          title="Удалить папку"
+          size="sm"
+        >
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Что сделать с папкой <span className="font-semibold text-gray-900">«{deleteFolderTarget.name}»</span>?
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (deleteFolderTarget.id) {
+                  deleteCategoryMutation.mutate({ id: deleteFolderTarget.id });
+                } else {
+                  toast.error('Эту папку нельзя удалить — переместите все товары из неё');
+                }
+                setDeleteFolderTarget(null);
+              }}
+              className="card-interactive w-full flex items-start gap-3 px-4 py-3 text-left"
+            >
+              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 flex-shrink-0">
+                <FolderOpen className="h-4 w-4" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900">Удалить только папку</p>
+                <p className="text-xs text-gray-500 mt-0.5">Товары внутри переедут в корень склада</p>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (deleteFolderTarget.id) {
+                  deleteCategoryMutation.mutate({ id: deleteFolderTarget.id, deleteContents: true });
+                }
+                setDeleteFolderTarget(null);
+              }}
+              className="card-interactive w-full flex items-start gap-3 px-4 py-3 text-left border-red-100 hover:border-red-200"
+            >
+              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-red-500 flex-shrink-0">
+                <Trash2 className="h-4 w-4" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-gray-900">Удалить вместе с товарами</p>
+                <p className="text-xs text-gray-500 mt-0.5">Товары попадут в корзину, можно будет восстановить</p>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDeleteFolderTarget(null)}
+              className="btn-ghost w-full"
+            >
+              Отмена
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {/* Move to folder modal */}
       {showMoveModal && (

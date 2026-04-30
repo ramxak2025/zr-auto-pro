@@ -27,7 +27,12 @@ export class WarehouseService {
     return rows[0];
   }
 
-  async removeCategory(id: string, tenantID: string, moveProductsTo?: string) {
+  async removeCategory(
+    id: string,
+    tenantID: string,
+    moveProductsTo?: string,
+    deleteContents?: boolean,
+  ) {
     // Find the path of the category being deleted
     const { rows: catRows } = await this.pool.query(
       'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2',
@@ -40,8 +45,18 @@ export class WarehouseService {
     try {
       await client.query('BEGIN');
 
-      // Move products that were in this category (or subcategories)
-      if (moveProductsTo !== undefined) {
+      if (deleteContents) {
+        // Soft-delete every live product in this folder (and subfolders).
+        // The trash bin keeps them — owner can restore individually if a
+        // mistake was made.
+        await client.query(
+          `UPDATE products SET deleted_at = NOW()
+           WHERE tenant_id=$1
+             AND deleted_at IS NULL
+             AND (category=$2 OR category LIKE $2 || '/%')`,
+          [tenantID, deletedPath],
+        );
+      } else if (moveProductsTo !== undefined) {
         // Move to specific target folder (or root if empty string)
         const target = moveProductsTo || null;
         await client.query(
@@ -72,7 +87,7 @@ export class WarehouseService {
       client.release();
     }
 
-    return { message: 'Удалено' };
+    return { message: deleteContents ? 'Папка и товары удалены' : 'Папка удалена' };
   }
 
   async updateOrder(tenantID: string, orderedIds: string[]) {

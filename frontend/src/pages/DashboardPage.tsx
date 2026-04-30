@@ -12,7 +12,6 @@ import {
   CreditCard,
   ShieldCheck,
   ClipboardList,
-  Trophy,
   Play,
   Square,
   Clock,
@@ -29,9 +28,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi } from '../api/services';
-import type { SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
+import type { SalarySummary, UserRole, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 import { useNavigate } from 'react-router-dom';
+import CallsWidget from '../components/CallsWidget';
 
 // ---------------------------------------------------------------------------
 // Skeleton loader for cards
@@ -611,18 +611,6 @@ function AdminDashboard() {
   const { user } = useAuth();
   const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
 
-  const { data: ranking } = useQuery<EmployeeRanking>({
-    queryKey: ['employee-ranking'],
-    queryFn: async () => { const res = await checksApi.getRanking(); return res.data; },
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-    enabled: isOwner,
-  });
-
-  const [rankingTab, setRankingTab] = useState<'today' | 'month'>('today');
-
-  const rankingData = rankingTab === 'today' ? (ranking?.today || []) : (ranking?.month || []);
-
   return (
     <div className="space-y-5">
       {/* Analytics chart on top */}
@@ -631,55 +619,10 @@ function AdminDashboard() {
       {/* Staff status circles */}
       <StaffStatusCircles />
 
-      {/* Employee ranking for owner */}
-      {isOwner && ranking && (
-        <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-100">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100">
-                  <Trophy className="h-5 w-5 text-amber-600" />
-                </div>
-                <h3 className="text-base font-bold text-gray-900">Рейтинг сотрудников</h3>
-              </div>
-              <div className="flex rounded-lg bg-gray-100 p-0.5 self-start sm:self-auto">
-                <button type="button" onClick={() => setRankingTab('today')}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${rankingTab === 'today' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                  Сегодня
-                </button>
-                <button type="button" onClick={() => setRankingTab('month')}
-                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${rankingTab === 'month' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                  За месяц
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="divide-y divide-gray-50">
-            {rankingData.length === 0 ? (
-              <div className="p-8 text-center text-sm text-gray-400">Нет данных за выбранный период</div>
-            ) : (
-              rankingData.map((emp, idx) => {
-                const medals = ['bg-amber-100 text-amber-600', 'bg-gray-100 text-gray-500', 'bg-orange-100 text-orange-600'];
-                const medalColor = idx < 3 ? medals[idx] : 'bg-gray-50 text-gray-400';
-                return (
-                  <div key={emp.masterId} className="flex items-center gap-3 px-5 py-3.5 hover:bg-gray-50/50 transition-colors">
-                    <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold flex-shrink-0 ${medalColor}`}>
-                      {idx + 1}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{emp.masterName}</p>
-                      <p className="text-[11px] text-gray-400">{emp.checkCount} заказов</p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-bold text-gray-900">{formatMoney(emp.revenue)}</p>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
+      {/* Calls today (replaces the old employee ranking widget — owner asked
+          to surface telephony on the dashboard instead, since the employees
+          section already exposes per-master ranking inside each profile). */}
+      {isOwner && <CallsWidget />}
     </div>
   );
 }
