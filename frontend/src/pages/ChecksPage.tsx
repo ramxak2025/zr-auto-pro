@@ -1,6 +1,6 @@
 import { useState, memo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Plus, FileText, Trash2, Clock, MessageSquare, TrendingUp, Car, User as UserIcon, Percent, Package, AlertTriangle, ArrowDown, ArrowUp, ClipboardCheck } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -133,9 +133,14 @@ export default function ChecksPage() {
   const { hasPermission } = useAuth();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
+  // Pre-fill the master filter from ?masterId=… so deep-links from the
+  // Employees page ("Чеки сотрудника" button) drop the user straight into
+  // a pre-filtered view.
+  const [searchParams] = useSearchParams();
+  const initialMasterId = searchParams.get('masterId') || '';
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [masterId, setMasterId] = useState('');
+  const [masterId, setMasterId] = useState(initialMasterId);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showWarehouseDocs, setShowWarehouseDocs] = useState(false);
