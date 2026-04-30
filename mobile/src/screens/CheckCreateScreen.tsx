@@ -400,32 +400,42 @@ export default function CheckCreateScreen() {
               <Text style={styles.sectionLabel}>Информация о клиенте</Text>
             </View>
 
-            {/* Date/Time */}
-            <View style={styles.dateTimeCard}>
-              <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(true)}>
-                <Ionicons name="calendar-outline" size={16} color={colors.blue[600]} />
-                <Text style={styles.dateBtnText}>{dateStr}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.timeBtn} onPress={() => setShowTimePicker(true)}>
-                <Ionicons name="time-outline" size={16} color={colors.blue[600]} />
-                <Text style={styles.timeBtnText}>{timeStr}</Text>
-              </TouchableOpacity>
-            </View>
+            {/* Date/Time — only when editing an existing check.
+                For new checks the timestamp is set automatically on save
+                (checkDate stays as 'now'), so we hide the noisy picker
+                pair to keep the form focused on what really matters:
+                the client, the car, the line items, the payment. */}
+            {editId && (
+              <View style={styles.dateTimeCard}>
+                <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(true)}>
+                  <Ionicons name="calendar-outline" size={16} color={colors.blue[600]} />
+                  <Text style={styles.dateBtnText}>{dateStr}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.timeBtn} onPress={() => setShowTimePicker(true)}>
+                  <Ionicons name="time-outline" size={16} color={colors.blue[600]} />
+                  <Text style={styles.timeBtnText}>{timeStr}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-            <DateTimePickerModal
-              visible={showDatePicker}
-              value={checkDate}
-              mode="date"
-              onConfirm={(d) => { setShowDatePicker(false); const u = new Date(checkDate); u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate()); setCheckDate(u); }}
-              onCancel={() => setShowDatePicker(false)}
-            />
-            <DateTimePickerModal
-              visible={showTimePicker}
-              value={checkDate}
-              mode="time"
-              onConfirm={(d) => { setShowTimePicker(false); const u = new Date(checkDate); u.setHours(d.getHours(), d.getMinutes()); setCheckDate(u); }}
-              onCancel={() => setShowTimePicker(false)}
-            />
+            {editId && (
+              <>
+                <DateTimePickerModal
+                  visible={showDatePicker}
+                  value={checkDate}
+                  mode="date"
+                  onConfirm={(d) => { setShowDatePicker(false); const u = new Date(checkDate); u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate()); setCheckDate(u); }}
+                  onCancel={() => setShowDatePicker(false)}
+                />
+                <DateTimePickerModal
+                  visible={showTimePicker}
+                  value={checkDate}
+                  mode="time"
+                  onConfirm={(d) => { setShowTimePicker(false); const u = new Date(checkDate); u.setHours(d.getHours(), d.getMinutes()); setCheckDate(u); }}
+                  onCancel={() => setShowTimePicker(false)}
+                />
+              </>
+            )}
 
             {/* ═══ ПОИСК ПО ГОСНОМЕРУ ═══ */}
             <Text style={styles.sectionSubLabel}>ПОИСК ПО ГОСНОМЕРУ</Text>

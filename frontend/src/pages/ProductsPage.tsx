@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback, memo, FormEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Reorder, useDragControls } from 'framer-motion';
 import toast from 'react-hot-toast';
 import {
   Plus,
@@ -21,8 +22,7 @@ import {
   Warehouse,
   Download,
   Upload,
-  ChevronUp,
-  ChevronDown,
+  GripVertical,
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse, StockMovement } from '../types';
@@ -722,26 +722,21 @@ function FolderTile({
   hasLow,
   onClick,
   onDelete,
-  onMoveUp,
-  onMoveDown,
-  isFirst,
-  isLast,
   canManage,
   recentlyChecked,
   lastCheckDate,
+  dragHandleProps,
 }: {
   name: string;
   count: number;
   hasLow: boolean;
   onClick: () => void;
   onDelete?: () => void;
-  onMoveUp?: () => void;
-  onMoveDown?: () => void;
-  isFirst?: boolean;
-  isLast?: boolean;
   canManage?: boolean;
   recentlyChecked?: boolean;
   lastCheckDate?: string;
+  /** Pointer-down handler that activates the drag — provided by Reorder.Item parent. */
+  dragHandleProps?: { onPointerDown: (e: React.PointerEvent) => void };
 }) {
   return (
     <div
@@ -749,26 +744,16 @@ function FolderTile({
         recentlyChecked ? 'border-green-200 bg-green-50/50' : 'border-gray-100 bg-white'
       }`}
     >
-      {/* Sort arrows */}
-      {canManage && (
-        <div className="flex flex-col gap-0.5 flex-shrink-0">
-          <button
-            type="button"
-            disabled={isFirst}
-            onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }}
-            className="p-0.5 rounded hover:bg-gray-100 disabled:opacity-20"
-          >
-            <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
-          </button>
-          <button
-            type="button"
-            disabled={isLast}
-            onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }}
-            className="p-0.5 rounded hover:bg-gray-100 disabled:opacity-20"
-          >
-            <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
-          </button>
-        </div>
+      {/* Drag handle — long-press / press-and-drag to reorder */}
+      {canManage && dragHandleProps && (
+        <button
+          type="button"
+          aria-label="Перетащите чтобы переставить"
+          className="flex-shrink-0 cursor-grab active:cursor-grabbing touch-none p-1 rounded text-gray-300 hover:text-gray-500 hover:bg-gray-50 transition-colors"
+          onPointerDown={(e) => { e.stopPropagation(); dragHandleProps.onPointerDown(e); }}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
       )}
 
       {/* Main area — clickable to navigate */}
@@ -814,6 +799,49 @@ function FolderTile({
         </button>
       )}
     </div>
+  );
+}
+
+// Reorder.Item wrapper — wires the folder tile into framer-motion's
+// gesture-driven list. dragListener={false} disables the default whole-row
+// drag (which would conflict with the tap-to-open behaviour) and instead
+// hands control to a manually-triggered useDragControls() bound to the
+// grip handle inside FolderTile. Long-press / press-and-drag on the grip
+// starts the drag; release commits via Reorder.Group's onReorder.
+function FolderTileReorderItem({
+  folder,
+  checkInfo,
+  canManage,
+  onClick,
+  onDelete,
+}: {
+  folder: { name: string; count: number; hasLow: boolean; catId: string; fullPath: string };
+  checkInfo?: { recentlyChecked: boolean; lastCheckDate?: string };
+  canManage?: boolean;
+  onClick: () => void;
+  onDelete: () => void;
+}) {
+  const dragControls = useDragControls();
+  return (
+    <Reorder.Item
+      value={folder}
+      dragListener={false}
+      dragControls={dragControls}
+      // Disable layout animations on the wrapper itself so the folder
+      // tile's own border/transition styles aren't fought.
+    >
+      <FolderTile
+        name={folder.name}
+        count={folder.count}
+        hasLow={folder.hasLow}
+        onClick={onClick}
+        onDelete={onDelete}
+        canManage={canManage}
+        recentlyChecked={checkInfo?.recentlyChecked}
+        lastCheckDate={checkInfo?.lastCheckDate}
+        dragHandleProps={{ onPointerDown: (e) => dragControls.start(e) }}
+      />
+    </Reorder.Item>
   );
 }
 
@@ -1868,38 +1896,33 @@ export default function ProductsPage() {
           {/* ── Category folders list ── */}
           {(showingRoot || showingFolderContents) && subfolders.length > 0 && (
             <div className="space-y-1.5">
-              {subfolders.map((folder, idx) => {
-                const checkInfo = folderCheckInfo.get(folder.name);
-                return (
-                  <FolderTile
+              {/* Reorder.Group lets users grab a folder by its drag-handle and reorder.
+                  Works on both pointer (mouse) and touch — long-press the grip dots,
+                  drag, drop. We sync the resulting order to the backend via
+                  reorderCategoriesMutation, but only fire when the order really
+                  changed to avoid extra writes. */}
+              <Reorder.Group
+                axis="y"
+                values={subfolders}
+                onReorder={(next) => {
+                  const before = subfolders.map((f) => f.catId).filter(Boolean).join('|');
+                  const after = next.map((f: { catId: string }) => f.catId).filter(Boolean).join('|');
+                  if (before === after) return;
+                  reorderCategoriesMutation.mutate(next.map((f: { catId: string }) => f.catId).filter(Boolean));
+                }}
+                className="space-y-1.5"
+              >
+                {subfolders.map((folder) => (
+                  <FolderTileReorderItem
                     key={folder.name}
-                    name={folder.name}
-                    count={folder.count}
-                    hasLow={folder.hasLow}
-                    onClick={() => enterFolder(folder.name)}
+                    folder={folder}
+                    checkInfo={folderCheckInfo.get(folder.name)}
                     canManage={canManageWarehouse}
-                    isFirst={idx === 0}
-                    isLast={idx === subfolders.length - 1}
+                    onClick={() => enterFolder(folder.name)}
                     onDelete={() => setDeleteFolderTarget({ id: folder.catId, name: folder.name, path: folder.fullPath })}
-                    onMoveUp={() => {
-                      if (idx === 0) return;
-                      const ids = subfolders.map((f) => f.catId).filter(Boolean);
-                      if (ids.length < 2) return;
-                      [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
-                      reorderCategoriesMutation.mutate(ids);
-                    }}
-                    onMoveDown={() => {
-                      if (idx === subfolders.length - 1) return;
-                      const ids = subfolders.map((f) => f.catId).filter(Boolean);
-                      if (ids.length < 2) return;
-                      [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
-                      reorderCategoriesMutation.mutate(ids);
-                    }}
-                    recentlyChecked={checkInfo?.recentlyChecked}
-                    lastCheckDate={checkInfo?.lastCheckDate}
                   />
-                );
-              })}
+                ))}
+              </Reorder.Group>
               {canManageWarehouse && (
                 <div
                   role="button"
