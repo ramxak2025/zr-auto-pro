@@ -31,6 +31,8 @@ import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../..
 import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi } from '../api/services';
 import type { SalarySummary, UserRole, EmployeeRanking, TodayEmployeeStatus, Shift } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
+import EmployeeDetailModal from '../components/EmployeeDetailModal';
+import { AnimatePresence } from 'framer-motion';
 
 // ---------------------------------------------------------------------------
 // Skeleton loader for cards
@@ -140,6 +142,9 @@ function StaffStatusCircles() {
     refetchInterval: 60_000,
   });
 
+  // Selected employee — opens the detail modal
+  const [selected, setSelected] = useState<TodayEmployeeStatus | null>(null);
+
   const statuses = todayData ?? [];
   if (statuses.length === 0) return null;
 
@@ -200,18 +205,24 @@ function StaffStatusCircles() {
         </p>
         <div className="grid grid-cols-5 gap-3">
           {items.map((s) => (
-            <div key={s.userId} className="flex flex-col items-center gap-1 min-w-0" title={getStatusLabel(s)}>
+            <button
+              type="button"
+              key={s.userId}
+              onClick={() => setSelected(s)}
+              className="flex flex-col items-center gap-1 min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 rounded-lg p-1 -m-1 transition-transform active:scale-95"
+              title={getStatusLabel(s)}
+            >
               <div className="relative">
-                <div className={`w-11 h-11 rounded-full ring-2 flex items-center justify-center text-xs font-bold text-white ${getCircleColor(s)}`}>
+                <div className={`w-11 h-11 rounded-full ring-2 flex items-center justify-center text-xs font-bold text-white transition-all group-hover:ring-4 group-hover:scale-105 ${getCircleColor(s)}`}>
                   {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2)}
                 </div>
                 {getStatusEmoji(s) && (
                   <span className="absolute -bottom-0.5 -right-0.5 text-xs">{getStatusEmoji(s)}</span>
                 )}
               </div>
-              <span className="text-[10px] text-gray-500 w-full truncate text-center">{s.fullName.split(' ')[0]}</span>
+              <span className="text-[10px] text-gray-500 w-full truncate text-center group-hover:text-gray-900 transition-colors">{s.fullName.split(' ')[0]}</span>
               <span className="text-[9px] text-gray-400 w-full truncate text-center">{getStatusLabel(s)}</span>
-            </div>
+            </button>
           ))}
         </div>
       </div>
@@ -236,6 +247,16 @@ function StaffStatusCircles() {
       {renderGroup('Прогул', '❌', absent)}
       {renderGroup('Выходной', '🌙', dayOff)}
       {renderGroup('Больничный', '🏥', sick)}
+
+      {/* Detail modal for the tapped employee */}
+      <AnimatePresence>
+        {selected && (
+          <EmployeeDetailModal
+            status={selected}
+            onClose={() => setSelected(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -438,10 +459,10 @@ function RevenueChart() {
   const revChange = prevRevenue > 0 ? Math.round(((lastRevenue - prevRevenue) / prevRevenue) * 100) : 0;
 
   return (
-    <div className="rounded-3xl bg-gradient-to-br from-blue-950 via-slate-900 to-blue-950 overflow-hidden shadow-xl">
+    <div className="rounded-3xl bg-gradient-to-br from-blue-950 via-slate-900 to-blue-950 overflow-hidden shadow-xl ring-1 ring-white/5 transition-shadow hover:shadow-2xl">
       {/* Header */}
       <div className="px-5 pt-5 pb-3">
-        <p className="text-[11px] font-medium text-slate-400 uppercase tracking-widest mb-3">Аналитика</p>
+        <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.18em] mb-3">Аналитика</p>
         <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1 backdrop-blur-sm mb-2">
           {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
             <button
@@ -524,13 +545,27 @@ function RevenueChart() {
                 <path d={buildAreaPath(profitValues, chartHeight, chartWidth, maxProfit)} fill="url(#profGrad)" />
                 <path d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)} fill="none" stroke="rgb(6,182,212)" strokeWidth="2" strokeLinecap="round" />
               </svg>
-              {/* X-axis labels */}
+              {/* X-axis labels — absolutely positioned to line up exactly with the
+                  SVG point x-coordinates (which are padding + i * step), so the
+                  numeric day labels sit perfectly under their data points. The
+                  earlier flex layout couldn't honour the chart padding and made
+                  long-period (month) labels drift off their points. */}
               {period !== 'today' && (
-                <div className="flex mt-1 px-4">
+                <div className="relative mt-1 h-4">
                   {data.points.map((point: { date: string }, idx: number) => {
                     const label = formatLabel(point.date, idx, data.points.length);
+                    if (!label) return null;
+                    const padding = 16;
+                    const range = chartWidth - 2 * padding;
+                    const denom = Math.max(data.points.length - 1, 1);
+                    const xUnits = padding + (idx / denom) * range;
+                    const xPct = (xUnits / chartWidth) * 100;
                     return (
-                      <span key={idx} className="text-[10px] text-slate-500 text-center flex-1">
+                      <span
+                        key={idx}
+                        className="absolute -translate-x-1/2 text-[10px] text-slate-500 tabular-nums"
+                        style={{ left: `${xPct}%` }}
+                      >
                         {label}
                       </span>
                     );
