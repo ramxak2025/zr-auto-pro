@@ -1237,6 +1237,30 @@ export default function ProductsPage() {
     onError: () => toast.error('Ошибка удаления папки'),
   });
 
+  // Some folders are "path-only" — they aren't backed by a row in
+  // warehouse_categories (they exist purely because some products list that
+  // string in their `category` column). For those there's no category id to
+  // hit the backend's removeCategory endpoint with, so we soft-delete every
+  // product whose category equals the path or starts with `${path}/` directly.
+  // Live-only filter (deletedAt IS NULL) is implicit — soft-deleted products
+  // are filtered out of `allProducts` upstream.
+  const deletePathContentsMutation = useMutation({
+    mutationFn: async (path: string) => {
+      const matched = allProducts.filter(
+        (p: Product) => !!p.category && (p.category === path || p.category.startsWith(path + '/')),
+      );
+      if (matched.length === 0) return { count: 0 };
+      await Promise.all(matched.map((p: Product) => productsApi.remove(p.id)));
+      return { count: matched.length };
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      toast.success(res.count > 0 ? `Папка и ${res.count} товаров удалены` : 'Папка удалена');
+    },
+    onError: () => toast.error('Не удалось удалить товары'),
+  });
+
   const reorderCategoriesMutation = useMutation({
     mutationFn: (orderedIds: string[]) => warehouseCategoriesApi.updateOrder(orderedIds),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] }),
@@ -2120,32 +2144,40 @@ export default function ProductsPage() {
               Что сделать с папкой <span className="font-semibold text-gray-900">«{deleteFolderTarget.name}»</span>?
             </p>
 
-            <button
-              type="button"
-              onClick={() => {
-                if (deleteFolderTarget.id) {
+            {/* Option 1 — keep products, drop the folder. Backend supports this
+                only for folders that have a real warehouse_categories row;
+                "path-only" folders (inferred from product.category) are
+                non-deletable on their own and need the path-soft-delete fallback below. */}
+            {deleteFolderTarget.id ? (
+              <button
+                type="button"
+                onClick={() => {
                   deleteCategoryMutation.mutate({ id: deleteFolderTarget.id });
-                } else {
-                  toast.error('Эту папку нельзя удалить — переместите все товары из неё');
-                }
-                setDeleteFolderTarget(null);
-              }}
-              className="card-interactive w-full flex items-start gap-3 px-4 py-3 text-left"
-            >
-              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 flex-shrink-0">
-                <FolderOpen className="h-4 w-4" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">Удалить только папку</p>
-                <p className="text-xs text-gray-500 mt-0.5">Товары внутри переедут в корень склада</p>
-              </div>
-            </button>
+                  setDeleteFolderTarget(null);
+                }}
+                className="card-interactive w-full flex items-start gap-3 px-4 py-3 text-left"
+              >
+                <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 flex-shrink-0">
+                  <FolderOpen className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">Удалить только папку</p>
+                  <p className="text-xs text-gray-500 mt-0.5">Товары внутри переедут в корень склада</p>
+                </div>
+              </button>
+            ) : null}
 
+            {/* Option 2 — soft-delete the folder's contents.
+                For id-backed folders we hit the backend's deleteContents flag.
+                For path-only folders we fan out per-product DELETE requests so
+                every product whose category sits in this path lands in the trash. */}
             <button
               type="button"
               onClick={() => {
                 if (deleteFolderTarget.id) {
                   deleteCategoryMutation.mutate({ id: deleteFolderTarget.id, deleteContents: true });
+                } else if (deleteFolderTarget.path) {
+                  deletePathContentsMutation.mutate(deleteFolderTarget.path);
                 }
                 setDeleteFolderTarget(null);
               }}
