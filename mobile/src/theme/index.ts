@@ -66,12 +66,15 @@ export const colors = {
     500: '#eab308',
     600: '#ca8a04',
     700: '#a16207',
+    800: '#854d0e',
   },
   amber: {
     50: '#fffbeb',
     100: '#fef3c7',
     200: '#fde68a',
     600: '#d97706',
+    700: '#b45309',
+    800: '#92400e',
   },
   emerald: {
     50: '#ecfdf5',
@@ -84,6 +87,7 @@ export const colors = {
     400: '#fb923c',
     500: '#f97316',
     600: '#ea580c',
+    700: '#c2410c',
   },
   purple: {
     50: '#faf5ff',
@@ -106,6 +110,7 @@ export const colors = {
     400: '#fb7185',
     500: '#f43f5e',
     600: '#e11d48',
+    700: '#be123c',
   },
   violet: {
     50: '#f5f3ff',
@@ -123,7 +128,9 @@ export const colors = {
     900: '#0f172a',
   },
   cyan: {
+    50: '#ecfeff',
     400: '#22d3ee',
+    600: '#0891b2',
   },
   white: '#ffffff',
   black: '#000000',

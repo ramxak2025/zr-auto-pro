@@ -17,6 +17,7 @@ import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 
@@ -159,6 +160,7 @@ const GridDayRow = memo(function GridDayRow({ userId, userName, days, entryMap, 
 // ============== GRID TAB ==============
 function GridTab() {
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const { user } = useAuth();
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -458,6 +460,7 @@ function GridTab() {
               onScroll={handleLeftScroll}
               scrollEventThrottle={16}
               bounces={false}
+              contentContainerStyle={{ paddingBottom: tabBarHeight }}
             >
               {activeUsers.map((u, rowIdx) => {
                 const stats = userStats.get(u.id);
@@ -541,6 +544,7 @@ function GridTab() {
                 onScroll={handleRightScroll}
                 scrollEventThrottle={16}
                 bounces={false}
+                contentContainerStyle={{ paddingBottom: tabBarHeight }}
               >
                 {activeUsers.map((u, rowIdx) => (
                   <GridDayRow
@@ -948,7 +952,7 @@ function RatingTab() {
   })();
 
   return (
-    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3] }}>
+    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3], paddingBottom: 120 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], borderWidth: 1, borderColor: colors.gray[100] }}>
         <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ padding: spacing[1] }}>
           <Ionicons name="chevron-back" size={20} color={colors.gray[500]} />
@@ -1485,10 +1489,12 @@ const styles = StyleSheet.create({
   },
 
   // ── Tab content ──
+  // paddingBottom reserves space for the floating iOS tab bar:
+  // 60 (bar) + 8 (padTop) + 34 (max home indicator) + 16 (buffer) ≈ 120
   tabContent: {
     padding: spacing[4],
     gap: spacing[3],
-    paddingBottom: spacing[8],
+    paddingBottom: 120,
   },
 
   // ── Empty state ──

@@ -7,7 +7,10 @@ import {
   splitPlate,
   isValidPlate,
   isRussianInput,
+  normalizeForeignPlate,
 } from '../utils/plateMask';
+
+export type PlateMode = 'ru' | 'foreign';
 
 interface Props {
   value: string;
@@ -15,18 +18,26 @@ interface Props {
   onValidPlate?: (plate: string) => void;
   autoFocus?: boolean;
   placeholder?: string;
+  /**
+   * Explicit mode. When provided, the input is locked to this mode and
+   * does NOT auto-switch based on value. Recommended — pair with
+   * <PlateModeSwitcher /> from the parent.
+   *
+   * When undefined, falls back to legacy auto-detect via isRussianInput()
+   * (kept for backwards compatibility).
+   */
+  mode?: PlateMode;
 }
 
 /**
- * Russian license plate input that looks like a real plate.
+ * Russian / foreign license plate input.
  *
- * One string under the hood (e.g. "А123АА77"), displayed as two visual
- * blocks: [А 123 АА] | [77 + 🇷🇺 RUS]. Backspace deletes one character
- * from the right, seamlessly crossing the region/main boundary.
- *
- * Latin input auto-converts to Cyrillic (A→А, B→В, etc.).
- * When input doesn't start with a valid plate letter → falls back to
- * plain text input (for foreign plates or free-text search).
+ * - mode='ru' (or auto-detected) — Russian visual plate with main+region split.
+ *   Latin chars auto-convert to Cyrillic. Region NEVER duplicates inside
+ *   main: splitPlate() makes sure last 2-3 digits live in the right block
+ *   only.
+ * - mode='foreign' — free-text uppercase with INT marker on the left.
+ *   No Cyrillic conversion.
  */
 export default function RussianPlateInput({
   value,
@@ -34,21 +45,26 @@ export default function RussianPlateInput({
   onValidPlate,
   autoFocus = false,
   placeholder = 'Введите госномер',
+  mode,
 }: Props) {
   const inputRef = useRef<TextInput>(null);
-  const isRu = useMemo(() => !value || isRussianInput(value), [value]);
-  const { main, region } = useMemo(() => splitPlate(value), [value]);
+
+  // Resolve effective mode:
+  //   - explicit prop wins
+  //   - else: legacy auto-detect (kept for unmigrated screens)
+  const effectiveMode: PlateMode = mode ?? (
+    !value || isRussianInput(value) ? 'ru' : 'foreign'
+  );
+  const isRu = effectiveMode === 'ru';
+
+  const { region } = useMemo(() => splitPlate(value), [value]);
 
   const handleChange = useCallback(
     (text: string) => {
-      if (!isRu && value && !isRussianInput(value)) {
-        // Foreign mode: free text
-        onChangeText(text.toUpperCase());
+      if (!isRu) {
+        onChangeText(normalizeForeignPlate(text));
         return;
       }
-
-      // Russian mode: process through mask
-      // Remove display spaces before processing
       const raw = text.replace(/\s/g, '');
       const clean = processPlateInput(raw);
       onChangeText(clean);
@@ -57,10 +73,10 @@ export default function RussianPlateInput({
         onValidPlate(clean);
       }
     },
-    [isRu, value, onChangeText, onValidPlate],
+    [isRu, onChangeText, onValidPlate],
   );
 
-  // Display value: Russian plates get visual formatting, foreign = raw
+  // Display value: Russian gets visual formatting, foreign = raw
   const displayValue = useMemo(() => {
     if (!value) return '';
     if (!isRu) return value;
@@ -68,8 +84,7 @@ export default function RussianPlateInput({
     return r ? `${formatMain(m)} ${r}` : formatMain(m);
   }, [value, isRu]);
 
-  if (!isRu && value) {
-    // Foreign plate — simple styled input
+  if (!isRu) {
     return (
       <View style={[styles.plateContainer, styles.plateForeign]}>
         <View style={styles.foreignStrip}>
@@ -92,10 +107,9 @@ export default function RussianPlateInput({
     );
   }
 
-  // Russian plate — visual plate design
   return (
     <View style={styles.plateContainer}>
-      {/* Main section */}
+      {/* Main section (А 123 АА) — region lives in the right block only */}
       <View style={styles.mainSection}>
         <TextInput
           ref={inputRef}
@@ -107,20 +121,18 @@ export default function RussianPlateInput({
           autoCapitalize="characters"
           autoCorrect={false}
           autoFocus={autoFocus}
-          maxLength={14} // "А 123 АА 177" = 12 chars + buffer
+          maxLength={14} // "А 123 АА 177" buffer
           returnKeyType="search"
         />
       </View>
 
-      {/* Divider */}
       <View style={styles.divider} />
 
-      {/* Region section */}
+      {/* Region section (77 + flag + RUS) */}
       <View style={styles.regionSection}>
         <Text style={[styles.regionText, !region && styles.regionPlaceholder]}>
           {region || '00'}
         </Text>
-        {/* Russian flag */}
         <View style={styles.flagRow}>
           <View style={[styles.flagBand, { backgroundColor: '#fff' }]} />
           <View style={[styles.flagBand, { backgroundColor: '#0039A6' }]} />

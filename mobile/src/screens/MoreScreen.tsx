@@ -212,7 +212,8 @@ export default function MoreScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },
+  // paddingBottom 120 reserves space for the floating iOS tab bar
+  scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: 120 },
   // User card
   userCard: {
     backgroundColor: colors.white,

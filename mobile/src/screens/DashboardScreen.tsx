@@ -953,7 +953,8 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scroll: { flex: 1 },
-  scrollContent2: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },
+  // paddingBottom 120 reserves space for the floating iOS tab bar (60+8+34+18)
+  scrollContent2: { padding: spacing[4], gap: spacing[4], paddingBottom: 120 },
   headerSection: { marginBottom: spacing[1] },
   headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   headerSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },

@@ -24,6 +24,7 @@ import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { tapMedium, notifySuccess } from '../utils/haptics';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Product, PaginatedResponse, StockMovement } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -36,6 +37,7 @@ function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=
 
 export default function ProductsScreen() {
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const { hasPermission, user } = useAuth();
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageWarehouse = hasPermission('warehouse_access');
@@ -699,7 +701,9 @@ export default function ProductsScreen() {
           <Ionicons name="cube" size={20} color={colors.primary[600]} />
           <Text style={styles.title}>{'\u0421\u043A\u043B\u0430\u0434'}</Text>
           <View style={styles.countBadge}>
-            <Text style={styles.countBadgeText}>{warehouseStats.count} {'\u0442\u043E\u0432\u0430\u0440\u043E\u0432'}</Text>
+            <Text style={styles.countBadgeText}>
+              {data === undefined ? '\u2026' : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`}
+            </Text>
           </View>
         </View>
         <View style={{ flexDirection: 'row', gap: spacing[2] }}>
@@ -756,7 +760,10 @@ export default function ProductsScreen() {
         />
       </View>
 
-      {isLoading ? (
+      {/* Loading: show skeleton when no data yet (cold start, no cache hit). */}
+      {/* Empty state only fires when query has resolved (data !== undefined) */}
+      {/* AND the result is genuinely empty \u2014 never on a stale-undefined flash. */}
+      {isLoading || data === undefined ? (
         <ListSkeleton count={8} />
       ) : !search && sortedFolders.length === 0 && currentProducts.length === 0 ? (
         <EmptyState
@@ -804,7 +811,10 @@ export default function ProductsScreen() {
               </AnimatedCard>
             );
           }}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={{
+            ...styles.list,
+            paddingBottom: tabBarHeight + spacing[4],
+          }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
           ListHeaderComponent={
             !search && sortedFolders.length > 0 ? (

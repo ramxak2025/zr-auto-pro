@@ -15,8 +15,11 @@ import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import RussianPlateInput from '../components/RussianPlateInput';
+import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { normalizePlateForSearch } from '../utils/plateMask';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Client, Car, User, Service, Product, CheckServiceLine, CheckProductLine, PaymentMethod } from '../../../shared/types';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -34,8 +37,12 @@ export default function CheckCreateScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const editId = route.params?.id;
   const isStackScreen = !!editId;
+  // When opened from the bottom tab (route name 'NewCheck'), the floating
+  // tab bar covers the bottom of the screen → reserve extra padding.
+  const openedFromTab = route.name === 'NewCheck';
 
   // Date with native picker
   const [checkDate, setCheckDate] = useState(new Date());
@@ -59,6 +66,7 @@ export default function CheckCreateScreen() {
 
   // Pickers
   const [plateSearch, setPlateSearch] = useState('');
+  const [plateMode, setPlateMode] = useState<PlateMode>('ru');
   const [showPlatePicker, setShowPlatePicker] = useState(false);
   const [showServicePicker, setShowServicePicker] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
@@ -71,11 +79,20 @@ export default function CheckCreateScreen() {
   // Service search
   const [serviceSearch, setServiceSearch] = useState('');
 
-  // Load data — fires when plate input has ≥1 char (inline search, no modal needed)
-  const { data: plateClients } = useQuery<Client[]>({
-    queryKey: ['clients-plate', plateSearch],
-    queryFn: async () => { const res = await clientsApi.getAll({ search: plateSearch, limit: 20 }); return res.data.data || []; },
-    enabled: plateSearch.length >= 1,
+  // Load data — search by normalized plate (latin→cyrillic, no spaces)
+  // so latin "P332PA05" or "р332ра05" finds the same client as "Р332РА05".
+  const normalizedSearch = useMemo(
+    () => normalizePlateForSearch(plateSearch, plateMode),
+    [plateSearch, plateMode],
+  );
+  const { data: plateClients, isFetching: isFetchingPlate } = useQuery<Client[]>({
+    queryKey: ['clients-plate', normalizedSearch, plateMode],
+    queryFn: async () => {
+      const res = await clientsApi.getAll({ search: normalizedSearch, limit: 20 });
+      return res.data.data || [];
+    },
+    enabled: normalizedSearch.length >= 2,
+    placeholderData: (prev) => prev,
   });
 
   const { data: clientData } = useQuery<Client>({
@@ -104,21 +121,25 @@ export default function CheckCreateScreen() {
     enabled: showProductPicker,
   });
 
-  // Plate search results
+  // Plate search results — match normalized plate substring or fullName loose match
   const plateResults = useMemo(() => {
     if (!plateClients) return [];
+    const sn = normalizedSearch;
+    const fnQuery = plateSearch.toLowerCase();
     const results: { client: Client; car: Car }[] = [];
     for (const client of plateClients) {
-      if (client.cars) {
-        for (const car of client.cars) {
-          if (!plateSearch || car.plateNumber?.toLowerCase().includes(plateSearch.toLowerCase()) || client.fullName?.toLowerCase().includes(plateSearch.toLowerCase())) {
-            results.push({ client, car });
-          }
+      if (!client.cars) continue;
+      for (const car of client.cars) {
+        const carPlateNorm = normalizePlateForSearch(car.plateNumber || '', plateMode);
+        const matchesPlate = sn && carPlateNorm.includes(sn);
+        const matchesName = fnQuery.length >= 2 && client.fullName?.toLowerCase().includes(fnQuery);
+        if (!sn || matchesPlate || matchesName) {
+          results.push({ client, car });
         }
       }
     }
     return results;
-  }, [plateClients, plateSearch]);
+  }, [plateClients, plateSearch, plateMode, normalizedSearch]);
 
   // Filtered services
   const filteredServices = useMemo(() => {
@@ -391,7 +412,14 @@ export default function CheckCreateScreen() {
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[
+            styles.scrollContent,
+            openedFromTab && { paddingBottom: tabBarHeight + spacing[4] },
+          ]}
+          keyboardShouldPersistTaps="handled"
+        >
 
           {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
           <View style={styles.sectionClient}>
@@ -438,17 +466,21 @@ export default function CheckCreateScreen() {
             )}
 
             {/* ═══ ПОИСК ПО ГОСНОМЕРУ ═══ */}
-            <Text style={styles.sectionSubLabel}>ПОИСК ПО ГОСНОМЕРУ</Text>
+            <View style={styles.plateLabelRow}>
+              <Text style={styles.sectionSubLabel}>ПОИСК ПО ГОСНОМЕРУ</Text>
+              <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
+            </View>
 
-            {/* Realistic license plate input */}
+            {/* Realistic license plate input — controlled mode */}
             <RussianPlateInput
               value={plateSearch}
               onChangeText={setPlateSearch}
               autoFocus={false}
+              mode={plateMode}
             />
 
             {/* Inline search results — appear right below the plate */}
-            {plateSearch.length >= 1 && plateResults.length > 0 && (
+            {normalizedSearch.length >= 2 && plateResults.length > 0 && (
               <View style={styles.inlineResults}>
                 {plateResults.slice(0, 5).map(({ client, car }) => (
                   <TouchableOpacity
@@ -469,7 +501,8 @@ export default function CheckCreateScreen() {
                 ))}
               </View>
             )}
-            {plateSearch.length >= 2 && plateResults.length === 0 && (
+            {/* Show "not found" only after search completed (no flash on partial input) */}
+            {normalizedSearch.length >= 2 && plateResults.length === 0 && !isFetchingPlate && (
               <Text style={styles.inlineNoResults}>Клиент не найден</Text>
             )}
 
@@ -1036,6 +1069,7 @@ const styles = StyleSheet.create({
   inlineResultName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   inlineResultSub: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
   inlineNoResults: { fontSize: 12, color: colors.gray[400], textAlign: 'center' as const, paddingVertical: spacing[3] },
+  plateLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[1.5] },
   // Car
   carChip: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], borderWidth: 1, borderColor: colors.blue[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[3], paddingVertical: spacing[2], backgroundColor: colors.white },
   carChipActive: { borderColor: colors.blue[500], backgroundColor: colors.blue[50] },

@@ -148,3 +148,66 @@ export function isRussianInput(text: string): boolean {
   const cyr = LAT_TO_CYR[first] || first;
   return VALID_CYRILLIC.has(cyr);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Foreign plate normalization
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Normalize a foreign-mode plate input.
+ *
+ * Rules:
+ *  - Uppercase
+ *  - Collapse multiple spaces into single space
+ *  - Trim leading/trailing whitespace
+ *  - Keep only [A-Z 0-9 \- /] (drop accidental cyrillic / specials)
+ *  - Max 20 characters
+ *
+ * Examples:
+ *   "  bg-3845-pa  " → "BG-3845-PA"
+ *   "t 123 ab"        → "T 123 AB"
+ *   "BG3845PA"        → "BG3845PA"
+ */
+export function normalizeForeignPlate(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .toUpperCase()
+    .replace(/[^A-Z0-9 \-/]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 20);
+}
+
+/**
+ * Normalize plate for backend search (clients/cars).
+ *
+ * Returns a clean string without spaces/regional dividers, ready for
+ * the `?search=` parameter on `clients/getAll`.
+ *
+ *  - mode='ru':   pass through processPlateInput (latin→cyrillic, drop invalid)
+ *  - mode='foreign': uppercase + drop spaces/dashes (server typically stores
+ *                    a denormalized version, so search by raw chars wins)
+ *
+ * Examples:
+ *   normalizePlateForSearch('p 332 pa 05', 'ru')        → 'Р332РА05'
+ *   normalizePlateForSearch('р332ра05', 'ru')           → 'Р332РА05'
+ *   normalizePlateForSearch('bg-3845-pa', 'foreign')    → 'BG3845PA'
+ *   normalizePlateForSearch('BG3845PA', 'foreign')      → 'BG3845PA'
+ */
+export function normalizePlateForSearch(raw: string, mode: 'ru' | 'foreign' = 'ru'): string {
+  if (!raw) return '';
+  if (mode === 'ru') {
+    return processPlateInput(raw.replace(/\s/g, ''));
+  }
+  // foreign: drop separators for tighter substring match
+  return normalizeForeignPlate(raw).replace(/[\s\-/]/g, '');
+}
+
+/**
+ * Decide initial mode from an existing value (e.g. when editing an existing
+ * client). Defaults to 'ru' for empty input.
+ */
+export function detectPlateMode(value: string): 'ru' | 'foreign' {
+  if (!value) return 'ru';
+  return isRussianInput(value) ? 'ru' : 'foreign';
+}

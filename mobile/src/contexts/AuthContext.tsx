@@ -1,7 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { authApi } from '../api/services';
+import type { QueryClient } from '@tanstack/react-query';
+import {
+  authApi,
+  productsApi,
+  servicesApi,
+  usersApi,
+  warehouseCategoriesApi,
+} from '../api/services';
 import { onAuthExpired } from '../api/axios';
+import { clearPersistentCache } from '../utils/persistentCache';
 import type { User, UserPermissions, UserRole } from '../../../shared/types';
 
 interface AuthContextType {
@@ -17,7 +25,60 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+interface AuthProviderProps {
+  children: ReactNode;
+  /**
+   * Optional QueryClient. When provided we kick off prefetches for the
+   * heavy reference data (warehouse, services, users) right after a
+   * successful login so the user perceives subsequent screens as instant.
+   */
+  queryClient?: QueryClient;
+}
+
+/**
+ * Fire-and-forget prefetch of cacheable reference data.
+ * Errors are swallowed — they'll surface naturally when the screen mounts.
+ */
+function prefetchAfterLogin(qc: QueryClient): void {
+  qc.prefetchQuery({
+    queryKey: ['products', { search: '', limit: 500 }],
+    queryFn: async () => {
+      const res = await productsApi.getAll({ search: '', page: 1, limit: 500 });
+      return res.data;
+    },
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  qc.prefetchQuery({
+    queryKey: ['warehouse-categories'],
+    queryFn: async () => (await warehouseCategoriesApi.getAll()).data,
+    staleTime: 10 * 60_000,
+  }).catch(() => {});
+
+  qc.prefetchQuery({
+    queryKey: ['all-services'],
+    queryFn: async () => {
+      const res = await servicesApi.getAll({ limit: 500 });
+      return res.data?.data || res.data;
+    },
+    staleTime: 10 * 60_000,
+  }).catch(() => {});
+
+  qc.prefetchQuery({
+    queryKey: ['all-users'],
+    queryFn: async () => (await usersApi.getAll()).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  // Mirror key 'users' since some screens use it instead of 'all-users'
+  qc.prefetchQuery({
+    queryKey: ['users'],
+    queryFn: async () => (await usersApi.getAll()).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+}
+
+export function AuthProvider({ children, queryClient }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,7 +90,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(stored);
         authApi
           .me()
-          .then((res) => setUser(res.data))
+          .then((res: any) => {
+            setUser(res.data);
+            // Token still valid — kick off prefetch for warm session
+            if (queryClient) prefetchAfterLogin(queryClient);
+          })
           .catch(() => {
             AsyncStorage.removeItem('token');
             setToken(null);
@@ -39,15 +104,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setLoading(false);
       }
     });
-  }, []);
+  }, [queryClient]);
 
   // Listen for 401 events from axios interceptor
   useEffect(() => {
     return onAuthExpired(() => {
       setToken(null);
       setUser(null);
+      // Clear persistent cache so the next login starts fresh
+      clearPersistentCache().catch(() => {});
+      queryClient?.clear();
     });
-  }, []);
+  }, [queryClient]);
 
   const login = async (phone: string, password: string) => {
     const res = await authApi.login({ phone, password });
@@ -55,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await AsyncStorage.setItem('token', t);
     setToken(t);
     setUser(u);
+    if (queryClient) prefetchAfterLogin(queryClient);
   };
 
   const refreshUser = async () => {
@@ -69,6 +138,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     authApi.logout().catch(() => {});
     await AsyncStorage.removeItem('token');
+    await clearPersistentCache().catch(() => {});
+    queryClient?.clear();
     setToken(null);
     setUser(null);
   };

@@ -816,7 +816,8 @@ const styles = StyleSheet.create({
   clearFiltersBtnText: { fontSize: fontSize.xs, color: colors.red[500], fontWeight: fontWeight.medium },
 
   // ── List ────────────────────────────────────────────────────────
-  list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8] },
+  // paddingBottom 120 reserves space for the floating iOS tab bar
+  list: { paddingHorizontal: spacing[4], paddingBottom: 120 },
 
   // Date group headers
   dateGroupHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2.5], marginTop: spacing[1] },
