@@ -1,25 +1,22 @@
 /**
- * TabBar — iOS variant. Floating Liquid Glass pill.
+ * TabBar — iOS variant. Floating Liquid Glass pill with sliding capsule.
  *
- *  • UIVisualEffectView (via expo-blur) for native iOS material — no fake CSS blur
- *  • systemUltraThinMaterialLight tint — closest match to system iOS bar
- *  • Outer soft glow tinted to brand
- *  • Top hairline rim for "highlight" depth, bottom hairline for shadow line
- *  • Active vs inactive: tint colour + label weight only — NO indicator dot,
- *    NO underline, NO Android-style pill
- *  • Centre Касса button: compact 48pt circular GlassDome — gradient tint
- *    with translucent overlay, looks premium without dominating the bar
- *  • Haptic feedback (select for tabs, impact for Касса)
- *  • Safe-area bottom padding for home-indicator devices
+ *  • UIVisualEffectView via the autexa-liquid-glass native module
+ *    (UIBlurEffect.systemMaterial — more saturated than ultraThin so the
+ *    glass surface reads as glass even over a flat-coloured screen)
+ *  • Animated capsule indicator slides between tabs on selection — gives
+ *    the "liquid blob" feel users expect from iOS 26 native bars
+ *  • Centre Касса button: 46pt circular GlassDome
+ *  • Haptic feedback, safe-area bottom padding
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { AutexaLiquidGlassView } from 'autexa-liquid-glass';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { haptic } from '../platform/haptics';
 import { Icon } from '../platform/Icon';
 import { SPRING_TIGHT } from '../platform/motion';
@@ -29,56 +26,77 @@ import { TAB_DEFINITIONS } from './TabBarShared';
 
 const BAR_HEIGHT = 58;
 const KASSA_SIZE = 46;
-// Visual gap between the floating pill and the home-indicator zone.
-// Larger value sells the "floating" look — bar reads as a separate piece
-// over the screen content, not an attached chrome strip.
 const FLOAT_LIFT = 8;
+const BAR_HORIZONTAL_MARGIN = 14;
+const BAR_INNER_PADDING = 4;
+const CAPSULE_WIDTH_RATIO = 0.78; // capsule slightly narrower than the slot
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const { width: SCREEN_W } = useWindowDimensions();
+
+  // Each tab slot's width (the bar uses paddingHorizontal: BAR_INNER_PADDING)
+  const slotW = (SCREEN_W - BAR_HORIZONTAL_MARGIN * 2 - BAR_INNER_PADDING * 2) / TAB_DEFINITIONS.length;
+  const capsuleW = slotW * CAPSULE_WIDTH_RATIO;
+  const capsuleOffset = (slotW - capsuleW) / 2;
+
+  const focusedIndex = TAB_DEFINITIONS.findIndex(
+    (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
+  );
+  const safeIndex = focusedIndex < 0 ? 0 : focusedIndex;
+
+  // Animated X position of the capsule indicator. Spring-driven for the
+  // liquid feel — it "slides" between tabs. Suppressed when the centre
+  // Касса tab is the focused one (its KassaGlassDome is the indicator).
+  const capsuleX = useSharedValue(BAR_INNER_PADDING + safeIndex * slotW + capsuleOffset);
+  const capsuleVisible = useSharedValue(TAB_DEFINITIONS[safeIndex]?.isKassa ? 0 : 1);
+
+  React.useEffect(() => {
+    capsuleX.value = withSpring(BAR_INNER_PADDING + safeIndex * slotW + capsuleOffset, {
+      damping: 18,
+      stiffness: 220,
+      mass: 0.9,
+    });
+    capsuleVisible.value = withTiming(TAB_DEFINITIONS[safeIndex]?.isKassa ? 0 : 1, { duration: 160 });
+  }, [safeIndex, slotW, capsuleOffset, capsuleX, capsuleVisible]);
+
+  const capsuleStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: capsuleX.value }],
+    opacity: capsuleVisible.value,
+  }));
 
   return (
     <View
       pointerEvents="box-none"
       style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 10) + FLOAT_LIFT }]}
     >
-      {/* External soft glow under the bar */}
       <View style={styles.outerGlow} pointerEvents="none" />
 
       <View style={styles.bar}>
-        {/* TRUE native iOS material — UIVisualEffectView with UIBlurEffect.systemUltraThinMaterial.
-            Forward-compat: upgrades to UIGlassEffect at runtime on iOS 26+. */}
-        <AutexaLiquidGlassView
-          variant="ultraThinMaterial"
-          intensity={1}
-          topRim={false /* we render our own rim above the gradient */}
-          style={StyleSheet.absoluteFill}
-        />
-        {/* Strong vertical glass dome — visible white highlight on top, deep on bottom */}
+        {/* Native iOS material — systemMaterial is heavier than ultraThin
+            so the bar reads as a clear "glass" surface over any background. */}
+        <AutexaLiquidGlassView variant="material" intensity={1} topRim={false} style={StyleSheet.absoluteFill} />
+
+        {/* Animated capsule that slides between active tabs */}
+        <Animated.View pointerEvents="none" style={[styles.capsule, { width: capsuleW, left: 0 }, capsuleStyle]}>
+          <LinearGradient
+            colors={['rgba(255,255,255,0.95)', 'rgba(255,255,255,0.55)']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+        </Animated.View>
+
+        {/* Subtle top-down highlight gradient over everything */}
         <LinearGradient
-          colors={[
-            'rgba(255,255,255,0.78)',
-            'rgba(255,255,255,0.32)',
-            'rgba(255,255,255,0.10)',
-            'rgba(255,255,255,0.40)',
-          ]}
-          locations={[0, 0.35, 0.65, 1]}
+          colors={['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0.30)']}
+          locations={[0, 0.55, 1]}
           start={{ x: 0.5, y: 0 }}
           end={{ x: 0.5, y: 1 }}
           style={StyleSheet.absoluteFill}
           pointerEvents="none"
         />
-        {/* Diagonal sheen — adds the moving "liquid" feel */}
-        <LinearGradient
-          colors={['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.0)']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 0.6, y: 0.8 }}
-          style={[StyleSheet.absoluteFill, { opacity: 0.7 }]}
-          pointerEvents="none"
-        />
-        {/* Top rim hairline (highlight) */}
         <View style={styles.rimTop} pointerEvents="none" />
-        {/* Inner rim ring — pronounced glass edge */}
         <View style={styles.innerRing} pointerEvents="none" />
 
         <View style={styles.row}>
@@ -224,15 +242,28 @@ const styles = StyleSheet.create({
   },
   bar: {
     height: BAR_HEIGHT,
-    marginHorizontal: 14,
+    marginHorizontal: BAR_HORIZONTAL_MARGIN,
     borderRadius: 30,
     overflow: 'hidden',
     borderWidth: 0.66,
     borderColor: 'rgba(255,255,255,0.95)',
     shadowColor: colors.primary[800],
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.28,
+    shadowRadius: 26,
+    shadowOffset: { width: 0, height: 12 },
+  },
+  capsule: {
+    position: 'absolute',
+    top: 6,
+    bottom: 6,
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.85)',
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
   },
   rimTop: {
     position: 'absolute',

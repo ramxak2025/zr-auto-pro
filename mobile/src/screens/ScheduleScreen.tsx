@@ -310,8 +310,10 @@ function GridTab() {
     queryKey: ['schedule', dateFrom, dateTo],
     queryFn: async () => {
       const res = await scheduleApi.getAll({ dateFrom, dateTo });
-      return res.data;
+      return res.data ?? [];
     },
+    // keep previous month visible while next month loads — no flash to empty
+    placeholderData: (prev) => prev,
     staleTime: 30_000,
   });
 
@@ -319,13 +321,15 @@ function GridTab() {
     queryKey: ['users'],
     queryFn: async () => {
       const res = await usersApi.getAll();
-      return res.data;
+      return res.data ?? [];
     },
+    placeholderData: (prev) => prev,
+    staleTime: 5 * 60_000,
   });
 
   // Global master order — uses backend sortOrder field
   const activeUsers = useMemo(() => {
-    const list = (usersData || []).filter((u) => u.isActive && u.role !== 'superadmin');
+    const list = (usersData || []).filter((u) => u.isActive);
     return list.sort((a: any, b: any) => {
       const ao = a.sortOrder ?? 0;
       const bo = b.sortOrder ?? 0;
@@ -671,12 +675,13 @@ function GridTab() {
         ))}
       </View>
 
-      {/* States, in order:
-          1. cold load (entries undefined) → skeleton
-          2. no active masters configured → onboarding empty state pointing to Users
-          3. month with entries (or empty array) → render grid; empty cells
-             stay tappable so the user can create shifts inline. */}
-      {entries === undefined ? (
+      {/* Schedule states:
+          1. usersData not yet loaded → skeleton (we need users to render rows)
+          2. usersData loaded but empty list → onboarding ("add employees")
+          3. otherwise → calendar grid (renders even when entries is empty —
+             the user can tap cells to create shifts, and entries fills in
+             from cache via placeholderData while a fresh fetch runs). */}
+      {!usersData ? (
         <GridSkeleton />
       ) : activeUsers.length === 0 ? (
         <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
@@ -1369,7 +1374,7 @@ function RatingTab() {
     queryFn: async () => (await usersApi.getAll()).data,
   });
 
-  const users = useMemo(() => (usersData || []).filter((u) => u.isActive && u.role !== 'superadmin'), [usersData]);
+  const users = useMemo(() => (usersData || []).filter((u) => u.isActive), [usersData]);
 
   // SHARED attendance utility — same logic everywhere (web + mobile)
   const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
@@ -1665,10 +1670,7 @@ function SettingsTab() {
     },
   });
 
-  const activeUsers = useMemo(
-    () => (usersData || []).filter((u) => u.isActive && u.role !== 'superadmin'),
-    [usersData],
-  );
+  const activeUsers = useMemo(() => (usersData || []).filter((u) => u.isActive), [usersData]);
 
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
     const user = activeUsers.find((u) => u.id === userId);
