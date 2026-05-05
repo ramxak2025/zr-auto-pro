@@ -15,7 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { clientsApi } from '../api/services';
+import { clientsApi, carsApi } from '../api/services';
+import type { Car } from '../../../shared/types';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -34,6 +35,20 @@ export default function ClientsScreen() {
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  // 'clients' = list of clients,  'cars' = same screen but car list below
+  const [mode, setMode] = useState<'clients' | 'cars'>('clients');
+
+  // Cars query — only fires while mode === 'cars' so we don't waste bandwidth
+  const carsQuery = useQuery<{ data: Car[]; total: number } | Car[]>({
+    queryKey: ['cars', { search, page, limit: 20 }],
+    queryFn: async () => {
+      const res = await carsApi.getAll({ search, page, limit: 20 });
+      return res.data;
+    },
+    enabled: mode === 'cars',
+    placeholderData: (prev) => prev as any,
+  });
+  const carsList: Car[] = Array.isArray(carsQuery.data) ? (carsQuery.data as Car[]) : (carsQuery.data?.data ?? []);
   const limit = 20;
   const [refreshing, setRefreshing] = useState(false);
 
@@ -212,26 +227,42 @@ export default function ClientsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Clients ⇄ Cars segmented control — keeps the two screens unified
-          while preserving each screen's own state and navigation. */}
+      {/* Clients ⇄ Cars — single screen with an in-place segmented control.
+          Tapping a tab swaps which list is rendered below; no navigation,
+          no full-screen transition, no animation. The search bar is shared
+          (its placeholder updates per mode). */}
       <View style={cnStyles.segmentWrap}>
         <View style={cnStyles.segment}>
-          <View style={[cnStyles.segmentItem, cnStyles.segmentActive]}>
-            <Ionicons name="people" size={14} color={colors.primary[700]} />
-            <Text style={cnStyles.segmentLabelActive}>Клиенты</Text>
-          </View>
           <TouchableOpacity
-            style={cnStyles.segmentItem}
-            onPress={() => navigation.replace('Cars')}
+            style={[cnStyles.segmentItem, mode === 'clients' && cnStyles.segmentActive]}
+            onPress={() => {
+              setMode('clients');
+              setSearch('');
+              setPage(1);
+            }}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
-            <Ionicons name="car-sport-outline" size={14} color={colors.gray[500]} />
-            <Text style={cnStyles.segmentLabelInactive}>Авто</Text>
+            <Ionicons name="people" size={14} color={mode === 'clients' ? colors.primary[700] : colors.gray[500]} />
+            <Text style={mode === 'clients' ? cnStyles.segmentLabelActive : cnStyles.segmentLabelInactive}>
+              Клиенты
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[cnStyles.segmentItem, mode === 'cars' && cnStyles.segmentActive]}
+            onPress={() => {
+              setMode('cars');
+              setSearch('');
+              setPage(1);
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+          >
+            <Ionicons name="car-sport" size={14} color={mode === 'cars' ? colors.primary[700] : colors.gray[500]} />
+            <Text style={mode === 'cars' ? cnStyles.segmentLabelActive : cnStyles.segmentLabelInactive}>Авто</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Search */}
+      {/* Search — placeholder switches with mode */}
       <View style={styles.searchWrap}>
         <SearchInput
           value={search}
@@ -239,12 +270,55 @@ export default function ClientsScreen() {
             setSearch(v);
             setPage(1);
           }}
-          placeholder="Поиск по имени или телефону..."
+          placeholder={mode === 'clients' ? 'Поиск по имени или телефону...' : 'Поиск по госномеру или марке...'}
         />
       </View>
 
-      {/* Content */}
-      {isLoading ? (
+      {/* Content — single screen renders either clients or cars based on mode */}
+      {mode === 'cars' ? (
+        carsQuery.isLoading ? (
+          <ListSkeleton count={8} />
+        ) : carsList.length === 0 ? (
+          <EmptyState
+            title="Нет автомобилей"
+            description={search ? 'Ничего не найдено' : 'Добавьте машину к клиенту'}
+          />
+        ) : (
+          <FlashList
+            data={carsList}
+            keyExtractor={(item: Car) => item.id}
+            renderItem={({ item }: { item: Car }) => (
+              <View style={cnStyles.carRow}>
+                <View style={cnStyles.carIconBox}>
+                  <Ionicons name="car-sport-outline" size={18} color={colors.primary[600]} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={cnStyles.carName} numberOfLines={1}>
+                    {item.makeModel || '—'}
+                  </Text>
+                  {item.plateNumber && (
+                    <View style={cnStyles.platePill}>
+                      <Text style={cnStyles.platePillText}>{item.plateNumber}</Text>
+                    </View>
+                  )}
+                </View>
+                {item.client?.fullName && (
+                  <TouchableOpacity onPress={() => navigation.navigate('ClientDetail', { id: item.client!.id })}>
+                    <Text style={cnStyles.carClient} numberOfLines={1}>
+                      {item.client.fullName}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+              </View>
+            )}
+            contentContainerStyle={styles.list}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+            }
+          />
+        )
+      ) : isLoading ? (
         <ListSkeleton count={8} />
       ) : clients.length === 0 && !search ? (
         <EmptyState
@@ -487,4 +561,34 @@ const cnStyles = StyleSheet.create({
   },
   segmentLabelActive: { fontSize: 13, fontWeight: '700', color: colors.primary[700] },
   segmentLabelInactive: { fontSize: 13, fontWeight: '500', color: colors.gray[600] },
+  // Car list rows used inside ClientsScreen when mode === 'cars'
+  carRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    backgroundColor: colors.white,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
+  },
+  carIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  carName: { fontSize: 14, fontWeight: '600', color: colors.gray[900] },
+  platePill: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    backgroundColor: colors.gray[100],
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  platePillText: { fontSize: 11, fontWeight: '700', color: colors.gray[800], letterSpacing: 0.5 },
+  carClient: { fontSize: 11, color: colors.gray[500], maxWidth: 100, marginRight: 4 },
 });

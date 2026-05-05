@@ -56,8 +56,12 @@ type FilterTab = 'all' | 'incoming' | 'outgoing' | 'missed';
 
 function formatDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return '0:00';
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
+  // Important: round down to integer seconds — expo-audio's currentTime
+  // returns floats like 83.500141776 which would otherwise render as
+  // "1:23.500141776" instead of "1:23".
+  const total = Math.floor(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
