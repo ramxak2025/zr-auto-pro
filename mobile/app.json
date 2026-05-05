@@ -51,6 +51,7 @@
     },
     "plugins": [
       "expo-updates",
+      "./plugins/withDisableUserScriptSandboxing.js",
       [
         "expo-build-properties",
         {
@@ -59,10 +60,7 @@
             "newArchEnabled": true
           },
           "ios": {
-            "newArchEnabled": true,
-            "extraPodfileProps": {
-              "ENABLE_USER_SCRIPT_SANDBOXING": "NO"
-            }
+            "newArchEnabled": true
           }
         }
       ]
