@@ -327,6 +327,25 @@ function GridTab() {
     staleTime: 5 * 60_000,
   });
 
+  // Prefetch adjacent months so swiping the month pager feels instant — by
+  // the time the user actually goes to Dec/Feb, the data is already cached.
+  React.useEffect(() => {
+    const prevMonth = new Date(year, month - 1, 1);
+    const nextMonth = new Date(year, month + 1, 1);
+    [prevMonth, nextMonth].forEach((m) => {
+      const from = formatDate(new Date(m.getFullYear(), m.getMonth(), 1));
+      const to = formatDate(new Date(m.getFullYear(), m.getMonth() + 1, 0));
+      queryClient.prefetchQuery({
+        queryKey: ['schedule', from, to],
+        queryFn: async () => {
+          const res = await scheduleApi.getAll({ dateFrom: from, dateTo: to });
+          return res.data ?? [];
+        },
+        staleTime: 30_000,
+      });
+    });
+  }, [year, month, queryClient]);
+
   // Master list shown as rows in the schedule grid.
   // Bullet-proof against partial data from backend:
   //   1. If backend returned a non-empty list → use it (filter inactive only).
@@ -686,24 +705,6 @@ function GridTab() {
             <Text style={styles.legendText}>{item.label}</Text>
           </View>
         ))}
-      </View>
-
-      {/* DEBUG banner — temporary; helps the owner see WHAT is coming from
-          backend so we can diagnose why the grid stays empty. Remove once
-          schedule is verified working in production. */}
-      <View
-        style={{
-          paddingHorizontal: 12,
-          paddingVertical: 6,
-          backgroundColor: '#fff7ed',
-          borderBottomWidth: 1,
-          borderBottomColor: '#fed7aa',
-        }}
-      >
-        <Text style={{ fontSize: 11, color: '#9a3412', fontWeight: '600' }}>
-          🛠 v9 · users:{usersData?.length ?? '—'} · activeUsers:{activeUsers.length} · entries:{entries?.length ?? '—'}{' '}
-          · {dateFrom}…{dateTo}
-        </Text>
       </View>
 
       {/* Schedule states:

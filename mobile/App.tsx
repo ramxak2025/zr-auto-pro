@@ -20,6 +20,11 @@ const queryClient = new QueryClient({
       gcTime: 30 * 60 * 1000,
       retry: 2,
       refetchOnWindowFocus: false,
+      // Global stale-while-revalidate: when a queryKey changes (eg. paging,
+      // search, filters), keep showing the previous data until the new one
+      // arrives instead of dropping back to a loading state. This is the
+      // single biggest perceptible-perf win — search/pager swaps feel native.
+      placeholderData: (prev: unknown) => prev,
     },
   },
 });

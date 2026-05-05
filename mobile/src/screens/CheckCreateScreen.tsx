@@ -378,6 +378,7 @@ export default function CheckCreateScreen() {
   }, [editId]);
 
   const selectedClient = clientData || plateClients?.find((c) => c.id === clientId);
+  const selectedCar = clientCars?.find((c) => c.id === carId) ?? clientCars?.[0];
 
   const resetForm = () => {
     setClientId('');
@@ -676,85 +677,123 @@ export default function CheckCreateScreen() {
               </>
             )}
 
-            {/* ═══ ПОИСК ПО ГОСНОМЕРУ ═══ */}
-            <View style={styles.plateLabelRow}>
-              <Text style={styles.sectionSubLabel}>ПОИСК ПО ГОСНОМЕРУ</Text>
-              <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
-            </View>
-
-            {/* Realistic license plate input — controlled mode */}
-            <RussianPlateInput value={plateSearch} onChangeText={setPlateSearch} autoFocus={false} mode={plateMode} />
-
-            {/* Inline search results — appear right below the plate */}
-            {normalizedSearch.length >= 2 && plateResults.length > 0 && (
-              <View style={styles.inlineResults}>
-                {plateResults.slice(0, 5).map(({ client, car }) => (
+            {clientId && selectedClient ? (
+              /* ═══ SELECTED CLIENT — BIG CARD ═══
+                 Search field hidden once a client is chosen. The card
+                 shows the GOST-styled plate, the client's name + phone,
+                 and a single X (top-right) to clear the selection. */
+              <View style={styles.selectedCard}>
+                <View style={styles.selectedCardTop}>
+                  <View style={styles.selectedCardAvatar}>
+                    <Ionicons name="person" size={22} color={colors.primary[700]} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.selectedCardName} numberOfLines={1}>
+                      {selectedClient.fullName}
+                    </Text>
+                    {selectedClient.phone && (
+                      <Text style={styles.selectedCardPhone} numberOfLines={1}>
+                        {selectedClient.phone}
+                      </Text>
+                    )}
+                  </View>
                   <TouchableOpacity
-                    key={`${client.id}-${car.id}`}
-                    style={styles.inlineResultItem}
                     onPress={() => {
-                      setClientId(client.id);
-                      setCarId(car.id);
+                      setClientId('');
+                      setCarId('');
                       setPlateSearch('');
                     }}
-                    activeOpacity={0.7}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    style={styles.selectedCardClose}
+                    accessibilityLabel="Сбросить клиента"
                   >
-                    {car.plateNumber && (
-                      <View style={styles.plateChip}>
-                        <Text style={styles.plateChipText}>{car.plateNumber}</Text>
-                      </View>
-                    )}
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.inlineResultName} numberOfLines={1}>
-                        {car.makeModel}
-                      </Text>
-                      <Text style={styles.inlineResultSub} numberOfLines={1}>
-                        {client.fullName}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                    <Ionicons name="close" size={18} color={colors.gray[600]} />
                   </TouchableOpacity>
-                ))}
-              </View>
-            )}
-            {/* Show "not found" only after search completed (no flash on partial input) */}
-            {normalizedSearch.length >= 2 && plateResults.length === 0 && !isFetchingPlate && (
-              <Text style={styles.inlineNoResults}>Клиент не найден</Text>
-            )}
-
-            {/* Client indicator */}
-            {clientId && selectedClient ? (
-              <View style={styles.selectedClientRow}>
-                <Ionicons name="person" size={16} color={colors.primary[600]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.selectedClientName}>{selectedClient.fullName}</Text>
-                  {selectedClient.phone && <Text style={styles.selectedClientPhone}>{selectedClient.phone}</Text>}
                 </View>
-                <TouchableOpacity
-                  onPress={() => {
-                    setClientId('');
-                    setCarId('');
-                    setPlateSearch('');
-                  }}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Ionicons name="close-circle" size={20} color={colors.gray[400]} />
-                </TouchableOpacity>
+
+                {selectedCar && (
+                  <View style={styles.selectedCarRow}>
+                    <PlateBadge plate={selectedCar.plateNumber || ''} active={true} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.selectedCarModel} numberOfLines={1}>
+                        {selectedCar.makeModel || '—'}
+                      </Text>
+                      {selectedCar.comment && (
+                        <Text style={styles.selectedCarYear} numberOfLines={1}>
+                          {selectedCar.comment}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                )}
               </View>
             ) : (
-              <View style={styles.retailDefault}>
-                <Ionicons name="storefront-outline" size={16} color={colors.blue[500]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.retailDefaultText}>Розничный покупатель</Text>
-                  <Text style={styles.retailDefaultHint}>Наберите госномер чтобы привязать клиента</Text>
+              <>
+                {/* ═══ ПОИСК ПО ГОСНОМЕРУ ═══ */}
+                <View style={styles.plateLabelRow}>
+                  <Text style={styles.sectionSubLabel}>ПОИСК ПО ГОСНОМЕРУ</Text>
+                  <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
                 </View>
-              </View>
+
+                {/* Realistic license plate input — controlled mode */}
+                <RussianPlateInput
+                  value={plateSearch}
+                  onChangeText={setPlateSearch}
+                  autoFocus={false}
+                  mode={plateMode}
+                />
+
+                {/* Inline search results — appear right below the plate */}
+                {normalizedSearch.length >= 2 && plateResults.length > 0 && (
+                  <View style={styles.inlineResults}>
+                    {plateResults.slice(0, 5).map(({ client, car }) => (
+                      <TouchableOpacity
+                        key={`${client.id}-${car.id}`}
+                        style={styles.inlineResultItem}
+                        onPress={() => {
+                          setClientId(client.id);
+                          setCarId(car.id);
+                          setPlateSearch('');
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        {car.plateNumber && (
+                          <View style={styles.plateChip}>
+                            <Text style={styles.plateChipText}>{car.plateNumber}</Text>
+                          </View>
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.inlineResultName} numberOfLines={1}>
+                            {car.makeModel}
+                          </Text>
+                          <Text style={styles.inlineResultSub} numberOfLines={1}>
+                            {client.fullName}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+                {/* Show "not found" only after search completed (no flash on partial input) */}
+                {normalizedSearch.length >= 2 && plateResults.length === 0 && !isFetchingPlate && (
+                  <Text style={styles.inlineNoResults}>Клиент не найден</Text>
+                )}
+
+                <View style={styles.retailDefault}>
+                  <Ionicons name="storefront-outline" size={16} color={colors.blue[500]} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.retailDefaultText}>Розничный покупатель</Text>
+                    <Text style={styles.retailDefaultHint}>Наберите госномер чтобы привязать клиента</Text>
+                  </View>
+                </View>
+              </>
             )}
 
-            {/* Car picker — real-plate visual instead of generic chips so the
-                user instantly recognises which car is selected.
-                Renders as a horizontal row of plate-styled cards; tap to pick. */}
-            {clientId && clientCars && clientCars.length > 0 && (
+            {/* Car picker — only when client has more than one car. The big
+                card above already shows the active car; here the user can
+                switch between siblings. */}
+            {clientId && clientCars && clientCars.length > 1 && (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -1521,6 +1560,56 @@ const styles = StyleSheet.create({
   },
   selectedClientName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   selectedClientPhone: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
+  // Big selected client card — replaces the search field once a client is chosen
+  selectedCard: {
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.primary[200],
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    marginTop: spacing[1],
+    shadowColor: colors.primary[800],
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    gap: spacing[3],
+  },
+  selectedCardTop: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[2.5],
+  },
+  selectedCardAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary[50],
+    borderWidth: 1,
+    borderColor: colors.primary[100],
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  selectedCardName: { fontSize: 16, fontWeight: '700', color: colors.gray[900] },
+  selectedCardPhone: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+  selectedCardClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  selectedCarRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[3],
+    paddingTop: spacing[2.5],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[100],
+  },
+  selectedCarModel: { fontSize: 14, fontWeight: '600', color: colors.gray[900] },
+  selectedCarYear: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
   sectionSubLabel: {
     fontSize: 11,
     fontWeight: '700',

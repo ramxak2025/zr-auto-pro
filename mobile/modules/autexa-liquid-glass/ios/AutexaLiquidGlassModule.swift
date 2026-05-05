@@ -4,20 +4,38 @@ public class AutexaLiquidGlassModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AutexaLiquidGlass")
 
+    // ──────────────────────────────────────────────────────────────────────
+    // 1. Plain glass surface (used as a building block — for example, the
+    //    tab bar background, a sheet header, etc.)
+    // ──────────────────────────────────────────────────────────────────────
     View(AutexaLiquidGlassView.self) {
-      // Material variant: maps to UIBlurEffect.Style on iOS
       Prop("variant") { (view: AutexaLiquidGlassView, value: String) in
         view.applyVariant(value)
       }
-
-      // Optional alpha multiplier for the effect (0..1). Default 1.0.
       Prop("intensity") { (view: AutexaLiquidGlassView, value: Double) in
         view.applyIntensity(CGFloat(value))
       }
-
-      // Adds a 1px hairline highlight at the top edge — helps premium "glass dome" feel.
       Prop("topRim") { (view: AutexaLiquidGlassView, value: Bool) in
         view.setTopRim(visible: value)
+      }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 2. Liquid Glass tab bar — premium native iOS tab bar with an
+    //    animated "droplet" highlight that springs between tabs and follows
+    //    a pan gesture. Sits underneath the JS-rendered icons and labels.
+    // ──────────────────────────────────────────────────────────────────────
+    View(AutexaLiquidGlassTabBarView.self) {
+      Events("onTabPress")
+
+      Prop("tabCount") { (view: AutexaLiquidGlassTabBarView, value: Int) in
+        view.setTabCount(value)
+      }
+      Prop("activeIndex") { (view: AutexaLiquidGlassTabBarView, value: Int) in
+        view.setActiveIndex(value)
+      }
+      Prop("bottomInset") { (view: AutexaLiquidGlassTabBarView, value: Double) in
+        view.setBottomInset(CGFloat(value))
       }
     }
   }

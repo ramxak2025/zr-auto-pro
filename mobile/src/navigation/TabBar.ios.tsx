@@ -1,22 +1,24 @@
 /**
- * TabBar — iOS variant. Floating Liquid Glass pill with sliding capsule.
+ * TabBar — iOS variant. Premium native Liquid Glass bar with an animated
+ * droplet highlight implemented in Swift (autexa-liquid-glass).
  *
- *  • UIVisualEffectView via the autexa-liquid-glass native module
- *    (UIBlurEffect.systemMaterial — more saturated than ultraThin so the
- *    glass surface reads as glass even over a flat-coloured screen)
- *  • Animated capsule indicator slides between tabs on selection — gives
- *    the "liquid blob" feel users expect from iOS 26 native bars
- *  • Centre Касса button: 46pt circular GlassDome
- *  • Haptic feedback, safe-area bottom padding
+ *  • Background, droplet, gestures, springs and haptics all live in the
+ *    native AutexaLiquidGlassTabBarView (UIVisualEffectView with iOS 26
+ *    UIGlassEffect upgrade, UIPanGestureRecognizer, UISelectionFeedback)
+ *  • This file only paints icons + labels + the centre Касса dome on top
+ *    of the native bar via RN children (positioned absolute slot-by-slot
+ *    so the native droplet underneath stays perfectly aligned)
+ *  • Pan + tap snap to nearest slot natively → onTabPress(index) bubbles
+ *    up here and we forward it to react-navigation
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { AutexaLiquidGlassView } from 'autexa-liquid-glass';
+import { AutexaLiquidGlassTabBar } from 'autexa-liquid-glass';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { haptic } from '../platform/haptics';
 import { Icon } from '../platform/Icon';
 import { SPRING_TIGHT } from '../platform/motion';
@@ -28,42 +30,35 @@ const BAR_HEIGHT = 58;
 const KASSA_SIZE = 46;
 const FLOAT_LIFT = 8;
 const BAR_HORIZONTAL_MARGIN = 14;
-const BAR_INNER_PADDING = 4;
-const CAPSULE_WIDTH_RATIO = 0.78; // capsule slightly narrower than the slot
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { width: SCREEN_W } = useWindowDimensions();
 
-  // Each tab slot's width (the bar uses paddingHorizontal: BAR_INNER_PADDING)
-  const slotW = (SCREEN_W - BAR_HORIZONTAL_MARGIN * 2 - BAR_INNER_PADDING * 2) / TAB_DEFINITIONS.length;
-  const capsuleW = slotW * CAPSULE_WIDTH_RATIO;
-  const capsuleOffset = (slotW - capsuleW) / 2;
+  const slotW = (SCREEN_W - BAR_HORIZONTAL_MARGIN * 2) / TAB_DEFINITIONS.length;
 
   const focusedIndex = TAB_DEFINITIONS.findIndex(
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
   );
   const safeIndex = focusedIndex < 0 ? 0 : focusedIndex;
 
-  // Animated X position of the capsule indicator. Spring-driven for the
-  // liquid feel — it "slides" between tabs. Suppressed when the centre
-  // Касса tab is the focused one (its KassaGlassDome is the indicator).
-  const capsuleX = useSharedValue(BAR_INNER_PADDING + safeIndex * slotW + capsuleOffset);
-  const capsuleVisible = useSharedValue(TAB_DEFINITIONS[safeIndex]?.isKassa ? 0 : 1);
-
-  React.useEffect(() => {
-    capsuleX.value = withSpring(BAR_INNER_PADDING + safeIndex * slotW + capsuleOffset, {
-      damping: 18,
-      stiffness: 220,
-      mass: 0.9,
-    });
-    capsuleVisible.value = withTiming(TAB_DEFINITIONS[safeIndex]?.isKassa ? 0 : 1, { duration: 160 });
-  }, [safeIndex, slotW, capsuleOffset, capsuleX, capsuleVisible]);
-
-  const capsuleStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: capsuleX.value }],
-    opacity: capsuleVisible.value,
-  }));
+  const navigateToTab = React.useCallback(
+    (index: number) => {
+      const tab = TAB_DEFINITIONS[index];
+      if (!tab) return;
+      const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
+      const focused = state.index === routeIndex;
+      const event = navigation.emit({
+        type: 'tabPress',
+        target: state.routes[routeIndex]?.key ?? tab.routeName,
+        canPreventDefault: true,
+      });
+      if (!focused && !event.defaultPrevented) {
+        navigation.navigate(tab.routeName as never);
+      }
+    },
+    [state, navigation],
+  );
 
   return (
     <View
@@ -72,54 +67,46 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     >
       <View style={styles.outerGlow} pointerEvents="none" />
 
-      <View style={styles.bar}>
-        {/* Native iOS material — systemMaterial is heavier than ultraThin
-            so the bar reads as a clear "glass" surface over any background. */}
-        <AutexaLiquidGlassView variant="material" intensity={1} topRim={false} style={StyleSheet.absoluteFill} />
+      <AutexaLiquidGlassTabBar
+        tabCount={TAB_DEFINITIONS.length}
+        activeIndex={safeIndex}
+        bottomInset={insets.bottom}
+        onTabPress={navigateToTab}
+        style={styles.bar}
+      >
+        {/* Icons + labels rendered on top of the native droplet. We lay them
+            out in absolute slots so the native droplet (underneath) lines
+            up tab-for-tab regardless of locale or font width. */}
+        {TAB_DEFINITIONS.map((tab, i) => {
+          const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
+          const focused = state.index === routeIndex;
 
-        {/* Animated capsule that slides between active tabs */}
-        <Animated.View pointerEvents="none" style={[styles.capsule, { width: capsuleW, left: 0 }, capsuleStyle]}>
-          <LinearGradient
-            colors={['rgba(255,255,255,0.95)', 'rgba(255,255,255,0.55)']}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-        </Animated.View>
+          const onPress = () => {
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: state.routes[routeIndex]?.key ?? tab.routeName,
+              canPreventDefault: true,
+            });
+            if (!focused && !event.defaultPrevented) {
+              haptic('select');
+              navigation.navigate(tab.routeName as never);
+            }
+          };
 
-        {/* Subtle top-down highlight gradient over everything */}
-        <LinearGradient
-          colors={['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.18)', 'rgba(255,255,255,0.30)']}
-          locations={[0, 0.55, 1]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
-        />
-        <View style={styles.rimTop} pointerEvents="none" />
-        <View style={styles.innerRing} pointerEvents="none" />
-
-        <View style={styles.row}>
-          {TAB_DEFINITIONS.map((tab) => {
-            const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
-            const focused = state.index === routeIndex;
-
-            const onPress = () => {
-              const event = navigation.emit({
-                type: 'tabPress',
-                target: state.routes[routeIndex]?.key ?? tab.routeName,
-                canPreventDefault: true,
-              });
-              if (!focused && !event.defaultPrevented) {
-                haptic('select');
-                navigation.navigate(tab.routeName as never);
-              }
-            };
-
-            if (tab.isKassa) {
-              return (
+          return (
+            <View
+              key={tab.routeName}
+              pointerEvents="box-none"
+              style={[
+                styles.slot,
+                {
+                  left: i * slotW,
+                  width: slotW,
+                },
+              ]}
+            >
+              {tab.isKassa ? (
                 <Pressable
-                  key={tab.routeName}
                   style={styles.item}
                   onPress={() => {
                     haptic('impact');
@@ -130,15 +117,13 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                 >
                   <KassaGlassDome focused={focused} />
                 </Pressable>
-              );
-            }
-
-            return (
-              <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} onPress={onPress} />
-            );
-          })}
-        </View>
-      </View>
+              ) : (
+                <TabItem focused={focused} label={tab.label} icon={tab.icon} onPress={onPress} />
+              )}
+            </View>
+          );
+        })}
+      </AutexaLiquidGlassTabBar>
     </View>
   );
 }
@@ -151,14 +136,15 @@ interface TabItemProps {
 }
 
 function TabItem({ focused, label, icon, onPress }: TabItemProps) {
-  // Subtle scale on focus — no dot, no pill, just the colour and weight change.
+  // Subtle scale on focus — the droplet underneath does the heavy lifting,
+  // so the icon itself just nudges to confirm.
   const scale = useSharedValue(focused ? 1.06 : 1);
   React.useEffect(() => {
     scale.value = withSpring(focused ? 1.06 : 1, SPRING_TIGHT);
   }, [focused, scale]);
   const iconStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
-  const tint = focused ? colors.primary[600] : colors.gray[500];
+  const tint = focused ? colors.primary[700] : colors.gray[500];
 
   return (
     <Pressable
@@ -190,12 +176,6 @@ function TabItem({ focused, label, icon, onPress }: TabItemProps) {
 
 /**
  * KassaGlassDome — compact, native-feeling centre button.
- *
- *  • 46pt circle, sits flush with the bar (no big -28 jump-out)
- *  • LinearGradient + thin glass-style overlay imitates a translucent dome
- *  • Slight scale spring on focus
- *  • Designed to sit IN the bar, not ON TOP of it — matches iOS Mail compose
- *    or Wallet add buttons in spirit.
  */
 function KassaGlassDome({ focused }: { focused: boolean }) {
   const scale = useSharedValue(focused ? 1.04 : 1);
@@ -212,7 +192,6 @@ function KassaGlassDome({ focused }: { focused: boolean }) {
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
-      {/* Top glass highlight */}
       <LinearGradient
         colors={['rgba(255,255,255,0.42)', 'rgba(255,255,255,0)']}
         start={{ x: 0.5, y: 0 }}
@@ -252,46 +231,16 @@ const styles = StyleSheet.create({
     shadowRadius: 26,
     shadowOffset: { width: 0, height: 12 },
   },
-  capsule: {
-    position: 'absolute',
-    top: 6,
-    bottom: 6,
-    borderRadius: 22,
-    overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.85)',
-    shadowColor: colors.primary[700],
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-  },
-  rimTop: {
+  slot: {
     position: 'absolute',
     top: 0,
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-  },
-  // Pronounced inset ring — sells the "convex glass" feel.
-  innerRing: {
-    position: 'absolute',
-    top: 1,
-    left: 1,
-    right: 1,
-    bottom: 1,
-    borderRadius: 29,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.5)',
-  },
-  row: {
-    flex: 1,
-    flexDirection: 'row',
+    bottom: 0,
     alignItems: 'center',
-    paddingHorizontal: 4,
+    justifyContent: 'center',
   },
   item: {
     flex: 1,
+    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 44,
