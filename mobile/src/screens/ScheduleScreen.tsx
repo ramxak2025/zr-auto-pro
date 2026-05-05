@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
+  Animated as RNAnimated,
   View,
   Text,
   ScrollView,
@@ -8,12 +9,13 @@ import {
   StyleSheet,
   RefreshControl,
   ActivityIndicator,
+  AccessibilityInfo,
   Alert,
   Dimensions,
   NativeSyntheticEvent,
   NativeScrollEvent,
 } from 'react-native';
-import Reanimated, { FadeIn } from 'react-native-reanimated';
+import Reanimated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,6 +28,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import AnimatedCard from '../components/AnimatedCard';
+import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
@@ -59,6 +62,27 @@ function getDaysInMonth(year: number, month: number): Date[] {
   const count = new Date(year, month + 1, 0).getDate();
   for (let i = 1; i <= count; i++) days.push(new Date(year, month, i));
   return days;
+}
+
+/**
+ * useReduceMotion — reads iOS / Android system "Reduce Motion" preference
+ * and listens for changes. Used to skip stagger / pulse animations for
+ * users who have requested less motion (Settings → Accessibility).
+ */
+function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled().then((v) => {
+      if (alive) setReduce(v);
+    });
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (v) => setReduce(v));
+    return () => {
+      alive = false;
+      sub.remove();
+    };
+  }, []);
+  return reduce;
 }
 
 function getInitials(fullName?: string): string {
@@ -159,6 +183,36 @@ function getCellDot(entry?: ScheduleEntry) {
   return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
 }
 
+/**
+ * TodayPill — the date number for "today" with an extra-soft halo pulse so
+ * the eye finds it instantly when scanning the grid header. The pulse is
+ * a slow ~2s opacity loop on a separate halo view (the number itself stays
+ * crisp). Disabled when the user has Reduce Motion on.
+ */
+function TodayPill({ day, reduceMotion }: { day: number; reduceMotion: boolean }) {
+  const opacity = useRef(new RNAnimated.Value(0.55)).current;
+  useEffect(() => {
+    if (reduceMotion) return;
+    const loop = RNAnimated.loop(
+      RNAnimated.sequence([
+        RNAnimated.timing(opacity, { toValue: 1, duration: 1100, useNativeDriver: true }),
+        RNAnimated.timing(opacity, { toValue: 0.45, duration: 1100, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [opacity, reduceMotion]);
+
+  return (
+    <View style={{ alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
+      <RNAnimated.View style={[styles.gridTodayHalo, { opacity }]} pointerEvents="none" />
+      <View style={styles.gridTodayCircle}>
+        <Text style={styles.gridTodayNum}>{day}</Text>
+      </View>
+    </View>
+  );
+}
+
 // Skeleton placeholder shown while the schedule grid loads for the first time.
 // Renders 6 ghost rows so the user sees the structure of the grid instead of
 // a generic spinner — much closer to native iOS apps (Calendar, Reminders).
@@ -204,6 +258,7 @@ interface GridDayRowProps {
   canEdit: boolean;
   CELL_W: number;
   ROW_H: number;
+  reduceMotion: boolean;
   onCellPress: (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => void;
 }
 
@@ -217,11 +272,18 @@ const GridDayRow = memo(function GridDayRow({
   canEdit,
   CELL_W,
   ROW_H,
+  reduceMotion,
   onCellPress,
 }: GridDayRowProps) {
   const firstName = userName?.split(' ')[0];
+  // Gentle staggered entrance — gives the grid a "populating" feel that
+  // matches Calendar / Reminders. Capped at row 8 so long rosters don't
+  // animate forever; users with Reduce Motion get an instant render.
+  const Wrapper: any = reduceMotion ? View : Reanimated.View;
+  const entering = reduceMotion ? undefined : FadeInDown.delay(Math.min(rowIdx, 8) * 35).duration(220);
   return (
-    <View
+    <Wrapper
+      entering={entering}
       style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}
     >
       {days.map((d) => {
@@ -241,7 +303,10 @@ const GridDayRow = memo(function GridDayRow({
               isWeekend && !cell.hasEntry && { backgroundColor: colors.red[50] + '40' },
               isToday && styles.gridCellToday,
             ]}
-            onPress={() => onCellPress(userId, ds, entry, firstName)}
+            onPress={() => {
+              if (canEdit) haptic('tap');
+              onCellPress(userId, ds, entry, firstName);
+            }}
             activeOpacity={canEdit ? 0.5 : 1}
           >
             {cell.hasEntry ? (
@@ -272,7 +337,7 @@ const GridDayRow = memo(function GridDayRow({
           </TouchableOpacity>
         );
       })}
-    </View>
+    </Wrapper>
   );
 });
 
@@ -280,6 +345,7 @@ const GridDayRow = memo(function GridDayRow({
 function GridTab() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const reduceMotion = useReduceMotion();
   const { user } = useAuth();
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -306,7 +372,13 @@ function GridTab() {
   const dateTo = formatDate(new Date(year, month + 1, 0));
   const today = formatDate(new Date());
 
-  const { data: entries, isLoading } = useQuery<ScheduleEntry[]>({
+  const {
+    data: entries,
+    isLoading,
+    isFetching,
+    isError,
+    refetch,
+  } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', dateFrom, dateTo],
     queryFn: async () => {
       const res = await scheduleApi.getAll({ dateFrom, dateTo });
@@ -640,18 +712,55 @@ function GridTab() {
     <View style={{ flex: 1 }}>
       {/* Month navigation */}
       <View style={styles.monthNav}>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
+        <TouchableOpacity
+          onPress={() => {
+            haptic('select');
+            setCurrentMonth(new Date(year, month - 1, 1));
+          }}
+          style={styles.monthNavBtn}
+        >
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date())} style={styles.monthCenter} activeOpacity={0.7}>
+        <TouchableOpacity
+          onPress={() => {
+            haptic('tap');
+            setCurrentMonth(new Date());
+          }}
+          style={styles.monthCenter}
+          activeOpacity={0.7}
+        >
           <Text style={styles.monthTitle}>
             {MONTH_NAMES[month]} {year}
           </Text>
+          {/* Hairline refresh indicator: only shows while we're re-validating
+              cached data in the background (not on first paint). */}
+          {isFetching && !isLoading && (
+            <View style={styles.bgRefreshIndicator}>
+              <ActivityIndicator size="small" color={colors.primary[500]} />
+            </View>
+          )}
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
+        <TouchableOpacity
+          onPress={() => {
+            haptic('select');
+            setCurrentMonth(new Date(year, month + 1, 1));
+          }}
+          style={styles.monthNavBtn}
+        >
           <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
       </View>
+
+      {/* Error banner — appears only if the network request fails AND we
+          have no cached data to fall back on. With cached data we silently
+          keep showing it, since intermittent connectivity shouldn't break
+          the UX. */}
+      {isError && !entries && (
+        <TouchableOpacity onPress={() => refetch()} style={styles.errorBanner} activeOpacity={0.7}>
+          <Ionicons name="cloud-offline-outline" size={16} color={colors.red[600]} />
+          <Text style={styles.errorBannerText}>Не удалось загрузить расписание. Нажмите чтобы повторить.</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Pending changes Apply bar */}
       {Object.keys(pendingChanges).length > 0 && (
@@ -824,9 +933,7 @@ function GridTab() {
                         {DAY_ABBR[dow]}
                       </Text>
                       {isToday ? (
-                        <View style={styles.gridTodayCircle}>
-                          <Text style={styles.gridTodayNum}>{d.getDate()}</Text>
-                        </View>
+                        <TodayPill day={d.getDate()} reduceMotion={reduceMotion} />
                       ) : (
                         <Text style={[styles.gridHeaderDay, isWeekend && { color: colors.red[400] }]}>
                           {d.getDate()}
@@ -858,6 +965,7 @@ function GridTab() {
                     canEdit={canEdit}
                     CELL_W={CELL_W}
                     ROW_H={ROW_H}
+                    reduceMotion={reduceMotion}
                     onCellPress={handleCellPress}
                   />
                 ))}
@@ -2249,12 +2357,39 @@ const styles = StyleSheet.create({
   },
   monthCenter: {
     alignItems: 'center',
+    flex: 1,
   },
   monthTitle: {
     fontSize: fontSize['2xl'],
     fontWeight: fontWeight.bold,
     color: colors.gray[900],
     letterSpacing: -0.5,
+  },
+  bgRefreshIndicator: {
+    position: 'absolute',
+    right: -4,
+    top: 6,
+    transform: [{ scale: 0.7 }],
+    opacity: 0.7,
+  },
+  errorBanner: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[2],
+    backgroundColor: colors.red[50],
+    borderWidth: 1,
+    borderColor: colors.red[200],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginHorizontal: spacing[4],
+    marginBottom: spacing[2],
+  },
+  errorBannerText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.red[700],
+    fontWeight: '500' as const,
   },
   monthYear: {
     fontSize: fontSize.xs,
@@ -2329,7 +2464,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 1,
+  },
+  gridTodayHalo: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primary[300],
   },
   gridTodayNum: {
     fontSize: 11,
