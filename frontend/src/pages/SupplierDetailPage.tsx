@@ -28,13 +28,7 @@ import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
-import {
-  Supplier,
-  Delivery,
-  SupplierPayment,
-  Product,
-  PaginatedResponse,
-} from '../types';
+import { Supplier, Delivery, SupplierPayment, Product, PaginatedResponse } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 
 type TabType = 'deliveries' | 'payments';
@@ -65,23 +59,31 @@ interface PaymentFormData {
 }
 
 function statusBadge(status: string) {
+  // We only badge fully-paid deliveries. Unpaid / partial is the default state
+  // in our "deliveries go on debt, settled in bulk" workflow — no need to
+  // shout "Не оплачено" on every row.
   switch (status) {
     case 'paid':
       return <span className="badge-success">Оплачено</span>;
     case 'partial':
       return <span className="badge-warning">Частично</span>;
     case 'unpaid':
-      return <span className="badge-danger">Не оплачено</span>;
     default:
-      return <span className="badge-default">{status}</span>;
+      return null;
   }
 }
 
 // ─── Product Picker (fullscreen, like checkout) ──────────────────────
 function DeliveryProductPicker({
-  isOpen, onClose, products, onSelect,
+  isOpen,
+  onClose,
+  products,
+  onSelect,
 }: {
-  isOpen: boolean; onClose: () => void; products: Product[]; onSelect: (p: Product) => void;
+  isOpen: boolean;
+  onClose: () => void;
+  products: Product[];
+  onSelect: (p: Product) => void;
 }) {
   const [search, setSearch] = useState('');
   const [activePath, setActivePath] = useState<string[]>([]);
@@ -111,15 +113,18 @@ function DeliveryProductPicker({
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const searchResults = search.trim()
-    ? products.filter(p => p.name.toLowerCase().includes(search.trim().toLowerCase()))
+    ? products.filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase()))
     : [];
 
   const goBack = () => {
-    if (activePath.length > 0) setActivePath(prev => prev.slice(0, -1));
+    if (activePath.length > 0) setActivePath((prev) => prev.slice(0, -1));
     else onClose();
   };
 
-  const handleSelect = (p: Product) => { onSelect(p); onClose(); };
+  const handleSelect = (p: Product) => {
+    onSelect(p);
+    onClose();
+  };
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex flex-col bg-white">
@@ -134,10 +139,20 @@ function DeliveryProductPicker({
       <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex-shrink-0">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Поиск товара..." className="input pl-10 w-full" autoFocus />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Поиск товара..."
+            className="input pl-10 w-full"
+            autoFocus
+          />
           {search && (
-            <button type="button" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+            >
               <X className="w-4 h-4" />
             </button>
           )}
@@ -151,11 +166,19 @@ function DeliveryProductPicker({
               <p className="text-sm">Ничего не найдено</p>
             </div>
           ) : (
-            searchResults.map(p => (
-              <button key={p.id} type="button" onClick={() => handleSelect(p)}
-                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-left">
+            searchResults.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => handleSelect(p)}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-left"
+              >
                 <div className="h-10 w-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                  {p.photo ? <img src={p.photo} alt="" className="h-full w-full object-cover" /> : <Package className="w-5 h-5 text-gray-300" />}
+                  {p.photo ? (
+                    <img src={p.photo} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <Package className="w-5 h-5 text-gray-300" />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
@@ -167,23 +190,37 @@ function DeliveryProductPicker({
           )
         ) : (
           <>
-            {subfolders.map(f => (
-              <button key={f.name} type="button" onClick={() => setActivePath(prev => [...prev, f.name])}
-                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50">
+            {subfolders.map((f) => (
+              <button
+                key={f.name}
+                type="button"
+                onClick={() => setActivePath((prev) => [...prev, f.name])}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50"
+              >
                 <FolderOpen className="w-5 h-5 text-amber-500 flex-shrink-0" />
                 <span className="flex-1 text-left font-medium text-gray-900 truncate">{f.name}</span>
                 <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{f.count}</span>
               </button>
             ))}
-            {currentProducts.map(p => (
-              <button key={p.id} type="button" onClick={() => handleSelect(p)}
-                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-left">
+            {currentProducts.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => handleSelect(p)}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 text-left"
+              >
                 <div className="h-10 w-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                  {p.photo ? <img src={p.photo} alt="" className="h-full w-full object-cover" /> : <Package className="w-5 h-5 text-gray-300" />}
+                  {p.photo ? (
+                    <img src={p.photo} alt="" className="h-full w-full object-cover" />
+                  ) : (
+                    <Package className="w-5 h-5 text-gray-300" />
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                  <p className="text-xs text-gray-400">Остаток: {p.stock} {p.unit === 'm' ? 'м' : p.unit === 'l' ? 'л' : 'шт'}</p>
+                  <p className="text-xs text-gray-400">
+                    Остаток: {p.stock} {p.unit === 'm' ? 'м' : p.unit === 'l' ? 'л' : 'шт'}
+                  </p>
                 </div>
                 <span className="text-sm font-semibold text-gray-700 flex-shrink-0">{formatMoney(p.costPrice)}</span>
               </button>
@@ -241,7 +278,7 @@ export default function SupplierDetailPage() {
     queryFn: () => suppliersApi.getDeliveries({ supplierId: id }),
     select: (res) => {
       const d = res.data;
-      return Array.isArray(d) ? d : ((d as PaginatedResponse<Delivery>).data || []);
+      return Array.isArray(d) ? d : (d as PaginatedResponse<Delivery>).data || [];
     },
     enabled: !!id,
   });
@@ -253,7 +290,7 @@ export default function SupplierDetailPage() {
     queryFn: () => suppliersApi.getPayments({ supplierId: id }),
     select: (res) => {
       const d = res.data;
-      return Array.isArray(d) ? d : ((d as PaginatedResponse<SupplierPayment>).data || []);
+      return Array.isArray(d) ? d : (d as PaginatedResponse<SupplierPayment>).data || [];
     },
     enabled: !!id,
   });
@@ -269,7 +306,7 @@ export default function SupplierDetailPage() {
     queryFn: () => productsApi.getAll({ limit: 5000 }),
     select: (res) => {
       const d = res.data;
-      return Array.isArray(d) ? d : ((d as PaginatedResponse<Product>).data || []);
+      return Array.isArray(d) ? d : (d as PaginatedResponse<Product>).data || [];
     },
     enabled: isDeliveryModalOpen || showDeliveryPicker,
     refetchOnMount: 'always',
@@ -322,8 +359,7 @@ export default function SupplierDetailPage() {
     items: [{ productId: '', quantity: 1, price: 0 }],
     comment: '',
   };
-  const [deliveryForm, setDeliveryForm] =
-    useState<DeliveryFormData>(emptyDeliveryForm);
+  const [deliveryForm, setDeliveryForm] = useState<DeliveryFormData>(emptyDeliveryForm);
 
   const openDeliveryModal = () => {
     setDeliveryForm(emptyDeliveryForm);
@@ -338,15 +374,15 @@ export default function SupplierDetailPage() {
   };
 
   const handleDeliveryProductSelected = (product: Product) => {
-    setDeliveryForm(prev => {
-      const existing = prev.items.findIndex(i => i.productId === product.id);
+    setDeliveryForm((prev) => {
+      const existing = prev.items.findIndex((i) => i.productId === product.id);
       if (existing !== -1) {
         const updated = [...prev.items];
         updated[existing] = { ...updated[existing], quantity: updated[existing].quantity + 1 };
         return { ...prev, items: updated };
       }
       // Remove empty placeholder rows
-      const filtered = prev.items.filter(i => i.productId);
+      const filtered = prev.items.filter((i) => i.productId);
       return {
         ...prev,
         items: [...filtered, { productId: product.id, quantity: 1, price: product.costPrice }],
@@ -361,11 +397,7 @@ export default function SupplierDetailPage() {
     });
   };
 
-  const updateDeliveryItem = (
-    index: number,
-    field: keyof DeliveryItemForm,
-    value: string | number
-  ) => {
+  const updateDeliveryItem = (index: number, field: keyof DeliveryItemForm, value: string | number) => {
     const updated = [...deliveryForm.items];
     updated[index] = { ...updated[index], [field]: value };
     setDeliveryForm({ ...deliveryForm, items: updated });
@@ -385,9 +417,7 @@ export default function SupplierDetailPage() {
 
   const handleDeliverySubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const validItems = deliveryForm.items.filter(
-      (item) => item.productId && item.quantity > 0 && item.price > 0
-    );
+    const validItems = deliveryForm.items.filter((item) => item.productId && item.quantity > 0 && item.price > 0);
     if (validItems.length === 0) {
       toast.error('Добавьте хотя бы один товар');
       return;
@@ -406,8 +436,7 @@ export default function SupplierDetailPage() {
     date: format(new Date(), 'yyyy-MM-dd'),
     comment: '',
   };
-  const [paymentForm, setPaymentForm] =
-    useState<PaymentFormData>(emptyPaymentForm);
+  const [paymentForm, setPaymentForm] = useState<PaymentFormData>(emptyPaymentForm);
 
   const openPaymentModal = () => {
     setPaymentForm(emptyPaymentForm);
@@ -446,10 +475,7 @@ export default function SupplierDetailPage() {
     const is404 = (error as any)?.response?.status === 404;
     return (
       <div className="space-y-6">
-        <button
-          onClick={() => navigate('/suppliers')}
-          className="btn-secondary"
-        >
+        <button onClick={() => navigate('/suppliers')} className="btn-secondary">
           <ArrowLeft className="w-4 h-4" />
           Назад
         </button>
@@ -466,10 +492,7 @@ export default function SupplierDetailPage() {
   return (
     <div className="space-y-6">
       {/* Back button */}
-      <button
-        onClick={() => navigate('/suppliers')}
-        className="btn-secondary"
-      >
+      <button onClick={() => navigate('/suppliers')} className="btn-secondary">
         <ArrowLeft className="w-4 h-4" />
         Назад к поставщикам
       </button>
@@ -479,9 +502,7 @@ export default function SupplierDetailPage() {
         <div className="card-body">
           <div className="flex items-start justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">
-                {supplier.name}
-              </h1>
+              <h1 className="text-2xl font-bold text-gray-900">{supplier.name}</h1>
               {supplier.contactPerson && (
                 <p className="mt-1 text-gray-600 flex items-center gap-2">
                   <User className="w-4 h-4" />
@@ -494,9 +515,7 @@ export default function SupplierDetailPage() {
                   {supplier.phone}
                 </p>
               )}
-              {supplier.comment && (
-                <p className="mt-2 text-sm text-gray-500">{supplier.comment}</p>
-              )}
+              {supplier.comment && <p className="mt-2 text-sm text-gray-500">{supplier.comment}</p>}
             </div>
             <button onClick={openEditModal} className="btn-secondary">
               <Edit2 className="w-4 h-4" />
@@ -510,23 +529,15 @@ export default function SupplierDetailPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="stat-card">
           <div className="stat-label">Закупки всего</div>
-          <div className="stat-value text-blue-600">
-            {formatMoney(supplier.totalPurchases)}
-          </div>
+          <div className="stat-value text-blue-600">{formatMoney(supplier.totalPurchases)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Оплачено</div>
-          <div className="stat-value text-green-600">
-            {formatMoney(supplier.totalPaid)}
-          </div>
+          <div className="stat-value text-green-600">{formatMoney(supplier.totalPaid)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Текущий долг</div>
-          <div
-            className={`stat-value ${
-              supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'
-            }`}
-          >
+          <div className={`stat-value ${supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'}`}>
             {formatMoney(supplier.currentDebt)}
           </div>
         </div>
@@ -587,9 +598,7 @@ export default function SupplierDetailPage() {
                           {format(new Date(delivery.date), 'dd MMM yyyy', { locale: ru })}
                         </p>
                       </div>
-                      {delivery.comment && (
-                        <p className="text-xs text-gray-500 mt-1.5 truncate">{delivery.comment}</p>
-                      )}
+                      {delivery.comment && <p className="text-xs text-gray-500 mt-1.5 truncate">{delivery.comment}</p>}
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-base font-bold text-primary-600">{formatMoney(delivery.totalAmount)}</p>
@@ -632,9 +641,7 @@ export default function SupplierDetailPage() {
                           {format(new Date(payment.date), 'dd MMM yyyy', { locale: ru })}
                         </p>
                       </div>
-                      {payment.comment && (
-                        <p className="text-xs text-gray-500 mt-1.5 truncate">{payment.comment}</p>
-                      )}
+                      {payment.comment && <p className="text-xs text-gray-500 mt-1.5 truncate">{payment.comment}</p>}
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-base font-bold text-green-600">{formatMoney(payment.amount)}</p>
@@ -648,11 +655,7 @@ export default function SupplierDetailPage() {
       )}
 
       {/* Edit Supplier Modal */}
-      <Modal
-        isOpen={isEditModalOpen}
-        onClose={() => setIsEditModalOpen(false)}
-        title="Редактировать поставщика"
-      >
+      <Modal isOpen={isEditModalOpen} onClose={() => setIsEditModalOpen(false)} title="Редактировать поставщика">
         <form onSubmit={handleEditSubmit} className="space-y-4">
           <div>
             <label className="label">Название *</label>
@@ -660,9 +663,7 @@ export default function SupplierDetailPage() {
               type="text"
               className="input"
               value={editForm.name}
-              onChange={(e) =>
-                setEditForm({ ...editForm, name: e.target.value })
-              }
+              onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
             />
           </div>
           <div>
@@ -671,17 +672,12 @@ export default function SupplierDetailPage() {
               type="text"
               className="input"
               value={editForm.contactPerson}
-              onChange={(e) =>
-                setEditForm({ ...editForm, contactPerson: e.target.value })
-              }
+              onChange={(e) => setEditForm({ ...editForm, contactPerson: e.target.value })}
             />
           </div>
           <div>
             <label className="label">Телефон</label>
-            <PhoneInput
-              value={editForm.phone}
-              onChange={(val) => setEditForm({ ...editForm, phone: val })}
-            />
+            <PhoneInput value={editForm.phone} onChange={(val) => setEditForm({ ...editForm, phone: val })} />
           </div>
           <div>
             <label className="label">Комментарий</label>
@@ -689,24 +685,14 @@ export default function SupplierDetailPage() {
               className="input"
               rows={3}
               value={editForm.comment}
-              onChange={(e) =>
-                setEditForm({ ...editForm, comment: e.target.value })
-              }
+              onChange={(e) => setEditForm({ ...editForm, comment: e.target.value })}
             />
           </div>
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => setIsEditModalOpen(false)}
-              className="btn-secondary"
-            >
+            <button type="button" onClick={() => setIsEditModalOpen(false)} className="btn-secondary">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={updateMutation.isPending}
-              className="btn-primary"
-            >
+            <button type="submit" disabled={updateMutation.isPending} className="btn-primary">
               {updateMutation.isPending ? 'Сохранение...' : 'Сохранить'}
             </button>
           </div>
@@ -727,9 +713,7 @@ export default function SupplierDetailPage() {
               type="date"
               className="input w-40"
               value={deliveryForm.date}
-              onChange={(e) =>
-                setDeliveryForm({ ...deliveryForm, date: e.target.value })
-              }
+              onChange={(e) => setDeliveryForm({ ...deliveryForm, date: e.target.value })}
             />
           </div>
 
@@ -746,7 +730,7 @@ export default function SupplierDetailPage() {
               </button>
             </div>
 
-            {deliveryForm.items.filter(i => i.productId).length === 0 ? (
+            {deliveryForm.items.filter((i) => i.productId).length === 0 ? (
               <button
                 type="button"
                 onClick={() => setShowDeliveryPicker(true)}
@@ -759,13 +743,11 @@ export default function SupplierDetailPage() {
               <div className="space-y-2">
                 {deliveryForm.items.map((item, index) => {
                   if (!item.productId) return null;
-                  const product = products.find(p => p.id === item.productId);
+                  const product = products.find((p) => p.id === item.productId);
                   return (
                     <div key={index} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2.5">
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">
-                          {product?.name || 'Товар'}
-                        </p>
+                        <p className="text-sm font-medium text-gray-900 truncate">{product?.name || 'Товар'}</p>
                         <div className="flex items-center gap-1 mt-1">
                           <input
                             type="number"
@@ -779,23 +761,32 @@ export default function SupplierDetailPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
-                        <button type="button"
-                          onClick={() => { if (item.quantity > 1) updateDeliveryItem(index, 'quantity', item.quantity - 1); }}
-                          className="p-1 rounded hover:bg-gray-200 text-gray-400">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (item.quantity > 1) updateDeliveryItem(index, 'quantity', item.quantity - 1);
+                          }}
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                        >
                           <Minus className="w-3.5 h-3.5" />
                         </button>
                         <span className="w-8 text-center text-sm font-medium">{item.quantity}</span>
-                        <button type="button"
+                        <button
+                          type="button"
                           onClick={() => updateDeliveryItem(index, 'quantity', item.quantity + 1)}
-                          className="p-1 rounded hover:bg-gray-200 text-gray-400">
+                          className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                        >
                           <Plus className="w-3.5 h-3.5" />
                         </button>
                       </div>
                       <span className="text-sm font-semibold text-gray-700 flex-shrink-0 w-20 text-right">
                         {formatMoney(item.quantity * item.price)}
                       </span>
-                      <button type="button" onClick={() => removeDeliveryItem(index)}
-                        className="p-1 text-red-400 hover:text-red-600 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => removeDeliveryItem(index)}
+                        className="p-1 text-red-400 hover:text-red-600 flex-shrink-0"
+                      >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -811,39 +802,21 @@ export default function SupplierDetailPage() {
               className="input"
               rows={2}
               value={deliveryForm.comment}
-              onChange={(e) =>
-                setDeliveryForm({ ...deliveryForm, comment: e.target.value })
-              }
+              onChange={(e) => setDeliveryForm({ ...deliveryForm, comment: e.target.value })}
               placeholder="Примечание к поставке..."
             />
           </div>
 
           <div className="text-right text-sm font-semibold text-gray-700">
-            Итого:{' '}
-            {formatMoney(
-              deliveryForm.items.reduce(
-                (sum, item) => sum + item.quantity * item.price,
-                0
-              )
-            )}
+            Итого: {formatMoney(deliveryForm.items.reduce((sum, item) => sum + item.quantity * item.price, 0))}
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => setIsDeliveryModalOpen(false)}
-              className="btn-secondary"
-            >
+            <button type="button" onClick={() => setIsDeliveryModalOpen(false)} className="btn-secondary">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={createDeliveryMutation.isPending}
-              className="btn-primary"
-            >
-              {createDeliveryMutation.isPending
-                ? 'Сохранение...'
-                : 'Создать поставку'}
+            <button type="submit" disabled={createDeliveryMutation.isPending} className="btn-primary">
+              {createDeliveryMutation.isPending ? 'Сохранение...' : 'Создать поставку'}
             </button>
           </div>
         </form>
@@ -858,11 +831,7 @@ export default function SupplierDetailPage() {
       />
 
       {/* Create Payment Modal */}
-      <Modal
-        isOpen={isPaymentModalOpen}
-        onClose={() => setIsPaymentModalOpen(false)}
-        title="Новая оплата поставщику"
-      >
+      <Modal isOpen={isPaymentModalOpen} onClose={() => setIsPaymentModalOpen(false)} title="Новая оплата поставщику">
         <form onSubmit={handlePaymentSubmit} className="space-y-4">
           <div>
             <label className="label">Сумма *</label>
@@ -886,9 +855,7 @@ export default function SupplierDetailPage() {
               type="date"
               className="input"
               value={paymentForm.date}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, date: e.target.value })
-              }
+              onChange={(e) => setPaymentForm({ ...paymentForm, date: e.target.value })}
             />
           </div>
           <div>
@@ -897,38 +864,23 @@ export default function SupplierDetailPage() {
               className="input"
               rows={2}
               value={paymentForm.comment}
-              onChange={(e) =>
-                setPaymentForm({ ...paymentForm, comment: e.target.value })
-              }
+              onChange={(e) => setPaymentForm({ ...paymentForm, comment: e.target.value })}
               placeholder="Примечание к оплате..."
             />
           </div>
 
           {supplier.currentDebt > 0 && (
             <p className="text-sm text-gray-500">
-              Текущий долг:{' '}
-              <span className="font-medium text-red-600">
-                {formatMoney(supplier.currentDebt)}
-              </span>
+              Текущий долг: <span className="font-medium text-red-600">{formatMoney(supplier.currentDebt)}</span>
             </p>
           )}
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => setIsPaymentModalOpen(false)}
-              className="btn-secondary"
-            >
+            <button type="button" onClick={() => setIsPaymentModalOpen(false)} className="btn-secondary">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={createPaymentMutation.isPending}
-              className="btn-primary"
-            >
-              {createPaymentMutation.isPending
-                ? 'Сохранение...'
-                : 'Записать оплату'}
+            <button type="submit" disabled={createPaymentMutation.isPending} className="btn-primary">
+              {createPaymentMutation.isPending ? 'Сохранение...' : 'Записать оплату'}
             </button>
           </div>
         </form>
