@@ -53,24 +53,38 @@ function formatMoney(v: number) {
 }
 
 /**
- * PlateBadge — read-only visual of a car's plate number that mimics the
- * real Russian state plate (white card, black border, main block + region
- * + RUS flag). For foreign-format plates falls back to a blue INT-style
- * tag. Used in the car picker on CheckCreate so the operator instantly
- * recognises which car they're selecting.
+ * PlateBadge — visual replica of a Russian state license plate per
+ * ГОСТ Р 50557-93. Proportions calibrated against the open-source
+ * generate_license_plates SVG template:
+ *
+ *   • viewBox 1842 × 397   →  aspect ratio 4.64 : 1
+ *   • main block (letter+3 digits+2 letters) takes 78% of width
+ *   • region block (2-3 digits + flag + RUS) takes 22% of width
+ *   • region font size = 75% of main (per SVG: 315 vs 420)
+ *   • inner cant: a second hairline black border inset ≈6% of height
+ *   • main:region letter-spacing is wide because the source uses the
+ *     RoadNumbers GOST font; with system fonts we simulate via tracking
+ *
+ * Total badge size for the small variant: 40 × 186 pt — fits 2 plates
+ * side-by-side in a horizontal scroll inside the client section.
  */
+const PLATE_HEIGHT = 40;
+const PLATE_WIDTH = Math.round(PLATE_HEIGHT * 4.64); // 186
+const PLATE_MAIN_W = Math.round(PLATE_WIDTH * 0.78); // 145
+const PLATE_REGION_W = PLATE_WIDTH - PLATE_MAIN_W - 2; // –2 for divider
+
 function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
   const clean = (plate || '').replace(/\s/g, '').toUpperCase();
   if (!clean) {
     return (
-      <View style={[plateBadgeStyles.frame, plateBadgeStyles.frameForeign, !active && { opacity: 0.6 }]}>
+      <View style={[plateBadgeStyles.frame, plateBadgeStyles.frameForeign, !active && { opacity: 0.55 }]}>
         <Text style={plateBadgeStyles.foreignTag}>—</Text>
       </View>
     );
   }
   if (!isRussianInput(clean)) {
     return (
-      <View style={[plateBadgeStyles.frame, plateBadgeStyles.frameForeign, !active && { opacity: 0.6 }]}>
+      <View style={[plateBadgeStyles.frame, plateBadgeStyles.frameForeign, !active && { opacity: 0.55 }]}>
         <View style={plateBadgeStyles.intStrip}>
           <Text style={plateBadgeStyles.intStripText}>INT</Text>
         </View>
@@ -82,15 +96,21 @@ function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
   }
   const { main, region } = splitPlate(clean);
   return (
-    <View style={[plateBadgeStyles.frame, !active && { opacity: 0.6 }]}>
+    <View style={[plateBadgeStyles.frame, !active && { opacity: 0.55 }]}>
+      {/* Inner cant — second hairline frame inside the outer black border. ГОСТ feature. */}
+      <View style={plateBadgeStyles.cant} pointerEvents="none" />
       <View style={plateBadgeStyles.mainBlock}>
-        <Text style={plateBadgeStyles.mainText}>{formatMain(main) || clean}</Text>
+        <Text style={plateBadgeStyles.mainText} numberOfLines={1}>
+          {formatMain(main) || clean}
+        </Text>
       </View>
       <View style={plateBadgeStyles.divider} />
       <View style={plateBadgeStyles.regionBlock}>
-        <Text style={plateBadgeStyles.regionText}>{region || '—'}</Text>
+        <Text style={plateBadgeStyles.regionText} numberOfLines={1}>
+          {region || '—'}
+        </Text>
         <View style={plateBadgeStyles.flagRow}>
-          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#fff' }]} />
+          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#FFFFFF' }]} />
           <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#0039A6' }]} />
           <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#D52B1E' }]} />
         </View>
@@ -103,26 +123,48 @@ function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
 const plateBadgeStyles = StyleSheet.create({
   frame: {
     flexDirection: 'row',
-    height: 40,
+    width: PLATE_WIDTH,
+    height: PLATE_HEIGHT,
     backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#1a1a1a',
+    borderWidth: 2,
+    borderColor: '#000000',
     borderRadius: 5,
     overflow: 'hidden',
   },
   frameForeign: { borderColor: '#3b82f6' },
-  mainBlock: { paddingHorizontal: 10, justifyContent: 'center' },
-  mainText: { fontSize: 16, fontWeight: '800', letterSpacing: 2, color: '#1a1a1a' },
-  divider: { width: 1.5, backgroundColor: '#1a1a1a' },
-  regionBlock: { width: 44, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
-  regionText: { fontSize: 14, fontWeight: '800', letterSpacing: 1.5, color: '#1a1a1a' },
-  flagRow: { flexDirection: 'row', marginTop: 1 },
-  flagBand: { width: 7, height: 2, borderRadius: 0.5 },
-  rusLabel: { fontSize: 5, fontWeight: '900', color: '#1a1a1a', letterSpacing: 0.5, marginTop: 0.5 },
-  intStrip: { width: 20, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
-  intStripText: { fontSize: 7, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
-  foreignText: { fontSize: 14, fontWeight: '700', color: '#1a1a1a', paddingHorizontal: 8, alignSelf: 'center' },
-  foreignTag: { fontSize: 14, fontWeight: '700', color: '#999', alignSelf: 'center', paddingHorizontal: 12 },
+  cant: {
+    position: 'absolute',
+    top: 2.5,
+    left: 2.5,
+    right: 2.5,
+    bottom: 2.5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#000000',
+    borderRadius: 3,
+  },
+  // Main block — main characters of the plate (letter-3digits-2letters)
+  mainBlock: { width: PLATE_MAIN_W, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  mainText: { fontSize: 22, fontWeight: '800', letterSpacing: 1.4, color: '#000000' },
+  divider: { width: 2, backgroundColor: '#000000' },
+  // Region block — region digits + flag + RUS
+  regionBlock: { width: PLATE_REGION_W, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+  regionText: { fontSize: 16, fontWeight: '800', letterSpacing: 0.8, color: '#000000' },
+  flagRow: { flexDirection: 'row', marginTop: 2 },
+  flagBand: { width: 9, height: 2.5 },
+  rusLabel: { fontSize: 6, fontWeight: '900', color: '#000000', letterSpacing: 0.4, marginTop: 1 },
+  // Foreign INT plate
+  intStrip: { width: 22, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
+  intStripText: { fontSize: 8, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
+  foreignText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000000',
+    paddingHorizontal: 8,
+    alignSelf: 'center',
+    letterSpacing: 0.5,
+  },
+  foreignTag: { fontSize: 16, fontWeight: '700', color: '#999', alignSelf: 'center', paddingHorizontal: 12 },
 });
 
 const paymentOptions: {
@@ -757,34 +799,26 @@ export default function CheckCreateScreen() {
                 placeholderTextColor={colors.gray[400]}
               />
             </View>
+          </View>
 
-            {/* Comment — moved up here so it sits with the rest of the
-                client/car/mileage block instead of getting buried below
-                services & products. */}
-            <View style={styles.commentInlineWrap}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[1] }}>
-                <Ionicons name="chatbubble-ellipses-outline" size={14} color={colors.gray[500]} />
-                <Text
-                  style={{
-                    fontSize: 11,
-                    fontWeight: '700',
-                    color: colors.gray[500],
-                    letterSpacing: 1,
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Комментарий
-                </Text>
-              </View>
-              <TextInput
-                value={comment}
-                onChangeText={setComment}
-                style={styles.commentInline}
-                multiline
-                placeholder="Необязательно"
-                placeholderTextColor={colors.gray[400]}
-              />
+          {/* ═══ SECTION 1.5: COMMENT — separate purple block right after
+              client info / mileage but BEFORE services & products. The
+              comment is about what the masters did / warned the client
+              about, so it belongs to the receipt as a whole — not nested
+              inside client info. */}
+          <View style={styles.sectionComment}>
+            <View style={styles.sectionHeader}>
+              <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.purple[600]} />
+              <Text style={styles.sectionLabel}>Комментарий</Text>
             </View>
+            <TextInput
+              value={comment}
+              onChangeText={setComment}
+              style={styles.commentInput}
+              multiline
+              placeholder="Что сделали, что предупредили клиента…"
+              placeholderTextColor={colors.gray[400]}
+            />
           </View>
 
           {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
