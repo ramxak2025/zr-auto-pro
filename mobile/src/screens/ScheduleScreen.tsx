@@ -2172,27 +2172,27 @@ export default function ScheduleScreen() {
       </View>
 
       {tab === 'grid' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="grid">
+        <Reanimated.View entering={FadeIn.duration(200)} key="grid" style={{ flex: 1 }}>
           <GridTab />
         </Reanimated.View>
       )}
       {tab === 'today' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="today">
+        <Reanimated.View entering={FadeIn.duration(200)} key="today" style={{ flex: 1 }}>
           <TodayTab />
         </Reanimated.View>
       )}
       {tab === 'shifts' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="shifts">
+        <Reanimated.View entering={FadeIn.duration(200)} key="shifts" style={{ flex: 1 }}>
           <ShiftsTab />
         </Reanimated.View>
       )}
       {tab === 'rating' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="rating">
+        <Reanimated.View entering={FadeIn.duration(200)} key="rating" style={{ flex: 1 }}>
           <RatingTab />
         </Reanimated.View>
       )}
       {tab === 'settings' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="settings">
+        <Reanimated.View entering={FadeIn.duration(200)} key="settings" style={{ flex: 1 }}>
           <SettingsTab />
         </Reanimated.View>
       )}

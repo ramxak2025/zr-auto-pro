@@ -85,22 +85,31 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
     self.dropletView = UIView()
     self.dropletView.layer.cornerCurve = .continuous
-    self.dropletView.layer.cornerRadius = 22
+    self.dropletView.layer.cornerRadius = 18
     self.dropletView.backgroundColor = .clear
     self.dropletView.isUserInteractionEnabled = false
-    self.dropletView.layer.shadowColor = UIColor.systemBlue.cgColor
-    self.dropletView.layer.shadowOpacity = 0.18
-    self.dropletView.layer.shadowRadius = 6
+    self.dropletView.layer.shadowColor = UIColor.black.cgColor
+    self.dropletView.layer.shadowOpacity = 0.10
+    self.dropletView.layer.shadowRadius = 5
     self.dropletView.layer.shadowOffset = CGSize(width: 0, height: 2)
+    // Subtle hairline edge — sells the "glass capsule" feel
+    self.dropletView.layer.borderWidth = 0.5
+    self.dropletView.layer.borderColor = UIColor(white: 1.0, alpha: 0.9).cgColor
 
+    // Three-stop gradient: bright top highlight → mid translucent →
+    // slight bottom shadow. Reads as a real glass capsule on every iOS
+    // version, regardless of whether UIGlassEffect is available.
     self.dropletGradient = CAGradientLayer()
     self.dropletGradient.colors = [
       UIColor(white: 1.0, alpha: 0.95).cgColor,
-      UIColor(white: 1.0, alpha: 0.55).cgColor,
+      UIColor(white: 1.0, alpha: 0.70).cgColor,
+      UIColor(white: 1.0, alpha: 0.85).cgColor,
     ]
+    self.dropletGradient.locations = [0.0, 0.55, 1.0]
     self.dropletGradient.startPoint = CGPoint(x: 0.5, y: 0.0)
     self.dropletGradient.endPoint = CGPoint(x: 0.5, y: 1.0)
     self.dropletGradient.cornerCurve = .continuous
+    self.dropletGradient.cornerRadius = 18
 
     self.panGesture = UIPanGestureRecognizer()
     self.tapGesture = UITapGestureRecognizer()
@@ -175,15 +184,28 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
   private func dropletFrame(forIndex index: Int) -> CGRect {
     guard tabCount > 0 else { return .zero }
+    // Droplet sits inside the icon row only — bottomInset (the home-
+    // indicator safe-area) is the bar's lower portion, glass-only.
+    let iconAreaH = bounds.height - bottomInset
     let slotW = bounds.width / CGFloat(tabCount)
     let dropletW = slotW - dropletSidePadding * 2
-    let dropletH = bounds.height - dropletInset * 2
+    let dropletH = max(0, iconAreaH - dropletInset * 2)
     let x = CGFloat(index) * slotW + dropletSidePadding
     let y = dropletInset
     return CGRect(x: x, y: y, width: dropletW, height: dropletH)
   }
 
-  // MARK: - Pan gesture — droplet follows finger live
+  // MARK: - Pan gesture — droplet follows finger live (Apple Music feel)
+  //
+  // Apple Music's bottom controls have a few signature touches when you
+  // drag across them:
+  //   1. The capsule "presses down" slightly on touch begin (scale 0.96)
+  //   2. While dragging fast, it stretches horizontally (>1) and squishes
+  //      vertically (<1) — like a real water droplet under acceleration
+  //   3. On release it springs back with critical-damping (no overshoot)
+  //
+  // We model the same behaviour here using direct frame writes during
+  // pan (driven by gesture velocity) and a UIView spring on release.
 
   @objc private func handlePan(_ gr: UIPanGestureRecognizer) {
     let location = gr.location(in: self)
@@ -191,36 +213,68 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     case .began:
       isPanning = true
       panStartTabX = dropletFrame(forIndex: activeIndex).midX
+      // 1. Press-down: subtle scale-down so the user FEELS the touch land.
+      UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut, .allowUserInteraction], animations: { [weak self] in
+        guard let self = self else { return }
+        self.dropletView.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+      }, completion: nil)
+      selectionFeedback.selectionChanged()
+
     case .changed:
       // Move droplet so its center tracks the finger; clamp to bar bounds
       let slotW = bounds.width / CGFloat(max(1, tabCount))
-      let dropletW = slotW - dropletSidePadding * 2
+      let baseW = slotW - dropletSidePadding * 2
+      let iconAreaH = bounds.height - bottomInset
+      let baseH = max(0, iconAreaH - dropletInset * 2)
+
+      // Velocity-driven liquid stretch. Wider when moving fast, slightly
+      // shorter vertically (water-like deformation). Capped so it never
+      // looks cartoony.
+      let vx = abs(gr.velocity(in: self).x)
+      let stretchX = min(1.22, 1 + vx / 3500)
+      let squishY = max(0.88, 1 - vx / 7000)
+
+      let dropletW = baseW * stretchX
+      let dropletH = baseH * squishY
+
       let minX = dropletSidePadding
       let maxX = bounds.width - dropletSidePadding - dropletW
       let proposedX = max(minX, min(maxX, location.x - dropletW / 2))
-      var f = dropletView.frame
-      f.origin.x = proposedX
-      // Slight horizontal stretch when moving fast — capture the velocity
-      let vx = abs(gr.velocity(in: self).x)
-      let stretch = min(1.18, 1 + vx / 4000)
-      f.size.width = (slotW - dropletSidePadding * 2) * stretch
-      dropletView.frame = f
+      let yOffset = (baseH - dropletH) / 2 // keep vertical center fixed
+
+      // Direct frame write — no UIView animation block here (we want
+      // strict 1-to-1 finger tracking, no easing lag).
+      dropletView.frame = CGRect(
+        x: proposedX,
+        y: dropletInset + yOffset,
+        width: dropletW,
+        height: dropletH
+      )
+      dropletView.transform = .identity
       dropletGradient.frame = dropletView.bounds
+
+      // While dragging, fire a subtle selection haptic each time the
+      // droplet's center crosses into a new slot — that "tick…tick"
+      // feedback mirrors how Music's volume scrubber feels.
+      let centerX = dropletView.frame.midX
+      let hovered = max(0, min(tabCount - 1, Int((centerX / slotW).rounded())))
+      if hovered != activeIndex {
+        selectionFeedback.selectionChanged()
+        selectionFeedback.prepare()
+        activeIndex = hovered
+      }
+
     case .ended, .cancelled:
       isPanning = false
-      // Snap to nearest tab
+      // Reset transform from the press-down scale, spring to the slot.
       let slotW = bounds.width / CGFloat(max(1, tabCount))
       let centerX = dropletView.frame.midX
       let nearest = max(0, min(tabCount - 1, Int((centerX / slotW).rounded())))
+      activeIndex = nearest
       animateToIndex(nearest)
-      if nearest != activeIndex {
-        activeIndex = nearest
-        impactFeedback.impactOccurred(intensity: 0.7)
-        emitPress(nearest)
-      } else {
-        // tiny haptic to confirm snap
-        selectionFeedback.selectionChanged()
-      }
+      impactFeedback.impactOccurred(intensity: 0.55)
+      emitPress(nearest)
+
     default:
       break
     }
@@ -241,22 +295,40 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
   }
 
   // MARK: - Spring animation between tabs
+  //
+  // We use the modern UIViewPropertyAnimator with a critically-damped
+  // spring on iOS 17+ — that gives the same "settle without overshoot"
+  // feel Apple uses on the iOS 26 Music control. On older iOS we fall
+  // back to the classic UIView.animate spring, which still looks great.
 
   private func animateToIndex(_ index: Int) {
     let target = dropletFrame(forIndex: index)
-    UIView.animate(
-      withDuration: 0.42,
-      delay: 0,
-      usingSpringWithDamping: 0.72,
-      initialSpringVelocity: 0.6,
-      options: [.allowUserInteraction, .beginFromCurrentState],
-      animations: { [weak self] in
+    if #available(iOS 17.0, *) {
+      let timing = UISpringTimingParameters(dampingRatio: 0.78, initialVelocity: .zero)
+      let animator = UIViewPropertyAnimator(duration: 0.45, timingParameters: timing)
+      animator.addAnimations { [weak self] in
         guard let self = self else { return }
+        self.dropletView.transform = .identity
         self.dropletView.frame = target
         self.dropletGradient.frame = self.dropletView.bounds
-      },
-      completion: nil
-    )
+      }
+      animator.startAnimation()
+    } else {
+      UIView.animate(
+        withDuration: 0.42,
+        delay: 0,
+        usingSpringWithDamping: 0.78,
+        initialSpringVelocity: 0.6,
+        options: [.allowUserInteraction, .beginFromCurrentState],
+        animations: { [weak self] in
+          guard let self = self else { return }
+          self.dropletView.transform = .identity
+          self.dropletView.frame = target
+          self.dropletGradient.frame = self.dropletView.bounds
+        },
+        completion: nil
+      )
+    }
   }
 
   // MARK: - Public API used by the Module file

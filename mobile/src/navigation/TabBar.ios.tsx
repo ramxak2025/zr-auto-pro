@@ -1,16 +1,24 @@
 /**
- * TabBar — iOS variant. Premium native Liquid Glass bar with an animated
- * droplet highlight implemented in Swift (autexa-liquid-glass).
+ * TabBar — iOS variant. Native Liquid Glass tab bar following the iOS
+ * Music / Photos / Apple Maps pattern: bar is FLUSH with the screen's
+ * bottom edge (no floating chin), glass extends THROUGH the home-
+ * indicator safe area, icons sit at the top of the bar with the safe
+ * area as breathing room below.
  *
- *  • Native AutexaLiquidGlassTabBar handles ALL of:
- *      – the glass background (UIVisualEffectView, iOS 26 UIGlassEffect)
- *      – the spring-animated droplet that follows finger / snaps to slot
- *      – pan gesture, tap gesture, haptics
- *  • Icons + labels + Касса dome are RN siblings rendered ABOVE the
- *    native bar (separate absolutely-positioned overlay) — never as
- *    native children, because UIView subview re-layout interferes with
- *    RN's flex layout and the icons end up squished.
- *  • onTabPress(index) bubbles up natively → forward to react-navigation.
+ * Geometry (top → bottom inside the bar):
+ *   • [icons row]   — height ICON_ROW_H, where the user taps
+ *   • [safe-area pad] — height insets.bottom, glass-covered too so the
+ *                       home indicator never reads on a different colour
+ *
+ * The bar has rounded TOP corners and square bottom corners (the
+ * bottom is the screen's hard edge), exactly like UIKit's UITabBar.
+ *
+ *  • Native AutexaLiquidGlassTabBar (Swift) handles glass + droplet +
+ *    pan gesture + spring snap + UISelectionFeedback / UIImpactFeedback.
+ *  • This file is pure presentation: icons + labels + Касса dome
+ *    overlaid on top (pointerEvents="none" so the native layer owns
+ *    every touch).
+ *  • onTabPress(index) bubbles up natively → forwarded to react-navigation.
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { AutexaLiquidGlassTabBar } from 'autexa-liquid-glass';
@@ -26,13 +34,15 @@ import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
-const BAR_HEIGHT = 58;
-const KASSA_SIZE = 46;
-const FLOAT_LIFT = 8;
-const BAR_HORIZONTAL_MARGIN = 14;
+const ICON_ROW_H = 56;
+const KASSA_SIZE = 42;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  // Total bar height: visible icon area + safe-area inset (so the glass
+  // covers the home indicator instead of leaving a grey strip below it).
+  const safeBottom = Math.max(insets.bottom, 0);
+  const totalH = ICON_ROW_H + safeBottom;
 
   const focusedIndex = TAB_DEFINITIONS.findIndex(
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
@@ -58,43 +68,38 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   );
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 10) + FLOAT_LIFT }]}
-    >
-      <View style={styles.outerGlow} pointerEvents="none" />
+    <View pointerEvents="box-none" style={[styles.wrapper, { height: totalH }]}>
+      {/* Native glass + droplet — fills the entire bar (icons area AND
+          safe area), edges touch the screen sides for a native flush feel. */}
+      <AutexaLiquidGlassTabBar
+        tabCount={TAB_DEFINITIONS.length}
+        activeIndex={safeIndex}
+        bottomInset={safeBottom}
+        onTabPress={navigateToTab}
+        style={styles.bar}
+      />
 
-      {/* Bar container — sits relative to wrapper, so the overlay row above
-          can use `position: absolute` to stack icons exactly over it. */}
-      <View style={styles.barWrap}>
-        <AutexaLiquidGlassTabBar
-          tabCount={TAB_DEFINITIONS.length}
-          activeIndex={safeIndex}
-          bottomInset={insets.bottom}
-          onTabPress={navigateToTab}
-          style={styles.bar}
-        />
+      {/* Hairline rim that sits on the very top of the bar — separates it
+          visually from the screen content above. UIKit does this too. */}
+      <View style={styles.topRim} pointerEvents="none" />
 
-        {/* Icons + labels overlaid above the native bar (NOT children of
-            it). pointerEvents="none" so taps and pans pass straight to the
-            native gesture recognizers — they emit onTabPress and animate
-            the droplet. JS here is pure presentation. */}
-        <View style={styles.iconsRow} pointerEvents="none">
-          {TAB_DEFINITIONS.map((tab) => {
-            const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
-            const focused = state.index === routeIndex;
+      {/* Icons row — pinned to the TOP of the bar so the safe area below
+          is just glass-covered breathing room, mirroring native UITabBar. */}
+      <View style={[styles.iconsRow, { height: ICON_ROW_H }]} pointerEvents="none">
+        {TAB_DEFINITIONS.map((tab) => {
+          const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
+          const focused = state.index === routeIndex;
 
-            if (tab.isKassa) {
-              return (
-                <View key={tab.routeName} style={styles.item}>
-                  <KassaGlassDome focused={focused} />
-                </View>
-              );
-            }
+          if (tab.isKassa) {
+            return (
+              <View key={tab.routeName} style={styles.item}>
+                <KassaGlassDome focused={focused} />
+              </View>
+            );
+          }
 
-            return <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} />;
-          })}
-        </View>
+          return <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} />;
+        })}
       </View>
     </View>
   );
@@ -137,9 +142,6 @@ function TabItem({ focused, label, icon }: TabItemProps) {
   );
 }
 
-/**
- * KassaGlassDome — compact, native-feeling centre button.
- */
 function KassaGlassDome({ focused }: { focused: boolean }) {
   const scale = useSharedValue(focused ? 1.04 : 1);
   React.useEffect(() => {
@@ -162,46 +164,36 @@ function KassaGlassDome({ focused }: { focused: boolean }) {
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
-      <Ionicons name="receipt-outline" size={20} color={colors.white} />
+      <Ionicons name="receipt-outline" size={18} color={colors.white} />
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
+  // The wrapper is the entire bar's hit area. Background transparent —
+  // the bar's GLASS provides the visual surface.
   wrapper: {
-    paddingTop: 6,
     backgroundColor: 'transparent',
   },
-  outerGlow: {
-    position: 'absolute',
-    left: 18,
-    right: 18,
-    bottom: 6,
-    height: BAR_HEIGHT - 4,
-    borderRadius: 30,
-    backgroundColor: colors.primary[700],
-    opacity: 0.05,
-  },
-  // Wrapper that holds the native bar AND the icons row at the same z.
-  barWrap: {
-    height: BAR_HEIGHT,
-    marginHorizontal: BAR_HORIZONTAL_MARGIN,
-  },
+  // Glass fills 100% of wrapper. No margins, no rounded corners on
+  // the bottom — the bar IS the screen's bottom edge now.
   bar: {
     ...StyleSheet.absoluteFillObject,
-    borderRadius: 30,
-    overflow: 'hidden',
-    borderWidth: 0.66,
-    borderColor: 'rgba(255,255,255,0.95)',
-    shadowColor: colors.primary[800],
-    shadowOpacity: 0.28,
-    shadowRadius: 26,
-    shadowOffset: { width: 0, height: 12 },
   },
-  // Icon overlay — flex row that fills the bar exactly, so each child
-  // (item) takes 1/Nth of the width without manual left/width math.
+  topRim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(0,0,0,0.08)',
+  },
+  // Icons row pinned to the top portion of the bar.
   iconsRow: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 4,
