@@ -95,6 +95,40 @@ function getCellDot(entry?: ScheduleEntry) {
   return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
 }
 
+// Skeleton placeholder shown while the schedule grid loads for the first time.
+// Renders 6 ghost rows so the user sees the structure of the grid instead of
+// a generic spinner — much closer to native iOS apps (Calendar, Reminders).
+function GridSkeleton() {
+  return (
+    <View style={{ flex: 1, paddingTop: 4 }}>
+      {[...Array(6)].map((_, i) => (
+        <View
+          key={i}
+          style={{
+            flexDirection: 'row',
+            paddingHorizontal: spacing[4],
+            paddingVertical: spacing[2],
+            gap: spacing[3],
+            alignItems: 'center',
+            opacity: 1 - i * 0.12,
+          }}
+        >
+          <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.gray[200] }} />
+          <View style={{ flex: 1, gap: 6 }}>
+            <View style={{ width: '50%', height: 11, borderRadius: 4, backgroundColor: colors.gray[200] }} />
+            <View style={{ width: '30%', height: 9, borderRadius: 4, backgroundColor: colors.gray[100] }} />
+          </View>
+          <View style={{ flexDirection: 'row', gap: 4 }}>
+            {[...Array(5)].map((__, j) => (
+              <View key={j} style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.gray[100] }} />
+            ))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 // Memoized grid row to avoid re-rendering all cells on unrelated state changes.
 interface GridDayRowProps {
   userId: string;
@@ -445,7 +479,17 @@ function GridTab() {
         ))}
       </View>
 
-      {isLoading ? <LoadingSpinner /> : (
+      {isLoading && !entries ? (
+        <GridSkeleton />
+      ) : !isLoading && (entries?.length ?? 0) === 0 && activeUsers.length > 0 ? (
+        <View style={[styles.emptyState, { paddingTop: 40 }]}>
+          <View style={styles.emptyIcon}>
+            <Ionicons name="calendar-outline" size={28} color={colors.gray[400]} />
+          </View>
+          <Text style={styles.emptyTitle}>Записей за этот месяц нет</Text>
+          <Text style={styles.emptySubtitle}>Тапни на ячейку, чтобы создать смену</Text>
+        </View>
+      ) : (
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Sticky left column -- employee names with avatar initials */}
           <View style={styles.stickyColumn}>

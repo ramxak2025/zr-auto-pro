@@ -148,7 +148,7 @@ function CallRow({ call, navigation }: { call: Call; navigation: any }) {
         <TouchableOpacity
           style={styles.playBtn}
           onPress={() => {
-            callsApi.getRecordingUrl(call.recordingUrl!).then(res => {
+            callsApi.getRecordingUrl(call.recordingUrl!).then((res: any) => {
               if (res.data?.url) Linking.openURL(res.data.url);
             }).catch(() => {});
           }}

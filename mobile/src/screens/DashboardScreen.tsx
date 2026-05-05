@@ -552,12 +552,12 @@ function MasterRatingCard({ userId }: { userId?: string }) {
 
   if (!data?.employeeRatings?.length || !userId) return null;
 
-  const myRating = data.employeeRatings.find(e => e.employeeId === userId);
+  const myRating = data.employeeRatings.find((e: any) => e.employeeId === userId);
   if (!myRating) return null;
 
   const rank = data.employeeRatings
-    .sort((a, b) => b.avgRating - a.avgRating)
-    .findIndex(e => e.employeeId === userId) + 1;
+    .sort((a: any, b: any) => b.avgRating - a.avgRating)
+    .findIndex((e: any) => e.employeeId === userId) + 1;
 
   const stars = Math.round(myRating.avgRating);
 
