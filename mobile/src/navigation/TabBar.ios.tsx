@@ -22,7 +22,6 @@
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { AutexaLiquidGlassTabBar } from 'autexa-liquid-glass';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -35,7 +34,6 @@ import { colors } from '../theme';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
 const ICON_ROW_H = 56;
-const KASSA_SIZE = 42;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -142,30 +140,38 @@ function TabItem({ focused, label, icon }: TabItemProps) {
   );
 }
 
+/**
+ * KassaGlassDome — primary action button at the centre of the bar.
+ *
+ * iOS native bottom bars don't usually have giant protruding centre
+ * buttons (that's a Material Design pattern). Instead we render a
+ * compact filled SF Symbol-style icon with a subtle accent background
+ * and a label, matching the visual weight of the surrounding tabs.
+ */
 function KassaGlassDome({ focused }: { focused: boolean }) {
-  const scale = useSharedValue(focused ? 1.04 : 1);
+  const scale = useSharedValue(focused ? 1.05 : 1);
   React.useEffect(() => {
-    scale.value = withSpring(focused ? 1.04 : 1, SPRING_TIGHT);
+    scale.value = withSpring(focused ? 1.05 : 1, SPRING_TIGHT);
   }, [focused, scale]);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
-    <Animated.View style={[s.dome, animatedStyle]}>
-      <LinearGradient
-        colors={[colors.primary[400], colors.primary[600]]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-      <LinearGradient
-        colors={['rgba(255,255,255,0.42)', 'rgba(255,255,255,0)']}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 0.55 }}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
-      <Ionicons name="receipt-outline" size={18} color={colors.white} />
-    </Animated.View>
+    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <Animated.View style={[s.dome, animatedStyle]}>
+        <Ionicons name="add" size={22} color={colors.white} />
+      </Animated.View>
+      <Text
+        variant="caption"
+        style={{
+          marginTop: 2,
+          color: colors.primary[700],
+          fontWeight: focused ? '700' : '600',
+          fontSize: 10,
+        }}
+      >
+        Касса
+      </Text>
+    </View>
   );
 }
 
@@ -207,18 +213,18 @@ const styles = StyleSheet.create({
 });
 
 const s = StyleSheet.create({
+  // Compact accent button — squircle, small shadow. Sits flush in the
+  // bar like the rest of the tabs, no protruding dome.
   dome: {
-    width: KASSA_SIZE,
-    height: KASSA_SIZE,
-    borderRadius: KASSA_SIZE / 2,
-    overflow: 'hidden',
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.7)',
     shadowColor: colors.primary[700],
-    shadowOpacity: 0.28,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
   },
 });

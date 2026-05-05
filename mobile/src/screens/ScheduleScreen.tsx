@@ -412,8 +412,18 @@ function GridTab() {
   //   2. If we got nothing AND we know the current user → fall back to it
   //      so the grid never looks "broken" for a fresh tenant.
   //   3. Sort by sortOrder, then by fullName.
+  // Schedule grid shows MASTERS only — owners (superadmin / director)
+  // and back-office admins don't need shifts on a service-bay roster.
+  // The auth-user fallback also gets filtered here so a director who
+  // signs in alone doesn't see themselves on the grid.
   const activeUsers = useMemo(() => {
-    const raw = (usersData || []).filter((u) => u && u.id && u.isActive !== false);
+    const isSchedulable = (u: any) => {
+      if (!u || !u.id) return false;
+      if (u.isActive === false) return false;
+      const role = (u.role || '').toString().toLowerCase();
+      return role !== 'superadmin' && role !== 'director' && role !== 'owner';
+    };
+    const raw = (usersData || []).filter(isSchedulable);
     if (raw.length > 0) {
       return raw.sort((a: any, b: any) => {
         const ao = a.sortOrder ?? 0;
@@ -422,7 +432,7 @@ function GridTab() {
         return (a.fullName || '').localeCompare(b.fullName || '');
       });
     }
-    if (user && (user as any).id) {
+    if (user && isSchedulable(user)) {
       return [user as unknown as User];
     }
     return [];
@@ -841,8 +851,10 @@ function GridTab() {
               style={{ flex: 1 }}
               showsVerticalScrollIndicator={false}
               onScroll={handleLeftScroll}
-              scrollEventThrottle={16}
+              scrollEventThrottle={1}
               bounces={false}
+              decelerationRate="normal"
+              removeClippedSubviews
               contentContainerStyle={{ paddingBottom: tabBarHeight }}
             >
               {activeUsers.map((u, rowIdx) => {
@@ -945,8 +957,10 @@ function GridTab() {
                 style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 onScroll={handleRightScroll}
-                scrollEventThrottle={16}
+                scrollEventThrottle={1}
                 bounces={false}
+                decelerationRate="normal"
+                removeClippedSubviews
                 contentContainerStyle={{ paddingBottom: tabBarHeight }}
               >
                 {activeUsers.map((u, rowIdx) => (

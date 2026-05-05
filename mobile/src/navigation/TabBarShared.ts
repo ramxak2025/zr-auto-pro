@@ -16,8 +16,8 @@ export interface TabDefinition {
 
 export const TAB_DEFINITIONS: TabDefinition[] = [
   { routeName: 'Dashboard', label: 'Главная', icon: 'home' },
-  { routeName: 'Products',  label: 'Склад',   icon: 'warehouse' },
-  { routeName: 'NewCheck',  label: '',        icon: 'receipt', isKassa: true },
-  { routeName: 'Checks',    label: 'Журнал',  icon: 'journal' },
-  { routeName: 'MoreTab',   label: 'Ещё',     icon: 'menu' },
+  { routeName: 'Products', label: 'Склад', icon: 'warehouse' },
+  { routeName: 'NewCheck', label: 'Касса', icon: 'receipt', isKassa: true },
+  { routeName: 'Checks', label: 'Журнал', icon: 'journal' },
+  { routeName: 'MoreTab', label: 'Ещё', icon: 'menu' },
 ];

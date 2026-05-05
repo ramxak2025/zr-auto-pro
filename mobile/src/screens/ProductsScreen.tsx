@@ -15,6 +15,8 @@ import { FlashList } from '@shopify/flash-list';
 import CachedImage from '../components/CachedImage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import { Pressable } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { productsApi, warehouseCategoriesApi, uploadsApi } from '../api/services';
@@ -1629,21 +1631,34 @@ export default function ProductsScreen() {
         </View>
       </Modal>
 
-      {/* Fullscreen Photo Viewer */}
+      {/* Fullscreen Photo Viewer — native iOS preview:
+          • backdrop is UIBlurEffect dark, not a flat black
+          • tapping ANYWHERE outside the image closes it
+          • image has rounded continuous corners and respects safe area
+          • close button is a translucent glyph in the top-right */}
       <RNModal
         visible={!!fullscreenPhoto}
         transparent
         animationType="fade"
         onRequestClose={() => setFullscreenPhoto(null)}
       >
-        <View style={styles.fullscreenOverlay}>
-          <TouchableOpacity style={styles.fullscreenClose} onPress={() => setFullscreenPhoto(null)}>
-            <Ionicons name="close" size={28} color={colors.white} />
-          </TouchableOpacity>
+        <Pressable style={styles.fullscreenOverlay} onPress={() => setFullscreenPhoto(null)}>
+          <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
+          {/* Inner Pressable absorbs taps on the image so the image
+              itself doesn't dismiss the preview — only the backdrop does. */}
           {fullscreenPhoto && (
-            <CachedImage source={{ uri: fullscreenPhoto }} style={styles.fullscreenImage} resizeMode="contain" />
+            <Pressable style={styles.fullscreenImageWrap} onPress={(e) => e.stopPropagation?.()}>
+              <CachedImage source={{ uri: fullscreenPhoto }} style={styles.fullscreenImage} resizeMode="contain" />
+            </Pressable>
           )}
-        </View>
+          <Pressable
+            style={styles.fullscreenClose}
+            onPress={() => setFullscreenPhoto(null)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
+            <Ionicons name="close" size={20} color={colors.white} />
+          </Pressable>
+        </Pressable>
       </RNModal>
 
       <ConfirmDialog
@@ -2033,17 +2048,32 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50],
   },
   addProductBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.primary[600] },
-  // Fullscreen photo
-  fullscreenOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center' },
+  // Fullscreen photo — backdrop is a translucent dark BlurView (set
+  // separately, not via backgroundColor), wrap centers the image, and
+  // the image gets continuous rounded corners.
+  fullscreenOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+  fullscreenImageWrap: {
+    borderRadius: 24,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+  },
   fullscreenClose: {
     position: 'absolute',
-    top: 50,
+    top: 60,
     right: 20,
     zIndex: 10,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
   },

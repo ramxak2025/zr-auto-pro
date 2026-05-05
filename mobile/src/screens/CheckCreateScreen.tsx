@@ -112,14 +112,16 @@ function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
         <Text style={plateBadgeStyles.regionText} numberOfLines={1}>
           {region || '—'}
         </Text>
-        {/* Russian flag — three horizontal stripes stacked vertically
-            (white / blue / red), exactly as on a real ГОСТ plate. */}
-        <View style={plateBadgeStyles.flagStack}>
-          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#FFFFFF' }]} />
-          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#0039A6' }]} />
-          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#D52B1E' }]} />
+        {/* RUS + Russian flag side-by-side on the bottom, matching the
+            real ГОСТ plate layout (RUS on the left, flag on the right). */}
+        <View style={plateBadgeStyles.rusFlagRow}>
+          <Text style={plateBadgeStyles.rusLabel}>RUS</Text>
+          <View style={plateBadgeStyles.flagBox}>
+            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#FFFFFF' }]} />
+            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#0039A6' }]} />
+            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#D52B1E' }]} />
+          </View>
         </View>
-        <Text style={plateBadgeStyles.rusLabel}>RUS</Text>
       </View>
     </View>
   );
@@ -152,22 +154,31 @@ const plateBadgeStyles = StyleSheet.create({
   mainBlock: { width: PLATE_MAIN_W, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
   mainText: { fontSize: 26, fontWeight: '800', letterSpacing: 1.6, color: '#000000' },
   divider: { width: 2, backgroundColor: '#000000' },
-  // Right strip: region digits top, horizontal Russian flag (3 stripes
-  // stacked vertically) below, RUS at the bottom — exactly the GOST layout.
+  // Right strip — region digits BIG at the top, RUS + flag side-by-side
+  // at the bottom. Square strip per GOST (PLATE_HEIGHT x PLATE_HEIGHT).
   regionBlock: {
     width: PLATE_REGION_W,
     alignItems: 'center' as const,
-    justifyContent: 'flex-start' as const,
-    paddingTop: 4,
-    paddingBottom: 3,
+    justifyContent: 'space-evenly' as const,
+    paddingVertical: 4,
   },
-  regionText: { fontSize: 19, fontWeight: '800' as const, letterSpacing: 0.4, color: '#000000', lineHeight: 22 },
-  // Flag occupies ~70% of the strip width; 3 horizontal bands of equal
-  // height (white / blue / red), forming a small Russian flag in the
-  // correct orientation (wider than tall).
-  flagStack: { flexDirection: 'column' as const, marginTop: 3 },
-  flagBand: { width: PLATE_REGION_W * 0.62, height: 2.2 },
-  rusLabel: { fontSize: 7.5, fontWeight: '900' as const, color: '#000000', letterSpacing: 0.6, marginTop: 1 },
+  regionText: { fontSize: 22, fontWeight: '800' as const, letterSpacing: 0.4, color: '#000000', lineHeight: 24 },
+  // Bottom row of the strip: "RUS" text (left) + tricolor flag (right).
+  rusFlagRow: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 2,
+  },
+  rusLabel: { fontSize: 8, fontWeight: '900' as const, color: '#000000', letterSpacing: 0.4 },
+  // Flag — small landscape rectangle of three horizontal bands
+  // (white / blue / red), exactly like the real Russian flag.
+  flagBox: {
+    flexDirection: 'column' as const,
+    overflow: 'hidden' as const,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#000000',
+  },
+  flagBand: { width: 12, height: 2.2 },
   // Foreign INT plate
   intStrip: { width: 22, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
   intStripText: { fontSize: 8, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
