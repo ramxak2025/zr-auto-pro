@@ -9,6 +9,7 @@ import {
   Linking,
   Animated as RNAnimated,
 } from 'react-native';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -85,29 +86,32 @@ function CallRow({ call, navigation }: { call: Call; navigation: any }) {
     ? new Date(call.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
     : '';
 
-  const iconName = isMissed && call.calledBack
-    ? 'call-outline'
-    : isMissed
-      ? 'close-circle-outline'
-      : isIncoming
-        ? 'arrow-down-outline'
-        : 'arrow-up-outline';
+  const iconName =
+    isMissed && call.calledBack
+      ? 'call-outline'
+      : isMissed
+        ? 'close-circle-outline'
+        : isIncoming
+          ? 'arrow-down-outline'
+          : 'arrow-up-outline';
 
-  const iconColor = isMissed && call.calledBack
-    ? colors.green[600]
-    : isMissed
-      ? colors.red[500]
-      : isIncoming
-        ? colors.green[600]
-        : colors.blue[600];
+  const iconColor =
+    isMissed && call.calledBack
+      ? colors.green[600]
+      : isMissed
+        ? colors.red[500]
+        : isIncoming
+          ? colors.green[600]
+          : colors.blue[600];
 
-  const iconBg = isMissed && call.calledBack
-    ? colors.green[50]
-    : isMissed
-      ? colors.red[50]
-      : isIncoming
-        ? colors.green[50]
-        : colors.blue[50];
+  const iconBg =
+    isMissed && call.calledBack
+      ? colors.green[50]
+      : isMissed
+        ? colors.red[50]
+        : isIncoming
+          ? colors.green[50]
+          : colors.blue[50];
 
   return (
     <View style={styles.callRow}>
@@ -133,28 +137,80 @@ function CallRow({ call, navigation }: { call: Call; navigation: any }) {
 
       <View style={styles.callRight}>
         <Text style={styles.callTime}>{callTime}</Text>
-        {call.duration > 0 && (
-          <Text style={styles.callDuration}>{formatDuration(call.duration)}</Text>
-        )}
+        {call.duration > 0 && <Text style={styles.callDuration}>{formatDuration(call.duration)}</Text>}
         {isMissed && call.calledBack && (
           <Text style={[styles.callStatus, { color: colors.green[600] }]}>Перезвонили</Text>
         )}
-        {isMissed && !call.calledBack && (
-          <Text style={[styles.callStatus, { color: colors.red[500] }]}>Пропущен</Text>
-        )}
+        {isMissed && !call.calledBack && <Text style={[styles.callStatus, { color: colors.red[500] }]}>Пропущен</Text>}
       </View>
 
-      {call.recordingUrl && (
-        <TouchableOpacity
-          style={styles.playBtn}
-          onPress={() => {
-            callsApi.getRecordingUrl(call.recordingUrl!).then((res: any) => {
-              if (res.data?.url) Linking.openURL(res.data.url);
-            }).catch(() => {});
-          }}
-        >
-          <Ionicons name="play" size={14} color={colors.primary[600]} />
-        </TouchableOpacity>
+      {call.recordingUrl && <InlineRecordingPlayer recordingUrl={call.recordingUrl} />}
+    </View>
+  );
+}
+
+/**
+ * InlineRecordingPlayer — native iOS/Android in-app audio player for a call
+ * recording. Uses expo-audio (the SDK 54+ replacement for expo-av) so playback
+ * happens entirely inside the app — no Safari hand-off, no download dialog.
+ *
+ * Lazy-loads the signed URL on first tap so we don't hit the backend for every
+ * row up-front. Once loaded, tap toggles play/pause; a thin progress bar shows
+ * elapsed time over the recording's duration.
+ */
+function InlineRecordingPlayer({ recordingUrl }: { recordingUrl: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const player = useAudioPlayer(src ? { uri: src } : null);
+  const status = useAudioPlayerStatus(player);
+  const playing = !!status?.playing;
+  const durationSec = status?.duration ?? 0;
+  const positionSec = status?.currentTime ?? 0;
+  const progress = durationSec > 0 ? Math.min(1, positionSec / durationSec) : 0;
+
+  const togglePlay = useCallback(async () => {
+    if (!src) {
+      try {
+        setLoading(true);
+        const res: any = await callsApi.getRecordingUrl(recordingUrl);
+        const url: string | undefined = res?.data?.url;
+        if (!url) return;
+        setSrc(url); // playback starts after src effect below
+      } catch {
+        // swallow — UI just stays in idle state
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    if (playing) player.pause();
+    else player.play();
+  }, [src, playing, player, recordingUrl]);
+
+  // Auto-start playback once the URL resolves.
+  useEffect(() => {
+    if (src) {
+      try {
+        player.play();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [src, player]);
+
+  return (
+    <View style={styles.playerWrap}>
+      <TouchableOpacity style={styles.playBtn} onPress={togglePlay} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+        {loading ? (
+          <ActivityIndicator size="small" color={colors.primary[600]} />
+        ) : (
+          <Ionicons name={playing ? 'pause' : 'play'} size={14} color={colors.primary[600]} />
+        )}
+      </TouchableOpacity>
+      {!!src && durationSec > 0 && (
+        <View style={styles.playerProgressTrack}>
+          <View style={[styles.playerProgressFill, { width: `${progress * 100}%` }]} />
+        </View>
       )}
     </View>
   );
@@ -214,10 +270,14 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
 
   const filteredCalls = useMemo(() => {
     switch (activeTab) {
-      case 'incoming': return calls.filter(c => c.direction === 'incoming' && c.status === 'answered');
-      case 'outgoing': return calls.filter(c => c.direction === 'outgoing');
-      case 'missed': return calls.filter(c => c.direction === 'incoming' && (c.status === 'missed' || c.duration === 0));
-      default: return calls;
+      case 'incoming':
+        return calls.filter((c) => c.direction === 'incoming' && c.status === 'answered');
+      case 'outgoing':
+        return calls.filter((c) => c.direction === 'outgoing');
+      case 'missed':
+        return calls.filter((c) => c.direction === 'incoming' && (c.status === 'missed' || c.duration === 0));
+      default:
+        return calls;
     }
   }, [calls, activeTab]);
 
@@ -231,7 +291,9 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     d.setDate(d.getDate() + 1);
     if (d <= new Date()) setSelectedDate(d);
   };
-  const isToday = dateStr === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+  const isToday =
+    dateStr ===
+    `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
 
   const summaryItems = [
     { label: 'Вх.', value: summary?.incoming ?? 0, color: colors.green[600], bg: colors.green[50] },
@@ -244,7 +306,11 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header — native iOS-style with back button + title + date stepper */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.backBtn}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -252,10 +318,19 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           <Text style={styles.subtitle}>{dateLabel}</Text>
         </View>
         <View style={styles.dateNav}>
-          <TouchableOpacity onPress={goToPrevDay} style={styles.dateBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+          <TouchableOpacity
+            onPress={goToPrevDay}
+            style={styles.dateBtn}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
             <Ionicons name="chevron-back" size={18} color={colors.gray[500]} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={goToNextDay} disabled={isToday} style={[styles.dateBtn, isToday && { opacity: 0.25 }]} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+          <TouchableOpacity
+            onPress={goToNextDay}
+            disabled={isToday}
+            style={[styles.dateBtn, isToday && { opacity: 0.25 }]}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
             <Ionicons name="chevron-forward" size={18} color={colors.gray[500]} />
           </TouchableOpacity>
         </View>
@@ -263,7 +338,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
 
       {/* Summary strip */}
       <View style={styles.summaryRow}>
-        {summaryItems.map(s => (
+        {summaryItems.map((s) => (
           <View key={s.label} style={[styles.summaryCard, { backgroundColor: s.bg }]}>
             <Text style={[styles.summaryValue, { color: s.color }]}>{isLoading ? '-' : s.value}</Text>
             <Text style={styles.summaryLabel}>{s.label}</Text>
@@ -281,11 +356,15 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
 
       {/* Filter tabs */}
       <View style={styles.tabs}>
-        {TABS.map(tab => {
-          const count = tab.key === 'all' ? summary?.total
-            : tab.key === 'incoming' ? summary?.incoming
-            : tab.key === 'outgoing' ? summary?.outgoing
-            : summary?.missed;
+        {TABS.map((tab) => {
+          const count =
+            tab.key === 'all'
+              ? summary?.total
+              : tab.key === 'incoming'
+                ? summary?.incoming
+                : tab.key === 'outgoing'
+                  ? summary?.outgoing
+                  : summary?.missed;
           const active = activeTab === tab.key;
           return (
             <TouchableOpacity
@@ -312,14 +391,10 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
         ) : filteredCalls.length === 0 ? (
           <View style={styles.empty}>
             <Ionicons name="call-outline" size={32} color={colors.gray[200]} />
-            <Text style={styles.emptyText}>
-              {activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}
-            </Text>
+            <Text style={styles.emptyText}>{activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}</Text>
           </View>
         ) : (
-          filteredCalls.map((call, idx) => (
-            <CallRow key={`${call.id}-${idx}`} call={call} navigation={navigation} />
-          ))
+          filteredCalls.map((call, idx) => <CallRow key={`${call.id}-${idx}`} call={call} navigation={navigation} />)
         )}
       </ScrollView>
     </SafeAreaView>
@@ -352,8 +427,21 @@ const styles = StyleSheet.create({
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
   subtitle: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 1 },
   dateNav: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  dateBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
-  dateLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], minWidth: 70, textAlign: 'center' },
+  dateBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dateLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[700],
+    minWidth: 70,
+    textAlign: 'center',
+  },
 
   summaryRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4], marginBottom: spacing[3] },
   summaryCard: { flex: 1, borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], alignItems: 'center' },
@@ -376,12 +464,25 @@ const styles = StyleSheet.create({
   warningText: { fontSize: fontSize.xs, color: colors.orange[600], fontWeight: fontWeight.medium },
 
   tabs: { flexDirection: 'row', marginHorizontal: spacing[4], marginBottom: spacing[3], gap: spacing[2] },
-  tab: { flex: 1, paddingVertical: spacing[2], alignItems: 'center', borderRadius: borderRadius.lg, backgroundColor: colors.gray[50] },
+  tab: {
+    flex: 1,
+    paddingVertical: spacing[2],
+    alignItems: 'center',
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.gray[50],
+  },
   tabActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
   tabText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[400] },
   tabTextActive: { color: colors.primary[600] },
 
-  list: { flex: 1, backgroundColor: colors.white, marginHorizontal: spacing[4], borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100] },
+  list: {
+    flex: 1,
+    backgroundColor: colors.white,
+    marginHorizontal: spacing[4],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+  },
 
   callRow: {
     flexDirection: 'row',
@@ -415,6 +516,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50],
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  playerWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    minWidth: 32,
+  },
+  playerProgressTrack: {
+    width: 60,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: colors.gray[200],
+    overflow: 'hidden',
+  },
+  playerProgressFill: {
+    height: '100%',
+    backgroundColor: colors.primary[500],
   },
 
   empty: { alignItems: 'center', paddingVertical: spacing[12] },
