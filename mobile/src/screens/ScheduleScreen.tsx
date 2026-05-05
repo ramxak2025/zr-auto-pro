@@ -675,6 +675,24 @@ function GridTab() {
         ))}
       </View>
 
+      {/* DEBUG banner — temporary; helps the owner see WHAT is coming from
+          backend so we can diagnose why the grid stays empty. Remove once
+          schedule is verified working in production. */}
+      <View
+        style={{
+          paddingHorizontal: 12,
+          paddingVertical: 6,
+          backgroundColor: '#fff7ed',
+          borderBottomWidth: 1,
+          borderBottomColor: '#fed7aa',
+        }}
+      >
+        <Text style={{ fontSize: 11, color: '#9a3412', fontWeight: '600' }}>
+          🛠 v9 · users:{usersData?.length ?? '—'} · activeUsers:{activeUsers.length} · entries:{entries?.length ?? '—'}{' '}
+          · {dateFrom}…{dateTo}
+        </Text>
+      </View>
+
       {/* Schedule states:
           1. usersData not yet loaded → skeleton (we need users to render rows)
           2. usersData loaded but empty list → onboarding ("add employees")
