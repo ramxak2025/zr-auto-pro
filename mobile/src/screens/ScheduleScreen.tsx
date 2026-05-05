@@ -2544,26 +2544,33 @@ const styles = StyleSheet.create({
   gridCell: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRightWidth: 0.5,
+    borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: colors.gray[100],
-    borderBottomWidth: 0.5,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.gray[100],
   },
   gridCellToday: {
-    backgroundColor: colors.primary[50] + '50',
+    backgroundColor: colors.primary[50],
   },
+  // Status pill — slightly larger, continuous corners, pleasant shadow
+  // so the indicator reads as a soft island instead of a flat dot.
   gridDot: {
-    height: 22,
-    borderRadius: 11,
+    height: 26,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 1.5,
+    shadowOffset: { width: 0, height: 1 },
   },
   gridDotRound: {
-    width: 22,
+    width: 26,
+    borderRadius: 13,
   },
   gridDotLabel: {
-    minWidth: 36,
-    paddingHorizontal: 5,
+    minWidth: 38,
+    paddingHorizontal: 6,
   },
   gridCellEmpty: {
     width: 6,
