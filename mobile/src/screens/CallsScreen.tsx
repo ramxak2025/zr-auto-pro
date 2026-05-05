@@ -8,8 +8,9 @@ import {
   ActivityIndicator,
   Linking,
   Animated as RNAnimated,
+  Pressable,
 } from 'react-native';
-import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, AudioModule } from 'expo-audio';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -78,7 +79,20 @@ function formatMoney(v: number): string {
 // Call Row
 // ---------------------------------------------------------------------------
 
-function CallRow({ call, navigation }: { call: Call; navigation: any }) {
+// One global "currently playing" id so only one recording sounds at once.
+// Lives at the screen root and is passed down via props (no Context to keep
+// this file self-contained).
+function CallRow({
+  call,
+  navigation,
+  playingId,
+  setPlayingId,
+}: {
+  call: Call;
+  navigation: any;
+  playingId: string | null;
+  setPlayingId: (id: string | null) => void;
+}) {
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
   const isIncoming = call.direction === 'incoming';
   const displayPhone = isIncoming ? call.from : call.to;
@@ -113,54 +127,81 @@ function CallRow({ call, navigation }: { call: Call; navigation: any }) {
           ? colors.green[50]
           : colors.blue[50];
 
+  const isThisPlaying = playingId === call.id;
+
   return (
-    <View style={styles.callRow}>
-      <View style={[styles.callIcon, { backgroundColor: iconBg }]}>
-        <Ionicons name={iconName as any} size={18} color={iconColor} />
-      </View>
+    <View style={styles.callItemWrap}>
+      <View style={styles.callRow}>
+        <View style={[styles.callIcon, { backgroundColor: iconBg }]}>
+          <Ionicons name={iconName as any} size={18} color={iconColor} />
+        </View>
 
-      <View style={styles.callInfo}>
-        <Text style={[styles.callPhone, isMissed && !call.calledBack && { color: colors.red[600] }]}>
-          {formatPhone(displayPhone)}
-        </Text>
-        {call.client ? (
-          <TouchableOpacity onPress={() => navigation.navigate('ClientDetail', { id: call.client!.id })}>
-            <Text style={styles.callClient} numberOfLines={1}>
-              {call.client.fullName}
-              {call.client.cars?.[0] && ` \u2022 ${call.client.cars[0].makeModel || call.client.cars[0].plateNumber}`}
-            </Text>
+        <View style={styles.callInfo}>
+          <Text style={[styles.callPhone, isMissed && !call.calledBack && { color: colors.red[600] }]}>
+            {formatPhone(displayPhone)}
+          </Text>
+          {call.client ? (
+            <TouchableOpacity onPress={() => navigation.navigate('ClientDetail', { id: call.client!.id })}>
+              <Text style={styles.callClient} numberOfLines={1}>
+                {call.client.fullName}
+                {call.client.cars?.[0] && ` \u2022 ${call.client.cars[0].makeModel || call.client.cars[0].plateNumber}`}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.callUnknown}>Неизвестный номер</Text>
+          )}
+        </View>
+
+        <View style={styles.callRight}>
+          <Text style={styles.callTime}>{callTime}</Text>
+          {call.duration > 0 && <Text style={styles.callDuration}>{formatDuration(call.duration)}</Text>}
+          {isMissed && call.calledBack && (
+            <Text style={[styles.callStatus, { color: colors.green[600] }]}>Перезвонили</Text>
+          )}
+          {isMissed && !call.calledBack && (
+            <Text style={[styles.callStatus, { color: colors.red[500] }]}>Пропущен</Text>
+          )}
+        </View>
+
+        {call.recordingUrl && (
+          <TouchableOpacity
+            style={[styles.playBtn, isThisPlaying && { backgroundColor: colors.primary[600] }]}
+            onPress={() => setPlayingId(isThisPlaying ? null : call.id)}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
+            <Ionicons
+              name={isThisPlaying ? 'chevron-up' : 'play'}
+              size={16}
+              color={isThisPlaying ? colors.white : colors.primary[600]}
+            />
           </TouchableOpacity>
-        ) : (
-          <Text style={styles.callUnknown}>Неизвестный номер</Text>
         )}
       </View>
-
-      <View style={styles.callRight}>
-        <Text style={styles.callTime}>{callTime}</Text>
-        {call.duration > 0 && <Text style={styles.callDuration}>{formatDuration(call.duration)}</Text>}
-        {isMissed && call.calledBack && (
-          <Text style={[styles.callStatus, { color: colors.green[600] }]}>Перезвонили</Text>
-        )}
-        {isMissed && !call.calledBack && <Text style={[styles.callStatus, { color: colors.red[500] }]}>Пропущен</Text>}
-      </View>
-
-      {call.recordingUrl && <InlineRecordingPlayer recordingUrl={call.recordingUrl} />}
+      {isThisPlaying && call.recordingUrl && (
+        <ExpandedRecordingPlayer recordingUrl={call.recordingUrl} onClose={() => setPlayingId(null)} />
+      )}
     </View>
   );
 }
 
 /**
- * InlineRecordingPlayer — native iOS/Android in-app audio player for a call
- * recording. Uses expo-audio (the SDK 54+ replacement for expo-av) so playback
- * happens entirely inside the app — no Safari hand-off, no download dialog.
+ * ExpandedRecordingPlayer — full-fidelity in-app player that slides open
+ * under the active call row.
  *
- * Lazy-loads the signed URL on first tap so we don't hit the backend for every
- * row up-front. Once loaded, tap toggles play/pause; a thin progress bar shows
- * elapsed time over the recording's duration.
+ *  • Lazy-loads the signed recording URL via callsApi.getRecordingUrl.
+ *  • Uses expo-audio (`useAudioPlayer` + `useAudioPlayerStatus`).
+ *  • Auto-starts playback once URL is fetched.
+ *  • Big play/pause button, ±15s skip buttons, current/total time labels.
+ *  • Tappable seek bar — tap anywhere on the track to jump to that
+ *    position. Width measured via onLayout, ratio → seekTo().
+ *  • Audio mode is configured at the screen root so playback also works
+ *    when the iPhone ringer switch is set to silent.
  */
-function InlineRecordingPlayer({ recordingUrl }: { recordingUrl: string }) {
+function ExpandedRecordingPlayer({ recordingUrl, onClose }: { recordingUrl: string; onClose: () => void }) {
   const [src, setSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [trackWidth, setTrackWidth] = useState(0);
+
   const player = useAudioPlayer(src ? { uri: src } : null);
   const status = useAudioPlayerStatus(player);
   const playing = !!status?.playing;
@@ -168,26 +209,26 @@ function InlineRecordingPlayer({ recordingUrl }: { recordingUrl: string }) {
   const positionSec = status?.currentTime ?? 0;
   const progress = durationSec > 0 ? Math.min(1, positionSec / durationSec) : 0;
 
-  const togglePlay = useCallback(async () => {
-    if (!src) {
+  // Lazy-fetch the URL on mount, then auto-play when it resolves.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
       try {
         setLoading(true);
         const res: any = await callsApi.getRecordingUrl(recordingUrl);
         const url: string | undefined = res?.data?.url;
-        if (!url) return;
-        setSrc(url); // playback starts after src effect below
+        if (!cancelled && url) setSrc(url);
       } catch {
-        // swallow — UI just stays in idle state
+        // swallow — keep the loading spinner; the user can re-tap
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-      return;
-    }
-    if (playing) player.pause();
-    else player.play();
-  }, [src, playing, player, recordingUrl]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [recordingUrl]);
 
-  // Auto-start playback once the URL resolves.
   useEffect(() => {
     if (src) {
       try {
@@ -198,20 +239,92 @@ function InlineRecordingPlayer({ recordingUrl }: { recordingUrl: string }) {
     }
   }, [src, player]);
 
+  // Stop sound when this player unmounts (row collapsed or another row picked)
+  useEffect(
+    () => () => {
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+    },
+    [player],
+  );
+
+  const togglePlay = () => {
+    if (!src) return;
+    if (playing) player.pause();
+    else player.play();
+  };
+
+  const seekDelta = (delta: number) => {
+    if (!src || durationSec <= 0) return;
+    const next = Math.max(0, Math.min(durationSec, positionSec + delta));
+    try {
+      player.seekTo(next);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const seekToRatio = (ratio: number) => {
+    if (!src || durationSec <= 0) return;
+    const next = Math.max(0, Math.min(durationSec, durationSec * ratio));
+    try {
+      player.seekTo(next);
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
-    <View style={styles.playerWrap}>
-      <TouchableOpacity style={styles.playBtn} onPress={togglePlay} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-        {loading ? (
-          <ActivityIndicator size="small" color={colors.primary[600]} />
-        ) : (
-          <Ionicons name={playing ? 'pause' : 'play'} size={14} color={colors.primary[600]} />
-        )}
-      </TouchableOpacity>
-      {!!src && durationSec > 0 && (
-        <View style={styles.playerProgressTrack}>
-          <View style={[styles.playerProgressFill, { width: `${progress * 100}%` }]} />
+    <View style={styles.expandedPlayer}>
+      {/* Time labels */}
+      <View style={styles.expandedTimeRow}>
+        <Text style={styles.expandedTime}>{formatDuration(positionSec)}</Text>
+        <Text style={styles.expandedTime}>{formatDuration(Math.max(0, durationSec - positionSec))}</Text>
+      </View>
+
+      {/* Tappable progress bar */}
+      <Pressable
+        onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+        onPress={(e) => {
+          if (trackWidth <= 0) return;
+          seekToRatio(e.nativeEvent.locationX / trackWidth);
+        }}
+        style={styles.expandedTrackHit}
+      >
+        <View style={styles.expandedTrack}>
+          <View style={[styles.expandedTrackFill, { width: `${progress * 100}%` }]} />
+          <View style={[styles.expandedThumb, { left: `${progress * 100}%` }]} />
         </View>
-      )}
+      </Pressable>
+
+      {/* Transport controls */}
+      <View style={styles.expandedControls}>
+        <TouchableOpacity onPress={() => seekDelta(-15)} style={styles.expandedSkip}>
+          <Ionicons name="play-back" size={20} color={colors.gray[700]} />
+          <Text style={styles.expandedSkipLabel}>15</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={togglePlay} style={styles.expandedPlayBig}>
+          {loading ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : (
+            <Ionicons name={playing ? 'pause' : 'play'} size={26} color={colors.white} />
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => seekDelta(15)} style={styles.expandedSkip}>
+          <Ionicons name="play-forward" size={20} color={colors.gray[700]} />
+          <Text style={styles.expandedSkipLabel}>15</Text>
+        </TouchableOpacity>
+
+        <View style={{ flex: 1 }} />
+        <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="close" size={22} color={colors.gray[400]} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -236,6 +349,25 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  // Single global "currently expanded player" — exactly one recording can
+  // play at a time, tapping a different row swaps which one is open.
+  const [playingId, setPlayingId] = useState<string | null>(null);
+
+  // Configure audio session once when the screen mounts. Without this
+  // call iOS silences playback if the ringer switch is set to silent —
+  // which is the case for most autosalon owners during work hours.
+  useEffect(() => {
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: false,
+      interruptionMode: 'mixWithOthers',
+      allowsRecording: false,
+    }).catch(() => {});
+    return () => {
+      // Stop any audio when leaving the screen
+      setPlayingId(null);
+    };
+  }, []);
 
   const dateStr = useMemo(() => {
     const y = selectedDate.getFullYear();
@@ -394,7 +526,15 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
             <Text style={styles.emptyText}>{activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}</Text>
           </View>
         ) : (
-          filteredCalls.map((call, idx) => <CallRow key={`${call.id}-${idx}`} call={call} navigation={navigation} />)
+          filteredCalls.map((call, idx) => (
+            <CallRow
+              key={`${call.id}-${idx}`}
+              call={call}
+              navigation={navigation}
+              playingId={playingId}
+              setPlayingId={setPlayingId}
+            />
+          ))
         )}
       </ScrollView>
     </SafeAreaView>
@@ -510,29 +650,103 @@ const styles = StyleSheet.create({
   callStatus: { fontSize: 10, fontWeight: fontWeight.medium },
 
   playBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: colors.primary[50],
     alignItems: 'center',
     justifyContent: 'center',
+    marginLeft: spacing[1],
   },
-  playerWrap: {
+
+  // Item wrapper so the expanded player can sit beneath the row.
+  callItemWrap: {
+    backgroundColor: colors.white,
+  },
+
+  // Expanded player styles
+  expandedPlayer: {
+    backgroundColor: colors.gray[50],
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
+  },
+  expandedTimeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: spacing[2],
+  },
+  expandedTime: {
+    fontSize: 12,
+    color: colors.gray[500],
+    fontVariant: ['tabular-nums'],
+  },
+  expandedTrackHit: {
+    paddingVertical: 10,
+    marginVertical: -8, // bigger touch target without changing layout
+  },
+  expandedTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.gray[200],
+    overflow: 'visible',
+  },
+  expandedTrackFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: colors.primary[600],
+  },
+  expandedThumb: {
+    position: 'absolute',
+    top: -6,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.primary[600],
+    marginLeft: -8,
+    shadowColor: colors.black,
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+  },
+  expandedControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[2],
-    minWidth: 32,
+    gap: spacing[3],
+    marginTop: spacing[3],
   },
-  playerProgressTrack: {
-    width: 60,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: colors.gray[200],
-    overflow: 'hidden',
+  expandedSkip: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  playerProgressFill: {
-    height: '100%',
-    backgroundColor: colors.primary[500],
+  expandedSkipLabel: {
+    position: 'absolute',
+    bottom: 4,
+    fontSize: 8,
+    fontWeight: '700',
+    color: colors.gray[600],
+  },
+  expandedPlayBig: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
 
   empty: { alignItems: 'center', paddingVertical: spacing[12] },
