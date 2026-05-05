@@ -149,15 +149,17 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
   }
 
   // MARK: - JS-exposed event
+  //
+  // Expo's `Events("onTabPress")` declaration in the Module file pairs with
+  // an `EventDispatcher` property of the SAME name on the view. We just have
+  // to declare it here as a stored property — Expo populates it before the
+  // view is mounted, and calling it forwards the payload to JS as a
+  // synthetic event.  Note: must NOT be `@objc` (EventDispatcher is a Swift
+  // generic-style type that doesn't bridge to Objective-C).
+  let onTabPress = EventDispatcher()
 
-  @objc public var onTabPress: EventDispatcher? = nil
-  // ExpoModulesCore wires this up via the View() definition in the Module file.
-
-  // Helper used by setActiveIndex / gesture handlers — declared as a closure
-  // so the Module file can override it after instantiation.
   fileprivate func emitPress(_ index: Int) {
-    guard let dispatch = onTabPress else { return }
-    dispatch(["index": index])
+    onTabPress(["index": index])
   }
 
   // MARK: - Layout
