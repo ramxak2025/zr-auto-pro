@@ -2,24 +2,24 @@
  * TabBar — iOS variant. Premium native Liquid Glass bar with an animated
  * droplet highlight implemented in Swift (autexa-liquid-glass).
  *
- *  • Background, droplet, gestures, springs and haptics all live in the
- *    native AutexaLiquidGlassTabBarView (UIVisualEffectView with iOS 26
- *    UIGlassEffect upgrade, UIPanGestureRecognizer, UISelectionFeedback)
- *  • This file only paints icons + labels + the centre Касса dome on top
- *    of the native bar via RN children (positioned absolute slot-by-slot
- *    so the native droplet underneath stays perfectly aligned)
- *  • Pan + tap snap to nearest slot natively → onTabPress(index) bubbles
- *    up here and we forward it to react-navigation
+ *  • Native AutexaLiquidGlassTabBar handles ALL of:
+ *      – the glass background (UIVisualEffectView, iOS 26 UIGlassEffect)
+ *      – the spring-animated droplet that follows finger / snaps to slot
+ *      – pan gesture, tap gesture, haptics
+ *  • Icons + labels + Касса dome are RN siblings rendered ABOVE the
+ *    native bar (separate absolutely-positioned overlay) — never as
+ *    native children, because UIView subview re-layout interferes with
+ *    RN's flex layout and the icons end up squished.
+ *  • onTabPress(index) bubbles up natively → forward to react-navigation.
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { AutexaLiquidGlassTabBar } from 'autexa-liquid-glass';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
-import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
-import { haptic } from '../platform/haptics';
 import { Icon } from '../platform/Icon';
 import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
@@ -33,9 +33,6 @@ const BAR_HORIZONTAL_MARGIN = 14;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
-  const { width: SCREEN_W } = useWindowDimensions();
-
-  const slotW = (SCREEN_W - BAR_HORIZONTAL_MARGIN * 2) / TAB_DEFINITIONS.length;
 
   const focusedIndex = TAB_DEFINITIONS.findIndex(
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
@@ -67,63 +64,38 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     >
       <View style={styles.outerGlow} pointerEvents="none" />
 
-      <AutexaLiquidGlassTabBar
-        tabCount={TAB_DEFINITIONS.length}
-        activeIndex={safeIndex}
-        bottomInset={insets.bottom}
-        onTabPress={navigateToTab}
-        style={styles.bar}
-      >
-        {/* Icons + labels rendered on top of the native droplet. We lay them
-            out in absolute slots so the native droplet (underneath) lines
-            up tab-for-tab regardless of locale or font width. */}
-        {TAB_DEFINITIONS.map((tab, i) => {
-          const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
-          const focused = state.index === routeIndex;
+      {/* Bar container — sits relative to wrapper, so the overlay row above
+          can use `position: absolute` to stack icons exactly over it. */}
+      <View style={styles.barWrap}>
+        <AutexaLiquidGlassTabBar
+          tabCount={TAB_DEFINITIONS.length}
+          activeIndex={safeIndex}
+          bottomInset={insets.bottom}
+          onTabPress={navigateToTab}
+          style={styles.bar}
+        />
 
-          const onPress = () => {
-            const event = navigation.emit({
-              type: 'tabPress',
-              target: state.routes[routeIndex]?.key ?? tab.routeName,
-              canPreventDefault: true,
-            });
-            if (!focused && !event.defaultPrevented) {
-              haptic('select');
-              navigation.navigate(tab.routeName as never);
-            }
-          };
+        {/* Icons + labels overlaid above the native bar (NOT children of
+            it). pointerEvents="none" so taps and pans pass straight to the
+            native gesture recognizers — they emit onTabPress and animate
+            the droplet. JS here is pure presentation. */}
+        <View style={styles.iconsRow} pointerEvents="none">
+          {TAB_DEFINITIONS.map((tab) => {
+            const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
+            const focused = state.index === routeIndex;
 
-          return (
-            <View
-              key={tab.routeName}
-              pointerEvents="box-none"
-              style={[
-                styles.slot,
-                {
-                  left: i * slotW,
-                  width: slotW,
-                },
-              ]}
-            >
-              {tab.isKassa ? (
-                <Pressable
-                  style={styles.item}
-                  onPress={() => {
-                    haptic('impact');
-                    navigation.navigate(tab.routeName as never);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel="Создать чек"
-                >
+            if (tab.isKassa) {
+              return (
+                <View key={tab.routeName} style={styles.item}>
                   <KassaGlassDome focused={focused} />
-                </Pressable>
-              ) : (
-                <TabItem focused={focused} label={tab.label} icon={tab.icon} onPress={onPress} />
-              )}
-            </View>
-          );
-        })}
-      </AutexaLiquidGlassTabBar>
+                </View>
+              );
+            }
+
+            return <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} />;
+          })}
+        </View>
+      </View>
     </View>
   );
 }
@@ -132,12 +104,9 @@ interface TabItemProps {
   focused: boolean;
   label: string;
   icon: (typeof TAB_DEFINITIONS)[number]['icon'];
-  onPress: () => void;
 }
 
-function TabItem({ focused, label, icon, onPress }: TabItemProps) {
-  // Subtle scale on focus — the droplet underneath does the heavy lifting,
-  // so the icon itself just nudges to confirm.
+function TabItem({ focused, label, icon }: TabItemProps) {
   const scale = useSharedValue(focused ? 1.06 : 1);
   React.useEffect(() => {
     scale.value = withSpring(focused ? 1.06 : 1, SPRING_TIGHT);
@@ -147,13 +116,7 @@ function TabItem({ focused, label, icon, onPress }: TabItemProps) {
   const tint = focused ? colors.primary[700] : colors.gray[500];
 
   return (
-    <Pressable
-      onPress={onPress}
-      style={styles.item}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected: focused }}
-    >
+    <View style={styles.item}>
       <Animated.View style={iconStyle}>
         <Icon name={icon} size={22} color={tint} weight={focused ? 'semibold' : 'regular'} />
       </Animated.View>
@@ -170,7 +133,7 @@ function TabItem({ focused, label, icon, onPress }: TabItemProps) {
           {label}
         </Text>
       )}
-    </Pressable>
+    </View>
   );
 }
 
@@ -219,9 +182,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[700],
     opacity: 0.05,
   },
-  bar: {
+  // Wrapper that holds the native bar AND the icons row at the same z.
+  barWrap: {
     height: BAR_HEIGHT,
     marginHorizontal: BAR_HORIZONTAL_MARGIN,
+  },
+  bar: {
+    ...StyleSheet.absoluteFillObject,
     borderRadius: 30,
     overflow: 'hidden',
     borderWidth: 0.66,
@@ -231,16 +198,16 @@ const styles = StyleSheet.create({
     shadowRadius: 26,
     shadowOffset: { width: 0, height: 12 },
   },
-  slot: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
+  // Icon overlay — flex row that fills the bar exactly, so each child
+  // (item) takes 1/Nth of the width without manual left/width math.
+  iconsRow: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: 4,
   },
   item: {
     flex: 1,
-    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 44,
