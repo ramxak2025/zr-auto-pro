@@ -65,21 +65,29 @@ function getDaysInMonth(year: number, month: number): Date[] {
 }
 
 /**
- * useReduceMotion — reads iOS / Android system "Reduce Motion" preference
- * and listens for changes. Used to skip stagger / pulse animations for
- * users who have requested less motion (Settings → Accessibility).
+ * useReduceMotion — reads iOS / Android system "Reduce Motion" preference.
+ * Defensive: never throws even if the platform API behaves oddly.
  */
 function useReduceMotion(): boolean {
   const [reduce, setReduce] = useState(false);
   useEffect(() => {
     let alive = true;
-    AccessibilityInfo.isReduceMotionEnabled().then((v) => {
-      if (alive) setReduce(v);
-    });
-    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (v) => setReduce(v));
+    let sub: { remove?: () => void } | null = null;
+    try {
+      AccessibilityInfo.isReduceMotionEnabled?.().then((v) => {
+        if (alive) setReduce(!!v);
+      });
+      sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (v) => setReduce(!!v));
+    } catch {
+      // ignore — animations will run by default
+    }
     return () => {
       alive = false;
-      sub.remove();
+      try {
+        sub?.remove?.();
+      } catch {
+        /* noop */
+      }
     };
   }, []);
   return reduce;
@@ -189,26 +197,10 @@ function getCellDot(entry?: ScheduleEntry) {
  * a slow ~2s opacity loop on a separate halo view (the number itself stays
  * crisp). Disabled when the user has Reduce Motion on.
  */
-function TodayPill({ day, reduceMotion }: { day: number; reduceMotion: boolean }) {
-  const opacity = useRef(new RNAnimated.Value(0.55)).current;
-  useEffect(() => {
-    if (reduceMotion) return;
-    const loop = RNAnimated.loop(
-      RNAnimated.sequence([
-        RNAnimated.timing(opacity, { toValue: 1, duration: 1100, useNativeDriver: true }),
-        RNAnimated.timing(opacity, { toValue: 0.45, duration: 1100, useNativeDriver: true }),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [opacity, reduceMotion]);
-
+function TodayPill({ day }: { day: number; reduceMotion?: boolean }) {
   return (
-    <View style={{ alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>
-      <RNAnimated.View style={[styles.gridTodayHalo, { opacity }]} pointerEvents="none" />
-      <View style={styles.gridTodayCircle}>
-        <Text style={styles.gridTodayNum}>{day}</Text>
-      </View>
+    <View style={styles.gridTodayCircle}>
+      <Text style={styles.gridTodayNum}>{day}</Text>
     </View>
   );
 }
@@ -358,8 +350,12 @@ function GridTab() {
   const isLeftScrolling = useRef(false);
   const isRightScrolling = useRef(false);
 
-  const year = currentMonth.getFullYear();
-  const month = currentMonth.getMonth();
+  // Defensive: currentMonth defaults to today, but in case state ever
+  // gets out of shape we fall back to "now" so year/month never become
+  // NaN and the header text always renders.
+  const safeMonth = currentMonth instanceof Date && !isNaN(currentMonth.getTime()) ? currentMonth : new Date();
+  const year = safeMonth.getFullYear();
+  const month = safeMonth.getMonth();
   const dateFrom = formatDate(new Date(year, month, 1));
   const dateTo = formatDate(new Date(year, month + 1, 0));
   const today = formatDate(new Date());
@@ -842,6 +838,7 @@ function GridTab() {
             {/* Name cells */}
             <ScrollView
               ref={leftScrollRef}
+              style={{ flex: 1 }}
               showsVerticalScrollIndicator={false}
               onScroll={handleLeftScroll}
               scrollEventThrottle={16}
@@ -896,8 +893,14 @@ function GridTab() {
           </View>
 
           {/* Scrollable right section -- day columns */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false}>
-            <View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            bounces={false}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ flexGrow: 1 }}
+          >
+            <View style={{ flex: 1 }}>
               {/* Day headers */}
               <View style={{ flexDirection: 'row' }}>
                 {days.map((d) => {
@@ -939,6 +942,7 @@ function GridTab() {
               {/* Day cells with dot indicators */}
               <ScrollView
                 ref={rightScrollRef}
+                style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 onScroll={handleRightScroll}
                 scrollEventThrottle={16}
@@ -2413,7 +2417,7 @@ const styles = StyleSheet.create({
 
   // ── Sticky Column ──
   stickyColumn: {
-    width: 110,
+    width: 140,
     backgroundColor: colors.white,
     zIndex: 2,
     shadowColor: colors.black,
