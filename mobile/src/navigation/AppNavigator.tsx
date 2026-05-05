@@ -113,6 +113,7 @@ export type TabParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
+const ChecksStack = createNativeStackNavigator();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Navigation
@@ -145,6 +146,21 @@ function MoreStackNavigator() {
   );
 }
 
+/**
+ * ChecksStackNavigator — local stack inside the Checks tab. Pushing
+ * CheckDetail onto THIS stack (instead of the root) keeps the tab bar
+ * visible while the user reads / edits a check, exactly like Mail
+ * pushing a message stays inside the Inbox tab.
+ */
+function ChecksStackNavigator() {
+  return (
+    <ChecksStack.Navigator screenOptions={{ headerShown: false }}>
+      <ChecksStack.Screen name="ChecksHome" component={ChecksScreen} />
+      <ChecksStack.Screen name="CheckDetail" component={CheckDetailScreen} />
+    </ChecksStack.Navigator>
+  );
+}
+
 function TabNavigator() {
   return (
     <Tab.Navigator
@@ -169,7 +185,7 @@ function TabNavigator() {
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Products" component={ProductsScreen} />
       <Tab.Screen name="NewCheck" component={CheckCreateScreen} />
-      <Tab.Screen name="Checks" component={ChecksScreen} />
+      <Tab.Screen name="Checks" component={ChecksStackNavigator} />
       <Tab.Screen name="MoreTab" component={MoreStackNavigator} />
     </Tab.Navigator>
   );
@@ -190,17 +206,6 @@ export default function AppNavigator() {
         <>
           <Stack.Screen name="Main" component={TabNavigator} />
           <Stack.Screen name="CheckCreate" component={CheckCreateScreen} options={{ animation: 'slide_from_bottom' }} />
-          {/* Open CheckDetail as a native iOS sheet — slides up from the
-              bottom and leaves the tab bar visible behind the sheet. */}
-          <Stack.Screen
-            name="CheckDetail"
-            component={CheckDetailScreen}
-            options={{
-              presentation: 'modal',
-              animation: 'slide_from_bottom',
-              gestureEnabled: true,
-            }}
-          />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
         </>

@@ -1,7 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  Alert, ActivityIndicator, RefreshControl,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  Alert,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,10 +23,23 @@ import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Client, Car, Check } from '../../../shared/types';
 
-const paymentLabels: Record<string, string> = { cash: 'Наличные', card: 'Карта', warranty: 'Гарантия', cash_card: 'Нал/Карта' };
+const paymentLabels: Record<string, string> = {
+  cash: 'Наличные',
+  card: 'Карта',
+  warranty: 'Гарантия',
+  cash_card: 'Нал/Карта',
+};
 
-function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
-function formatDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
+function formatMoney(v: number) {
+  return (
+    Math.round(v)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
+  );
+}
+function formatDate(d: string) {
+  return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
 function formatDateGroup(d: string) {
   const dt = new Date(d);
   const today = new Date();
@@ -37,9 +57,14 @@ function getInitials(name: string): string {
 }
 
 const avatarColors = [
-  colors.primary[500], colors.green[600], colors.orange[500],
-  colors.purple[700], colors.teal[600], colors.rose[500],
-  colors.indigo[600], colors.yellow[600],
+  colors.primary[500],
+  colors.green[600],
+  colors.orange[500],
+  colors.purple[700],
+  colors.teal[600],
+  colors.rose[500],
+  colors.indigo[600],
+  colors.yellow[600],
 ];
 
 function getAvatarColor(name: string): string {
@@ -49,8 +74,12 @@ function getAvatarColor(name: string): string {
 }
 
 const carIconColors = [
-  colors.primary[500], colors.green[600], colors.orange[500],
-  colors.purple[700], colors.teal[600], colors.rose[500],
+  colors.primary[500],
+  colors.green[600],
+  colors.orange[500],
+  colors.purple[700],
+  colors.teal[600],
+  colors.rose[500],
 ];
 
 function getCarColor(id: string): string {
@@ -79,18 +108,24 @@ export default function ClientDetailScreen() {
 
   const { data: client, isLoading } = useQuery<Client>({
     queryKey: ['client', id],
-    queryFn: async () => { const res = await clientsApi.getById(id); return res.data; },
+    queryFn: async () => {
+      const res = await clientsApi.getById(id);
+      return res.data;
+    },
   });
 
   const { data: checks } = useQuery<Check[]>({
     queryKey: ['client-checks', id],
-    queryFn: async () => { const res = await checksApi.getAll({ clientId: id, limit: 50 }); return res.data.data || res.data; },
+    queryFn: async () => {
+      const res = await checksApi.getAll({ clientId: id, limit: 50 });
+      return res.data.data || res.data;
+    },
   });
 
   const filteredChecks = useMemo(() => {
     if (!checks) return [];
     if (!selectedCarId) return checks;
-    return checks.filter(c => c.car?.id === selectedCarId);
+    return checks.filter((c) => c.car?.id === selectedCarId);
   }, [checks, selectedCarId]);
 
   const totalSpent = useMemo(() => {
@@ -99,13 +134,19 @@ export default function ClientDetailScreen() {
 
   const createCarMutation = useMutation({
     mutationFn: (d: any) => carsApi.create(d),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['client', id] }); closeCarModal(); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client', id] });
+      closeCarModal();
+    },
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании авто'),
   });
 
   const updateCarMutation = useMutation({
     mutationFn: ({ carId, data }: { carId: string; data: any }) => carsApi.update(carId, data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['client', id] }); closeCarModal(); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client', id] });
+      closeCarModal();
+    },
     onError: () => Alert.alert('Ошибка', 'Ошибка при обновлении авто'),
   });
 
@@ -115,7 +156,10 @@ export default function ClientDetailScreen() {
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении авто'),
   });
 
-  const closeCarModal = () => { setCarModalOpen(false); setEditingCar(null); };
+  const closeCarModal = () => {
+    setCarModalOpen(false);
+    setEditingCar(null);
+  };
 
   const openAddCar = () => {
     setEditingCar(null);
@@ -176,14 +220,18 @@ export default function ClientDetailScreen() {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{client.fullName}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {client.fullName}
+        </Text>
         <View style={{ width: 22 }} />
       </View>
 
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
       >
         {/* Client info card */}
         <AnimatedCard style={styles.card} index={0}>
@@ -246,7 +294,9 @@ export default function ClientDetailScreen() {
                     <Ionicons name="car-sport" size={16} color={carColor} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.carModel} numberOfLines={1}>{car.makeModel}</Text>
+                    <Text style={styles.carModel} numberOfLines={1}>
+                      {car.makeModel}
+                    </Text>
                     <Text style={styles.carPlate}>{car.plateNumber}</Text>
                   </View>
                 </View>
@@ -266,9 +316,7 @@ export default function ClientDetailScreen() {
 
         {/* Checks section */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>
-            Чеки ({filteredChecks.length})
-          </Text>
+          <Text style={styles.sectionTitle}>Чеки ({filteredChecks.length})</Text>
         </View>
 
         {/* Car filter chips */}
@@ -281,13 +329,16 @@ export default function ClientDetailScreen() {
               >
                 <Text style={[styles.carChipText, !selectedCarId && styles.carChipTextActive]}>Все авто</Text>
               </TouchableOpacity>
-              {cars.map(car => (
+              {cars.map((car) => (
                 <TouchableOpacity
                   key={car.id}
                   style={[styles.carChip, selectedCarId === car.id && styles.carChipActive]}
                   onPress={() => setSelectedCarId(selectedCarId === car.id ? null : car.id)}
                 >
-                  <Text style={[styles.carChipText, selectedCarId === car.id && styles.carChipTextActive]} numberOfLines={1}>
+                  <Text
+                    style={[styles.carChipText, selectedCarId === car.id && styles.carChipTextActive]}
+                    numberOfLines={1}
+                  >
                     {car.makeModel} · {car.plateNumber}
                   </Text>
                 </TouchableOpacity>
@@ -319,11 +370,23 @@ export default function ClientDetailScreen() {
                   <TouchableOpacity
                     key={check.id}
                     style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
-                    onPress={() => navigation.navigate('CheckDetail', { id: check.id })}
+                    onPress={() =>
+                      navigation.navigate('Main', {
+                        screen: 'Checks',
+                        params: { screen: 'CheckDetail', params: { id: check.id } },
+                      })
+                    }
                     activeOpacity={0.7}
                   >
                     {/* Left accent bar */}
-                    <View style={[styles.accentBar, check.isDeferred ? { backgroundColor: colors.red[400] } : { backgroundColor: colors.primary[400] }]} />
+                    <View
+                      style={[
+                        styles.accentBar,
+                        check.isDeferred
+                          ? { backgroundColor: colors.red[400] }
+                          : { backgroundColor: colors.primary[400] },
+                      ]}
+                    />
 
                     <View style={styles.checkContent}>
                       {/* Top row: number + badges | total */}
@@ -349,17 +412,19 @@ export default function ClientDetailScreen() {
                         <View style={styles.checkInfoRow}>
                           <View style={styles.infoChip}>
                             <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
-                            <Text style={styles.infoChipText} numberOfLines={1}>{check.car.makeModel}</Text>
-                            {check.car.plateNumber && (
-                              <Text style={styles.plateTag}>{check.car.plateNumber}</Text>
-                            )}
+                            <Text style={styles.infoChipText} numberOfLines={1}>
+                              {check.car.makeModel}
+                            </Text>
+                            {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
                           </View>
                         </View>
                       )}
 
                       {/* Comment preview */}
                       {check.comment && (
-                        <Text style={styles.commentText} numberOfLines={1}>{check.comment}</Text>
+                        <Text style={styles.commentText} numberOfLines={1}>
+                          {check.comment}
+                        </Text>
                       )}
 
                       {/* Footer: time | master | profit */}
@@ -369,8 +434,14 @@ export default function ClientDetailScreen() {
                         </Text>
                         {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
                         {canViewProfit && check.profit !== undefined && (
-                          <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
-                            {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+                          <Text
+                            style={[
+                              styles.footerProfit,
+                              check.profit >= 0 ? styles.profitPositive : styles.profitNegative,
+                            ]}
+                          >
+                            {check.profit >= 0 ? '+' : ''}
+                            {formatMoney(check.profit)}
                           </Text>
                         )}
                       </View>
@@ -387,15 +458,35 @@ export default function ClientDetailScreen() {
       <Modal visible={carModalOpen} onClose={closeCarModal} title={editingCar ? 'Редактировать авто' : 'Добавить авто'}>
         <View style={styles.formField}>
           <Text style={styles.formLabel}>Гос. номер</Text>
-          <TextInput value={plateNumber} onChangeText={setPlateNumber} style={styles.formInput} placeholder="А000АА 00" autoCapitalize="characters" placeholderTextColor={colors.gray[400]} />
+          <TextInput
+            value={plateNumber}
+            onChangeText={setPlateNumber}
+            style={styles.formInput}
+            placeholder="А000АА 00"
+            autoCapitalize="characters"
+            placeholderTextColor={colors.gray[400]}
+          />
         </View>
         <View style={styles.formField}>
           <Text style={styles.formLabel}>Марка и модель</Text>
-          <TextInput value={makeModel} onChangeText={setMakeModel} style={styles.formInput} placeholder="Toyota Camry" placeholderTextColor={colors.gray[400]} />
+          <TextInput
+            value={makeModel}
+            onChangeText={setMakeModel}
+            style={styles.formInput}
+            placeholder="Toyota Camry"
+            placeholderTextColor={colors.gray[400]}
+          />
         </View>
         <View style={styles.formField}>
           <Text style={styles.formLabel}>Комментарий</Text>
-          <TextInput value={carComment} onChangeText={setCarComment} style={[styles.formInput, { height: 80, textAlignVertical: 'top' }]} multiline placeholder="Необязательно" placeholderTextColor={colors.gray[400]} />
+          <TextInput
+            value={carComment}
+            onChangeText={setCarComment}
+            style={[styles.formInput, { height: 80, textAlignVertical: 'top' }]}
+            multiline
+            placeholder="Необязательно"
+            placeholderTextColor={colors.gray[400]}
+          />
         </View>
         <View style={styles.formActions}>
           <TouchableOpacity style={styles.cancelBtn} onPress={closeCarModal}>
@@ -411,7 +502,10 @@ export default function ClientDetailScreen() {
       <ConfirmDialog
         visible={!!deleteCarId}
         onClose={() => setDeleteCarId(null)}
-        onConfirm={() => { if (deleteCarId) deleteCarMutation.mutate(deleteCarId); setDeleteCarId(null); }}
+        onConfirm={() => {
+          if (deleteCarId) deleteCarMutation.mutate(deleteCarId);
+          setDeleteCarId(null);
+        }}
         title="Удалить авто"
         message="Вы уверены?"
         confirmText="Удалить"
@@ -423,35 +517,98 @@ export default function ClientDetailScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    backgroundColor: colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[200],
+  },
   backBtn: { width: 60 },
-  headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.semibold, color: colors.gray[900], flex: 1, textAlign: 'center' },
+  headerTitle: {
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+    flex: 1,
+    textAlign: 'center',
+  },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
 
   // Client info card
-  card: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+  },
   avatarSection: { alignItems: 'center', marginBottom: spacing[3] },
-  avatar: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[2] },
+  avatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[2],
+  },
   avatarText: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.white },
   clientName: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.gray[50], borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], paddingHorizontal: spacing[4], marginBottom: spacing[3] },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.gray[50],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[4],
+    marginBottom: spacing[3],
+  },
   statItem: { flex: 1, alignItems: 'center' },
   statValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   statLabel: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
   statDivider: { width: 1, height: 28, backgroundColor: colors.gray[200], marginHorizontal: spacing[3] },
-  infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[2.5], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[2.5],
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[50],
+  },
   infoLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
-  infoValue: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900], flex: 1, textAlign: 'right' },
+  infoValue: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[900],
+    flex: 1,
+    textAlign: 'right',
+  },
 
   // Section
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing[4] },
   sectionTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  smallBtn: { backgroundColor: colors.primary[600], paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.lg },
+  smallBtn: {
+    backgroundColor: colors.primary[600],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.lg,
+  },
   smallBtnText: { color: colors.white, fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
   // Car cards
-  carCard: { backgroundColor: colors.white, borderRadius: borderRadius.xl, borderWidth: 1, borderColor: colors.gray[100], paddingHorizontal: spacing[3], paddingVertical: spacing[2.5], marginTop: spacing[2] },
+  carCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginTop: spacing[2],
+  },
   carTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   carInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flex: 1 },
   carIconWrap: { width: 32, height: 32, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
@@ -464,15 +621,34 @@ const styles = StyleSheet.create({
   // Car filter chips
   carChipsScroll: { marginTop: spacing[2] },
   carChipsRow: { flexDirection: 'row', gap: spacing[1.5] },
-  carChip: { paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: borderRadius.full, backgroundColor: colors.gray[100], borderWidth: 1, borderColor: colors.gray[200] },
+  carChip: {
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.gray[100],
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+  },
   carChipActive: { backgroundColor: colors.primary[50], borderColor: colors.primary[500] },
   carChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600], maxWidth: 160 },
   carChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
 
   // Date group headers
-  dateGroupHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[2.5], marginTop: spacing[1] },
+  dateGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginTop: spacing[1],
+  },
   dateGroupLine: { flex: 1, height: 1, backgroundColor: colors.gray[200] },
-  dateGroupText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[400], textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateGroupText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[400],
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
 
   // Check card — compact with left accent
   checkCard: {
@@ -494,10 +670,20 @@ const styles = StyleSheet.create({
   checkContent: { flex: 1, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
 
   // Check header row
-  checkHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[1.5] },
+  checkHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing[1.5],
+  },
   checkHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: 1 },
   checkNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  deferredBadge: { backgroundColor: colors.red[100], paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: borderRadius.full },
+  deferredBadge: {
+    backgroundColor: colors.red[100],
+    paddingHorizontal: spacing[1.5],
+    paddingVertical: 1,
+    borderRadius: borderRadius.full,
+  },
   deferredText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.red[700] },
   paymentBadge: { paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: borderRadius.full },
   paymentBadgeText: { fontSize: 10, fontWeight: fontWeight.medium },
@@ -507,7 +693,17 @@ const styles = StyleSheet.create({
   checkInfoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[1.5], marginBottom: spacing[1] },
   infoChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   infoChipText: { fontSize: 12, color: colors.gray[600], maxWidth: 120 },
-  plateTag: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.primary[700], backgroundColor: colors.primary[50], paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3, overflow: 'hidden', marginLeft: 2 },
+  plateTag: {
+    fontSize: 9,
+    fontWeight: fontWeight.bold,
+    color: colors.primary[700],
+    backgroundColor: colors.primary[50],
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginLeft: 2,
+  },
 
   // Comment
   commentText: { fontSize: 11, color: colors.amber[600], fontStyle: 'italic', marginBottom: spacing[1] },
@@ -526,11 +722,43 @@ const styles = StyleSheet.create({
 
   // Form
   formField: { marginBottom: spacing[4] },
-  formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], marginBottom: spacing[1.5] },
-  formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
-  formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[3], paddingTop: spacing[4], borderTopWidth: 1, borderTopColor: colors.gray[200] },
-  cancelBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.gray[300] },
+  formLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[700],
+    marginBottom: spacing[1.5],
+  },
+  formInput: {
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+    color: colors.gray[900],
+  },
+  formActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing[3],
+    paddingTop: spacing[4],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[200],
+  },
+  cancelBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+  },
   cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  submitBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
+  submitBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[600],
+  },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
 });
