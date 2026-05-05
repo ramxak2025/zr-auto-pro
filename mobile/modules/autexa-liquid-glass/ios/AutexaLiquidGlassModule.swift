@@ -4,10 +4,8 @@ public class AutexaLiquidGlassModule: Module {
   public func definition() -> ModuleDefinition {
     Name("AutexaLiquidGlass")
 
-    // ──────────────────────────────────────────────────────────────────────
-    // 1. Plain glass surface (used as a building block — for example, the
-    //    tab bar background, a sheet header, etc.)
-    // ──────────────────────────────────────────────────────────────────────
+    // Plain glass surface (used as a building block — for example, the
+    // tab bar background, a sheet header, etc.)
     View(AutexaLiquidGlassView.self) {
       Prop("variant") { (view: AutexaLiquidGlassView, value: String) in
         view.applyVariant(value)
@@ -19,12 +17,19 @@ public class AutexaLiquidGlassModule: Module {
         view.setTopRim(visible: value)
       }
     }
+  }
+}
 
-    // ──────────────────────────────────────────────────────────────────────
-    // 2. Liquid Glass tab bar — premium native iOS tab bar with an
-    //    animated "droplet" highlight that springs between tabs and follows
-    //    a pan gesture. Sits underneath the JS-rendered icons and labels.
-    // ──────────────────────────────────────────────────────────────────────
+/**
+ * Separate module for the tab-bar view so the JS lookup name lines up
+ * unambiguously with `requireNativeViewManager('AutexaLiquidGlassTabBar')`.
+ * Keeping it in its own Module avoids the multi-view ambiguity we hit when
+ * two views were registered inside the same Module definition.
+ */
+public class AutexaLiquidGlassTabBarModule: Module {
+  public func definition() -> ModuleDefinition {
+    Name("AutexaLiquidGlassTabBar")
+
     View(AutexaLiquidGlassTabBarView.self) {
       Events("onTabPress")
 

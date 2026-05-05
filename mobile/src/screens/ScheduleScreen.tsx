@@ -258,7 +258,6 @@ interface GridDayRowProps {
   canEdit: boolean;
   CELL_W: number;
   ROW_H: number;
-  reduceMotion: boolean;
   onCellPress: (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => void;
 }
 
@@ -272,18 +271,11 @@ const GridDayRow = memo(function GridDayRow({
   canEdit,
   CELL_W,
   ROW_H,
-  reduceMotion,
   onCellPress,
 }: GridDayRowProps) {
   const firstName = userName?.split(' ')[0];
-  // Gentle staggered entrance — gives the grid a "populating" feel that
-  // matches Calendar / Reminders. Capped at row 8 so long rosters don't
-  // animate forever; users with Reduce Motion get an instant render.
-  const Wrapper: any = reduceMotion ? View : Reanimated.View;
-  const entering = reduceMotion ? undefined : FadeInDown.delay(Math.min(rowIdx, 8) * 35).duration(220);
   return (
-    <Wrapper
-      entering={entering}
+    <View
       style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}
     >
       {days.map((d) => {
@@ -337,7 +329,7 @@ const GridDayRow = memo(function GridDayRow({
           </TouchableOpacity>
         );
       })}
-    </Wrapper>
+    </View>
   );
 });
 
@@ -418,25 +410,23 @@ function GridTab() {
     });
   }, [year, month, queryClient]);
 
-  // Master list shown as rows in the schedule grid.
-  // Bullet-proof against partial data from backend:
-  //   1. If backend returned a non-empty list → use it (filter inactive only).
-  //   2. If backend returned empty/undefined and we know who the current
-  //      authed user is (useAuth().user) → fall back to a single-row grid
-  //      with that user, so the screen never looks "broken" for a fresh
-  //      tenant whose only user is the founder.
-  //   3. If even auth user is missing → empty array, GridSkeleton kicks in.
+  // Master list shown as rows in the schedule grid. Robust against any
+  // shape of usersData (undefined, null, empty, missing isActive flags):
+  //   1. Take everything that has an id and isn't explicitly inactive.
+  //   2. If we got nothing AND we know the current user → fall back to it
+  //      so the grid never looks "broken" for a fresh tenant.
+  //   3. Sort by sortOrder, then by fullName.
   const activeUsers = useMemo(() => {
-    const fromBackend = (usersData || []).filter((u) => u.isActive);
-    if (fromBackend.length > 0) {
-      return fromBackend.sort((a: any, b: any) => {
+    const raw = (usersData || []).filter((u) => u && u.id && u.isActive !== false);
+    if (raw.length > 0) {
+      return raw.sort((a: any, b: any) => {
         const ao = a.sortOrder ?? 0;
         const bo = b.sortOrder ?? 0;
         if (ao !== bo) return ao - bo;
         return (a.fullName || '').localeCompare(b.fullName || '');
       });
     }
-    if (user) {
+    if (user && (user as any).id) {
       return [user as unknown as User];
     }
     return [];
@@ -817,12 +807,14 @@ function GridTab() {
       </View>
 
       {/* Schedule states:
-          1. usersData not yet loaded → skeleton (we need users to render rows)
-          2. usersData loaded but empty list → onboarding ("add employees")
-          3. otherwise → calendar grid (renders even when entries is empty —
-             the user can tap cells to create shifts, and entries fills in
-             from cache via placeholderData while a fresh fetch runs). */}
-      {!usersData ? (
+          1. We don't yet have ANY user info (neither cached usersData nor
+             the authed user) → skeleton.
+          2. We have user info but the master list is empty → onboarding.
+          3. Otherwise → calendar grid. Note: we don't gate on usersData
+             being undefined any more, because activeUsers already falls
+             back to the auth user — that single row is enough to render
+             the grid even on fresh tenants. */}
+      {activeUsers.length === 0 && !user ? (
         <GridSkeleton />
       ) : activeUsers.length === 0 ? (
         <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
@@ -965,7 +957,6 @@ function GridTab() {
                     canEdit={canEdit}
                     CELL_W={CELL_W}
                     ROW_H={ROW_H}
-                    reduceMotion={reduceMotion}
                     onCellPress={handleCellPress}
                   />
                 ))}

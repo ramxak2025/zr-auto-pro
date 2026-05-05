@@ -150,8 +150,11 @@ function TabNavigator() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        // Make the underlying tab-bar surface transparent so our floating
-        // pill renders over the screen content with no gray strip beneath.
+        sceneStyle: { backgroundColor: 'transparent' },
+        // Floating pill: the absolute position lifts the bar out of the
+        // layout flow so screen content scrolls UNDER the glass — that's
+        // what makes the bar feel native (visible content blurred through
+        // it) rather than sitting on a flat gray backdrop.
         tabBarStyle: {
           position: 'absolute',
           backgroundColor: 'transparent',
@@ -187,7 +190,17 @@ export default function AppNavigator() {
         <>
           <Stack.Screen name="Main" component={TabNavigator} />
           <Stack.Screen name="CheckCreate" component={CheckCreateScreen} options={{ animation: 'slide_from_bottom' }} />
-          <Stack.Screen name="CheckDetail" component={CheckDetailScreen} />
+          {/* Open CheckDetail as a native iOS sheet — slides up from the
+              bottom and leaves the tab bar visible behind the sheet. */}
+          <Stack.Screen
+            name="CheckDetail"
+            component={CheckDetailScreen}
+            options={{
+              presentation: 'modal',
+              animation: 'slide_from_bottom',
+              gestureEnabled: true,
+            }}
+          />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
         </>

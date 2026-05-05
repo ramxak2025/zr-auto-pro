@@ -68,10 +68,12 @@ function formatMoney(v: number) {
  * Total badge size for the small variant: 40 × 186 pt — fits 2 plates
  * side-by-side in a horizontal scroll inside the client section.
  */
-const PLATE_HEIGHT = 40;
-const PLATE_WIDTH = Math.round(PLATE_HEIGHT * 4.64); // 186
-const PLATE_MAIN_W = Math.round(PLATE_WIDTH * 0.78); // 145
-const PLATE_REGION_W = PLATE_WIDTH - PLATE_MAIN_W - 2; // –2 for divider
+// GOST proportions but slightly stretched so 3-digit regions like "198"
+// always fit comfortably with the flag+RUS strip beside them.
+const PLATE_HEIGHT = 44;
+const PLATE_WIDTH = Math.round(PLATE_HEIGHT * 4.4); // 194
+const PLATE_MAIN_W = Math.round(PLATE_WIDTH * 0.7); // 136 — narrower main, wider region
+const PLATE_REGION_W = PLATE_WIDTH - PLATE_MAIN_W - 2;
 
 function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
   const clean = (plate || '').replace(/\s/g, '').toUpperCase();
@@ -109,12 +111,17 @@ function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
         <Text style={plateBadgeStyles.regionText} numberOfLines={1}>
           {region || '—'}
         </Text>
-        <View style={plateBadgeStyles.flagRow}>
-          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#FFFFFF' }]} />
-          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#0039A6' }]} />
-          <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#D52B1E' }]} />
+        {/* Flag (3 horizontal stripes) + RUS sit on the SAME row beneath the
+            digits — matches the real plate layout where "RUS" reads next to
+            the flag, not stacked under it. */}
+        <View style={plateBadgeStyles.flagRusRow}>
+          <View style={plateBadgeStyles.flagStack}>
+            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#FFFFFF' }]} />
+            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#0039A6' }]} />
+            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#D52B1E' }]} />
+          </View>
+          <Text style={plateBadgeStyles.rusLabel}>RUS</Text>
         </View>
-        <Text style={plateBadgeStyles.rusLabel}>RUS</Text>
       </View>
     </View>
   );
@@ -148,10 +155,13 @@ const plateBadgeStyles = StyleSheet.create({
   divider: { width: 2, backgroundColor: '#000000' },
   // Region block — region digits + flag + RUS
   regionBlock: { width: PLATE_REGION_W, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
-  regionText: { fontSize: 16, fontWeight: '800', letterSpacing: 0.8, color: '#000000' },
-  flagRow: { flexDirection: 'row', marginTop: 2 },
-  flagBand: { width: 9, height: 2.5 },
-  rusLabel: { fontSize: 6, fontWeight: '900', color: '#000000', letterSpacing: 0.4, marginTop: 1 },
+  regionText: { fontSize: 17, fontWeight: '800', letterSpacing: 0.5, color: '#000000' },
+  // Horizontal row that sits BELOW the region digits — flag stripes (stacked
+  // vertically inside their own column) next to the RUS label.
+  flagRusRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 3, marginTop: 2 },
+  flagStack: { flexDirection: 'column' as const },
+  flagBand: { width: 12, height: 2 },
+  rusLabel: { fontSize: 7, fontWeight: '900', color: '#000000', letterSpacing: 0.4 },
   // Foreign INT plate
   intStrip: { width: 22, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
   intStripText: { fontSize: 8, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
@@ -855,7 +865,7 @@ export default function CheckCreateScreen() {
               onChangeText={setComment}
               style={styles.commentInput}
               multiline
-              placeholder="Что сделали, что предупредили клиента…"
+              placeholder="Заметки по чеку: рекомендации, замечания, что предупредили клиента…"
               placeholderTextColor={colors.gray[400]}
             />
           </View>

@@ -902,6 +902,13 @@ export default function ProductsScreen() {
                     onPress={() => {
                       if (pUri) setFullscreenPhoto(pUri);
                     }}
+                    onLongPress={() => {
+                      if (pUri) {
+                        tapMedium();
+                        setFullscreenPhoto(pUri);
+                      }
+                    }}
+                    delayLongPress={400}
                   >
                     {pUri ? (
                       <CachedImage source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
