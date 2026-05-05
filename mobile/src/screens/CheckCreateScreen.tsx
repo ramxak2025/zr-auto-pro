@@ -68,12 +68,13 @@ function formatMoney(v: number) {
  * Total badge size for the small variant: 40 × 186 pt — fits 2 plates
  * side-by-side in a horizontal scroll inside the client section.
  */
-// GOST proportions but slightly stretched so 3-digit regions like "198"
-// always fit comfortably with the flag+RUS strip beside them.
-const PLATE_HEIGHT = 44;
-const PLATE_WIDTH = Math.round(PLATE_HEIGHT * 4.4); // 194
-const PLATE_MAIN_W = Math.round(PLATE_WIDTH * 0.7); // 136 — narrower main, wider region
-const PLATE_REGION_W = PLATE_WIDTH - PLATE_MAIN_W - 2;
+// True ГОСТ Р 50577-93 proportions: 520x112mm = 4.64:1 ratio. Right region
+// strip = 112x112mm = ~22% of total width. We render at PLATE_HEIGHT=48pt
+// for crisp legibility on phone screens (real plates would be ~80pt at 4x).
+const PLATE_HEIGHT = 48;
+const PLATE_WIDTH = Math.round(PLATE_HEIGHT * 4.64); // 223
+const PLATE_REGION_W = Math.round(PLATE_HEIGHT * 1.0); // square right strip per GOST
+const PLATE_MAIN_W = PLATE_WIDTH - PLATE_REGION_W - 2;
 
 function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
   const clean = (plate || '').replace(/\s/g, '').toUpperCase();
@@ -132,32 +133,41 @@ const plateBadgeStyles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderWidth: 2,
     borderColor: '#000000',
-    borderRadius: 5,
+    borderRadius: 6,
     overflow: 'hidden',
   },
   frameForeign: { borderColor: '#3b82f6' },
+  // Inner cant — second hairline frame ~1.5mm inside the outer border.
   cant: {
     position: 'absolute',
-    top: 2.5,
-    left: 2.5,
-    right: 2.5,
-    bottom: 2.5,
+    top: 3,
+    left: 3,
+    right: 3,
+    bottom: 3,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#000000',
-    borderRadius: 3,
+    borderRadius: 4,
   },
-  // Main block — main characters of the plate (letter-3digits-2letters)
-  mainBlock: { width: PLATE_MAIN_W, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-  mainText: { fontSize: 22, fontWeight: '800', letterSpacing: 1.4, color: '#000000' },
+  // Main block — letter + 3 digits + 2 letters, big and centered.
+  mainBlock: { width: PLATE_MAIN_W, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
+  mainText: { fontSize: 26, fontWeight: '800', letterSpacing: 1.6, color: '#000000' },
   divider: { width: 2, backgroundColor: '#000000' },
-  // Region block — region digits on top, vertical Russian flag, then RUS,
-  // matching the real ГОСТ Р 50577-93 right-hand strip exactly.
-  regionBlock: { width: PLATE_REGION_W, alignItems: 'center', justifyContent: 'center', paddingVertical: 3 },
-  regionText: { fontSize: 17, fontWeight: '800', letterSpacing: 0.5, color: '#000000' },
-  // Three horizontal bands stacked vertically — that IS the Russian flag.
-  flagStack: { flexDirection: 'column' as const, marginTop: 2 },
-  flagBand: { width: 16, height: 2.5 },
-  rusLabel: { fontSize: 7, fontWeight: '900', color: '#000000', letterSpacing: 0.4, marginTop: 1 },
+  // Right strip: region digits top, horizontal Russian flag (3 stripes
+  // stacked vertically) below, RUS at the bottom — exactly the GOST layout.
+  regionBlock: {
+    width: PLATE_REGION_W,
+    alignItems: 'center' as const,
+    justifyContent: 'flex-start' as const,
+    paddingTop: 4,
+    paddingBottom: 3,
+  },
+  regionText: { fontSize: 19, fontWeight: '800' as const, letterSpacing: 0.4, color: '#000000', lineHeight: 22 },
+  // Flag occupies ~70% of the strip width; 3 horizontal bands of equal
+  // height (white / blue / red), forming a small Russian flag in the
+  // correct orientation (wider than tall).
+  flagStack: { flexDirection: 'column' as const, marginTop: 3 },
+  flagBand: { width: PLATE_REGION_W * 0.62, height: 2.2 },
+  rusLabel: { fontSize: 7.5, fontWeight: '900' as const, color: '#000000', letterSpacing: 0.6, marginTop: 1 },
   // Foreign INT plate
   intStrip: { width: 22, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
   intStripText: { fontSize: 8, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
