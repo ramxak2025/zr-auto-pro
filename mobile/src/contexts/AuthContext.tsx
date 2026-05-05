@@ -7,6 +7,10 @@ import {
   servicesApi,
   usersApi,
   warehouseCategoriesApi,
+  suppliersApi,
+  clientsApi,
+  carsApi,
+  equipmentApi,
 } from '../api/services';
 import { onAuthExpired } from '../api/axios';
 import { clearPersistentCache } from '../utils/persistentCache';
@@ -74,6 +78,35 @@ function prefetchAfterLogin(qc: QueryClient): void {
   qc.prefetchQuery({
     queryKey: ['users'],
     queryFn: async () => (await usersApi.getAll()).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  // Suppliers / clients / cars / equipment — heavy reference lists; user
+  // perceives screens as instant when these are warm.
+  qc.prefetchQuery({
+    queryKey: ['suppliers', ''],
+    queryFn: async () => {
+      const res: any = await suppliersApi.getAll({ search: '' });
+      return res.data?.data ?? res.data ?? [];
+    },
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  qc.prefetchQuery({
+    queryKey: ['clients', { search: '', page: 1, limit: 50 }],
+    queryFn: async () => (await clientsApi.getAll({ search: '', page: 1, limit: 50 })).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  qc.prefetchQuery({
+    queryKey: ['cars', { search: '', page: 1, limit: 50 }],
+    queryFn: async () => (await carsApi.getAll({ search: '', page: 1, limit: 50 })).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  qc.prefetchQuery({
+    queryKey: ['eq-summary'],
+    queryFn: async () => (await equipmentApi.getSummary()).data,
     staleTime: 5 * 60_000,
   }).catch(() => {});
 }

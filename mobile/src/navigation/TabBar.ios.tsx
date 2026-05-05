@@ -19,11 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { haptic } from '../platform/haptics';
 import { Icon } from '../platform/Icon';
 import { SPRING_TIGHT } from '../platform/motion';
@@ -38,39 +34,45 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
 
   return (
-    <View
-      pointerEvents="box-none"
-      style={[
-        styles.wrapper,
-        { paddingBottom: Math.max(insets.bottom, 10) },
-      ]}
-    >
+    <View pointerEvents="box-none" style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 10) }]}>
       {/* External soft glow under the bar */}
       <View style={styles.outerGlow} pointerEvents="none" />
 
       <View style={styles.bar}>
-        {/* TRUE native iOS material — UIVisualEffectView with UIBlurEffect.systemThinMaterial.
+        {/* TRUE native iOS material — UIVisualEffectView with UIBlurEffect.systemUltraThinMaterial.
             Forward-compat: upgrades to UIGlassEffect at runtime on iOS 26+. */}
         <AutexaLiquidGlassView
-          variant="thinMaterial"
+          variant="ultraThinMaterial"
           intensity={1}
           topRim={false /* we render our own rim above the gradient */}
           style={StyleSheet.absoluteFill}
         />
-        {/* Subtle vertical gradient overlay — gives "glass dome" feel */}
+        {/* Strong vertical glass dome — visible white highlight on top, deep on bottom */}
         <LinearGradient
           colors={[
-            'rgba(255,255,255,0.45)',
-            'rgba(255,255,255,0.12)',
-            'rgba(255,255,255,0.22)',
+            'rgba(255,255,255,0.78)',
+            'rgba(255,255,255,0.32)',
+            'rgba(255,255,255,0.10)',
+            'rgba(255,255,255,0.40)',
           ]}
+          locations={[0, 0.35, 0.65, 1]}
           start={{ x: 0.5, y: 0 }}
           end={{ x: 0.5, y: 1 }}
           style={StyleSheet.absoluteFill}
           pointerEvents="none"
         />
-        {/* Top rim hairline */}
+        {/* Diagonal sheen — adds the moving "liquid" feel */}
+        <LinearGradient
+          colors={['rgba(255,255,255,0.55)', 'rgba(255,255,255,0.0)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0.6, y: 0.8 }}
+          style={[StyleSheet.absoluteFill, { opacity: 0.7 }]}
+          pointerEvents="none"
+        />
+        {/* Top rim hairline (highlight) */}
         <View style={styles.rimTop} pointerEvents="none" />
+        {/* Inner rim ring — pronounced glass edge */}
+        <View style={styles.innerRing} pointerEvents="none" />
 
         <View style={styles.row}>
           {TAB_DEFINITIONS.map((tab) => {
@@ -107,13 +109,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
             }
 
             return (
-              <TabItem
-                key={tab.routeName}
-                focused={focused}
-                label={tab.label}
-                icon={tab.icon}
-                onPress={onPress}
-              />
+              <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} onPress={onPress} />
             );
           })}
         </View>
@@ -224,12 +220,12 @@ const styles = StyleSheet.create({
     marginHorizontal: 14,
     borderRadius: 30,
     overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.6)',
-    shadowColor: colors.primary[700],
-    shadowOpacity: 0.18,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
+    borderWidth: 0.66,
+    borderColor: 'rgba(255,255,255,0.95)',
+    shadowColor: colors.primary[800],
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 10 },
   },
   rimTop: {
     position: 'absolute',
@@ -237,7 +233,18 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: 'rgba(255,255,255,0.95)',
+  },
+  // Pronounced inset ring — sells the "convex glass" feel.
+  innerRing: {
+    position: 'absolute',
+    top: 1,
+    left: 1,
+    right: 1,
+    bottom: 1,
+    borderRadius: 29,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.5)',
   },
   row: {
     flex: 1,

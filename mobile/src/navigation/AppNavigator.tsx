@@ -148,7 +148,17 @@ function MoreStackNavigator() {
 function TabNavigator() {
   return (
     <Tab.Navigator
-      screenOptions={{ headerShown: false }}
+      screenOptions={{
+        headerShown: false,
+        // Make the underlying tab-bar surface transparent so our floating
+        // pill renders over the screen content with no gray strip beneath.
+        tabBarStyle: {
+          position: 'absolute',
+          backgroundColor: 'transparent',
+          borderTopWidth: 0,
+          elevation: 0,
+        },
+      }}
       // Platform-adaptive bar: Metro resolves TabBar.ios.tsx / TabBar.android.tsx
       // eslint-disable-next-line react/no-unstable-nested-components
       tabBar={(props) => <PlatformTabBar {...props} />}
@@ -176,11 +186,7 @@ export default function AppNavigator() {
       ) : (
         <>
           <Stack.Screen name="Main" component={TabNavigator} />
-          <Stack.Screen
-            name="CheckCreate"
-            component={CheckCreateScreen}
-            options={{ animation: 'slide_from_bottom' }}
-          />
+          <Stack.Screen name="CheckCreate" component={CheckCreateScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="CheckDetail" component={CheckDetailScreen} />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />

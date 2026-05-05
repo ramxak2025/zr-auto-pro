@@ -27,14 +27,39 @@ const STORAGE_PREFIX = 'rqcache:v1:';
  *   - useful to show stale to the user on cold start
  *   - not user-input-volatile (e.g. don't persist `['clients-plate', search]`)
  */
+// Whitelist of query keys we cache to AsyncStorage. Each entry matches the
+// FIRST element of a useQuery key (e.g. ['suppliers', { search: '' }] matches
+// 'suppliers'). Update this list whenever a new screen needs instant cold-start.
 const PERSISTED_KEYS = [
-  'products',           // warehouse — main cache
-  'all-services',       // services dictionary
-  'all-products-check', // product picker in CheckCreate
-  'all-users',          // masters/users dictionary
-  'users',              // alt key in some screens
-  'warehouse-categories', // category folders
-  'schedule',           // schedule entries (per month)
+  // Warehouse + product picker
+  'products',
+  'all-products-check',
+  'warehouse-categories',
+  // Reference data
+  'all-services',
+  'all-users',
+  'users',
+  // Suppliers / clients / cars / equipment
+  'suppliers',
+  'clients',
+  'cars',
+  // Equipment (uses 'eq-*' keys)
+  'eq-summary',
+  'eq-storage-list',
+  'eq-user',
+  // Schedule + today
+  'schedule',
+  'schedule-today',
+  // Dashboard cards
+  'dashboard-chart',
+  'employee-ranking',
+  'marketing-dashboard',
+  'shifts',
+  'salary',
+  // Calls + services list
+  'calls-summary',
+  'services-list',
+  'service-categories',
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];
@@ -45,8 +70,15 @@ interface StoredEntry {
   storedAt: number;
 }
 
-/** Max age of persisted entry — older than this is ignored (1 hour). */
-const MAX_STALE_MS = 60 * 60 * 1000;
+/**
+ * Max age of a persisted entry — older than this is ignored.
+ *
+ * 7 days: most autosalon data (suppliers, clients, products) doesn't churn
+ * faster than that; users opening the app after a weekend should still see
+ * something instead of a blank screen. Stale data is replaced by a fresh
+ * fetch in the background via TanStack Query's stale-while-revalidate.
+ */
+const MAX_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function firstKey(qk: QueryKey): string | null {
   if (!Array.isArray(qk) || qk.length === 0) return null;
