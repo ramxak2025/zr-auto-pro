@@ -1407,7 +1407,10 @@ const styles = StyleSheet.create({
   breadcrumbText: { fontSize: fontSize.xs, color: colors.primary[600], fontWeight: fontWeight.medium },
   breadcrumbTextActive: { color: colors.gray[900], fontWeight: fontWeight.bold },
   searchWrap: { paddingHorizontal: spacing[4] },
-  list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8], gap: spacing[2], paddingTop: spacing[2] },
+  // iOS-grouped list: rows are flush — no gap, no horizontal padding (rows
+  // own their gutter). The list itself sits on a slightly grey background
+  // with a top hairline that meets the search bar.
+  list: { paddingHorizontal: 0, paddingTop: 0 },
   // Folders - 3 cols
   foldersList: { marginBottom: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], overflow: 'hidden' },
   folderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[3.5], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
@@ -1429,20 +1432,35 @@ const styles = StyleSheet.create({
   folderCount: { fontSize: 10, color: colors.gray[400], marginTop: 2 },
   folderAlert: { position: 'absolute', top: spacing[1.5], right: spacing[1.5] },
   // Products
-  productCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[3], shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 },
+  // Compact iOS-style list rows — flat white surface with hairline separators,
+  // matches the look of native Settings / Mail lists on iPhone.
+  productCard: {
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
+  },
   productRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  productPhoto: { width: 52, height: 52, borderRadius: borderRadius.lg },
-  productPhotoPlaceholder: { width: 52, height: 52, borderRadius: borderRadius.lg, backgroundColor: colors.gray[50], alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.gray[100] },
+  productPhoto: { width: 42, height: 42, borderRadius: borderRadius.md },
+  productPhotoPlaceholder: {
+    width: 42,
+    height: 42,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   productInfo: { flex: 1, minWidth: 0 },
-  productName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  productName: { fontSize: 15, fontWeight: fontWeight.semibold, color: colors.gray[900], letterSpacing: -0.1 },
   productCategory: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
-  productPrices: { flexDirection: 'row', gap: spacing[3], marginTop: 4 },
-  productSellPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  productCostPrice: { fontSize: fontSize.xs, color: colors.gray[400] },
-  productStockWrap: { alignItems: 'center', minWidth: 36 },
-  productStock: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  productPrices: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 },
+  productSellPrice: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[700] },
+  productCostPrice: { fontSize: 11, color: colors.gray[400] },
+  productStockWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 44, paddingLeft: spacing[1] },
+  productStock: { fontSize: 16, fontWeight: '700' as const, color: colors.gray[900], letterSpacing: -0.3 },
   productStockLow: { color: colors.red[500] },
-  productStockLabel: { fontSize: 10, color: colors.gray[400] },
+  productStockLabel: { fontSize: 10, color: colors.gray[400], marginTop: -1 },
   // Photo section in form
   photoSection: { marginBottom: spacing[4], alignItems: 'center' },
   photoPickerWrap: { width: 100, height: 100, borderRadius: borderRadius.xl, overflow: 'hidden', borderWidth: 2, borderColor: colors.gray[200], borderStyle: 'dashed' },

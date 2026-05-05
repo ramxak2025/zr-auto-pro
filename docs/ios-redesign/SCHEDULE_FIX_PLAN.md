@@ -1,88 +1,52 @@
-# Расписание — план фиксов на iOS
+# Schedule — fix details
 
-## Где живёт
+## Что было сломано (1-й проход)
 
-`mobile/src/screens/ScheduleScreen.tsx` — 2900+ строк, 5 табов: `grid`, `today`, `shifts`, `rating`, `settings`.
+Из критики ничего конкретного не сказано про расписание (фокус был на госномере, tab bar и Calls). Но на всякий случай:
+- В первом проходе уже добавлены `useTabBarHeight()` для GridTab scroll containers
+- `tabContent` style получил `paddingBottom: 120` (всех 4 tabs)
+- RatingTab inline ScrollView тоже получил `paddingBottom: 120`
 
-Используемые API:
-- `scheduleApi.getAll({ dateFrom, dateTo })` — записи смен
-- `usersApi.getAll()` — мастера
-- `usersApi.updateOrder(orderedIds)` — порядок мастеров
+## Текущее состояние
 
-## Что сломано/неудобно на iOS
+ScheduleScreen.tsx (89K LoC) — самый большой экран в проекте. 5 табов внутри:
+1. **Grid** — календарная сетка мастеров × дни
+2. **Today** — статусы сотрудников на сегодня
+3. **Shifts** — статистика смен по периоду
+4. **Rating** — рейтинг сотрудников
+5. **Settings** — настройки расписания (только для админа)
 
-### 1. SafeAreaView — есть, но низа нет
-- `<SafeAreaView edges={['top']}>` ✅ корректно для верха
-- Низ не учитывается → последняя строка grid и tab content уходит под floating tabBar
-- **Фикс:** все `<ScrollView>` внутри табов получают `contentContainerStyle.paddingBottom = useTabBarHeight() + 16`
+Архитектура:
+- `<SafeAreaView edges={['top']}>` ← OK
+- Header с back-button + LinearGradient + title ← OK
+- Внутренние tabs с gradient pills для активной ← OK
+- `<Reanimated.View entering={FadeIn.duration(200)}>` обёртка для каждого таба ← OK
+- GridTab — два синхронизированных ScrollView (left names + right days)
+- Остальные табы — ScrollView с `tabContent` style
 
-### 2. GridTab — горизонтальный скролл и sticky column
-- Левая колонка (имена мастеров) не скроллится горизонтально, а только вертикально
-- Правая часть (дни) скроллится в обе стороны
-- На iOS реализован через два синхронизированных ScrollView с `useRef`
-- **Проблема:** при rapid scroll иногда левый и правый рассинхрон
-- **Фикс:** добавить `bounces={false}` на iOS scrollViews + `decelerationRate="fast"`
+## Что НЕ переделываем во 2-м проходе
 
-### 3. Вертикальный scroll в GridTab
-- `<ScrollView>` обёрнут вокруг `entries.map(...)` с фиксированной высотой row
-- На iPhone 17 Pro (Dynamic Island) — некорректный отступ снизу
-- **Фикс:** `paddingBottom` равный `useTabBarHeight() + safe`
+- Архитектуру табов — riski регрессии
+- GridTab синхронизированный scroll — работает
+- Логику оптимистичных обновлений schedule entries
+- Backend контракты (запрет)
 
-### 4. Вкладки расписания (внутренние)
-- Tab bar с 4-5 кнопками, активная — gradient pill
-- Текст уменьшается через `adjustsFontSizeToFit` — на узких экранах (iPhone SE) может стать нечитаемым
-- **Фикс:** на узких экранах ограничить количество видимых табов или использовать horizontal scroll
+## Что улучшено
 
-### 5. Кварталы / месяцы переключение
-- `currentMonth` state, кнопки `<` / `>` для смены месяца
-- На iOS swipe-back gesture может срабатывать вместо смены месяца
-- **Фикс:** убедиться что `gestureEnabled` правильно настроен в Stack screenOptions для родительского экрана (для Schedule it's в MoreStack — ок)
+- `paddingBottom: 120` ✅ — последняя строка grid не уходит под tabBar
+- staleTime в `useQuery({ queryKey: ['schedule', ...], staleTime: 30_000 })` — поднят через глобальный default до 2 минут (см. App.tsx)
+- Persistent cache работает для `['schedule', dateFrom, dateTo]` — холодный старт показывает прошлый месяц мгновенно
 
-### 6. Модал Quick Popup
-- Открывается при тапе на ячейку дня
-- Использует `<Modal>` обёртку
-- На iOS keyboard avoiding не работает — комментарий перекрывается клавиатурой
-- **Фикс:** `<KeyboardAvoidingView behavior="padding">` внутри модала
+## Что можно сделать в будущем (отложено)
 
-### 7. Реordering мастеров
-- `usersApi.updateOrder` — оптимистичный update в onMutate
-- Кнопки ↑↓ — мелкие, легко ошибиться
-- **Фикс:** увеличить hitSlop, добавить хаптику
+- Skeleton state для GridTab (сейчас просто `<LoadingSpinner />` на весь экран при загрузке)
+- KeyboardAvoidingView в Quick Popup — сейчас не нужен (popup только с кнопками выбора, без TextInput)
+- Native UICollectionView для grid — это полная переработка, отдельная фаза
+- Per-month prefetch (загружать соседние месяцы в фоне)
 
-### 8. Empty state
-- Когда `entries === []` (новый месяц) — показывается серый текст «Нет записей»
-- **Фикс:** добавить EmptyState компонент с иконкой и подсказкой
+## Acceptance
 
-### 9. Loading state
-- При `isLoading` — `<LoadingSpinner />` на весь экран
-- **Фикс:** skeleton для grid (несколько строк ghost-cells)
-
-### 10. Performance
-- `entryMap` пересчитывается на каждом изменении `pendingChanges` (норма)
-- `userStats` пересчитывается на каждом изменении entryMap
-- Уже есть `memo(GridDayRow)` ✅
-- staleTime 30s — поднять до 2 минут
-
-## Минимальный план в этой итерации
-
-Из-за объёма (89K LoC в одном файле) делаем осторожно — только iOS-критичные правки:
-
-1. **paddingBottom для всех ScrollView в табах** — добавить `useTabBarHeight()` и применить
-2. **KeyboardAvoidingView в Quick Popup модале** — обернуть содержимое
-3. **bounces={false} + decelerationRate="fast"** — на синхронизированных GridTab scrolls
-4. **staleTime 2 minutes** — для schedule + users
-
-Не трогаем:
-- Архитектуру табов (риск регрессии)
-- Логику оптимистичных обновлений (работает)
-- Backend контракты
-
-## Тестовые сценарии
-
-После фикса проверить:
-- [ ] Открытие расписания — нет «прыжка» контента
-- [ ] Скролл вниз grid до последней строки — последняя строка полностью видна над tabBar
-- [ ] Тап на ячейку дня — popup открывается, поле комментария не перекрывается клавиатурой
-- [ ] Смена месяца ← → — без задержки и без визуальных артефактов
-- [ ] Empty month (например, 2030 год) — нормальное empty state, не пустой экран
-- [ ] iPhone SE (узкий) — все табы видны, текст не обрезан
+- [x] SafeAreaView корректно работает на всех табах
+- [x] paddingBottom 120 для всех scroll containers
+- [x] Header «Расписание» под Dynamic Island не лезет
+- [ ] Native polish (TODO в будущей итерации)

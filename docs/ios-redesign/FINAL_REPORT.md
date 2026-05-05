@@ -1,7 +1,18 @@
 # Autexa iOS — Final Report
 
-Дата: 2026-05-04
+Дата: 2026-05-04 (обновлено после 2-го прохода)
 Ветка: `claude/fix-auteksa-freezing-zuMJS`
+
+## История
+
+1-й проход (commit `b5ca180`) — комплексный iOS redesign + persistent cache + plate switcher.
+2-й проход (этот) — критичные багфиксы по результатам теста на iPhone 17 Pro:
+- госномер дублировал регион (`О 777 ОО 88 | 88` вместо `О 777 ОО | 88`);
+- CallsScreen залезал на Dynamic Island (без SafeAreaView);
+- TabBar показывал лишние точки-индикаторы и тяжёлую центральную кнопку;
+- Карточки склада были толстыми Material-style вместо iOS plain list.
+
+Все четыре дефекта устранены. См. `REVIEW_OF_FAILED_IMPLEMENTATION.md` и `CRITICAL_FIX_PLAN.md`.
 
 ## Что сделано
 

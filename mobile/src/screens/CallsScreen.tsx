@@ -9,11 +9,13 @@ import {
   Linking,
   Animated as RNAnimated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { callsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -175,6 +177,7 @@ const TABS: { key: FilterTab; label: string }[] = [
 
 export default function CallsScreen({ navigation }: { navigation: any }) {
   const { isRole } = useAuth();
+  const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
 
@@ -238,20 +241,22 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   ];
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header — native iOS-style with back button + title + date stepper */}
       <View style={styles.header}>
-        <View>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
           <Text style={styles.title}>Звонки</Text>
-          <Text style={styles.subtitle}>История и записи</Text>
+          <Text style={styles.subtitle}>{dateLabel}</Text>
         </View>
         <View style={styles.dateNav}>
-          <TouchableOpacity onPress={goToPrevDay} style={styles.dateBtn}>
-            <Ionicons name="chevron-back" size={20} color={colors.gray[400]} />
+          <TouchableOpacity onPress={goToPrevDay} style={styles.dateBtn} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+            <Ionicons name="chevron-back" size={18} color={colors.gray[500]} />
           </TouchableOpacity>
-          <Text style={styles.dateLabel}>{dateLabel}</Text>
-          <TouchableOpacity onPress={goToNextDay} disabled={isToday} style={[styles.dateBtn, isToday && { opacity: 0.2 }]}>
-            <Ionicons name="chevron-forward" size={20} color={colors.gray[400]} />
+          <TouchableOpacity onPress={goToNextDay} disabled={isToday} style={[styles.dateBtn, isToday && { opacity: 0.25 }]} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+            <Ionicons name="chevron-forward" size={18} color={colors.gray[500]} />
           </TouchableOpacity>
         </View>
       </View>
@@ -297,7 +302,11 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
       </View>
 
       {/* Call list */}
-      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.list}
+        contentContainerStyle={{ paddingBottom: tabBarHeight + spacing[4] }}
+        showsVerticalScrollIndicator={false}
+      >
         {isLoading ? (
           <ActivityIndicator size="small" color={colors.primary[500]} style={{ marginTop: spacing[10] }} />
         ) : filteredCalls.length === 0 ? (
@@ -312,9 +321,8 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
             <CallRow key={`${call.id}-${idx}`} call={call} navigation={navigation} />
           ))
         )}
-        <View style={{ height: spacing[6] }} />
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -326,16 +334,25 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.gray[50] },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[4],
+    gap: spacing[2],
+    paddingHorizontal: spacing[3],
+    paddingTop: spacing[2],
     paddingBottom: spacing[3],
   },
-  title: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  subtitle: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  dateNav: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
-  dateBtn: { padding: spacing[2], borderRadius: borderRadius.lg, backgroundColor: colors.gray[100] },
+  backBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerCenter: { flex: 1, alignItems: 'flex-start', justifyContent: 'center' },
+  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
+  subtitle: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 1 },
+  dateNav: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  dateBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
   dateLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], minWidth: 70, textAlign: 'center' },
 
   summaryRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4], marginBottom: spacing[3] },

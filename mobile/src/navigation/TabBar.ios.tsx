@@ -1,18 +1,21 @@
 /**
- * TabBar — iOS variant. Premium Liquid Glass.
+ * TabBar — iOS variant. Floating Liquid Glass pill.
  *
- *  • Floating pill (14pt insets, 30pt corner radius)
- *  • BlurView (systemUltraThinMaterialLight) for max-glass on iOS 17+
- *  • Inner gradient highlight (rim light) on top edge
- *  • Outer soft shadow tinted toward primary[700]
- *  • Inner subtle stroke at the active item to give a Liquid Glass "depth" feel
- *  • Spring scale on the focused icon, smooth color transition
- *  • Haptic feedback (select / impact for Касса)
+ *  • UIVisualEffectView (via expo-blur) for native iOS material — no fake CSS blur
+ *  • systemUltraThinMaterialLight tint — closest match to system iOS bar
+ *  • Outer soft glow tinted to brand
+ *  • Top hairline rim for "highlight" depth, bottom hairline for shadow line
+ *  • Active vs inactive: tint colour + label weight only — NO indicator dot,
+ *    NO underline, NO Android-style pill
+ *  • Centre Касса button: compact 48pt circular GlassDome — gradient tint
+ *    with translucent overlay, looks premium without dominating the bar
+ *  • Haptic feedback (select for tabs, impact for Касса)
  *  • Safe-area bottom padding for home-indicator devices
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,17 +23,16 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 import { haptic } from '../platform/haptics';
 import { Icon } from '../platform/Icon';
-import { SPRING_TIGHT, TIMING_FAST } from '../platform/motion';
+import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
-import { KassaButton } from './KassaButton';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
-const BAR_HEIGHT = 60;
+const BAR_HEIGHT = 58;
+const KASSA_SIZE = 46;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
@@ -40,37 +42,33 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
       pointerEvents="box-none"
       style={[
         styles.wrapper,
-        { paddingBottom: Math.max(insets.bottom, 12) },
+        { paddingBottom: Math.max(insets.bottom, 10) },
       ]}
     >
       {/* External soft glow under the bar */}
       <View style={styles.outerGlow} pointerEvents="none" />
 
       <View style={styles.bar}>
-        {/* Liquid Glass blur layer */}
+        {/* Native iOS visual effect */}
         <BlurView
-          tint="systemUltraThinMaterialLight"
-          intensity={92}
+          tint="systemThinMaterialLight"
+          intensity={96}
           style={StyleSheet.absoluteFill}
         />
-
-        {/* Subtle vertical gradient overlay for depth */}
+        {/* Subtle glass overlay — top-down highlight */}
         <LinearGradient
           colors={[
-            'rgba(255,255,255,0.55)',
-            'rgba(255,255,255,0.18)',
-            'rgba(255,255,255,0.32)',
+            'rgba(255,255,255,0.45)',
+            'rgba(255,255,255,0.12)',
+            'rgba(255,255,255,0.22)',
           ]}
           start={{ x: 0.5, y: 0 }}
           end={{ x: 0.5, y: 1 }}
           style={StyleSheet.absoluteFill}
           pointerEvents="none"
         />
-
-        {/* Top rim light (1px hairline) */}
-        <View style={styles.rimLight} pointerEvents="none" />
-        {/* Bottom rim — slightly darker to add definition */}
-        <View style={styles.rimBottom} pointerEvents="none" />
+        {/* Top rim hairline */}
+        <View style={styles.rimTop} pointerEvents="none" />
 
         <View style={styles.row}>
           {TAB_DEFINITIONS.map((tab) => {
@@ -99,9 +97,9 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                     navigation.navigate(tab.routeName as never);
                   }}
                   accessibilityRole="button"
-                  accessibilityLabel="Касса"
+                  accessibilityLabel="Создать чек"
                 >
-                  <KassaButton />
+                  <KassaGlassDome focused={focused} />
                 </Pressable>
               );
             }
@@ -130,16 +128,12 @@ interface TabItemProps {
 }
 
 function TabItem({ focused, label, icon, onPress }: TabItemProps) {
-  const scale = useSharedValue(focused ? 1.08 : 1);
-  const dotOpacity = useSharedValue(focused ? 1 : 0);
-
+  // Subtle scale on focus — no dot, no pill, just the colour and weight change.
+  const scale = useSharedValue(focused ? 1.06 : 1);
   React.useEffect(() => {
-    scale.value = withSpring(focused ? 1.08 : 1, SPRING_TIGHT);
-    dotOpacity.value = withTiming(focused ? 1 : 0, TIMING_FAST);
-  }, [focused, scale, dotOpacity]);
-
+    scale.value = withSpring(focused ? 1.06 : 1, SPRING_TIGHT);
+  }, [focused, scale]);
   const iconStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
-  const dotStyle = useAnimatedStyle(() => ({ opacity: dotOpacity.value }));
 
   const tint = focused ? colors.primary[600] : colors.gray[500];
 
@@ -158,36 +152,70 @@ function TabItem({ focused, label, icon, onPress }: TabItemProps) {
         <Text
           variant="caption"
           style={{
-            marginTop: 2,
+            marginTop: 1,
             color: tint,
             fontWeight: focused ? '600' : '500',
-            fontSize: 10.5,
+            fontSize: 10,
           }}
         >
           {label}
         </Text>
       )}
-      {/* Active indicator dot under the label */}
-      <Animated.View style={[styles.activeDot, dotStyle]} />
     </Pressable>
+  );
+}
+
+/**
+ * KassaGlassDome — compact, native-feeling centre button.
+ *
+ *  • 46pt circle, sits flush with the bar (no big -28 jump-out)
+ *  • LinearGradient + thin glass-style overlay imitates a translucent dome
+ *  • Slight scale spring on focus
+ *  • Designed to sit IN the bar, not ON TOP of it — matches iOS Mail compose
+ *    or Wallet add buttons in spirit.
+ */
+function KassaGlassDome({ focused }: { focused: boolean }) {
+  const scale = useSharedValue(focused ? 1.04 : 1);
+  React.useEffect(() => {
+    scale.value = withSpring(focused ? 1.04 : 1, SPRING_TIGHT);
+  }, [focused, scale]);
+  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+  return (
+    <Animated.View style={[s.dome, animatedStyle]}>
+      <LinearGradient
+        colors={[colors.primary[400], colors.primary[600]]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      {/* Top glass highlight */}
+      <LinearGradient
+        colors={['rgba(255,255,255,0.42)', 'rgba(255,255,255,0)']}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 0.55 }}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
+      <Ionicons name="receipt-outline" size={20} color={colors.white} />
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   wrapper: {
-    paddingTop: 8,
+    paddingTop: 6,
     backgroundColor: 'transparent',
   },
   outerGlow: {
     position: 'absolute',
-    left: 8,
-    right: 8,
-    bottom: 4,
-    height: BAR_HEIGHT + 4,
-    borderRadius: 32,
+    left: 18,
+    right: 18,
+    bottom: 6,
+    height: BAR_HEIGHT - 4,
+    borderRadius: 30,
     backgroundColor: colors.primary[700],
-    opacity: 0.06,
-    transform: [{ scale: 1.02 }],
+    opacity: 0.05,
   },
   bar: {
     height: BAR_HEIGHT,
@@ -195,28 +223,19 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.7)',
-    // iOS shadow — premium soft glow
+    borderColor: 'rgba(255,255,255,0.6)',
     shadowColor: colors.primary[700],
-    shadowOpacity: 0.22,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
   },
-  rimLight: {
+  rimTop: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     height: 1,
-    backgroundColor: 'rgba(255,255,255,0.85)',
-  },
-  rimBottom: {
-    position: 'absolute',
-    bottom: 0,
-    left: 16,
-    right: 16,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(0,0,0,0.06)',
+    backgroundColor: 'rgba(255,255,255,0.78)',
   },
   row: {
     flex: 1,
@@ -230,12 +249,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 44,
   },
-  activeDot: {
-    position: 'absolute',
-    bottom: 2,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.primary[600],
+});
+
+const s = StyleSheet.create({
+  dome: {
+    width: KASSA_SIZE,
+    height: KASSA_SIZE,
+    borderRadius: KASSA_SIZE / 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.7)',
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.28,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
   },
 });

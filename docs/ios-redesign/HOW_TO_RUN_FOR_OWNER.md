@@ -25,7 +25,7 @@
 ## ЕСЛИ КОМПЬЮТЕР ЧИСТЫЙ — ПЕРВЫЙ РАЗ
 
 ```bash
-# 1) Скачать проект
+# 1) Скачать проект (проект может лежать где угодно — например, ~/Downloads/zr-auto-pro)
 cd ~
 git clone https://github.com/ramxak2025/zr-auto-pro.git
 
@@ -49,6 +49,13 @@ npx expo prebuild --platform ios --clean
 ```
 
 Когда увидишь надписи `✔ Finished prebuild` и `✔ Installed CocoaPods` — переходим к Xcode.
+
+> **Важно:** если у тебя проект уже скачан, и есть незакоммиченные изменения (например, обновлённый `package-lock.json` после прошлого `npm install`), и `git pull` ругается «Your local changes would be overwritten» — сначала сохрани изменения в стэш:
+> ```bash
+> git stash
+> git checkout claude/fix-auteksa-freezing-zuMJS
+> git pull origin claude/fix-auteksa-freezing-zuMJS
+> ```
 
 ---
 
@@ -140,9 +147,17 @@ open ios/Autexa.xcworkspace
 ### «Could not find module 'expo-symbols'» при сборке
 Запусти:
 ```bash
-cd ~/zr-auto-pro/mobile
+cd mobile
 npm install
+npx expo install expo-symbols
 npx expo prebuild --platform ios --clean
+```
+
+### «Your local changes would be overwritten by merge»
+```bash
+git stash
+git checkout claude/fix-auteksa-freezing-zuMJS
+git pull origin claude/fix-auteksa-freezing-zuMJS
 ```
 
 ### «No bundle URL present» (красный экран на iPhone)
@@ -182,15 +197,18 @@ pod install
 
 Кратко (полный список — в `docs/ios-redesign/FINAL_REPORT.md`):
 
-- 🎨 **Премиальный нижний бар** — настоящий Liquid Glass (стекло + блики)
-- ⚡ **Холодный старт без пустых экранов** — данные показываются мгновенно из кеша
+- 🎨 **Премиальный нижний бар** — настоящий iOS material через `expo-blur` (UIVisualEffectView под капотом). Без точек-индикаторов под вкладками. Центральная кнопка Касса — компактная и flush с баром, не выпрыгивает
+- 🔢 **Госномер БЕЗ дублирования региона** — main и region разделены на два независимых поля; `О777ОО88` показывается только как `О 777 ОО | 88`
+- 📞 **Звонки больше не залезают на Dynamic Island** — добавлен SafeAreaView и нативный header с back-button
+- 📦 **Склад как iOS plain list** — компактные ряды с hairline-разделителями вместо толстых Material-карточек. На iPhone 17 Pro помещается ~10 товаров на экран вместо 6
+- ⚡ **Холодный старт без пустых экранов** — данные мгновенно из кеша
 - 🚀 **Быстрая загрузка разделов** — после логина данные подкачиваются в фоне
 - ❌ **Убран ложный «0 товаров»** — больше не показывается во время загрузки
-- 🔢 **Госномер: переключатель RU/INT** — явная кнопка над полем
-- 🔄 **Латиница автоматически в кириллицу** — `P332PA05` → `Р332РА05`
-- 🔍 **Умный поиск клиента** — находит по любому формату ввода (с пробелами, латиницей, нижним регистром)
+- 🔄 **Латиница в кириллицу** — `P332PA05` → `Р 332 РА | 05`
+- 🌐 **Switcher RU/INT** для иностранных номеров
+- 🔍 **Умный поиск клиента** — находит по любому формату ввода
 - 📅 **Расписание** — последняя строка больше не уходит под нижний бар
-- ✅ **Все экраны** — корректные отступы, ничего не вылезает за края iPhone
+- ✅ **Все экраны** — корректные отступы, Safe Area везде
 
 ---
 

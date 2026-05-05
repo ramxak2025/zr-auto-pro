@@ -52,6 +52,39 @@ function normalizeChar(ch: string, position: number): string {
 export const PLATE_MAX_LENGTH = 9;
 
 /**
+ * Process the MAIN block alone (1 letter + 3 digits + 2 letters → max 6 chars).
+ * Used when the input has separate main and region fields (recommended UX).
+ */
+export function processPlateMainInput(raw: string): string {
+  const chars: string[] = [];
+  let pos = 0;
+  for (const ch of raw) {
+    if (pos >= 6) break;
+    const normalized = normalizeChar(ch, pos);
+    if (normalized) {
+      chars.push(normalized);
+      pos++;
+    }
+  }
+  return chars.join('');
+}
+
+/**
+ * Process the REGION block alone (2-3 digits).
+ */
+export function processPlateRegionInput(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  return digits.slice(0, 3);
+}
+
+/**
+ * Combine separate main + region back into a single clean plate string.
+ */
+export function combinePlate(main: string, region: string): string {
+  return `${main}${region}`;
+}
+
+/**
  * Process a raw input string into a clean plate string.
  * Applies character-by-character validation + Latin→Cyrillic conversion.
  */

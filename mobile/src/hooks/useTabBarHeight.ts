@@ -12,8 +12,8 @@
 import { Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-export const TAB_BAR_PILL_HEIGHT = 60;
-export const TAB_BAR_PILL_TOP_PADDING = 8;
+export const TAB_BAR_PILL_HEIGHT = 58;
+export const TAB_BAR_PILL_TOP_PADDING = 6;
 export const TAB_BAR_PILL_BUFFER = 8;
 
 export function useTabBarHeight(): number {
