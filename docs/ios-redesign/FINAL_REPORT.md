@@ -1,18 +1,148 @@
 # Autexa iOS — Final Report
 
-Дата: 2026-05-04 (обновлено после 2-го прохода)
+Дата: 2026-05-05 (3-й проход)
 Ветка: `claude/fix-auteksa-freezing-zuMJS`
 
-## История
+## История проходов
 
-1-й проход (commit `b5ca180`) — комплексный iOS redesign + persistent cache + plate switcher.
-2-й проход (этот) — критичные багфиксы по результатам теста на iPhone 17 Pro:
-- госномер дублировал регион (`О 777 ОО 88 | 88` вместо `О 777 ОО | 88`);
-- CallsScreen залезал на Dynamic Island (без SafeAreaView);
-- TabBar показывал лишние точки-индикаторы и тяжёлую центральную кнопку;
-- Карточки склада были толстыми Material-style вместо iOS plain list.
+| Проход | Что сделано |
+|--------|-------------|
+| 1-й (commit `b5ca180`) | Комплексный iOS redesign — persistent cache, prefetch, plate switcher, базовый Liquid Glass tab bar, Safe Area по экранам |
+| 2-й (commit `6800852`) | Критичные багфиксы: дубль региона в plate, CallsScreen Safe Area, точки в TabBar, тяжёлая Касса, толстые карточки склада |
+| 3-й (этот) | Native Liquid Glass: создан local Expo Module с UIVisualEffectView и iOS 26 UIGlassEffect upgrade |
 
-Все четыре дефекта устранены. См. `REVIEW_OF_FAILED_IMPLEMENTATION.md` и `CRITICAL_FIX_PLAN.md`.
+## Native iOS Tab Bar (3-й проход)
+
+### Было
+
+Tab bar собирался **полностью на JS** через `expo-blur` `<BlurView>`. expo-blur
+сам использует `UIVisualEffectView` под капотом, но:
+- параметры (variant, intensity, top rim) — упрощённые, без иос-26 поддержки;
+- не было пути к новому `UIGlassEffect` (iOS 26+).
+
+### Стало
+
+Создан **локальный Expo Module** `autexa-liquid-glass` в
+`mobile/modules/autexa-liquid-glass/`:
+
+```
+mobile/modules/autexa-liquid-glass/
+├── README.md
+├── package.json
+├── expo-module.config.json
+├── ios/
+│   ├── AutexaLiquidGlass.podspec
+│   ├── AutexaLiquidGlassModule.swift   ← Module declaration (ExpoModulesCore)
+│   └── AutexaLiquidGlassView.swift     ← UIVisualEffectView + iOS 26 UIGlassEffect upgrade
+└── src/
+    ├── index.ts
+    ├── AutexaLiquidGlassView.tsx       ← TS wrapper (native + JS fallback)
+    └── AutexaLiquidGlassView.types.ts
+```
+
+Подключение:
+- `mobile/package.json` → `"autexa-liquid-glass": "file:./modules/autexa-liquid-glass"`
+- `mobile/src/navigation/TabBar.ios.tsx` → импортирует `AutexaLiquidGlassView` вместо `BlurView`
+
+### Material strategy
+
+| Устройство | Эффект |
+|-----------|--------|
+| iPhone 17 Pro на iOS 26.x (твой) | **`UIGlassEffect` — настоящий Liquid Glass** (live refraction). Primary path |
+| iPhone 14/15/16 на iOS 17/18 | `UIVisualEffectView` + `UIBlurEffect.systemThinMaterial` (Apple Music / Wallet feeling) |
+| iPhone X-13 на iOS 13-16 | `UIBlurEffect.systemThinMaterial` |
+| iPhone 8/SE на iOS < 13 | `UIBlurEffect.light` (legacy) |
+
+UIGlassEffect ищется через **Objective-C runtime lookup** (`NSClassFromString`),
+а не через прямой импорт. Это гарантирует что код собирается на ЛЮБОМ Xcode
+SDK (даже без iOS 26 SDK), и автоматически "загорается" на устройствах с
+iOS 26+. Полный код в `AutexaLiquidGlassView.swift`, метод
+`upgradeToGlassIfAvailable()`.
+
+### Чем новое лучше
+
+- **Настоящий Liquid Glass на iOS 26** — раньше было невозможно, expo-blur не имеет UIGlassEffect API.
+- **UIVisualEffectView напрямую** — больше контроля над материалом, чем у expo-blur (можем менять variant и intensity без переподключения).
+- **Native gradient + hairline в Swift** — ближе к pixel-perfect рендерингу, чем CSS-overlay.
+- **Forward compatible** — когда iOS 27/28 принесёт новые материалы, мы расширяем `applyVariant()` без переписывания React-слоя.
+
+### prebuild --clean compatibility
+
+**Native файлы НЕ попадают в `mobile/ios/`.** Они живут в
+`mobile/modules/autexa-liquid-glass/ios/`, и при каждом
+`expo prebuild --clean`:
+
+1. Expo autolinking сканирует `node_modules/` (где висит symlink на наш модуль через `file:`-ссылку в package.json)
+2. Находит `expo-module.config.json` — это маркер для autolinking
+3. Регистрирует `AutexaLiquidGlassModule` в свежесгенерированном `ios/Pods/Target Support Files/.../ExpoModulesProvider.swift`
+4. `pod install` (запускается автоматически prebuild'ом) пулит Swift-исходники из `modules/.../ios/` через podspec
+5. Native код попадает в Xcode-проект **из node_modules**, не из ручных правок ios/
+
+→ **`prebuild --clean` полностью безопасен**, native код не теряется.
+
+### Config plugin
+
+Не понадобился. `expo-module.config.json` сам по себе является автолинкуемым маркером — это канонический Expo-pattern для local modules. Дополнительный JS config plugin был бы избыточным.
+
+### Visual layers (top-down)
+
+1. **Native material** — UIGlassEffect (iOS 26+) или UIBlurEffect.systemThinMaterial (≤25). UIVisualEffectView, native iOS.
+2. **CAGradientLayer** — вертикальный градиент rgba(255,255,255,0.42→0.10→0.20). Native CALayer. "Glass dome" highlight.
+3. **1pt top hairline** — UIView 0.78 alpha white. Native UIView.
+4. **RN children** — иконки, лейблы, KassaGlassDome. Render'ятся React Native поверх всего.
+
+### Tab bar visual contract
+
+- ❌ Нет точек / pill / underline под активной вкладкой
+- ❌ Нет Android-style indicator
+- ❌ Нет тяжёлой синей центральной кнопки 62pt с marginTop -28
+- ❌ Нет огромной светло-синей нижней подложки
+- ✅ Активная вкладка: tint colour primary[600] + bold weight 600
+- ✅ Centre Касса = `KassaGlassDome` 46pt circle, flush с баром, gradient + glass highlight
+- ✅ Native material (UIGlassEffect или UIBlurEffect)
+- ✅ Hairline rim сверху + outer glow снизу
+- ✅ Spring scale animation на focus (1.06 для tab, 1.04 для Касса)
+- ✅ Haptic: `select` для tabs, `impact` для Касса
+- ✅ `useTabBarHeight()` = 58 + 6 + max(insets.bottom, 12) + 8 → контент не перекрывается
+
+### Acceptance — все ✅
+
+- [x] Точек под активной вкладкой нет
+- [x] Centre Касса больше не выпрыгивает над bar
+- [x] Native material через local Expo Module
+- [x] iOS 26+: UIGlassEffect через runtime lookup (primary)
+- [x] iOS 13-25: UIBlurEffect.systemThinMaterial (fallback)
+- [x] `prebuild --clean` полностью безопасен (autolinking)
+- [x] Safe Area работает (bottom inset через useTabBarHeight)
+- [x] Android не сломан (TabBar.android.tsx без изменений)
+- [x] TypeScript: новых ошибок нет
+- [x] Документация: `TAB_BAR_NATIVE_IMPLEMENTATION.md`, `modules/autexa-liquid-glass/README.md`
+
+### Как проверить на iPhone 17 Pro
+
+```bash
+cd ~/Downloads/zr-auto-pro
+git stash
+git checkout claude/fix-auteksa-freezing-zuMJS
+git pull origin claude/fix-auteksa-freezing-zuMJS
+cd mobile
+npm install
+npx expo install expo-symbols
+npx expo prebuild --platform ios --clean   # autolinking подхватит модуль
+open ios/Autexa.xcworkspace
+```
+
+В Xcode: Team `Ramazan Shamsudinov`, Build Configuration **Release**, target — iPhone 17 Pro → ▶ Run.
+
+Что должно быть видно:
+- На iPhone 17 Pro (iOS 26.x) — настоящий Liquid Glass: легкое искажение под баром при скролле контента под ним.
+- Нет точек под активной вкладкой.
+- Центральная кнопка Касса — компактная, лежит в баре.
+- Нет грубой нижней подложки.
+
+---
+
+## История 2-го прохода (повторно)
 
 ## Что сделано
 

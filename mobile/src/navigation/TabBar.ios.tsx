@@ -13,7 +13,7 @@
  *  • Safe-area bottom padding for home-indicator devices
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { BlurView } from 'expo-blur';
+import { AutexaLiquidGlassView } from 'autexa-liquid-glass';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import React from 'react';
@@ -49,13 +49,15 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
       <View style={styles.outerGlow} pointerEvents="none" />
 
       <View style={styles.bar}>
-        {/* Native iOS visual effect */}
-        <BlurView
-          tint="systemThinMaterialLight"
-          intensity={96}
+        {/* TRUE native iOS material — UIVisualEffectView with UIBlurEffect.systemThinMaterial.
+            Forward-compat: upgrades to UIGlassEffect at runtime on iOS 26+. */}
+        <AutexaLiquidGlassView
+          variant="thinMaterial"
+          intensity={1}
+          topRim={false /* we render our own rim above the gradient */}
           style={StyleSheet.absoluteFill}
         />
-        {/* Subtle glass overlay — top-down highlight */}
+        {/* Subtle vertical gradient overlay — gives "glass dome" feel */}
         <LinearGradient
           colors={[
             'rgba(255,255,255,0.45)',

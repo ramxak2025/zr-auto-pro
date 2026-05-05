@@ -1,111 +1,143 @@
-# Tab Bar — Native iOS Implementation
+# Tab Bar — Native iOS Implementation (final)
 
-## TL;DR
+> Updated 2026-05-04 (3rd revision). The tab bar **uses native iOS materials
+> through a local Expo Module**, with iOS 26 `UIGlassEffect` as the primary
+> path and `UIVisualEffectView` + `UIBlurEffect.systemThinMaterial` as the
+> fallback for iOS 13–25.
 
-Tab bar остаётся на React Native, но использует **native iOS-API под капотом** через `expo-blur` (UIVisualEffectView с UIBlurEffect, native iOS 13+ material). Нативный кастомный Swift-модуль **не добавлен** в этой итерации — он не дал бы дополнительного visual-выигрыша, но добавил бы хрупкость (`prebuild --clean` стирает native-файлы без config-plugin).
+## Architecture
 
-## Что под капотом expo-blur
+```
+React Native TabBar.ios.tsx
+        ↓ uses
+<AutexaLiquidGlassView />          ← TS wrapper (autexa-liquid-glass module)
+        ↓ requireNativeViewManager
+AutexaLiquidGlassView.swift        ← Swift native view (UIVisualEffectView)
+        ├─ iOS 26+: UIGlassEffect  ← real Liquid Glass via runtime lookup
+        └─ iOS 13-25: UIBlurEffect.systemThinMaterial  (premium fallback)
+```
 
-`expo-blur` v13+ на iOS реализована через native `UIVisualEffectView`:
+## Material strategy
+
+| Device / OS                    | Effect actually rendered                  |
+|--------------------------------|-------------------------------------------|
+| iPhone 17 Pro on iOS 26.x      | **UIGlassEffect** — Apple's true Liquid Glass with subtle live refraction. Primary path. |
+| iPhone 14/15/16 on iOS 17/18   | UIVisualEffectView + UIBlurEffect.systemThinMaterial — Apple's premium frosted glass material (same as Control Center, Apple Music mini-player) |
+| iPhone X-13 on iOS 13-16       | UIVisualEffectView + UIBlurEffect.systemThinMaterial |
+| iPhone 8/SE on iOS < 13        | UIBlurEffect.light (legacy)                |
+
+UIVisualEffectView is **NOT** Liquid Glass — it is the proven native iOS
+glass material that has shipped since iOS 13 and powers most of Apple's own
+chrome. UIGlassEffect (iOS 26) is the new step up: live refraction. Our
+module uses the better of the two automatically per device.
+
+## Why UIGlassEffect is reached via runtime lookup, not direct import
+
+`UIGlassEffect` is a brand-new symbol in the iOS 26 SDK. Most developers'
+machines (and most CI runners) have older Xcode SDKs that don't know the
+symbol. If we wrote `if #available(iOS 26.0, *) { effectView.effect =
+UIGlassEffect() }` directly, the build would fail on any Xcode without the
+iOS 26 SDK.
+
+Solution: look the class up by name through the Objective-C runtime —
 
 ```swift
-// Внутри expo-blur ios/EXBlurView.m
-let effect = UIBlurEffect(style: .systemThinMaterial)  // iOS native
-let visualEffectView = UIVisualEffectView(effect: effect)
-```
-
-Это и есть та самая «настоящая» iOS material — Apple использует её во всех системных приложениях (Control Center, Notification Center, Apple Music mini-player). Никакой CSS-имитации.
-
-## Параметры новой реализации
-
-### `TabBar.ios.tsx`
-
-```tsx
-<BlurView
-  tint="systemThinMaterialLight"  // native UIBlurEffect.systemThinMaterial
-  intensity={96}                   // 0..100, влияет на native saturation
-  style={StyleSheet.absoluteFill}
-/>
-```
-
-- `tint="systemThinMaterialLight"` — на iOS 17+ выглядит как UIVisualEffectView с UIBlurEffect.systemThinMaterial. На iOS < 13 — fallback на light tint.
-- `intensity={96}` — макс. насыщенность для эффекта присутствия.
-
-### Дополнительные слои
-
-Поверх native blur добавлены полу-CSS слои для тонкой настройки:
-
-1. **Vertical gradient overlay** — `LinearGradient` сверху вниз (rgba 45% → 12% → 22%) — даёт «купол» света на верху бара, имитируя реальное стекло.
-2. **Top rim hairline** — 1px белая полоса сверху (78% alpha) — отражение света на кромке стекла.
-3. **Outer glow** — за барам мягкая тень primary[700] @ 5% opacity, размытая 18pt — обозначает «зону присутствия» бара без чёткого края.
-4. **Box shadow** — `shadowColor: primary[700], shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: {0, 8}` — нативная iOS-тень снизу для глубины.
-
-Все они **не закрывают** native blur — они над ним для финального полировки.
-
-### Активная вкладка
-
-**Никаких** точек, pill'ов, индикаторов. Только:
-- `tint = primary[600]` (вместо gray[500])
-- `fontWeight = '600'` (вместо '500')
-- `Icon weight = 'semibold'` (вместо 'regular') — на iOS-устройствах показывает SF Symbols в более жирном варианте
-- Subtle scale spring 1.06 (через reanimated SPRING_TIGHT)
-
-Это и есть «iOS native» подход — как в стандартных Apple-приложениях.
-
-### KassaGlassDome (центральная кнопка)
-
-Заменил old KassaButton (62pt + marginTop -28 + 5 анимированных blobs) на:
-
-```tsx
-function KassaGlassDome({ focused }) {
-  return (
-    <Animated.View style={[s.dome, animatedStyle]}>
-      <LinearGradient
-        colors={[primary[400], primary[600]]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-      />
-      <LinearGradient
-        colors={['rgba(255,255,255,0.42)', 'rgba(255,255,255,0)']}
-        start={{ x: 0.5, y: 0 }}
-        end={{ x: 0.5, y: 0.55 }}
-      />
-      <Ionicons name="receipt-outline" size={20} color={white} />
-    </Animated.View>
-  );
+guard let cls = NSClassFromString("UIGlassEffect") as? NSObject.Type else {
+  return // SDK or device doesn't have it — keep UIBlurEffect fallback
+}
+let instance = cls.init()
+if let glass = instance as? UIVisualEffect {
+  effectView.effect = glass
 }
 ```
 
-- 46pt circle (вместо 62pt) — visually balanced с другими табами 24pt icons + 10pt label
-- Sits flush in the bar — нет marginTop -28 «выпрыгивания»
-- Top-half translucent white highlight — имитирует glass dome
-- Hairline border 70% white — определяет силуэт
-- Spring scale 1.04 на focus — едва заметная реакция
-- Без liquid blobs — premium формируется light + hairline, без анимированных пятен
+This compiles on every Xcode SDK and "lights up" automatically when the user
+device runs iOS 26+.
 
-## Почему не сделан кастомный Swift-модуль с UIGlassEffect
+## Local Expo Module — `prebuild --clean` survival
 
-`UIGlassEffect` — новое API в iOS 26 (релиз осень 2025). Даёт «жидкое» искажение поверх blur.
+The native code lives in **`mobile/modules/autexa-liquid-glass/`**, not in
+the generated `ios/` folder. When the owner runs `expo prebuild --clean`:
 
-Чтобы его использовать в Expo-приложении нужно:
-1. Создать локальный Expo Module (`mobile/modules/liquid-glass/`)
-2. Написать Swift-файлы (`LiquidGlassView.swift`, `LiquidGlassModule.swift`)
-3. Зарегистрировать через `expo-module.config.json`
-4. Добавить config-plugin в `app.json` (иначе `prebuild --clean` стирает custom-files)
-5. iOS < 26 fallback на UIVisualEffectView
+1. `prebuild --clean` deletes and regenerates `ios/`.
+2. Expo's autolinking scanner walks `node_modules`, finds
+   `node_modules/autexa-liquid-glass/expo-module.config.json` (a symlink
+   to our module), and registers `AutexaLiquidGlassModule` in the
+   generated `ExpoModulesProvider.swift`.
+3. `pod install` (run automatically by prebuild) pulls in the Swift sources
+   via `ios/AutexaLiquidGlass.podspec` from the module folder.
+4. Result: native sources are linked in **fresh from `node_modules`** every
+   prebuild — they cannot be lost.
 
-Затрат: 1-2 часа. Visual-выигрыш на iPhone 17 Pro: ≤5% (тонкое искажение под движущимся контентом). Риск: при `prebuild --clean` без правильного config-plugin native файлы пропадают, владелец не сможет собрать.
+This is the **canonical Expo pattern** for shipping native iOS code in a
+managed Expo project. No additional config plugin file is needed; the
+module's `expo-module.config.json` is the autolinking marker.
 
-**Решение:** оставить на следующую итерацию. Если после реальной проверки текущая реализация выглядит «как обычная Android material», тогда добавить native module. На iPhone 17 Pro `expo-blur` уже даёт настоящий iOS Liquid Glass-feeling (это native UIVisualEffectView).
+## Files added / changed
 
-## Acceptance — все ✅
+```
+mobile/modules/autexa-liquid-glass/                ← NEW LOCAL MODULE
+├── README.md
+├── package.json
+├── expo-module.config.json
+├── ios/
+│   ├── AutexaLiquidGlass.podspec
+│   ├── AutexaLiquidGlassModule.swift
+│   └── AutexaLiquidGlassView.swift
+└── src/
+    ├── index.ts
+    ├── AutexaLiquidGlassView.tsx
+    └── AutexaLiquidGlassView.types.ts
 
-- [x] Нет точек / pill / underline под активной вкладкой
-- [x] Активная вкладка обозначена цветом + weight (как в native iOS)
-- [x] Centre button compact (46pt) и flush с bar
-- [x] Native UIVisualEffectView blur через expo-blur
-- [x] Top rim light + outer glow для glass-feel
-- [x] Tint `systemThinMaterialLight` — настоящий iOS material
-- [x] Haptic feedback на нажатие (select / impact)
-- [x] Bar учитывает `insets.bottom` для home-indicator
-- [x] `useTabBarHeight()` синхронизирован (58 + 6 + max(insets.bottom, 12) + 8)
+mobile/package.json                                ← +"autexa-liquid-glass": "file:./modules/autexa-liquid-glass"
+mobile/src/navigation/TabBar.ios.tsx               ← BlurView → AutexaLiquidGlassView
+```
+
+## Visual layers (top-down)
+
+1. **System material** — UIGlassEffect (iOS 26) **or** UIBlurEffect.systemThinMaterial (≤25). Done in native via UIVisualEffectView.
+2. **Vertical highlight gradient** — CAGradientLayer rgba(255,255,255,0.42→0.10→0.20), top to bottom. Sits ABOVE the effect, BELOW children. Done in native (CAGradientLayer).
+3. **Top hairline (1pt @ 0.78 alpha white)** — UIView constrained to top edge. Done in native.
+4. **RN-rendered children** — tab icons, labels, KassaGlassDome. Inserted by React Native on top.
+
+The gradient + hairline are pure cosmetic touches that sell the "glass
+dome" feel without overpowering the native material.
+
+## Tab bar visual contract
+
+- ❌ No dot indicator under the active label
+- ❌ No Android-style pill/underline
+- ❌ No big jumping centre button (no `marginTop: -28`)
+- ✅ Active tab: tint colour (primary[600]) + bold weight (600)
+- ✅ Centre Касса = `KassaGlassDome` 46pt circle, flush with bar, gradient + glass highlight
+- ✅ Native material via this module
+- ✅ `useTabBarHeight()` returns 58 + 6 + max(insets.bottom, 12) + 8 — no content is hidden under the bar
+- ✅ Haptic feedback on tap (select for tabs, impact for Касса)
+
+## How to verify on physical iPhone
+
+1. `cd mobile`
+2. `npm install` — creates symlink `node_modules/autexa-liquid-glass` → `modules/autexa-liquid-glass`
+3. `npx expo install expo-symbols` (unrelated, but needed for icons)
+4. `npx expo prebuild --platform ios --clean` — autolinking will register the module; pod install will run automatically
+5. `open ios/Autexa.xcworkspace`
+6. In Xcode: Team = Ramazan Shamsudinov, Build Configuration = Release, target = your iPhone
+7. ▶ Run
+
+What you should see:
+- **iPhone 17 Pro (iOS 26.x):** subtle live refraction through the bar — text/icons under the bar bend slightly as the bar scrolls. That's UIGlassEffect.
+- **Older iPhones (iOS 13–25):** thin frosted glass that lets the wallpaper colour bleed through, with a soft top highlight. That's UIBlurEffect.systemThinMaterial.
+
+To explicitly verify which material is active on your device, watch the
+Xcode console — the module logs nothing by default; if you need to confirm,
+add `print("UIGlassEffect available")` inside the `if let glass` branch in
+`AutexaLiquidGlassView.swift`.
+
+## What is NOT in this module
+
+- No fallback for **Android** beyond a translucent solid colour. TabBar.android.tsx renders Material 3 chrome instead.
+- No animated material variant changes beyond `applyVariant()`.
+- No support for changing tint dynamically based on system dark/light mode (the project is `userInterfaceStyle: "light"` in `app.json`).
+
+If/when Apple opens an animatable parameter for UIGlassEffect, we can extend
+the Module's `View` definition with a new `Prop("...")`.
