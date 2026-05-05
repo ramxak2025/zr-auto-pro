@@ -29,12 +29,19 @@ import { TAB_DEFINITIONS } from './TabBarShared';
 
 const BAR_HEIGHT = 58;
 const KASSA_SIZE = 46;
+// Visual gap between the floating pill and the home-indicator zone.
+// Larger value sells the "floating" look — bar reads as a separate piece
+// over the screen content, not an attached chrome strip.
+const FLOAT_LIFT = 8;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
 
   return (
-    <View pointerEvents="box-none" style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+    <View
+      pointerEvents="box-none"
+      style={[styles.wrapper, { paddingBottom: Math.max(insets.bottom, 10) + FLOAT_LIFT }]}
+    >
       {/* External soft glow under the bar */}
       <View style={styles.outerGlow} pointerEvents="none" />
 

@@ -325,7 +325,7 @@ function GridTab() {
 
   // Global master order — uses backend sortOrder field
   const activeUsers = useMemo(() => {
-    const list = (usersData || []).filter((u) => u.isActive && (u.role === 'master' || u.role === 'admin'));
+    const list = (usersData || []).filter((u) => u.isActive && u.role !== 'superadmin');
     return list.sort((a: any, b: any) => {
       const ao = a.sortOrder ?? 0;
       const bo = b.sortOrder ?? 0;
@@ -671,13 +671,23 @@ function GridTab() {
         ))}
       </View>
 
-      {/* Skeleton ONLY for the very first load (no cache hit yet).
-          Once we have any entries data — even an empty array — render the
-          calendar grid so the user can tap cells to create shifts. The grid
-          is the primary affordance of this tab; hiding it for "empty month"
-          was a UX bug. */}
-      {entries === undefined && activeUsers.length === 0 ? (
+      {/* States, in order:
+          1. cold load (entries undefined) → skeleton
+          2. no active masters configured → onboarding empty state pointing to Users
+          3. month with entries (or empty array) → render grid; empty cells
+             stay tappable so the user can create shifts inline. */}
+      {entries === undefined ? (
         <GridSkeleton />
+      ) : activeUsers.length === 0 ? (
+        <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
+          <View style={[styles.emptyIcon, { width: 72, height: 72, borderRadius: 36 }]}>
+            <Ionicons name="people-outline" size={32} color={colors.gray[400]} />
+          </View>
+          <Text style={[styles.emptyTitle, { fontSize: 17, fontWeight: '600' }]}>Нет мастеров</Text>
+          <Text style={[styles.emptySubtitle, { textAlign: 'center', maxWidth: 260, marginTop: 4 }]}>
+            Чтобы планировать смены, добавьте сотрудников в разделе «Пользователи»
+          </Text>
+        </View>
       ) : (
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Sticky left column -- employee names with avatar initials */}
@@ -1359,10 +1369,7 @@ function RatingTab() {
     queryFn: async () => (await usersApi.getAll()).data,
   });
 
-  const users = useMemo(
-    () => (usersData || []).filter((u) => u.isActive && (u.role === 'master' || u.role === 'admin')),
-    [usersData],
-  );
+  const users = useMemo(() => (usersData || []).filter((u) => u.isActive && u.role !== 'superadmin'), [usersData]);
 
   // SHARED attendance utility — same logic everywhere (web + mobile)
   const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
@@ -1659,7 +1666,7 @@ function SettingsTab() {
   });
 
   const activeUsers = useMemo(
-    () => (usersData || []).filter((u) => u.isActive && (u.role === 'master' || u.role === 'admin')),
+    () => (usersData || []).filter((u) => u.isActive && u.role !== 'superadmin'),
     [usersData],
   );
 
