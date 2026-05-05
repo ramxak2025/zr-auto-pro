@@ -105,18 +105,38 @@ iOS 26+. Полный код в `AutexaLiquidGlassView.swift`, метод
 - ✅ Haptic: `select` для tabs, `impact` для Касса
 - ✅ `useTabBarHeight()` = 58 + 6 + max(insets.bottom, 12) + 8 → контент не перекрывается
 
-### Acceptance — все ✅
+### Acceptance — что РЕАЛЬНО проверено в среде
 
-- [x] Точек под активной вкладкой нет
-- [x] Centre Касса больше не выпрыгивает над bar
-- [x] Native material через local Expo Module
-- [x] iOS 26+: UIGlassEffect через runtime lookup (primary)
-- [x] iOS 13-25: UIBlurEffect.systemThinMaterial (fallback)
-- [x] `prebuild --clean` полностью безопасен (autolinking)
-- [x] Safe Area работает (bottom inset через useTabBarHeight)
-- [x] Android не сломан (TabBar.android.tsx без изменений)
-- [x] TypeScript: новых ошибок нет
-- [x] Документация: `TAB_BAR_NATIVE_IMPLEMENTATION.md`, `modules/autexa-liquid-glass/README.md`
+| Пункт | Способ проверки | Результат |
+|-------|-----------------|-----------|
+| TypeScript clean | `./node_modules/.bin/tsc --noEmit` | ✅ exit 0, 0 errors |
+| Jest plateMask tests | `./node_modules/.bin/jest --testPathPattern plateMask` | ✅ 38/38 passed |
+| ESLint clean | `./node_modules/.bin/eslint "src/**/*.{ts,tsx}" --max-warnings=10000` | ✅ exit 0 |
+| `expo prebuild --clean` отрабатывает | `npx expo prebuild --platform ios --clean --no-install` | ✅ Finished prebuild |
+| Native module видим autolinking | `npx expo-modules-autolinking resolve --platform apple --json` | ✅ autexa-liquid-glass найден с metadata |
+| Android не сломан | `TabBar.android.tsx` не изменялся | ✅ |
+
+### Acceptance — что требует фактической проверки на iPhone
+
+| Пункт | Кто |
+|-------|-----|
+| Plate input visual без дубля региона | владелец |
+| Tab bar нет точек, glass effect видим | владелец |
+| Centre Касса compact, не выпрыгивает | владелец |
+| iOS 26+ UIGlassEffect активируется | владелец |
+| CallsScreen Safe Area | владелец |
+| Warehouse compact rows | владелец |
+| Schedule skeleton при загрузке | владелец |
+| Schedule empty state | владелец |
+| `pod install` подключает модуль | владелец на macOS |
+| iOS build success | владелец в Xcode |
+
+### Remaining blockers
+
+1. **Физический iPhone 17 Pro test.** Среда Claude (Linux) не имеет ни iOS-устройства, ни macOS, ни Xcode.
+2. **`pod install`.** CocoaPods недоступен в Linux. Autolinking metadata подтверждён, но фактический build — на стороне владельца.
+3. **Schedule полная переработка.** В этом проходе: skeleton + empty state + paddingBottom + cache. Архитектура (89K LoC, 5 табов) не переписана — risk управляемый.
+4. **Скриншоты / видео с устройства** — не приложены, нет физического iPhone в среде.
 
 ### Как проверить на iPhone 17 Pro
 
