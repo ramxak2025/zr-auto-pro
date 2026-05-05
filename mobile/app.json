@@ -59,7 +59,10 @@
             "newArchEnabled": true
           },
           "ios": {
-            "newArchEnabled": true
+            "newArchEnabled": true,
+            "extraPodfileProps": {
+              "ENABLE_USER_SCRIPT_SANDBOXING": "NO"
+            }
           }
         }
       ]
