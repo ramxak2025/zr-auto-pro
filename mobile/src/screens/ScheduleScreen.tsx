@@ -327,16 +327,29 @@ function GridTab() {
     staleTime: 5 * 60_000,
   });
 
-  // Global master order — uses backend sortOrder field
+  // Master list shown as rows in the schedule grid.
+  // Bullet-proof against partial data from backend:
+  //   1. If backend returned a non-empty list → use it (filter inactive only).
+  //   2. If backend returned empty/undefined and we know who the current
+  //      authed user is (useAuth().user) → fall back to a single-row grid
+  //      with that user, so the screen never looks "broken" for a fresh
+  //      tenant whose only user is the founder.
+  //   3. If even auth user is missing → empty array, GridSkeleton kicks in.
   const activeUsers = useMemo(() => {
-    const list = (usersData || []).filter((u) => u.isActive);
-    return list.sort((a: any, b: any) => {
-      const ao = a.sortOrder ?? 0;
-      const bo = b.sortOrder ?? 0;
-      if (ao !== bo) return ao - bo;
-      return (a.fullName || '').localeCompare(b.fullName || '');
-    });
-  }, [usersData]);
+    const fromBackend = (usersData || []).filter((u) => u.isActive);
+    if (fromBackend.length > 0) {
+      return fromBackend.sort((a: any, b: any) => {
+        const ao = a.sortOrder ?? 0;
+        const bo = b.sortOrder ?? 0;
+        if (ao !== bo) return ao - bo;
+        return (a.fullName || '').localeCompare(b.fullName || '');
+      });
+    }
+    if (user) {
+      return [user as unknown as User];
+    }
+    return [];
+  }, [usersData, user]);
 
   const updateOrderMut = useMutation({
     mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
