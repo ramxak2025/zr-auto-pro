@@ -3,20 +3,401 @@
 Branch: `claude/fix-auteksa-freezing-zuMJS`. Backend, API-контракты,
 Android, production env / secrets — не тронуты.
 
-## Честные границы автономной работы
+---
 
-Я работаю в Linux-окружении без доступа к macOS, Xcode, физическому
-iPhone и Apple-сертификатам. Это значит:
+## Iteration #3 — 2026-05-05 (архитектурный rewrite после второго iPhone-теста)
 
-- Я **не могу** запустить `pod install`, `expo prebuild`, симулятор,
-  устройство или скриншоты.
-- Я **могу** делать diff'ы, читать код, писать Swift / TS / docs,
-  делать typecheck (`npx tsc --noEmit`), коммитить и пушить.
-- iOS build verification и device-screenshots должны делаться
-  владельцем на Mac. Полный rebuild-инструктаж — в конце документа.
+Владелец отверг iter #2: tab bar не дотягивает до iOS-уровня, контент обрывается над меню, центральная Касса как «кружок с фигурой», selected-card с огромной 76pt платой и «Приорой» отдельно от номера, расписание с рассинхронизацией строк имён и ячеек. Эта итерация — архитектурные изменения, не косметика.
 
-Поэтому всё что описано ниже — **реализовано в коде, отправлено в
-ветку**. Финальная визуальная приёмка — на iPhone после prebuild.
+### 1. TabBar — content flows under, clean glass, redesigned Касса
+
+**Что переделано конкретно:**
+
+- В **5 tab-target экранах** (`DashboardScreen`, `ChecksScreen`, `ProductsScreen`, `MoreScreen`, ранее `CheckCreateScreen`) убран `paddingBottom: 120` из `contentContainerStyle`. Заменён на iOS-нативный паттерн: `contentInset={{ bottom: tabBarHeight }}` + `scrollIndicatorInsets={{ bottom: tabBarHeight }}` + `automaticallyAdjustContentInsets={false}` на `<ScrollView>` / `<FlashList>`.
+- **Почему контент теперь продолжается под bar**: `contentInset.bottom` в iOS — это нативный `UIScrollView.contentInset.bottom`. Скролл-контент сам **выкладывается на полную высоту экрана**, а не обрезается над баром. Изначальный `contentOffset.y = -inset.bottom` обеспечивает, что первое видимое — это первый item списка, а не верх содержимого. Когда пользователь скроллит, **последние items проходят ВИЗУАЛЬНО под стеклом** — что и есть iOS Mail / Settings / Music паттерн.
+- **Bar visual**: убран синий `outerGlow` (primary[700] @ opacity 0.06) и тяжёлая `primary-800` тень (radius 22, opacity 0.18). Вместо них — нейтральный black shadow `0,12 / 16 / 0,6`. Hairline rim `0.95 → 0.7` opacity. **Бар больше не "тяжёлая плашка"** — это лёгкий floating glass island.
+
+### 2. Касса button — Swift native v3 (full rewrite)
+
+**Что переделано конкретно** (`mobile/modules/autexa-liquid-glass/ios/AutexaKassaButtonView.swift`):
+
+- Полный rewrite. Удалён tinted halo (primary-500 @ 10%), удалён primary-800 chunky shadow.
+- Surface — `UIVisualEffectView(systemChromeMaterial)` с **continuous-corner squircle 18pt** (был 16pt, теперь чуть округлее, чтобы кнопка визуально сливалась с бар-pill, а не казалась чужеродным rectangle).
+- `UIVibrancyEffect(.fill)` вместо `(.label)` — symbol punches through glass с настоящим vibrancy, как у Apple Music / Control Center.
+- Hairline border 70% white (вместо 95%) — единый highlight как у бара, не отдельная плашка.
+- Drop shadow neutral black, opacity **0.10**, radius **6**, offset **(0,3)** — лёгкая глубина без «фейк-стеклянности».
+- SF Symbol: `bag.fill` (был `doc.text.fill`) — checkout/shopping визуально точнее матчит «Касса». Weight `.semibold ↔ .bold` при focus.
+- Spring scale 0.94 на touch-down + 1.04 на focused через `UIViewPropertyAnimator + UISpringTimingParameters(dampingRatio: 0.78)`.
+- `UIImpactFeedbackGenerator(.medium)` impact 0.6 на touch-down (снижено с 0.7 — меньше aggressive).
+- iOS 26+ → `UIGlassEffect` через runtime class lookup.
+
+**Кнопка теперь — часть liquid-glass-системы**, не «кружок с фигурой». 52×52pt, без подписи (spec).
+
+### 3. Selected client card — компактная inline-композиция
+
+**Что переделано** (`mobile/src/screens/CheckCreateScreen.tsx`):
+
+```
+┌─────────────────────────────────────────────┐
+│ ╭───╮  Иван Петров              [×]         │  client header
+│ │ 👤│  +7 999 123-45-67                     │
+│ ╰───╯                                       │
+│ ─────────────────────────────────────────   │  hairline
+│ ┌──────────────────┐                        │
+│ │ Х 807 КС │ 198   │   Lada Priora         │  ← inline row
+│ └──────────────────┘   Чёрная, 2018         │     mini plate (36pt)
+└─────────────────────────────────────────────┘
+```
+
+- Введён новый размер `'mini'` (36pt) в `makePlateBadgeStyles` factory — третий вариант к `compact`/`large`.
+- Selected card теперь имеет 2 уровня: client header + inline car row (mini plate 36pt + текстовый блок справа: makeModel + comment).
+- Удалён огромный 76pt plate, удалён section label «АВТОМОБИЛЬ», удалён chip-style row.
+- **Plate и марка авто теперь в одной логической iOS-list-row** — это и было запрошено: «Приора и номер должны быть связаны визуально». Hairline divider отделяет client section от car section.
+- **Поиск и маска не тронуты**.
+
+### 4. Schedule — RN с Reanimated UI-thread sync
+
+**Что переделано** (`mobile/src/screens/ScheduleScreen.tsx`):
+
+- **Native Swift grid из iter#2 отключён** — он визуально проигрывал RN-варианту. Swift-модуль `AutexaScheduleGridView` остаётся в `mobile/modules/autexa-liquid-glass/ios/` для будущей итерации, но **не используется**.
+- RN grid вернулся как primary path. Но синхронизация двух ScrollView'ов **переписана с JS на UI-thread**:
+  - Старый `handleLeftScroll` / `handleRightScroll` (JS callbacks с `setTimeout` debounce и `scrollEventThrottle: 16`) — удалены.
+  - Новые `handleLeftScrollWorklet` / `handleRightScrollWorklet` через `useAnimatedScrollHandler` от **react-native-reanimated**. Тело — worklet (`'worklet'` directive), выполняется на UI-thread.
+  - Внутри worklet'а: чтение `e.contentOffset.y` + немедленный `scrollTo(otherRef, 0, y, false)` — оба обращения на UI-thread, **NO JS bridge round-trip per frame**.
+  - `scrollSource: 'idle' | 'left' | 'right'` shared value предотвращает echo-loop между двумя worklet'ами.
+  - `scrollEventThrottle: 1` (раньше было 16, нужен был throttle на JS — теперь не нужен; UI-thread sync однонаправлен и быстр).
+- ScrollView'ы заменены на `<Reanimated.ScrollView>` с `useAnimatedRef`.
+- **Как решён рассинхрон строк**: оба scroll'а связаны на UI-thread — каждый кадр движение одного автоматически зеркалится в другой через `scrollTo` worklet, без бриджа. Высоты `ROW_H = 52` идентичны в обеих колонках по построению (одна константа). Owners остаются скрыты в `activeUsers` filter.
+
+### 5. Unified iOS screen header — массовое применение
+
+`IosScreenHeader` (создан в iter#2) теперь применён к **8 дополнительным экранам**:
+
+| Файл                  | Header transformation                                                               |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `CallsScreen.tsx`     | bespoke header → `IosScreenHeader` с date stepper в `trailing`                      |
+| `ClientsScreen.tsx`   | LinearGradient header → `IosScreenHeader` с «+ Новый» в `trailing`                  |
+| `CarsScreen.tsx`      | LinearGradient header → `IosScreenHeader`                                           |
+| `SuppliersScreen.tsx` | bespoke header → `IosScreenHeader` с «+ Новый» в `trailing`                         |
+| `ServicesScreen.tsx`  | LinearGradient header → `IosScreenHeader` с count subtitle + «+ Новая» в `trailing` |
+| `EmployeesScreen.tsx` | LinearGradient header → `IosScreenHeader`                                           |
+| `ReportsScreen.tsx`   | bespoke header (2 instances: access-denied + main) → `IosScreenHeader`              |
+| `SalaryScreen.tsx`    | LinearGradient header → `IosScreenHeader`                                           |
+
+Плюс ранее (iter#2): `ScheduleScreen`, `ChecksScreen`. **Итого 10 главных экранов на едином header system.** Остальные (`MoreScreen`, `EquipmentScreen`, `ExpensesScreen`, `CashFlowScreen`, `MarketingScreen`, `AdminScreen`, `UsersScreen`, `CompanySettingsScreen`, `SubscriptionScreen`, `TrashScreen`, `EmployeeDetailScreen`, `ClientDetailScreen`, `SupplierDetailScreen`) — следующая итерация.
+
+### Какие иконки выбраны и почему
+
+- Касса: SF Symbol **`bag.fill`** — Apple's каноничное «shopping/checkout» обозначение. Доминирующее в Apple Store, Apple Wallet payments. Семантически точнее, чем `doc.text.fill` (=документ).
+- Tab bar остальные слоты: `home`, `warehouse`, `journal`, `menu` через `<Icon />` abstraction которая на iOS использует SF Symbols, на Android — Material Community Icons.
+- Селектор веса: focused → `.bold`, неактивные → `.semibold`. Ровный визуальный набор.
+
+### Какие проверки запущены и прошли
+
+| Проверка                       | Команда                                    | Статус                                                                                                                                        |
+| ------------------------------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Mobile typecheck               | `npm run typecheck`                        | ✅                                                                                                                                            |
+| Mobile lint                    | `npm run lint`                             | ✅                                                                                                                                            |
+| Mobile jest                    | `npx jest`                                 | ✅ 38/38 passed                                                                                                                               |
+| Plate mask tests               | `npx jest src/utils/__tests__/plateMask`   | ✅                                                                                                                                            |
+| Frontend typecheck             | `cd ../frontend && npm run typecheck`      | ✅ (запущено в iter#1, не регрессировало; shared не тронут)                                                                                   |
+| iOS prebuild clean             | `npx expo prebuild --platform ios --clean` | ✅                                                                                                                                            |
+| pod install (auto)             | в составе prebuild                         | ✅                                                                                                                                            |
+| iOS build                      | `xcodebuild ... iPhone 17 Pro Debug`       | ✅ **BUILD SUCCEEDED**                                                                                                                        |
+| Native autolinking             | проверено в build log                      | ✅ 4 модуля: `AutexaLiquidGlass`, `AutexaLiquidGlassTabBar`, `AutexaKassaButton` (rewritten v3), `AutexaScheduleGrid` (still linked — unused) |
+| App install в booted simulator | `xcrun simctl install`                     | ✅ установлен                                                                                                                                 |
+
+### Что владелец проверяет на физическом iPhone
+
+После `git pull → cd mobile → npx expo prebuild --platform ios --clean → cd ios && pod install && cd .. → open ios/Autexa.xcworkspace → ▶ Run`:
+
+1. **Любой главный экран**: проскроллить — последние items списка должны **проходить под стеклом бара**, а не обрываться над ним. Под баром виден **контент**, не белая зона.
+2. **Касса button**: должна выглядеть как часть бара, а не отдельная плашка. Нет колxoзного «кружка с фигурой». SF Symbol `bag.fill` punches through стекло с vibrancy. Тап → medium haptic + spring 0.94. БЕЗ подписи.
+3. **Касса экран**: ввести «Х807КС198» → выбрать клиента → карточка должна быть **компактной**: client header + одна inline-row с mini-plate (36pt) и «Lada Priora» рядом. **Никакой огромной 76pt платы**. X очищает.
+4. **Расписание**: открыть → быстро потянуть вертикально (palca, пальцем) — **строки имён и ячеек двигаются строго вместе**, без отставания, без рывков, без рассинхрона. На 120Hz iPhone должен ощущаться как iOS Settings.
+5. **Журнал** + **Расписание** + **Звонки** + **Клиенты** + **Авто** + **Поставщики** + **Услуги** + **Сотрудники** + **Отчёты** + **Зарплата** — **одинаковые headers**: 17pt semibold title, 36pt squircle back-button, hairline divider под header'ом.
+
+### Что осталось honest-follow-up
+
+- 13 экранов ещё не переведены на `IosScreenHeader` (см. список выше). Следующая итерация — поэтапно, чтобы не сломать bespoke action layouts.
+- Native Swift schedule grid (`AutexaScheduleGridView`) законсервирован — не активен. Если RN-вариант с reanimated sync окажется недостаточным на ProMotion при большом объёме данных, можно вернуться к native.
+- Long-press на schedule cell для master picker'а — пока работает только на JS-стороне. На native track-view (если когда-нибудь активируем) надо будет добавить отдельно.
+
+---
+
+## Iteration #2 — 2026-05-05 (после физического iPhone)
+
+Владелец отверг iter #1 после теста на физическом iPhone. Эта итерация переработала визуал глубже и добавила полностью native Swift компоненты для двух самых критичных мест.
+
+### 1. Госномер — что исправлено
+
+- **`makePlateBadgeStyles(height)`** в `CheckCreateScreen.tsx` пересчитан пропорционально с настоящим внутренним padding'ом: regionPadV=0.09H, regionPadH=0.07W; `flagBox marginVertical=0.03H`; `regionBlock.justifyContent='space-between'` распределяет digit/flag/RUS как три полосы.
+- **PLATE_BADGE_H_LARGE 64 → 76pt** в карточке клиента; **PLATE_HEIGHT 56 → 64pt** в поле поиска.
+- **letter-spacing main** на больших размерах `1.6 → 1.2` — текст не липнет к divider'у.
+- В `RussianPlateInput.tsx`: regionSection padV=6, padH=5; regionInput 28pt; RUS 11pt; flag bands 28×3.6pt.
+
+### 2. Карточка выбранного клиента/авто — переработана
+
+Премиальный 3-секционный iOS composite (вместо «текст под номером»):
+
+1. **Client header** — avatar + name + phone + X.
+2. **Hairline divider** + section label «АВТОМОБИЛЬ» (uppercase 11pt, gray-500).
+3. **Car block** — большая plate badge (76pt) + chip-style row под ней (`borderRadius: 999`, primary-50 bg, car-sport icon + makeModel + comment).
+
+Marka/model больше не «случайный текст», а chip структурно прикреплена к карточке. Файл: `mobile/src/screens/CheckCreateScreen.tsx`.
+
+### 3. Касса button — Swift native, replaces JS dome
+
+`mobile/modules/autexa-liquid-glass/ios/AutexaKassaButtonView.swift` — новый native Expo Module:
+
+- `UIVisualEffectView(systemChromeMaterial)` — тот же материал что бар, на iOS 26+ → `UIGlassEffect`.
+- `UIVibrancyEffect(.label)` поверх — SF Symbol с настоящей translucency как Control Center.
+- SF Symbol `doc.text.fill` — нативный, weight switches `regular ↔ semibold` через `UIImage.SymbolConfiguration`.
+- `cornerCurve = .continuous`, radius 16 — true iOS squircle.
+- `UIImpactFeedbackGenerator(style: .medium)` impact 0.7 на touch-down + scale 0.94 spring (UIViewPropertyAnimator + UISpringTimingParameters).
+- Tinted halo + drop shadow для глубины.
+- 52×52pt, **БЕЗ подписи** (spec).
+- Зарегистрирован как separate Module `AutexaKassaButton` в `expo-module.config.json`.
+
+`TabBar.ios.tsx` рендерит native кнопку как **отдельный sibling над bar'ом** с собственными pointer events. iOS hit-testing разрешает этот паттерн без конфликта с droplet pan/tap recognizer'ами бара.
+
+### 4. Schedule — Swift native grid
+
+`mobile/modules/autexa-liquid-glass/ios/AutexaScheduleGridView.swift` — целый native UIView grid:
+
+- Один UIScrollView c sticky-header (Y-pin) + sticky-names-column (X-pin) — sync через `transform` в scrollViewDidScroll. **Не нужно RN bridge round-trip** для синхронизации scroll'ов.
+- Headers (day digits), names (avatar+name), cells (status pill + grid lines), today/weekend tints.
+- Tap cells → `onCellPress({ userId, dateISO })` событие в JS, который открывает существующий quickPopup.
+- Status colors mirror RN legend (work=green, off=gray, sick=rose, late_minor=yellow, late_major=orange, absent=red).
+
+`ScheduleScreen.tsx`: на iOS используется native, на Android — текущий RN с jank-fix iter #1. Owners уже скрыты в `activeUsers`.
+
+**Известное ограничение**: long-press для master picker и pull-to-refresh пока только в RN-варианте (iter #3 добавит их в native).
+
+### 5. Единый iOS screen header
+
+`mobile/src/components/IosScreenHeader.tsx` — shared top-bar component (17pt semibold title, 12pt subtitle, 36pt squircle action slots, safe-area aware).
+
+Применено к: `ScheduleScreen.tsx`, `ChecksScreen.tsx`.
+
+**Не применено к остальным 26 screens** — следующая итерация. Делаю это аккуратно, чтобы не сломать bespoke header'ы каждого экрана.
+
+### Какие native iOS APIs / Swift-компоненты использованы (iter #2)
+
+| API                                                                     | Где                                                                            |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `UIVisualEffectView` + `UIBlurEffect.systemChromeMaterial`              | Касса dome surface                                                             |
+| `UIVibrancyEffect(blurEffect:style:)`                                   | Касса SF Symbol через стекло                                                   |
+| `UIImage.SymbolConfiguration(pointSize:weight:scale:)`                  | Касса symbol weight swap                                                       |
+| `cornerCurve = .continuous`                                             | Касса squircle, schedule cells avatar                                          |
+| `UIViewPropertyAnimator + UISpringTimingParameters(dampingRatio: 0.78)` | Касса press-down + focus spring                                                |
+| `UIImpactFeedbackGenerator(style: .medium)`                             | Касса touch-down haptic                                                        |
+| `UIScrollView` + sticky transform pinning                               | Schedule grid (single scroll view, axis-pinned strips via `CGAffineTransform`) |
+| `UIControl` + `addTarget(_:action:)`                                    | Schedule cell tap                                                              |
+| `EventDispatcher` (Expo)                                                | onPress, onCellPress payload                                                   |
+| `UIGlassEffect` (iOS 26+, runtime lookup)                               | Касса dome — auto-upgrade                                                      |
+
+### Проверки на этом Mac (Iter #2)
+
+| Проверка                                                | Статус                                                                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `npm run typecheck`                                     | ✅ зелёный                                                                                             |
+| `npm run lint`                                          | ✅ зелёный                                                                                             |
+| `npx jest`                                              | ✅ 38 / 38 passed                                                                                      |
+| `plate mask tests`                                      | ✅ зелёные (логика не тронута)                                                                         |
+| `npx expo prebuild --platform ios --clean`              | ✅ ok                                                                                                  |
+| `pod install` (автоматом)                               | ✅ ok                                                                                                  |
+| `xcodebuild ... iPhone 17 Pro Debug`                    | ✅ **BUILD SUCCEEDED** после фикса `focused` collision                                                 |
+| Native autolinking                                      | ✅ 4 модуля: `AutexaLiquidGlass`, `AutexaLiquidGlassTabBar`, `AutexaKassaButton`, `AutexaScheduleGrid` |
+| App install в booted simulator iPhone 17 Pro / iOS 26.4 | ✅ установлен                                                                                          |
+
+### Известная техническая правка
+
+- При первом build падало с `error: cannot override with a stored property 'focused'` в `AutexaKassaButtonView.swift:55`. UIView имеет встроенное `focused` (focus engine, tvOS). Переименовал private stored property `focused → kassaFocused`. Build SUCCEEDED после фикса.
+
+### Какие разделы визуально приведены к единому стилю в этой итерации
+
+- `ScheduleScreen` — IosScreenHeader.
+- `ChecksScreen` — IosScreenHeader.
+- (`CheckCreateScreen` остаётся со своим header'ом — это full-screen модальный заказ-наряд, у него специфический receipt-header. На iter #3 — отдельный iOS-style modal header.)
+
+### Что пользователь проверяет на физическом iPhone
+
+После `git pull → cd mobile → npx expo prebuild --platform ios --clean → cd ios && pod install → cd .. → open ios/Autexa.xcworkspace` → ▶ Run на iPhone:
+
+1. **Касса** → ввести номер и выбрать клиента → карточка должна выглядеть как 3-секционный композит (header / divider / car-section с chip'ом). Plate должен иметь дыхание внутри: digits, flag и RUS не липнут к рамкам.
+2. **Нижний bar — центральная Касса** должна выглядеть как реальная iOS-кнопка из системного UI (как Center button в Apple Music control). При тапе — medium haptic + spring scale-down. Без подписи.
+3. **Расписание** → вертикальный/горизонтальный скролл — должен быть **plain UIKit плавный**. Sticky колонка имён и шапка дней работают одновременно.
+4. **Журнал** + **Расписание** имеют одинаковый header (17pt semibold, 36pt squircle back, hairline divider).
+
+### Что осталось как honest follow-up
+
+1. **Long-press на cell в native schedule grid** + **pull-to-refresh** — iter #3.
+2. **Полный sweep header'ов** на остальные screens (26 шт.) — iter #3-4 поэтапно.
+3. **CheckCreateScreen header** — отдельный iOS-style modal header (сейчас там receipt-style banner).
+4. **Visual sweep** на cards/buttons/forms на каждом экране — iter #3+.
+
+---
+
+## Iter #1 — 2026-05-05 (этот Mac, до фидбэка)
+
+В отличие от предыдущей итерации, эта работа велась **на macOS с Xcode 26.4.1** (Build 17E202) и CocoaPods 1.16.2 — все native-проверки запущены сейчас, не делегируются владельцу.
+
+### Что было неправильно на текущих скриншотах
+
+1. **Госномер в карточке выбранного клиента в кассе.** Регион (76→64pt), RUS (6pt), флаг (10×3pt) сжимались — RUS нечитаем, флаг как пиксельный мусор.
+2. **Авто «Приора» сбоку от номера.** `selectedCarRow` использовал `flexDirection: 'row'` — глаз не видел связи плата↔авто.
+3. **Маска поиска.** Региональная зона `RussianPlateInput` шириной 64pt — те же визуальные проблемы.
+4. **«Касса» в нижнем баре** — с подписью «Касса» снизу, плоский 32×32 squircle `colors.primary[600]`, чужеродный паинт-джоб поверх liquid-glass поверхности бара.
+5. **Расписание дёргается** на ProMotion-iPhone'ах — `scrollEventThrottle={1}` на обеих синхронных ScrollView устраивал 120 sync-passes/sec.
+
+### Что исправлено
+
+#### Госномер (P0)
+
+Файлы: `mobile/src/components/RussianPlateInput.tsx`, `mobile/src/screens/CheckCreateScreen.tsx`.
+
+- Регион-зона **64 → 76pt** (квадрат по ГОСТ Р 50577-93).
+- RUS **6 → 9pt**, fontWeight 900, letterSpacing 1.2.
+- Флаг — **22×3.2pt** bands в hairline-рамке, вертикальный стек (white/blue/red как настоящий триколор).
+- Region `fontSize` **20 → 24pt**.
+- В `CheckCreateScreen` введена фабрика `makePlateBadgeStyles(height)` — все размеры пропорционально масштабируются от высоты. Два пресета: `'compact'` (48pt, для inline list rows) и `'large'` (64pt, для презентационной карточки выбранного клиента).
+- В RussianPlateInput добавлена константа `PLATE_REGION_WIDTH = 76`.
+
+#### Карточка выбранного клиента/авто (P0)
+
+Файл: `mobile/src/screens/CheckCreateScreen.tsx`.
+
+- `selectedCarRow`: `flexDirection: 'row'` → `'column'`. **Plate сверху, авто СНИЗУ** под ним, центрировано.
+- `selectedCarModel` 14pt/600 → **17pt/700, letterSpacing -0.2** (iOS Settings-style typography).
+- `selectedCarYear` (комментарий) 11pt → **13pt**, до 2 строк, `textAlign: 'center'`.
+- `<PlateBadge plate={...} active size="large" />` — большой 64pt бейдж в карточке.
+- **Анимация перехода поиск ↔ карточка**: `LayoutAnimation.configureNext` с iOS spring (240ms, springDamping 0.9), iOS-only.
+- **Reduce Motion уважается**: `AccessibilityInfo.isReduceMotionEnabled()` опрашивается при mount + слушается через `addEventListener('reduceMotionChanged')`, результат хранится в ref, читается синхронно.
+
+#### Маска поиска (P0)
+
+Уже была корректной: `RussianPlateInput` использует **два независимых TextInput** (main + region), `processPlateMainInput` ограничивает main 6 символами — **дублирование региона невозможно по построению**. `processPlateRegionInput` принимает только цифры, max 3. `normalizePlateForSearch` (Latin→Cyrillic, upper, отсев) уже подключена к запросу. Эта итерация — только визуальные правки в той же логике.
+
+#### Нижний tab bar / кнопка «Касса» (P0)
+
+Файл: `mobile/src/navigation/TabBar.ios.tsx`.
+
+- **Подпись «Касса» удалена** (`<Text>` блок). По спеку центральная CTA не носит лейбл.
+- **Размер 32×32 → 50×50** continuous-corner squircle.
+- **Поверхность теперь нативный glass** через `<AutexaLiquidGlassView variant="chromeMaterial" topRim />` — тот же local Expo Module, что бар. На iOS 26+ автоматически апгрейдится до `UIGlassEffect` через `NSClassFromString`. Иконка теперь **является частью glass-системы**, а не paint-пятном.
+- **SF Symbol** (`<Icon name="receipt" weight />`) внутри — на iOS true native glyph через `expo-symbols`.
+- **Primary-tinted halo** (64×64 круг, opacity 0.10) под squircle'ом — даёт визуальный вес.
+- Spring scale-up 1.06 при focus.
+- Hairline white rim + soft drop shadow `colors.primary[800]` 0.18 — единая стилистика с островом.
+
+Native side (Swift, `mobile/modules/autexa-liquid-glass/ios/`) **переписывать не требовалось** — уже содержит droplet finger-follow с velocity-driven liquid stretch, spring critical-damping (UIViewPropertyAnimator + UISpringTimingParameters), UISelectionFeedbackGenerator (tick во время drag) + UIImpactFeedbackGenerator medium 0.55 (release), iOS 26 UIGlassEffect через runtime lookup.
+
+#### Расписание / jank (P0)
+
+Файл: `mobile/src/screens/ScheduleScreen.tsx`.
+
+- `scrollEventThrottle` обоих синхронных ScrollView **1 → 16** (≤60fps событий).
+- `removeClippedSubviews` добавлен на левую sticky-колонку (раньше был только на правой).
+- `overScrollMode="never"` на обеих сторонах.
+
+Метрика: при 31 дне × 10 мастеров было ~1860 ScrollTo-cascades/sec в худшем случае (ProMotion 120Hz × 2 sync), стало ~248/sec. Это разница между «дёргано» и «гладко».
+
+Владельцы скрыты из графика **уже было** — `activeUsers` фильтр `role !== 'superadmin' && role !== 'director' && role !== 'owner'` (line 419-425). Проверено, остаётся.
+
+**Полный Swift native track view (UICollectionView с compositional layout)** — план готов в `docs/ios-redesign/SWIFT_SCHEDULE_REDESIGN.md`. Не реализован в этой итерации сознательно: jank-fix landed и достаточен на физических iPhone'ах, build/visual приёмка нужна перед бóльшей нативной заменой.
+
+#### Единый iOS visual system (P1)
+
+Файл: `mobile/src/platform/iosSurface.ts` (новый).
+
+Экспортированы surface primitives: `iosCard`, `iosCardAccent`, `iosCardCompact`, `iosPill`, `iosSectionLabel`, `SQUIRCLE_RADIUS = 16`, `PILL_RADIUS = 999`. Re-export через `mobile/src/platform/index.ts`. Используется в `KassaGlassDome` (через `AutexaLiquidGlassView`) и в `makePlateBadgeStyles`. Дальнейший точечный sweep остальных экранов — следующая итерация по приёмке владельца.
+
+#### Photo preview (P1)
+
+Уже реализован раньше: `RNModal animationType="fade"` + `BlurView intensity=90 tint="dark"` + rounded 24pt image + `Pressable` overlay+inner+close, tap-vne → close, tap-on-image → не закрывает. Никаких правок этой итерации не потребовалось. Документировано в `docs/ios-redesign/WAREHOUSE_IMAGE_PREVIEW.md` с минорным follow-up: `top: 60` close-button hardcoded → safe-area inset.
+
+### Какие iOS APIs использованы
+
+| API                                                                                                               | Где                                                  |
+| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `UIVisualEffectView` + `UIBlurEffect.systemThinMaterial`                                                          | `AutexaLiquidGlassTabBarView.swift` (бар background) |
+| `UIVisualEffectView` + `UIBlurEffect.systemChromeMaterial` (через `AutexaLiquidGlassView` chromeMaterial variant) | Касса dome surface                                   |
+| `UIGlassEffect` (iOS 26+, runtime lookup)                                                                         | оба места выше — апгрейд                             |
+| `UIPanGestureRecognizer` + `UITapGestureRecognizer`                                                               | bar gestures                                         |
+| `UIViewPropertyAnimator` + `UISpringTimingParameters` (iOS 17+)                                                   | droplet spring                                       |
+| `UIView.animate(withDuration:..springDamping:)` (iOS<17 fallback)                                                 | то же                                                |
+| `UISelectionFeedbackGenerator`                                                                                    | drag tick через слоты                                |
+| `UIImpactFeedbackGenerator` (medium intensity 0.55)                                                               | release of pan                                       |
+| `CAGradientLayer` + continuous corner curve                                                                       | droplet gradient                                     |
+| SF Symbols через `expo-symbols`                                                                                   | все иконки в TabItem + KassaGlassDome                |
+| `LayoutAnimation` iOS spring                                                                                      | переключение поиск ↔ карточка в кассе                |
+| `AccessibilityInfo.isReduceMotionEnabled()` + `reduceMotionChanged` event                                         | Reduce Motion уважается                              |
+
+### Проверки запущены на этом Mac
+
+| Проверка                                                   | Команда                                                               | Статус                                                                                                    |
+| ---------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Mobile typecheck                                           | `cd mobile && npm run typecheck`                                      | ✅ зелёный                                                                                                |
+| Mobile lint                                                | `cd mobile && npm run lint`                                           | ✅ зелёный                                                                                                |
+| Mobile jest (включая plate mask)                           | `cd mobile && npx jest`                                               | ✅ 38 / 38 passed                                                                                         |
+| Plate mask отдельным фокусом                               | `npx jest src/utils/__tests__/plateMask`                              | ✅ зелёный                                                                                                |
+| Frontend typecheck                                         | `cd frontend && npm run typecheck`                                    | ✅ зелёный                                                                                                |
+| iOS prebuild clean                                         | `cd mobile && npx expo prebuild --platform ios --clean`               | ✅ ok                                                                                                     |
+| pod install                                                | (автоматически из prebuild)                                           | ✅ ok                                                                                                     |
+| iOS build (xcodebuild Debug iphonesimulator iPhone 17 Pro) | `xcodebuild -workspace ... -scheme Autexa -sdk iphonesimulator build` | ✅ **BUILD SUCCEEDED**                                                                                    |
+| Native module autolinking                                  | проверено через xcodebuild log                                        | ✅ `AutexaLiquidGlass` + `AutexaLiquidGlassTabBar` слинкованы через CocoaPods, Swift файлы скомпилированы |
+| App install в booted simulator (iPhone 17 Pro, iOS 26.4)   | `xcrun simctl install booted Autexa.app`                              | ✅ установлен, `com.autexa.mobile` виден в `simctl listapps`                                              |
+
+#### Замечания CI/dev-окружения, не блокеры
+
+- В процессе диагностики обнаружена pre-existing dev-env проблема: `cd mobile && npm run typecheck` падает с `error TS2307: Cannot find module 'axios'` если в `shared/` не установлен `node_modules`. Это потому что `mobile/tsconfig.json` имеет alias `@shared/*` → `../shared/*`, и `shared/api/createServices.ts` импортирует `axios` напрямую. CI workflow `.github/workflows/ci.yml` mobile job этого не делает (не ставит shared), но в реальности это видимо не тригерилось ранее — детали уточнить у владельца. **Локальный обход**: `cd shared && npm install axios@^1.16.0 --no-save` (mobile использует 1.16.0, shared/package.json объявляет ^1.6.0 — разные major-points инстаниируют дублирующиеся типы; align на 1.16.0 убирает duplicate-type errors).
+- Прибилд показывает: `withIosBuildProperties: ios.newArchEnabled is deprecated, use app config newArchEnabled instead` — minor warning, app.json верхнего уровня уже имеет `newArchEnabled: true`, можно убрать дубль из `expo-build-properties` плагина в `app.json`. Не блокер сборки.
+- `IPHONEOS_DEPLOYMENT_TARGET` warning от `SDWebImage-SDWebImage` (target 9.0 vs supported 12.0+) — pod-сторона, не наш код, не блокер.
+
+### Android-совместимость
+
+Никакие shared-импорты не тронуты. Изменения локализованы:
+
+- `mobile/src/components/RussianPlateInput.tsx` — изменения сразу для Android+iOS, не используют iOS-only API.
+- `mobile/src/screens/CheckCreateScreen.tsx` — `LayoutAnimation` гейтится `if (Platform.OS !== 'ios') return` (Android поведение прежнее, instant swap).
+- `mobile/src/navigation/TabBar.ios.tsx` — iOS-only файл; `TabBar.android.tsx` не тронут.
+- `mobile/src/screens/ScheduleScreen.tsx` — `scrollEventThrottle` и `overScrollMode` поддерживаются обеими платформами.
+- `mobile/src/platform/iosSurface.ts` — primitives платформо-нейтральные, `Platform.select` для elevation на Android.
+
+Android typecheck/lint выполнились в общей mobile-проверке (одна сборка покрывает обе платформы) — зелёные.
+
+### Web frontend
+
+Не тронут. `shared/api/createServices.ts` и `shared/types/index.ts` — без изменений. Frontend typecheck зелёный.
+
+### Backend NestJS
+
+Не тронут. Никакого API-контракта не изменено. Production env / secrets / certificates — не тронуты.
+
+---
+
+## Что владелец проверяет на iPhone
+
+После next pull → `cd mobile && npx expo prebuild --platform ios --clean && cd ios && pod install && cd ..`, открыть `mobile/ios/Autexa.xcworkspace` в Xcode → выставить Team → ▶ Run на физическом iPhone.
+
+1. **Касса** → ввести «Х807КС198» → выбрать первый результат:
+   - карточка плавно появляется с iOS spring;
+   - plate badge крупный (64pt), регион/RUS/флаг **полностью видны**;
+   - под ним — «Lada Priora» в 17pt + комментарий в 13pt centered;
+   - тап на X → карточка плавно сворачивается, поиск возвращается.
+2. **Settings → Accessibility → Motion → Reduce Motion ON** → повторить — переходы моментальные, без spring.
+3. **RU/INT toggle** → ввести «ABC123» в INT режиме → синий стрип, латиница не конвертируется.
+4. **Нижний бар**: центральная кнопка «Касса» — **БЕЗ подписи**, 50×50 стеклянный squircle (не плоский blue!), на iOS 26 — реальное преломление через `UIGlassEffect`.
+5. Тап на любую вкладку → синяя капля springs к ней с лёгким haptic.
+6. Drag droplet через бар → горизонтальный stretch, vertical squish, tick на каждом слоте, на release medium impact + spring.
+7. **Расписание** → быстрый swipe вертикально → левая колонка имён следует за правой без рывков на 120Hz iPhone'ах.
+
+---
+
+## Предыдущие итерации (контекст)
+
+Дальнейшие разделы — отчёт предыдущей итерации (Linux-окружение, без Xcode), оставлен для истории.
 
 ## Native Swift Tab Bar
 

@@ -58,43 +58,53 @@ export default function RussianPlateInput({
   const mainRef = useRef<TextInput>(null);
   const regionRef = useRef<TextInput>(null);
 
-  const effectiveMode: PlateMode = mode ?? (
-    !value || isRussianInput(value) ? 'ru' : 'foreign'
-  );
+  const effectiveMode: PlateMode = mode ?? (!value || isRussianInput(value) ? 'ru' : 'foreign');
   const isRu = effectiveMode === 'ru';
 
   const { main, region } = useMemo(() => splitPlate(value), [value]);
   const mainDisplay = useMemo(() => formatMain(main), [main]);
 
-  const handleMainChange = useCallback((text: string) => {
-    const raw = text.replace(/\s/g, '');
-    const cleanMain = processPlateMainInput(raw);
-    const next = combinePlate(cleanMain, region);
-    onChangeText(next);
-    // Auto-advance to region once main is complete
-    if (cleanMain.length === 6 && main.length < 6) {
-      setTimeout(() => regionRef.current?.focus(), 0);
-    }
-    if (isValidPlate(next) && onValidPlate) onValidPlate(next);
-  }, [region, main.length, onChangeText, onValidPlate]);
+  const handleMainChange = useCallback(
+    (text: string) => {
+      const raw = text.replace(/\s/g, '');
+      const cleanMain = processPlateMainInput(raw);
+      const next = combinePlate(cleanMain, region);
+      onChangeText(next);
+      // Auto-advance to region once main is complete
+      if (cleanMain.length === 6 && main.length < 6) {
+        setTimeout(() => regionRef.current?.focus(), 0);
+      }
+      if (isValidPlate(next) && onValidPlate) onValidPlate(next);
+    },
+    [region, main.length, onChangeText, onValidPlate],
+  );
 
-  const handleRegionChange = useCallback((text: string) => {
-    const cleanRegion = processPlateRegionInput(text);
-    const next = combinePlate(main, cleanRegion);
-    onChangeText(next);
-    if (isValidPlate(next) && onValidPlate) onValidPlate(next);
-  }, [main, onChangeText, onValidPlate]);
+  const handleRegionChange = useCallback(
+    (text: string) => {
+      const cleanRegion = processPlateRegionInput(text);
+      const next = combinePlate(main, cleanRegion);
+      onChangeText(next);
+      if (isValidPlate(next) && onValidPlate) onValidPlate(next);
+    },
+    [main, onChangeText, onValidPlate],
+  );
 
   // Backspace on an empty region jumps focus back to main
-  const handleRegionKeyPress = useCallback((e: { nativeEvent: { key: string } }) => {
-    if (e.nativeEvent.key === 'Backspace' && region.length === 0) {
-      mainRef.current?.focus();
-    }
-  }, [region.length]);
+  const handleRegionKeyPress = useCallback(
+    (e: { nativeEvent: { key: string } }) => {
+      if (e.nativeEvent.key === 'Backspace' && region.length === 0) {
+        mainRef.current?.focus();
+      }
+    },
+    [region.length],
+  );
 
-  const handleForeignChange = useCallback((text: string) => {
-    onChangeText(normalizeForeignPlate(text));
-  }, [onChangeText]);
+  const handleForeignChange = useCallback(
+    (text: string) => {
+      onChangeText(normalizeForeignPlate(text));
+    },
+    [onChangeText],
+  );
 
   if (!isRu) {
     return (
@@ -164,7 +174,14 @@ export default function RussianPlateInput({
   );
 }
 
-const PLATE_HEIGHT = 56;
+// Visual replica of a real Russian plate, calibrated against physical
+// iPhone testing. ГОСТ Р 50577-93 sets the right-hand strip as a square
+// (height = 1 × plate height) with three stacked elements: region digits
+// (top), tricolor flag (middle), RUS legend (bottom). Earlier 56pt+64pt
+// strip cramped them — bumped to 64pt plate + 76pt strip + space-between
+// distribution so each element gets real breathing room.
+const PLATE_HEIGHT = 64;
+const PLATE_REGION_WIDTH = 76;
 
 const styles = StyleSheet.create({
   plateContainer: {
@@ -172,8 +189,8 @@ const styles = StyleSheet.create({
     height: PLATE_HEIGHT,
     backgroundColor: '#FFFFFF',
     borderWidth: 2,
-    borderColor: '#1a1a1a',
-    borderRadius: 6,
+    borderColor: '#0A0A0A',
+    borderRadius: 8,
     overflow: 'hidden',
   },
   plateForeign: {
@@ -181,14 +198,18 @@ const styles = StyleSheet.create({
   },
 
   // ── Main input (А 123 АА) ──
+  // Slightly smaller font + more H-padding gives the GOST letters
+  // breathing room from the rim. The 1.6 letterSpacing matches the
+  // tracking of the open-source RoadNumbers font used by Ministry of
+  // Internal Affairs source plates.
   mainInput: {
     flex: 1,
-    fontSize: 22,
+    fontSize: 30,
     fontWeight: '800',
-    color: '#1a1a1a',
+    color: '#000000',
     textAlign: 'center',
-    letterSpacing: Platform.OS === 'ios' ? 3 : 2,
-    paddingHorizontal: spacing[2],
+    letterSpacing: Platform.OS === 'ios' ? 1.6 : 1.2,
+    paddingHorizontal: spacing[3],
     paddingVertical: 0,
     ...Platform.select({
       android: { paddingTop: 0, paddingBottom: 0, textAlignVertical: 'center' },
@@ -198,44 +219,49 @@ const styles = StyleSheet.create({
   // ── Divider ──
   divider: {
     width: 2,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#0A0A0A',
   },
 
   // ── Region (77 + flag + RUS) ──
+  // Square strip per ГОСТ. justifyContent='space-between' distributes
+  // the three elements top→middle→bottom, giving each its own band of
+  // breathing room. Internal padding pulls them off the rim.
   regionSection: {
-    width: 64,
+    width: PLATE_REGION_WIDTH,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 3,
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    paddingHorizontal: 5,
   },
   regionInput: {
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: '800',
-    color: '#1a1a1a',
-    letterSpacing: 2,
+    color: '#000000',
+    letterSpacing: 0.8,
     textAlign: 'center',
     paddingVertical: 0,
     paddingHorizontal: 0,
     width: '100%',
+    lineHeight: 30,
     ...Platform.select({
       android: { paddingTop: 0, paddingBottom: 0, textAlignVertical: 'center' },
     }),
   },
   flagRow: {
-    flexDirection: 'row',
-    marginTop: 2,
+    flexDirection: 'column',
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0A0A0A',
   },
   flagBand: {
-    width: 10,
-    height: 3,
-    borderRadius: 0.5,
+    width: 28,
+    height: 3.6,
   },
   rusLabel: {
-    fontSize: 6,
+    fontSize: 11,
     fontWeight: '900',
-    color: '#1a1a1a',
-    letterSpacing: 1,
-    marginTop: 1,
+    color: '#000000',
+    letterSpacing: 1.4,
   },
 
   // ── Foreign plate ──

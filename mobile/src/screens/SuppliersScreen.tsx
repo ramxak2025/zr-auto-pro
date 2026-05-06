@@ -10,20 +10,23 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Swipeable } from 'react-native-gesture-handler';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Supplier } from '../../../shared/types';
+import { UserRole, type Supplier } from '../../../shared/types';
 
 function formatMoney(v: number) {
   return (
@@ -36,8 +39,17 @@ function formatMoney(v: number) {
 export default function SuppliersScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const { hasPermission, isRole } = useAuth();
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+
+  // Permission gate for the destructive swipe-delete. Owner-class roles
+  // see it unconditionally; otherwise we require `suppliers_access`
+  // (the only suppliers-related permission key in UserPermissions).
+  const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('suppliers_access');
+
+  // Confirm dialog state — driven by row swipe.
+  const [pendingDelete, setPendingDelete] = useState<Supplier | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -70,6 +82,28 @@ export default function SuppliersScreen() {
       closeModal();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при обновлении'),
+  });
+
+  // Optimistic delete — cache snapshot, eager local removal, rollback on
+  // error. The backend already exposes DELETE /suppliers/:id; we never
+  // touch the API contract, only the JS-side cache shape.
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => suppliersApi.remove(id),
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ['suppliers'] });
+      const prev = queryClient.getQueriesData<Supplier[]>({ queryKey: ['suppliers'] });
+      queryClient.setQueriesData<Supplier[] | undefined>({ queryKey: ['suppliers'] }, (old) =>
+        old ? old.filter((s) => s.id !== id) : old,
+      );
+      return { prev };
+    },
+    onError: (_err, _id, ctx) => {
+      ctx?.prev.forEach(([key, val]) => queryClient.setQueryData(key, val));
+      Alert.alert('Не удалось удалить', 'Поставщик может быть связан с поставками или долгами.');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+    },
   });
 
   const openCreate = () => {
@@ -117,7 +151,8 @@ export default function SuppliersScreen() {
 
   const renderSupplier = ({ item, index }: { item: Supplier; index: number }) => {
     const hasDebt = item.currentDebt > 0;
-    return (
+
+    const card = (
       <AnimatedCard
         style={styles.card}
         index={index}
@@ -153,29 +188,51 @@ export default function SuppliersScreen() {
         </View>
       </AnimatedCard>
     );
+
+    // Without delete permission — a plain card. With permission — wrap
+    // in Swipeable and reveal a destructive trailing action on left-swipe.
+    if (!canDelete) return card;
+
+    return (
+      <Swipeable
+        renderRightActions={() => (
+          /* Two trailing actions, iOS-style: Edit (primary blue, pencil)
+             then Delete (destructive red, trash). Tap on Edit opens
+             the same edit modal as a regular row tap; tap on Delete
+             goes through ConfirmDialog → optimistic delete. */
+          <View style={styles.swipeActionsRow}>
+            <TouchableOpacity style={styles.swipeEditAction} onPress={() => openEdit(item)} activeOpacity={0.85}>
+              <Ionicons name="pencil" size={20} color={colors.white} />
+              <Text style={styles.swipeEditText}>Изменить</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.swipeDeleteAction}
+              onPress={() => setPendingDelete(item)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.white} />
+              <Text style={styles.swipeDeleteText}>Удалить</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        overshootRight={false}
+      >
+        {card}
+      </Swipeable>
+    );
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.orange[500], colors.orange[600]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="business-outline" size={18} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Поставщики</Text>
-        </View>
-        <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-          <Text style={styles.addBtnText}>+ Новый</Text>
-        </TouchableOpacity>
-      </View>
+    <View style={styles.safe}>
+      <IosScreenHeader
+        title="Поставщики"
+        onBack={() => navigation.goBack()}
+        trailing={
+          <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+            <Text style={styles.addBtnText}>+ Новый</Text>
+          </TouchableOpacity>
+        }
+      />
 
       <View style={styles.searchWrap}>
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск поставщика..." />
@@ -257,7 +314,20 @@ export default function SuppliersScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
-    </SafeAreaView>
+
+      <ConfirmDialog
+        visible={!!pendingDelete}
+        title="Удалить поставщика?"
+        message={pendingDelete ? `«${pendingDelete.name}» будет удалён. Это действие нельзя отменить.` : ''}
+        confirmText="Удалить"
+        variant="danger"
+        onClose={() => setPendingDelete(null)}
+        onConfirm={() => {
+          if (pendingDelete) deleteMutation.mutate(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+      />
+    </View>
   );
 }
 
@@ -296,6 +366,37 @@ const styles = StyleSheet.create({
   iconCircleClean: { backgroundColor: colors.gray[100] },
   iconCircleDebt: { backgroundColor: colors.orange[50] },
   info: { flex: 1, minWidth: 0 },
+  swipeActionsRow: {
+    flexDirection: 'row',
+  },
+  swipeEditAction: {
+    backgroundColor: colors.primary[600],
+    width: 84,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  swipeEditText: {
+    color: colors.white,
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
+  swipeDeleteAction: {
+    backgroundColor: colors.red[500],
+    width: 84,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  swipeDeleteText: {
+    color: colors.white,
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
   cardName: { fontSize: 15, fontWeight: '600', color: colors.gray[900], letterSpacing: -0.1 },
   cardSub: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
   amountWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 70 },

@@ -11,7 +11,7 @@ import {
   Pressable,
 } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, AudioModule } from 'expo-audio';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
@@ -439,38 +439,32 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   ];
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header — native iOS-style with back button + title + date stepper */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backBtn}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-        >
-          <Ionicons name="chevron-back" size={22} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={styles.title}>Звонки</Text>
-          <Text style={styles.subtitle}>{dateLabel}</Text>
-        </View>
-        <View style={styles.dateNav}>
-          <TouchableOpacity
-            onPress={goToPrevDay}
-            style={styles.dateBtn}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          >
-            <Ionicons name="chevron-back" size={18} color={colors.gray[500]} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={goToNextDay}
-            disabled={isToday}
-            style={[styles.dateBtn, isToday && { opacity: 0.25 }]}
-            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          >
-            <Ionicons name="chevron-forward" size={18} color={colors.gray[500]} />
-          </TouchableOpacity>
-        </View>
-      </View>
+    <View style={styles.container}>
+      {/* Unified iOS header with date stepper as the trailing slot. */}
+      <IosScreenHeader
+        title="Звонки"
+        subtitle={dateLabel}
+        onBack={() => navigation.goBack()}
+        trailing={
+          <View style={styles.dateNav}>
+            <TouchableOpacity
+              onPress={goToPrevDay}
+              style={styles.dateBtn}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <Ionicons name="chevron-back" size={18} color={colors.gray[500]} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={goToNextDay}
+              disabled={isToday}
+              style={[styles.dateBtn, isToday && { opacity: 0.25 }]}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            >
+              <Ionicons name="chevron-forward" size={18} color={colors.gray[500]} />
+            </TouchableOpacity>
+          </View>
+        }
+      />
 
       {/* Summary strip */}
       <View style={styles.summaryRow}>
@@ -541,7 +535,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           ))
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

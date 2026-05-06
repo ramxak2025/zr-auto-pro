@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -208,24 +208,15 @@ export default function ClientsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.blue[500], colors.blue[700]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="people-outline" size={18} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Клиенты</Text>
-        </View>
-        <TouchableOpacity style={styles.addBtn} onPress={openCreateModal}>
-          <Text style={styles.addBtnText}>+ Новый</Text>
-        </TouchableOpacity>
-      </View>
+    <View style={styles.safe}>
+      <IosScreenHeader
+        title="Клиенты"
+        trailing={
+          <TouchableOpacity style={styles.addBtn} onPress={openCreateModal}>
+            <Text style={styles.addBtnText}>+ Новый</Text>
+          </TouchableOpacity>
+        }
+      />
 
       {/* Clients ⇄ Cars — single screen with an in-place segmented control.
           Tapping a tab swaps which list is rendered below; no navigation,
@@ -407,7 +398,7 @@ export default function ClientsScreen() {
         confirmText="Удалить"
         variant="danger"
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

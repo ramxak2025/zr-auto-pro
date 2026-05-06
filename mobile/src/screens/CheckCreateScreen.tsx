@@ -14,14 +14,24 @@ import {
   Animated,
   Modal as RNModal,
   PanResponder,
+  LayoutAnimation,
+  AccessibilityInfo,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { checksApi, clientsApi, carsApi, usersApi, servicesApi, productsApi } from '../api/services';
+import {
+  checksApi,
+  clientsApi,
+  carsApi,
+  usersApi,
+  servicesApi,
+  productsApi,
+  warehouseCategoriesApi,
+} from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -69,29 +79,54 @@ function formatMoney(v: number) {
  * side-by-side in a horizontal scroll inside the client section.
  */
 // True ГОСТ Р 50577-93 proportions: 520x112mm = 4.64:1 ratio. Right region
-// strip = 112x112mm = ~22% of total width. We render at PLATE_HEIGHT=48pt
-// for crisp legibility on phone screens (real plates would be ~80pt at 4x).
-const PLATE_HEIGHT = 48;
-const PLATE_WIDTH = Math.round(PLATE_HEIGHT * 4.64); // 223
-const PLATE_REGION_W = Math.round(PLATE_HEIGHT * 1.0); // square right strip per GOST
-const PLATE_MAIN_W = PLATE_WIDTH - PLATE_REGION_W - 2;
+// strip is square (112x112mm). Two render variants: a compact 48pt badge
+// for inline list rows, and a 64pt presentation badge for the
+// SELECTED-CLIENT card where the plate is the visual anchor of the screen.
+// Iter#6 sizing pass — owner reported on physical iPhone the medium
+// plate still alternated between "слишком большой" and "слишком сжатый".
+// Tightened to 54pt with smaller region digit / flag / RUS so the
+// elements reliably fit inside the right strip with visible padding to
+// the rim. Compact 48 stays for inline lists; large 76 retained for any
+// future hero use; mini 36 unchanged.
+const PLATE_BADGE_H_COMPACT = 48;
+const PLATE_BADGE_H_MEDIUM = 54;
+const PLATE_BADGE_H_LARGE = 76;
+const PLATE_BADGE_H_MINI = 36;
 
-function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
+interface PlateBadgeProps {
+  plate: string;
+  active: boolean;
+  /** 'compact' (default) — inline list rows.
+   *  'medium' — selected-client card hero (new in iter#5).
+   *  'large' — full-bleed presentation (legacy).
+   *  'mini' — tiny inline pill. */
+  size?: 'compact' | 'medium' | 'large' | 'mini';
+}
+
+function PlateBadge({ plate, active, size = 'compact' }: PlateBadgeProps) {
   const clean = (plate || '').replace(/\s/g, '').toUpperCase();
+  const styles =
+    size === 'large'
+      ? plateBadgeLargeStyles
+      : size === 'medium'
+        ? plateBadgeMediumStyles
+        : size === 'mini'
+          ? plateBadgeMiniStyles
+          : plateBadgeStyles;
   if (!clean) {
     return (
-      <View style={[plateBadgeStyles.frame, plateBadgeStyles.frameForeign, !active && { opacity: 0.55 }]}>
-        <Text style={plateBadgeStyles.foreignTag}>—</Text>
+      <View style={[styles.frame, styles.frameForeign, !active && { opacity: 0.55 }]}>
+        <Text style={styles.foreignTag}>—</Text>
       </View>
     );
   }
   if (!isRussianInput(clean)) {
     return (
-      <View style={[plateBadgeStyles.frame, plateBadgeStyles.frameForeign, !active && { opacity: 0.55 }]}>
-        <View style={plateBadgeStyles.intStrip}>
-          <Text style={plateBadgeStyles.intStripText}>INT</Text>
+      <View style={[styles.frame, styles.frameForeign, !active && { opacity: 0.55 }]}>
+        <View style={styles.intStrip}>
+          <Text style={styles.intStripText}>INT</Text>
         </View>
-        <Text style={plateBadgeStyles.foreignText} numberOfLines={1}>
+        <Text style={styles.foreignText} numberOfLines={1}>
           {plate}
         </Text>
       </View>
@@ -99,100 +134,168 @@ function PlateBadge({ plate, active }: { plate: string; active: boolean }) {
   }
   const { main, region } = splitPlate(clean);
   return (
-    <View style={[plateBadgeStyles.frame, !active && { opacity: 0.55 }]}>
+    <View style={[styles.frame, !active && { opacity: 0.55 }]}>
       {/* Inner cant — second hairline frame inside the outer black border. ГОСТ feature. */}
-      <View style={plateBadgeStyles.cant} pointerEvents="none" />
-      <View style={plateBadgeStyles.mainBlock}>
-        <Text style={plateBadgeStyles.mainText} numberOfLines={1}>
+      <View style={styles.cant} pointerEvents="none" />
+      <View style={styles.mainBlock}>
+        <Text style={styles.mainText} numberOfLines={1}>
           {formatMain(main) || clean}
         </Text>
       </View>
-      <View style={plateBadgeStyles.divider} />
-      <View style={plateBadgeStyles.regionBlock}>
-        <Text style={plateBadgeStyles.regionText} numberOfLines={1}>
+      <View style={styles.divider} />
+      <View style={styles.regionBlock}>
+        <Text style={styles.regionText} numberOfLines={1}>
           {region || '—'}
         </Text>
-        {/* RUS + Russian flag side-by-side on the bottom, matching the
-            real ГОСТ plate layout (RUS on the left, flag on the right). */}
-        <View style={plateBadgeStyles.rusFlagRow}>
-          <Text style={plateBadgeStyles.rusLabel}>RUS</Text>
-          <View style={plateBadgeStyles.flagBox}>
-            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#FFFFFF' }]} />
-            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#0039A6' }]} />
-            <View style={[plateBadgeStyles.flagBand, { backgroundColor: '#D52B1E' }]} />
-          </View>
+        {/* RUS legend + tricolor flag stacked vertically, matching ГОСТ. */}
+        <View style={styles.flagBox}>
+          <View style={[styles.flagBand, { backgroundColor: '#FFFFFF' }]} />
+          <View style={[styles.flagBand, { backgroundColor: '#0039A6' }]} />
+          <View style={[styles.flagBand, { backgroundColor: '#D52B1E' }]} />
         </View>
+        <Text style={styles.rusLabel}>RUS</Text>
       </View>
     </View>
   );
 }
 
-const plateBadgeStyles = StyleSheet.create({
-  frame: {
-    flexDirection: 'row',
-    width: PLATE_WIDTH,
-    height: PLATE_HEIGHT,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 2,
-    borderColor: '#000000',
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
-  frameForeign: { borderColor: '#3b82f6' },
-  // Inner cant — second hairline frame ~1.5mm inside the outer border.
-  cant: {
-    position: 'absolute',
-    top: 3,
-    left: 3,
-    right: 3,
-    bottom: 3,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#000000',
-    borderRadius: 4,
-  },
-  // Main block — letter + 3 digits + 2 letters, big and centered.
-  mainBlock: { width: PLATE_MAIN_W, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
-  mainText: { fontSize: 26, fontWeight: '800', letterSpacing: 1.6, color: '#000000' },
-  divider: { width: 2, backgroundColor: '#000000' },
-  // Right strip — region digits BIG at the top, RUS + flag side-by-side
-  // at the bottom. Square strip per GOST (PLATE_HEIGHT x PLATE_HEIGHT).
-  regionBlock: {
-    width: PLATE_REGION_W,
-    alignItems: 'center' as const,
-    justifyContent: 'space-evenly' as const,
-    paddingVertical: 4,
-  },
-  regionText: { fontSize: 22, fontWeight: '800' as const, letterSpacing: 0.4, color: '#000000', lineHeight: 24 },
-  // Bottom row of the strip: "RUS" text (left) + tricolor flag (right).
-  rusFlagRow: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 2,
-  },
-  rusLabel: { fontSize: 8, fontWeight: '900' as const, color: '#000000', letterSpacing: 0.4 },
-  // Flag — small landscape rectangle of three horizontal bands
-  // (white / blue / red), exactly like the real Russian flag.
-  flagBox: {
-    flexDirection: 'column' as const,
-    overflow: 'hidden' as const,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#000000',
-  },
-  flagBand: { width: 12, height: 2.2 },
-  // Foreign INT plate
-  intStrip: { width: 22, backgroundColor: '#3b82f6', alignItems: 'center', justifyContent: 'center' },
-  intStripText: { fontSize: 8, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
-  foreignText: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#000000',
-    paddingHorizontal: 8,
-    alignSelf: 'center',
-    letterSpacing: 0.5,
-  },
-  foreignTag: { fontSize: 16, fontWeight: '700', color: '#999', alignSelf: 'center', paddingHorizontal: 12 },
-});
+/** Build a styles dict for a given plate height.
+ *
+ *  Calibrated against ГОСТ Р 50577-93. The compact preset (48pt) is for
+ *  inline list rows — proportions stay as before. The large preset (76pt)
+ *  is the visual anchor inside the selected-client card and gets a
+ *  carefully tuned set of *internal* paddings so the regional digits,
+ *  tricolor flag and RUS legend each "breathe" instead of being shoved
+ *  against the rim — which was the primary complaint after physical
+ *  iPhone testing.
+ *
+ *  Sizing model (height H):
+ *    main letters:      52% of H → big block, room for А 123 АА
+ *    region digits:     44% of H, lineHeight = digit
+ *    flag block:        40% of W of strip, hairline-bordered, 3 stripes
+ *    RUS legend:        18% of H, never < 10pt → readable on iPhone SE
+ *    region V-padding:  9% of H — top breathing room above digits
+ *    region H-padding:  7% of strip width — keeps content off the rim
+ *    inner cant inset:  5% of H — second hairline frame, the ГОСТ tell
+ */
+function makePlateBadgeStyles(height: number) {
+  const width = Math.round(height * 4.64);
+  // Region strip slightly wider than ГОСТ-square (1.05×) — buys ~3pt of
+  // additional internal width so flag + RUS centre properly without
+  // touching the rim, even on the smaller presets.
+  const regionW = Math.round(height * 1.05);
+  const mainW = width - regionW - 2;
+  const mainFont = Math.round(height * 0.5);
+  const regionFont = Math.round(height * 0.32);
+  const flagW = Math.round(regionW * 0.34);
+  const flagBandH = Math.max(1.6, Math.round(height * 0.045));
+  const rusFont = Math.max(8, Math.round(height * 0.14));
+  const regionPadV = Math.max(5, Math.round(height * 0.12));
+  // Iter#8: more horizontal padding (was 13% → 16%) — the user reported
+  // the LEFT side of the region strip still felt cramped. With 16% and
+  // a 1.05× wider strip, region/flag/RUS now have visible breathing
+  // room from BOTH the divider on the left and the rim on the right.
+  const regionPadH = Math.max(6, Math.round(regionW * 0.16));
+  const cantInset = Math.max(3, Math.round(height * 0.055));
+  return StyleSheet.create({
+    frame: {
+      flexDirection: 'row',
+      width,
+      height,
+      backgroundColor: '#FFFFFF',
+      borderWidth: 2,
+      borderColor: '#0A0A0A',
+      borderRadius: Math.max(6, Math.round(height * 0.13)),
+      overflow: 'hidden',
+    },
+    frameForeign: { borderColor: '#3b82f6' },
+    cant: {
+      position: 'absolute',
+      top: cantInset,
+      left: cantInset,
+      right: cantInset,
+      bottom: cantInset,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: '#0A0A0A',
+      borderRadius: Math.max(3, Math.round(height * 0.08)),
+    },
+    mainBlock: {
+      width: mainW,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: Math.max(6, Math.round(mainW * 0.05)),
+    },
+    mainText: {
+      fontSize: mainFont,
+      fontWeight: '800',
+      // Slightly tighter letter-spacing on the bigger preset so the main
+      // block doesn't push text toward the divider.
+      letterSpacing: height >= 70 ? 1.2 : 1.6,
+      color: '#000000',
+    },
+    divider: { width: 2, backgroundColor: '#0A0A0A' },
+    regionBlock: {
+      width: regionW,
+      alignItems: 'center' as const,
+      justifyContent: 'space-between' as const,
+      paddingVertical: regionPadV,
+      paddingHorizontal: regionPadH,
+    },
+    regionText: {
+      fontSize: regionFont,
+      fontWeight: '800' as const,
+      letterSpacing: 0.6,
+      color: '#000000',
+      lineHeight: regionFont + 2,
+      // Pull the digit visually upward — gives more breathing room above
+      // the tricolor flag underneath.
+      marginTop: -1,
+    },
+    rusLabel: {
+      fontSize: rusFont,
+      fontWeight: '900' as const,
+      color: '#000000',
+      letterSpacing: 1.2,
+      marginTop: 0,
+    },
+    flagBox: {
+      flexDirection: 'column' as const,
+      overflow: 'hidden' as const,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: '#0A0A0A',
+      marginVertical: Math.max(2, Math.round(height * 0.03)),
+    },
+    flagBand: { width: flagW, height: flagBandH },
+    intStrip: {
+      width: Math.round(width * 0.1),
+      backgroundColor: '#3b82f6',
+      alignItems: 'center' as const,
+      justifyContent: 'center' as const,
+    },
+    intStripText: { fontSize: rusFont - 1, fontWeight: '900' as const, color: '#fff', letterSpacing: 0.5 },
+    foreignText: {
+      flex: 1,
+      fontSize: Math.round(height * 0.34),
+      fontWeight: '700' as const,
+      color: '#000000',
+      paddingHorizontal: 8,
+      alignSelf: 'center' as const,
+      letterSpacing: 0.5,
+    },
+    foreignTag: {
+      fontSize: Math.round(height * 0.34),
+      fontWeight: '700' as const,
+      color: '#999',
+      alignSelf: 'center' as const,
+      paddingHorizontal: 12,
+    },
+  });
+}
+
+const plateBadgeStyles = makePlateBadgeStyles(PLATE_BADGE_H_COMPACT);
+const plateBadgeMediumStyles = makePlateBadgeStyles(PLATE_BADGE_H_MEDIUM);
+const plateBadgeLargeStyles = makePlateBadgeStyles(PLATE_BADGE_H_LARGE);
+const plateBadgeMiniStyles = makePlateBadgeStyles(PLATE_BADGE_H_MINI);
 
 const paymentOptions: {
   key: PaymentMethod;
@@ -224,6 +327,7 @@ export default function CheckCreateScreen() {
   const route = useRoute<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const insetsTop = useSafeAreaInsets().top;
   const editId = route.params?.id;
   const isStackScreen = !!editId;
   // When opened from the bottom tab (route name 'NewCheck'), the floating
@@ -253,6 +357,39 @@ export default function CheckCreateScreen() {
   // Pickers
   const [plateSearch, setPlateSearch] = useState('');
   const [plateMode, setPlateMode] = useState<PlateMode>('ru');
+
+  // Cache Reduce-Motion preference synchronously so the next LayoutAnimation
+  // call can opt out without waiting on an async query.
+  const reduceMotionRef = useRef(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((v) => {
+        if (alive) reduceMotionRef.current = v;
+      })
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (v) => {
+      reduceMotionRef.current = v;
+    });
+    return () => {
+      alive = false;
+      sub.remove();
+    };
+  }, []);
+
+  /** Fire a soft iOS layout animation when the search ↔ selected-card view
+   *  swap happens. Skipped under Reduce Motion. iOS-only — Android keeps
+   *  the instant swap which has always worked there. */
+  const animateClientToggle = React.useCallback(() => {
+    if (Platform.OS !== 'ios') return;
+    if (reduceMotionRef.current) return;
+    LayoutAnimation.configureNext({
+      duration: 240,
+      create: { type: 'easeInEaseOut', property: 'opacity' },
+      update: { type: 'spring', springDamping: 0.9 },
+      delete: { type: 'easeInEaseOut', property: 'opacity' },
+    });
+  }, []);
   const [showPlatePicker, setShowPlatePicker] = useState(false);
   const [showServicePicker, setShowServicePicker] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
@@ -307,6 +444,12 @@ export default function CheckCreateScreen() {
     enabled: showServicePicker,
   });
 
+  // Products picker query — shares the cache key warmed by
+  // AuthContext.prefetchAfterLogin so the FIRST open of the picker
+  // shows the list instantly. `placeholderData` (global QueryClient
+  // default + explicit override here for safety) keeps the previous
+  // list visible while a stale-revalidate runs in the background —
+  // no flash of empty.
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: ['all-products-check'],
     queryFn: async () => {
@@ -314,7 +457,29 @@ export default function CheckCreateScreen() {
       return res.data.data || res.data;
     },
     enabled: showProductPicker,
+    placeholderData: (prev) => prev,
+    staleTime: 5 * 60_000,
   });
+
+  // Pre-warm the products + categories cache as soon as the screen
+  // mounts (rather than waiting for the picker to open). Net effect on
+  // physical iPhone: tap "+" → picker is cache-hit, opens within one
+  // frame, no "товаров нет" flash.
+  useEffect(() => {
+    queryClient.prefetchQuery({
+      queryKey: ['all-products-check'],
+      queryFn: async () => {
+        const res = await productsApi.getAll({ limit: 500 });
+        return res.data.data || res.data;
+      },
+      staleTime: 5 * 60_000,
+    });
+    queryClient.prefetchQuery({
+      queryKey: ['warehouse-categories'],
+      queryFn: async () => (await warehouseCategoriesApi.getAll()).data,
+      staleTime: 10 * 60_000,
+    });
+  }, [queryClient]);
 
   // Plate search results — match normalized plate substring or fullName loose match
   const plateResults = useMemo(() => {
@@ -629,9 +794,11 @@ export default function CheckCreateScreen() {
   ).current;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Receipt-style header */}
-      <View style={styles.receiptHeader}>
+    <View style={styles.safe}>
+      {/* Receipt-style header — paddingTop applied via insetsTop so the
+          screen background flows continuously under the status bar
+          while the title text still sits inside the safe area. */}
+      <View style={[styles.receiptHeader, { paddingTop: insetsTop + spacing[2] }]}>
         {isStackScreen && (
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.receiptBackBtn}>
             <Ionicons name="chevron-back" size={22} color={colors.white} />
@@ -705,11 +872,18 @@ export default function CheckCreateScreen() {
             )}
 
             {clientId && selectedClient ? (
-              /* ═══ SELECTED CLIENT — BIG CARD ═══
-                 Search field hidden once a client is chosen. The card
-                 shows the GOST-styled plate, the client's name + phone,
-                 and a single X (top-right) to clear the selection. */
+              /* ═══ SELECTED CLIENT — PREMIUM iOS CARD ═══
+                 Three-section composite, modeled after Apple's Wallet
+                 card detail screen:
+                   1. CLIENT HEADER — avatar + name + phone + X.
+                   2. HAIRLINE DIVIDER.
+                   3. CAR SECTION — plate badge centered, then a chip-
+                      style row with make/model and (optional) comment.
+                 The car gets its own labeled section ("АВТОМОБИЛЬ") so
+                 it's structurally tied to the card instead of floating
+                 as random text under the plate. */
               <View style={styles.selectedCard}>
+                {/* — Section 1: client header — */}
                 <View style={styles.selectedCardTop}>
                   <View style={styles.selectedCardAvatar}>
                     <Ionicons name="person" size={22} color={colors.primary[700]} />
@@ -726,6 +900,7 @@ export default function CheckCreateScreen() {
                   </View>
                   <TouchableOpacity
                     onPress={() => {
+                      animateClientToggle();
                       setClientId('');
                       setCarId('');
                       setPlateSearch('');
@@ -739,18 +914,22 @@ export default function CheckCreateScreen() {
                 </View>
 
                 {selectedCar && (
-                  <View style={styles.selectedCarRow}>
-                    <PlateBadge plate={selectedCar.plateNumber || ''} active={true} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.selectedCarModel} numberOfLines={1}>
-                        {selectedCar.makeModel || '—'}
+                  /* — Medium plate (58pt) centered + label row
+                       "Автомобиль: <make/model>" under. The 'medium'
+                       preset gives ГОСТ digit/flag/RUS room to breathe
+                       inside the right strip without the cramped 48pt
+                       look reported on physical iPhones. */
+                  <View style={styles.selectedCarStack}>
+                    <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="medium" />
+                    <Text style={styles.selectedCarLabel} numberOfLines={1}>
+                      <Text style={styles.selectedCarLabelKey}>Автомобиль: </Text>
+                      {selectedCar.makeModel || '—'}
+                    </Text>
+                    {selectedCar.comment && (
+                      <Text style={styles.selectedCarComment} numberOfLines={1}>
+                        {selectedCar.comment}
                       </Text>
-                      {selectedCar.comment && (
-                        <Text style={styles.selectedCarYear} numberOfLines={1}>
-                          {selectedCar.comment}
-                        </Text>
-                      )}
-                    </View>
+                    )}
                   </View>
                 )}
               </View>
@@ -778,6 +957,7 @@ export default function CheckCreateScreen() {
                         key={`${client.id}-${car.id}`}
                         style={styles.inlineResultItem}
                         onPress={() => {
+                          animateClientToggle();
                           setClientId(client.id);
                           setCarId(car.id);
                           setPlateSearch('');
@@ -1457,7 +1637,7 @@ export default function CheckCreateScreen() {
           </Animated.View>
         </View>
       </RNModal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1587,19 +1767,21 @@ const styles = StyleSheet.create({
   },
   selectedClientName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   selectedClientPhone: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
-  // Big selected client card — replaces the search field once a client is chosen
+  // Premium selected-client card — three sections: client header,
+  // hairline divider with section label, car block (plate + chip).
   selectedCard: {
     backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.primary[200],
-    borderRadius: borderRadius.xl,
-    paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[3],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    borderRadius: borderRadius['2xl'],
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3.5],
+    paddingBottom: spacing[4],
     marginTop: spacing[1],
-    shadowColor: colors.primary[800],
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 1 },
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
     gap: spacing[3],
   },
   selectedCardTop: {
@@ -1612,13 +1794,13 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 22,
     backgroundColor: colors.primary[50],
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.primary[100],
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
   },
-  selectedCardName: { fontSize: 16, fontWeight: '700', color: colors.gray[900] },
-  selectedCardPhone: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+  selectedCardName: { fontSize: 17, fontWeight: '700', color: colors.gray[900], letterSpacing: -0.2 },
+  selectedCardPhone: { fontSize: 13, color: colors.gray[500], marginTop: 2 },
   selectedCardClose: {
     width: 32,
     height: 32,
@@ -1627,16 +1809,31 @@ const styles = StyleSheet.create({
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
   },
-  selectedCarRow: {
-    flexDirection: 'row' as const,
+  // Vertical stack: compact plate (48pt, "compact" preset — proportional,
+  // not stretched) centered + label row "Автомобиль: <make/model>" under.
+  selectedCarStack: {
     alignItems: 'center' as const,
-    gap: spacing[3],
-    paddingTop: spacing[2.5],
-    borderTopWidth: 1,
-    borderTopColor: colors.gray[100],
+    gap: spacing[2],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.gray[200],
+    marginTop: spacing[1],
   },
-  selectedCarModel: { fontSize: 14, fontWeight: '600', color: colors.gray[900] },
-  selectedCarYear: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
+  selectedCarLabel: {
+    fontSize: 14,
+    color: colors.gray[800],
+    textAlign: 'center' as const,
+    letterSpacing: -0.1,
+  },
+  selectedCarLabelKey: {
+    color: colors.gray[500],
+    fontWeight: '500' as const,
+  },
+  selectedCarComment: {
+    fontSize: 12,
+    color: colors.gray[500],
+    textAlign: 'center' as const,
+  },
   sectionSubLabel: {
     fontSize: 11,
     fontWeight: '700',

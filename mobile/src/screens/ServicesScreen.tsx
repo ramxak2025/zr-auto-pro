@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -180,31 +180,17 @@ export default function ServicesScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <LinearGradient colors={[colors.white, colors.gray[50]] as [string, string]} style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="construct-outline" size={16} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Услуги</Text>
-          {total > 0 && (
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{total}</Text>
-            </View>
-          )}
-        </View>
-        <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-          <Text style={styles.addBtnText}>+ Новая</Text>
-        </TouchableOpacity>
-      </LinearGradient>
+    <View style={styles.safe}>
+      <IosScreenHeader
+        title="Услуги"
+        subtitle={total > 0 ? `Услуг: ${total}` : undefined}
+        onBack={() => navigation.goBack()}
+        trailing={
+          <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+            <Text style={styles.addBtnText}>+ Новая</Text>
+          </TouchableOpacity>
+        }
+      />
 
       {/* Breadcrumbs — appear when navigating folders */}
       {!search && activePath.length > 0 && (
@@ -366,7 +352,7 @@ export default function ServicesScreen() {
         confirmText="Удалить"
         variant="danger"
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

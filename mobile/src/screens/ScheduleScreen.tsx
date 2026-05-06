@@ -12,12 +12,21 @@ import {
   AccessibilityInfo,
   Alert,
   Dimensions,
-  NativeSyntheticEvent,
-  NativeScrollEvent,
 } from 'react-native';
-import Reanimated, { FadeIn, FadeInDown } from 'react-native-reanimated';
+// Native AutexaScheduleGrid was integrated in iter#2 but disabled in
+// iter#3 — see comment near the schedule grid render. The Swift module
+// remains in mobile/modules/autexa-liquid-glass/ios/ for a future
+// retry; we only stop importing it here.
+import Reanimated, {
+  FadeIn,
+  FadeInDown,
+  useAnimatedRef,
+  useAnimatedScrollHandler,
+  useSharedValue,
+  scrollTo,
+} from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+// SafeAreaView no longer used — IosScreenHeader handles top inset
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -27,6 +36,7 @@ import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -35,6 +45,28 @@ import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/t
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
+
+/**
+ * Schedule month state lifted to the parent screen so the month picker
+ * can live in the unified IosScreenHeader (trailing slot) instead of
+ * floating as a separate row inside GridTab.
+ *
+ * GridTab and TodayTab consume the context; missing-context fallback
+ * returns the local state pattern from before, so older code paths keep
+ * working in isolation.
+ */
+const ScheduleMonthCtx = React.createContext<{
+  currentMonth: Date;
+  setCurrentMonth: (d: Date) => void;
+} | null>(null);
+
+function useScheduleMonth() {
+  const ctx = React.useContext(ScheduleMonthCtx);
+  if (!ctx) {
+    throw new Error('useScheduleMonth must be inside ScheduleMonthCtx.Provider');
+  }
+  return ctx;
+}
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAY_ABBR = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -332,7 +364,9 @@ function GridTab() {
   const reduceMotion = useReduceMotion();
   const { user } = useAuth();
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
-  const [currentMonth, setCurrentMonth] = useState(new Date());
+  // Lifted month state — same Date instance across the screen, driven
+  // from the IosScreenHeader month picker.
+  const { currentMonth, setCurrentMonth } = useScheduleMonth();
   const [quickPopup, setQuickPopup] = useState<{
     userId: string;
     date: string;
@@ -344,11 +378,29 @@ function GridTab() {
     Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>
   >({});
 
-  // Synced vertical scroll refs
-  const leftScrollRef = useRef<ScrollView>(null);
-  const rightScrollRef = useRef<ScrollView>(null);
-  const isLeftScrolling = useRef(false);
-  const isRightScrolling = useRef(false);
+  // Synced vertical scroll refs.
+  //
+  // The grid has two ScrollViews that must scroll vertically together:
+  //   • left  — sticky names column
+  //   • right — day cells
+  //
+  // Earlier iterations used onScroll (JS) → scrollTo() (JS) sync with a
+  // setTimeout debounce. On a 120Hz iPhone that fired up to 120 events
+  // per second, each round-tripping through the bridge — the source of
+  // the lag the owner reported. We now sync ON THE UI THREAD with
+  // Reanimated's useAnimatedScrollHandler + scrollTo:
+  //   • the LEFT scroll is the master; its onScroll is a worklet that
+  //     writes its offset into a sharedValue and immediately calls
+  //     scrollTo(rightAnimatedRef, ...) — both happen on the UI thread,
+  //     no bridge.
+  //   • when the user scrolls the RIGHT side, the same logic mirrors
+  //     back so the names column follows.
+  //   • a guard sharedValue prevents the two handlers from echoing each
+  //     other into an infinite loop.
+  const leftAnimatedRef = useAnimatedRef<Reanimated.ScrollView>();
+  const rightAnimatedRef = useAnimatedRef<Reanimated.ScrollView>();
+  const scrollY = useSharedValue(0);
+  const scrollSource = useSharedValue<'idle' | 'left' | 'right'>('idle');
 
   // Defensive: currentMonth defaults to today, but in case state ever
   // gets out of shape we fall back to "now" so year/month never become
@@ -678,24 +730,53 @@ function GridTab() {
   const NAME_W = 140;
   const ROW_H = 52;
 
-  // Sync vertical scroll between left (names) and right (cells)
-  const handleLeftScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (isRightScrolling.current) return;
-    isLeftScrolling.current = true;
-    rightScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
-    setTimeout(() => {
-      isLeftScrolling.current = false;
-    }, 16);
-  }, []);
+  // UI-thread scroll handlers — keep names column and grid cells locked
+  // to the same vertical offset on every frame, on the UI thread, with
+  // ZERO JS-bridge round-trip per scroll event. The owner's "names and
+  // cells live as separate screens" complaint was the JS sync drift;
+  // this resolves it.
+  const handleLeftScrollWorklet = useAnimatedScrollHandler(
+    {
+      onScroll: (e) => {
+        'worklet';
+        // Ignore echoes — only the touched side drives the sync.
+        if (scrollSource.value === 'right') return;
+        scrollSource.value = 'left';
+        scrollY.value = e.contentOffset.y;
+        scrollTo(rightAnimatedRef, 0, e.contentOffset.y, false);
+      },
+      onEndDrag: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+      onMomentumEnd: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+    },
+    [],
+  );
 
-  const handleRightScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (isLeftScrolling.current) return;
-    isRightScrolling.current = true;
-    leftScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
-    setTimeout(() => {
-      isRightScrolling.current = false;
-    }, 16);
-  }, []);
+  const handleRightScrollWorklet = useAnimatedScrollHandler(
+    {
+      onScroll: (e) => {
+        'worklet';
+        if (scrollSource.value === 'left') return;
+        scrollSource.value = 'right';
+        scrollY.value = e.contentOffset.y;
+        scrollTo(leftAnimatedRef, 0, e.contentOffset.y, false);
+      },
+      onEndDrag: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+      onMomentumEnd: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+    },
+    [],
+  );
 
   const handleCellPress = useCallback(
     (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => {
@@ -706,46 +787,14 @@ function GridTab() {
 
   return (
     <View style={{ flex: 1 }}>
-      {/* Month navigation */}
-      <View style={styles.monthNav}>
-        <TouchableOpacity
-          onPress={() => {
-            haptic('select');
-            setCurrentMonth(new Date(year, month - 1, 1));
-          }}
-          style={styles.monthNavBtn}
-        >
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => {
-            haptic('tap');
-            setCurrentMonth(new Date());
-          }}
-          style={styles.monthCenter}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.monthTitle}>
-            {MONTH_NAMES[month]} {year}
-          </Text>
-          {/* Hairline refresh indicator: only shows while we're re-validating
-              cached data in the background (not on first paint). */}
-          {isFetching && !isLoading && (
-            <View style={styles.bgRefreshIndicator}>
-              <ActivityIndicator size="small" color={colors.primary[500]} />
-            </View>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => {
-            haptic('select');
-            setCurrentMonth(new Date(year, month + 1, 1));
-          }}
-          style={styles.monthNavBtn}
-        >
-          <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-      </View>
+      {/* Month picker is now lifted to ScheduleScreen's header
+          (ScheduleMonthCtx). A hairline refresh indicator at the top of
+          the tab still tells the user we're re-validating cached data. */}
+      {isFetching && !isLoading && (
+        <View style={styles.bgRefreshIndicator}>
+          <ActivityIndicator size="small" color={colors.primary[500]} />
+        </View>
+      )}
 
       {/* Error banner — appears only if the network request fails AND we
           have no cached data to fall back on. With cached data we silently
@@ -833,6 +882,15 @@ function GridTab() {
           </Text>
         </View>
       ) : (
+        /* Schedule grid — RN implementation. The native Swift grid built
+           in iter#2 (mobile/modules/autexa-liquid-glass/ios/AutexaScheduleGridView.swift)
+           is intentionally NOT used here: physical-iPhone testing showed
+           the RN visual layer was clearer and the owner asked to keep
+           the familiar design. The lag from iter#2's setTimeout-based
+           scroll sync is fixed below by replacing handleLeftScroll /
+           handleRightScroll with reanimated useAnimatedScrollHandler so
+           the names column and the day grid sync ON THE UI THREAD —
+           no JS bridge round-trip per scroll frame. */
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Sticky left column -- employee names with avatar initials */}
           <View style={styles.stickyColumn}>
@@ -845,16 +903,19 @@ function GridTab() {
             >
               <Text style={styles.gridHeaderLabel}>Сотрудник</Text>
             </View>
-            {/* Name cells */}
-            <ScrollView
-              ref={leftScrollRef}
+            {/* Name cells — Reanimated.ScrollView so the scroll handler
+                runs on the UI thread and can drive the right-grid offset
+                directly via scrollTo without a JS bridge round-trip. */}
+            <Reanimated.ScrollView
+              ref={leftAnimatedRef}
               style={{ flex: 1 }}
               showsVerticalScrollIndicator={false}
-              onScroll={handleLeftScroll}
+              onScroll={handleLeftScrollWorklet}
               scrollEventThrottle={1}
               bounces={false}
               decelerationRate="normal"
               removeClippedSubviews
+              overScrollMode="never"
               contentContainerStyle={{ paddingBottom: tabBarHeight }}
             >
               {activeUsers.map((u, rowIdx) => {
@@ -901,7 +962,7 @@ function GridTab() {
                   </TouchableOpacity>
                 );
               })}
-            </ScrollView>
+            </Reanimated.ScrollView>
           </View>
 
           {/* Scrollable right section -- day columns */}
@@ -951,16 +1012,19 @@ function GridTab() {
                 })}
               </View>
 
-              {/* Day cells with dot indicators */}
-              <ScrollView
-                ref={rightScrollRef}
+              {/* Day cells — Reanimated.ScrollView so the UI-thread
+                  worklet handler can mirror its offset to the names
+                  column without any JS bridge work. */}
+              <Reanimated.ScrollView
+                ref={rightAnimatedRef}
                 style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
-                onScroll={handleRightScroll}
+                onScroll={handleRightScrollWorklet}
                 scrollEventThrottle={1}
                 bounces={false}
                 decelerationRate="normal"
                 removeClippedSubviews
+                overScrollMode="never"
                 contentContainerStyle={{ paddingBottom: tabBarHeight }}
               >
                 {activeUsers.map((u, rowIdx) => (
@@ -978,7 +1042,7 @@ function GridTab() {
                     onCellPress={handleCellPress}
                   />
                 ))}
-              </ScrollView>
+              </Reanimated.ScrollView>
             </View>
           </ScrollView>
         </View>
@@ -1339,7 +1403,9 @@ function TodayTab() {
 
 // ============== SHIFTS TAB ==============
 function ShiftsTab() {
-  const [currentMonth, setCurrentMonth] = useState(new Date());
+  // Same lifted month so changing it in the header reflects across tabs.
+  // ShiftsTab consumes only — the picker lives in the screen header.
+  const { currentMonth } = useScheduleMonth();
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
 
@@ -1388,21 +1454,6 @@ function ShiftsTab() {
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
-      {/* Month nav */}
-      <View style={styles.monthNav}>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date())} style={styles.monthCenter} activeOpacity={0.7}>
-          <Text style={styles.monthTitle}>
-            {MONTH_NAMES[month]} {year}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-      </View>
-
       {isLoading ? (
         <LoadingSpinner />
       ) : (
@@ -2103,6 +2154,12 @@ export default function ScheduleScreen() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [tab, setTab] = useState<TabType>('grid');
+  // Single source of truth for the schedule month — provided to GridTab
+  // and ShiftsTab via context, manipulated from the header trailing slot.
+  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const monthCtxValue = useMemo(() => ({ currentMonth, setCurrentMonth }), [currentMonth]);
+  const monthYear = currentMonth.getFullYear();
+  const monthIndex = currentMonth.getMonth();
 
   const tabConfig: {
     key: TabType;
@@ -2126,91 +2183,116 @@ export default function ScheduleScreen() {
       : []),
   ];
 
+  // Compact month stepper inside the header trailing slot. Tap on the
+  // month label resets to today; arrows step ± one month with a haptic.
+  // Hidden on Today tab (which is single-day), Rating tab (year-wide),
+  // and Settings (no time scope).
+  const showMonthStepper = tab === 'grid' || tab === 'shifts';
+  const trailingMonthStepper = showMonthStepper ? (
+    <View style={styles.headerMonthStepper}>
+      <TouchableOpacity
+        onPress={() => {
+          haptic('select');
+          setCurrentMonth(new Date(monthYear, monthIndex - 1, 1));
+        }}
+        hitSlop={6}
+        style={styles.headerMonthBtn}
+      >
+        <Ionicons name="chevron-back" size={16} color={colors.gray[700]} />
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={() => {
+          haptic('tap');
+          setCurrentMonth(new Date());
+        }}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.headerMonthText}>{MONTH_NAMES[monthIndex].slice(0, 3)}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={() => {
+          haptic('select');
+          setCurrentMonth(new Date(monthYear, monthIndex + 1, 1));
+        }}
+        hitSlop={6}
+        style={styles.headerMonthBtn}
+      >
+        <Ionicons name="chevron-forward" size={16} color={colors.gray[700]} />
+      </TouchableOpacity>
+    </View>
+  ) : undefined;
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <LinearGradient colors={[colors.white, colors.gray[50]] as [string, string]} style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.primary[500], colors.primary[700]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="calendar" size={16} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Расписание</Text>
-        </View>
-        <View style={{ width: 40 }} />
-      </LinearGradient>
+    <ScheduleMonthCtx.Provider value={monthCtxValue}>
+      <View style={styles.safe}>
+        {/* Unified iOS header — same component used across screens. */}
+        <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
 
-      {/* Tab bar */}
-      <View style={styles.tabBar}>
-        <View style={styles.tabBarInner}>
-          {tabConfig.map((t) => {
-            const isActive = tab === t.key;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                style={[styles.tabItem, isActive && styles.tabItemActive]}
-                onPress={() => setTab(t.key)}
-                activeOpacity={0.7}
-              >
-                {isActive ? (
-                  <LinearGradient
-                    colors={[colors.primary[500], colors.primary[700]] as [string, string]}
-                    style={styles.tabItemGradient}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                  >
-                    <Ionicons name={t.activeIcon} size={16} color={colors.white} />
-                    <Text style={styles.tabItemTextActive} numberOfLines={1} adjustsFontSizeToFit>
-                      {t.label}
-                    </Text>
-                  </LinearGradient>
-                ) : (
-                  <View style={styles.tabItemInner}>
-                    <Ionicons name={t.icon} size={16} color={colors.gray[400]} />
-                    <Text style={styles.tabItemText} numberOfLines={1} adjustsFontSizeToFit>
-                      {t.label}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          })}
+        {/* Tab bar */}
+        <View style={styles.tabBar}>
+          <View style={styles.tabBarInner}>
+            {tabConfig.map((t) => {
+              const isActive = tab === t.key;
+              return (
+                <TouchableOpacity
+                  key={t.key}
+                  style={[styles.tabItem, isActive && styles.tabItemActive]}
+                  onPress={() => setTab(t.key)}
+                  activeOpacity={0.7}
+                >
+                  {isActive ? (
+                    <LinearGradient
+                      colors={[colors.primary[500], colors.primary[700]] as [string, string]}
+                      style={styles.tabItemGradient}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                    >
+                      <Ionicons name={t.activeIcon} size={16} color={colors.white} />
+                      <Text style={styles.tabItemTextActive} numberOfLines={1} adjustsFontSizeToFit>
+                        {t.label}
+                      </Text>
+                    </LinearGradient>
+                  ) : (
+                    <View style={styles.tabItemInner}>
+                      <Ionicons name={t.icon} size={16} color={colors.gray[400]} />
+                      <Text style={styles.tabItemText} numberOfLines={1} adjustsFontSizeToFit>
+                        {t.label}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
+
+        {tab === 'grid' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="grid" style={{ flex: 1 }}>
+            <GridTab />
+          </Reanimated.View>
+        )}
+        {tab === 'today' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="today" style={{ flex: 1 }}>
+            <TodayTab />
+          </Reanimated.View>
+        )}
+        {tab === 'shifts' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="shifts" style={{ flex: 1 }}>
+            <ShiftsTab />
+          </Reanimated.View>
+        )}
+        {tab === 'rating' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="rating" style={{ flex: 1 }}>
+            <RatingTab />
+          </Reanimated.View>
+        )}
+        {tab === 'settings' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="settings" style={{ flex: 1 }}>
+            <SettingsTab />
+          </Reanimated.View>
+        )}
       </View>
-
-      {tab === 'grid' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="grid" style={{ flex: 1 }}>
-          <GridTab />
-        </Reanimated.View>
-      )}
-      {tab === 'today' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="today" style={{ flex: 1 }}>
-          <TodayTab />
-        </Reanimated.View>
-      )}
-      {tab === 'shifts' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="shifts" style={{ flex: 1 }}>
-          <ShiftsTab />
-        </Reanimated.View>
-      )}
-      {tab === 'rating' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="rating" style={{ flex: 1 }}>
-          <RatingTab />
-        </Reanimated.View>
-      )}
-      {tab === 'settings' && (
-        <Reanimated.View entering={FadeIn.duration(200)} key="settings" style={{ flex: 1 }}>
-          <SettingsTab />
-        </Reanimated.View>
-      )}
-    </SafeAreaView>
+    </ScheduleMonthCtx.Provider>
   );
 }
 
@@ -2348,7 +2430,8 @@ const styles = StyleSheet.create({
     color: colors.gray[400],
   },
 
-  // ── Month Navigation ──
+  // ── Month Navigation (legacy in-tab — kept for typecheck of unused
+  //    style references; the actual stepper now lives in the header) ──
   monthNav: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2363,6 +2446,29 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50],
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  // Compact iOS-header-style month stepper for IosScreenHeader.trailing.
+  headerMonthStepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.gray[100],
+    borderRadius: 999,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  headerMonthBtn: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerMonthText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.gray[800],
+    minWidth: 36,
+    textAlign: 'center',
   },
   monthCenter: {
     alignItems: 'center',

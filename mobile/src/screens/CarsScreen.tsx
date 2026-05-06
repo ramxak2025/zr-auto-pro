@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -76,24 +76,8 @@ export default function CarsScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <LinearGradient colors={[colors.white, colors.gray[50]] as [string, string]} style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.blue[500], colors.blue[700]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="car-sport-outline" size={16} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Автомобили</Text>
-        </View>
-        <View style={{ width: 40 }} />
-      </LinearGradient>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Автомобили" onBack={() => navigation.goBack()} />
 
       {/* Clients ⇄ Cars segmented — same shape as ClientsScreen so the
           two screens read as one unified Clients section. */}
@@ -147,7 +131,7 @@ export default function CarsScreen() {
           onEndReachedThreshold={0.5}
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 

@@ -26,8 +26,7 @@
  * onTabPress(index) bubbles up natively → forwarded to react-navigation.
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { AutexaLiquidGlassTabBar } from 'autexa-liquid-glass';
-import { Ionicons } from '@expo/vector-icons';
+import { AutexaLiquidGlassTabBar, AutexaKassaButton } from 'autexa-liquid-glass';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,9 +37,18 @@ import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
+// Floating island geometry — owner explicitly wants the bar to read as
+// a small island floating ABOVE the screen content with content
+// passing under the glass, NOT a slab pinned to the bottom edge.
 const BAR_HEIGHT = 60;
 const HORIZONTAL_MARGIN = 14;
-const BOTTOM_LIFT = 10;
+// Breathing room ABOVE the bar (between scroll-end and the island's
+// top edge).
+const TOP_LIFT = 6;
+// Breathing room BELOW the bar (between island's bottom edge and the
+// home-indicator safe area). Small but non-zero so the island reads as
+// floating rather than touching the safe area.
+const BOTTOM_LIFT = 8;
 const CORNER_RADIUS = BAR_HEIGHT / 2;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
@@ -51,6 +59,13 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
   );
   const safeIndex = focusedIndex < 0 ? 0 : focusedIndex;
+
+  // Index of the Касса slot (the one declared with isKassa: true). The
+  // Касса button is rendered as a separate sibling on top of the bar,
+  // so we need this index to (a) emit the right tab navigation and
+  // (b) compute the focused state.
+  const kassaTabIndex = TAB_DEFINITIONS.findIndex((t) => t.isKassa);
+  const kassaFocused = safeIndex === kassaTabIndex;
 
   const navigateToTab = React.useCallback(
     (index: number) => {
@@ -70,12 +85,28 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     [state, navigation],
   );
 
+  // Floating island: glass pill with TOP_LIFT above and (BOTTOM_LIFT +
+  // safeBottom) below it.
+  //
+  // CRITICAL: the wrapper is `position: 'absolute'` so it does NOT take
+  // a slot in the BottomTabNavigator's column flex layout. React
+  // Navigation's BottomTabView lays out the scene container as
+  // `flex: 1` with the tab bar element as a sibling — if our wrapper
+  // participated in that flex, the scene would be shorter than the
+  // screen by `wrapperHeight` (~108pt) and the navigator's theme bg
+  // (gray-50) would show through the transparent padding around the
+  // island. That's the "grey plane under the glass" effect: the bar
+  // would be floating over navigator-bg, not over live RN content.
+  // Pulling the wrapper out of the flex flow lets the scene's
+  // ScrollView reach the screen's bottom edge; with each screen's
+  // `contentInset.bottom = useTabBarHeight()`, content visibly passes
+  // UNDER the glass material as the user scrolls.
   return (
-    <View pointerEvents="box-none" style={[styles.wrapper, { paddingBottom: safeBottom + BOTTOM_LIFT }]}>
-      {/* Soft outer glow for depth — sits BEHIND the island. */}
-      <View style={styles.outerGlow} pointerEvents="none" />
-
-      <View style={styles.island}>
+    <View
+      pointerEvents="box-none"
+      style={[styles.wrapper, { paddingTop: TOP_LIFT, paddingBottom: safeBottom + BOTTOM_LIFT }]}
+    >
+      <View style={[styles.island, { height: BAR_HEIGHT }]}>
         {/* Native glass + droplet — fills the rounded island. */}
         <AutexaLiquidGlassTabBar
           tabCount={TAB_DEFINITIONS.length}
@@ -88,23 +119,35 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
         {/* White hairline rim along the top edge — subtle premium touch. */}
         <View style={styles.topRim} pointerEvents="none" />
 
-        {/* Icons + labels on a separate absolute layer; pointerEvents="none"
-            so taps and pans pass straight through to the native gestures. */}
+        {/* Non-Касса icons + labels on a pass-through absolute layer.
+            Fills the entire island vertically — island is now plain
+            60pt so icons get vertically centered without doing extra
+            offset math. */}
         <View style={styles.iconsRow} pointerEvents="none">
           {TAB_DEFINITIONS.map((tab) => {
             const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
             const focused = state.index === routeIndex;
 
             if (tab.isKassa) {
-              return (
-                <View key={tab.routeName} style={styles.item}>
-                  <KassaGlassDome focused={focused} />
-                </View>
-              );
+              // Empty placeholder slot — actual Касса button rendered
+              // separately above so it can receive its own touches.
+              return <View key={tab.routeName} style={styles.item} />;
             }
 
             return <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} />;
           })}
+        </View>
+
+        {/* Native premium Касса button — Swift-side AutexaKassaButtonView.
+            Fills the island and is centered horizontally + vertically
+            against the icon row. */}
+        <View style={styles.kassaSlot} pointerEvents="box-none">
+          <AutexaKassaButton
+            symbolName="bag.fill"
+            focused={kassaFocused}
+            onPress={() => navigateToTab(kassaTabIndex)}
+            style={styles.kassaButton}
+          />
         </View>
       </View>
     </View>
@@ -148,65 +191,41 @@ function TabItem({ focused, label, icon }: TabItemProps) {
   );
 }
 
-/**
- * KassaGlassDome — primary action button at the centre of the bar.
- * Compact squircle, no protruding dome (that's a Material pattern, not iOS).
- */
-function KassaGlassDome({ focused }: { focused: boolean }) {
-  const scale = useSharedValue(focused ? 1.05 : 1);
-  React.useEffect(() => {
-    scale.value = withSpring(focused ? 1.05 : 1, SPRING_TIGHT);
-  }, [focused, scale]);
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+// KassaGlassDome (the JS-side dome) was removed — the central CTA is now
+// rendered by the native Swift AutexaKassaButtonView (see
+// mobile/modules/autexa-liquid-glass/ios/AutexaKassaButtonView.swift) and
+// inserted as a separate sibling above the bar via <AutexaKassaButton />.
 
-  return (
-    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-      <Animated.View style={[s.dome, animatedStyle]}>
-        <Ionicons name="add" size={22} color={colors.white} />
-      </Animated.View>
-      <Text
-        variant="caption"
-        style={{
-          marginTop: 2,
-          color: colors.primary[700],
-          fontWeight: focused ? '700' : '600',
-          fontSize: 10,
-        }}
-      >
-        Касса
-      </Text>
-    </View>
-  );
-}
+const KASSA_SIZE = 52;
 
 const styles = StyleSheet.create({
+  // Absolute, anchored to the screen's bottom edge so the BottomTabView
+  // gives the scene container the FULL screen height and the glass
+  // floats over live content — see the explanation block in the
+  // component above.
   wrapper: {
-    paddingTop: 6,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: 'transparent',
   },
-  // Subtle blue-tinted glow under the island — sells "premium glass".
-  outerGlow: {
-    position: 'absolute',
-    left: HORIZONTAL_MARGIN + 6,
-    right: HORIZONTAL_MARGIN + 6,
-    top: 14,
-    height: BAR_HEIGHT,
-    borderRadius: CORNER_RADIUS,
-    backgroundColor: colors.primary[700],
-    opacity: 0.06,
-  },
-  // The floating island — full-pill rounded, soft shadow, hairline border.
+  // Floating island — full-pill (height/2 corners), hairline rim,
+  // VERY soft shadow. The earlier 0.12/16-radius shadow created a
+  // perceptible darker ring around the bar that read as "dead gray
+  // zone" on physical iPhones; dropped to 0.06/10 — still gives depth
+  // but doesn't paint a visible halo onto the screen's gray-50 bg
+  // underneath.
   island: {
-    height: BAR_HEIGHT,
     marginHorizontal: HORIZONTAL_MARGIN,
     borderRadius: CORNER_RADIUS,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.95)',
-    shadowColor: colors.primary[800],
-    shadowOpacity: 0.18,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 10 },
+    borderColor: 'rgba(255,255,255,0.6)',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
   },
   bar: {
     ...StyleSheet.absoluteFillObject,
@@ -217,7 +236,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255,255,255,0.95)',
+    backgroundColor: 'rgba(255,255,255,0.85)',
   },
   iconsRow: {
     ...StyleSheet.absoluteFillObject,
@@ -231,20 +250,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 44,
   },
-});
-
-const s = StyleSheet.create({
-  // Compact accent button — squircle, small shadow.
-  dome: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: colors.primary[600],
+  kassaSlot: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.primary[700],
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
+  },
+  kassaButton: {
+    width: KASSA_SIZE,
+    height: KASSA_SIZE,
   },
 });

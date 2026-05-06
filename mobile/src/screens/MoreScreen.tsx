@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator } from 'react-native';
 import CachedImage from '../components/CachedImage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { uploadsApi, authApi, subscriptionApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
@@ -240,6 +241,8 @@ function AnimatedMenuItem({
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
   const { user, logout, hasPermission, refreshUser } = useAuth();
+  const tabBarHeight = useTabBarHeight();
+  const insetsTop = useSafeAreaInsets().top;
   const [uploading, setUploading] = useState(false);
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
@@ -304,8 +307,13 @@ export default function MoreScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+    <View style={styles.safe}>
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingTop: insetsTop + spacing[3] }]}
+        contentInset={{ bottom: tabBarHeight }}
+        scrollIndicatorInsets={{ bottom: tabBarHeight }}
+        automaticallyAdjustContentInsets={false}
+      >
         {/* User card */}
         <Animated.View style={[styles.userCard, { opacity: cardFade, transform: [{ scale: cardScale }] }]}>
           <View style={styles.userRow}>
@@ -357,14 +365,15 @@ export default function MoreScreen() {
           <Text style={styles.logoutText}>Выйти из аккаунта</Text>
         </TouchableOpacity>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  // paddingBottom 120 reserves space for the floating iOS tab bar
-  scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: 120 },
+  // No paddingBottom — handled at the ScrollView level via contentInset
+  // so content flows visibly under the floating glass bar.
+  scrollContent: { padding: spacing[4], gap: spacing[4] },
   // User card
   userCard: {
     backgroundColor: colors.white,

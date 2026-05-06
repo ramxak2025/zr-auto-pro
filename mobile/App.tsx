@@ -56,11 +56,41 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <SafeAreaProvider>
+      <SafeAreaProvider style={{ backgroundColor: colors.gray[50] }}>
         <QueryClientProvider client={queryClient}>
           <AuthProvider queryClient={queryClient}>
-            <NavigationContainer>
-              <StatusBar barStyle="dark-content" backgroundColor={colors.white} />
+            <NavigationContainer
+              theme={{
+                dark: false,
+                colors: {
+                  // Make every navigator's scene background match the
+                  // screens' canvas — gray-50. This is the final fix for
+                  // the "boxed app" effect: the underlying NativeStack /
+                  // BottomTab containers stop drawing white behind each
+                  // screen, so the visual surface is one continuous
+                  // gray-50 from the status bar all the way under the
+                  // floating glass tab bar. Per-screen `<View>` with
+                  // gray-50 then layers harmlessly on top.
+                  primary: colors.primary[600],
+                  background: colors.gray[50],
+                  card: 'transparent',
+                  text: colors.gray[900],
+                  border: colors.gray[200],
+                  notification: colors.primary[600],
+                },
+                fonts: {
+                  regular: { fontFamily: 'System', fontWeight: '400' },
+                  medium: { fontFamily: 'System', fontWeight: '500' },
+                  bold: { fontFamily: 'System', fontWeight: '700' },
+                  heavy: { fontFamily: 'System', fontWeight: '900' },
+                },
+              }}
+            >
+              {/* Translucent status bar — on Android removes the default
+                  opaque strip, so the SafeAreaProvider's gray-50 shows
+                  underneath; on iOS this prop is a no-op (status bar
+                  is always translucent over content). */}
+              <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
               <AppNavigator />
             </NavigationContainer>
           </AuthProvider>

@@ -71,3 +71,26 @@
 - [x] Тап ПО фото НЕ закрывает (можно рассматривать)
 - [x] Анимация открытия и закрытия плавная (RNModal fade)
 - [x] Close-кнопка translucent в стиле iOS native preview
+
+## Что осталось как minor follow-up (не блокер)
+
+- Close-button использует `top: 60` — хардкод. Корректнее было бы взять
+  `useSafeAreaInsets().top + 12` для адаптивной позиции на iPhone с
+  Dynamic Island и без неё. На современных iPhone'ах разница незаметная,
+  но на iPhone SE2 / 8 (safe top 20) кнопка сейчас сидит низковато.
+  Замена тривиальная (один useSafeAreaInsets hook + dynamic style),
+  оставляю на следующую итерацию вместе с миграцией close-кнопки на
+  SF Symbol через `<Icon name="close" />`.
+- Близко к 5.5/6.7" iPhone'ам maximum image height стоит сделать
+  адаптивным (сейчас `SCREEN_HEIGHT * 0.7` — может «съедать» close-кнопку
+  на маленьких экранах). Тоже не блокер, тривиальное.
+
+Обе правки — на ProductsScreen.tsx, в `fullscreenClose` / `fullscreenImage`
+стилях (~line 2068-2080).
+
+## Аудит 2026-05-05
+
+- Структура реализации в коде совпадает с этим документом.
+- Backdrop, скругления, close-кнопка, tap-vne, anim — на месте.
+- Long-press уже реализован в двух местах (line 907, 966 в `ProductsScreen.tsx`).
+- Никаких правок этой итерации не требуется.

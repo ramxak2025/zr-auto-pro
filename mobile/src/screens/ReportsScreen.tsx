@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -18,7 +18,9 @@ function formatMoney(v: number) {
   return `${v < 0 ? '-' : ''}${formatted} ₽`;
 }
 
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
+function toDateStr(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
 
 const PERIODS = [
   { key: 'today', label: 'Сегодня' },
@@ -58,7 +60,10 @@ export default function ReportsScreen() {
 
   const { data: report, isLoading } = useQuery<FinancialReport>({
     queryKey: ['financial-report', dateFrom, dateTo],
-    queryFn: async () => { const res = await reportsApi.getFinancial({ dateFrom, dateTo }); return res.data; },
+    queryFn: async () => {
+      const res = await reportsApi.getFinancial({ dateFrom, dateTo });
+      return res.data;
+    },
     enabled: canView,
   });
 
@@ -77,67 +82,37 @@ export default function ReportsScreen() {
 
   if (!canView) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
-          </TouchableOpacity>
-          <View style={styles.headerCenter}>
-            <LinearGradient
-              colors={[colors.primary[400], colors.primary[600]] as [string, string]}
-              style={styles.headerIcon}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
-              <Ionicons name="bar-chart-outline" size={18} color={colors.white} />
-            </LinearGradient>
-            <Text style={styles.title}>Отчёты</Text>
-          </View>
-          <View style={{ width: 60 }} />
-        </View>
+      <View style={styles.safe}>
+        <IosScreenHeader title="Отчёты" onBack={() => navigation.goBack()} />
         <View style={styles.accessDenied}>
           <Ionicons name="lock-closed" size={40} color={colors.gray[300]} />
           <Text style={styles.adTitle}>Доступ ограничен</Text>
           <Text style={styles.adDesc}>У вас нет прав для просмотра финансовых отчетов</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
-  const marginPct = report && report.revenue > 0
-    ? ((report.netProfit / report.revenue) * 100).toFixed(1)
-    : '0';
+  const marginPct = report && report.revenue > 0 ? ((report.netProfit / report.revenue) * 100).toFixed(1) : '0';
 
-  const avgCheck = report && report.checkCount > 0 && report.revenue > 0
-    ? formatMoney(report.revenue / report.checkCount)
-    : '—';
+  const avgCheck =
+    report && report.checkCount > 0 && report.revenue > 0 ? formatMoney(report.revenue / report.checkCount) : '—';
 
   const otherExpenses = (report as any)?.otherExpenses ?? 0;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="bar-chart-outline" size={18} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Отчёты</Text>
-        </View>
-        <View style={{ width: 60 }} />
-      </View>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Отчёты" onBack={() => navigation.goBack()} />
 
-      <ScrollView contentContainerStyle={styles.scrollContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
+      >
         {/* Period selector */}
         <View style={styles.periodRow}>
-          {PERIODS.map(p => (
+          {PERIODS.map((p) => (
             <TouchableOpacity
               key={p.key}
               style={[styles.periodChip, period === p.key && styles.periodChipActive]}
@@ -148,7 +123,9 @@ export default function ReportsScreen() {
           ))}
         </View>
 
-        {isLoading ? <LoadingSpinner /> : !report ? (
+        {isLoading ? (
+          <LoadingSpinner />
+        ) : !report ? (
           <Text style={styles.empty}>Нет данных за выбранный период</Text>
         ) : (
           <>
@@ -207,7 +184,9 @@ export default function ReportsScreen() {
                   </View>
                   <View>
                     <Text style={styles.expName}>Себестоимость товаров</Text>
-                    {report.revenue > 0 && <Text style={styles.expPct}>{pctOf(report.productCost, report.revenue)}% от выручки</Text>}
+                    {report.revenue > 0 && (
+                      <Text style={styles.expPct}>{pctOf(report.productCost, report.revenue)}% от выручки</Text>
+                    )}
                   </View>
                 </View>
                 <Text style={styles.expAmount}>{formatMoney(report.productCost)}</Text>
@@ -222,7 +201,9 @@ export default function ReportsScreen() {
                   </View>
                   <View>
                     <Text style={styles.expName}>Зарплаты мастерам</Text>
-                    {report.revenue > 0 && <Text style={styles.expPct}>{pctOf(report.salaries, report.revenue)}% от выручки</Text>}
+                    {report.revenue > 0 && (
+                      <Text style={styles.expPct}>{pctOf(report.salaries, report.revenue)}% от выручки</Text>
+                    )}
                   </View>
                 </View>
                 <Text style={styles.expAmount}>{formatMoney(report.salaries)}</Text>
@@ -238,7 +219,9 @@ export default function ReportsScreen() {
                       </View>
                       <View>
                         <Text style={styles.expName}>Прочие расходы</Text>
-                        {report.revenue > 0 && <Text style={styles.expPct}>{pctOf(otherExpenses, report.revenue)}% от выручки</Text>}
+                        {report.revenue > 0 && (
+                          <Text style={styles.expPct}>{pctOf(otherExpenses, report.revenue)}% от выручки</Text>
+                        )}
                       </View>
                     </View>
                     <Text style={styles.expAmount}>{formatMoney(otherExpenses)}</Text>
@@ -263,13 +246,22 @@ export default function ReportsScreen() {
           </>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    backgroundColor: colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[200],
+  },
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
@@ -282,7 +274,13 @@ const styles = StyleSheet.create({
   adDesc: { fontSize: fontSize.sm, color: colors.gray[500], textAlign: 'center', marginTop: spacing[2] },
   // Period
   periodRow: { flexDirection: 'row', gap: spacing[2] },
-  periodChip: { flex: 1, paddingVertical: spacing[2.5], borderRadius: borderRadius.xl, backgroundColor: colors.gray[100], alignItems: 'center' },
+  periodChip: {
+    flex: 1,
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+  },
   periodChipActive: { backgroundColor: colors.primary[600] },
   periodText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[600] },
   periodTextActive: { color: colors.white },
@@ -294,15 +292,42 @@ const styles = StyleSheet.create({
   heroSub: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
   // Two columns
   twoCol: { flexDirection: 'row', gap: spacing[3] },
-  metricCard: { flex: 1, backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
+  metricCard: {
+    flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+  },
   metricIconWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[3] },
   metricIcon: { width: 32, height: 32, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
   metricLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
   metricValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   // Expenses
-  expCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], overflow: 'hidden' },
-  expTitle: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.gray[400], letterSpacing: 1, paddingHorizontal: spacing[4], paddingTop: spacing[4], paddingBottom: spacing[2] },
-  expRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[4], paddingVertical: spacing[3.5] },
+  expCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    overflow: 'hidden',
+  },
+  expTitle: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[400],
+    letterSpacing: 1,
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[4],
+    paddingBottom: spacing[2],
+  },
+  expRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3.5],
+  },
   expLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], flex: 1 },
   expIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   expName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
@@ -310,7 +335,16 @@ const styles = StyleSheet.create({
   expAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   expDivider: { height: 1, backgroundColor: colors.gray[50], marginHorizontal: spacing[4] },
   // Check count
-  checkCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4] },
+  checkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+  },
   checkLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   checkCount: { fontSize: 28, fontWeight: fontWeight.bold, color: colors.primary[600] },
 });

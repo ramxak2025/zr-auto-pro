@@ -5,11 +5,9 @@
  * today status string. Lives inside the More tab stack.
  */
 import React, { useMemo } from 'react';
-import {
-  View, Text, TouchableOpacity, StyleSheet, RefreshControl,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -61,13 +59,19 @@ export default function EmployeesScreen() {
 
   const { data: users, isLoading } = useQuery<User[]>({
     queryKey: ['users-all'],
-    queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await usersApi.getAll();
+      return res.data;
+    },
     staleTime: 60_000,
   });
 
   const { data: today } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
-    queryFn: async () => { const res = await scheduleApi.getToday(); return res.data; },
+    queryFn: async () => {
+      const res = await scheduleApi.getToday();
+      return res.data;
+    },
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -79,9 +83,7 @@ export default function EmployeesScreen() {
   }, [today]);
 
   const sortedUsers = useMemo(
-    () => (users ?? [])
-      .filter((u) => u.isActive)
-      .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ru')),
+    () => (users ?? []).filter((u) => u.isActive).sort((a, b) => a.fullName.localeCompare(b.fullName, 'ru')),
     [users],
   );
 
@@ -96,7 +98,12 @@ export default function EmployeesScreen() {
 
   const renderItem = ({ item }: { item: User }) => {
     const status = todayMap.get(item.id);
-    const initials = item.fullName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    const initials = item.fullName
+      .split(' ')
+      .map((w) => w[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
     const role = ROLE_BADGE[item.role] || ROLE_BADGE.master;
     return (
       <TouchableOpacity
@@ -111,12 +118,16 @@ export default function EmployeesScreen() {
           <View style={[styles.dot, { backgroundColor: statusDotColor(status) }]} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.name} numberOfLines={1}>{item.fullName}</Text>
+          <Text style={styles.name} numberOfLines={1}>
+            {item.fullName}
+          </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], marginTop: 2 }}>
             <View style={[styles.badge, { backgroundColor: role.bg }]}>
               <Text style={[styles.badgeText, { color: role.text }]}>{roleLabels[item.role] || item.role}</Text>
             </View>
-            <Text style={styles.status} numberOfLines={1}>{statusLabel(status)}</Text>
+            <Text style={styles.status} numberOfLines={1}>
+              {statusLabel(status)}
+            </Text>
           </View>
         </View>
         <Ionicons name="chevron-forward" size={18} color={colors.gray[300]} />
@@ -125,19 +136,8 @@ export default function EmployeesScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <LinearGradient colors={[colors.white, colors.gray[50]] as [string, string]} style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <View style={styles.headerIcon}>
-            <Ionicons name="people-circle-outline" size={18} color={colors.cyan[600]} />
-          </View>
-          <Text style={styles.title}>Сотрудники</Text>
-        </View>
-        <View style={{ width: 40 }} />
-      </LinearGradient>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Сотрудники" onBack={() => navigation.goBack()} />
 
       {isLoading ? (
         <ListSkeleton count={6} />
@@ -149,46 +149,75 @@ export default function EmployeesScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           contentContainerStyle={styles.list}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+          }
         />
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderBottomWidth: 1, borderBottomColor: colors.gray[100],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[100],
   },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary[50],
-    alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   headerIcon: {
-    width: 30, height: 30, borderRadius: borderRadius.lg,
-    backgroundColor: colors.cyan[50], alignItems: 'center', justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.cyan[50],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
   list: { paddingHorizontal: spacing[4], paddingTop: spacing[3], paddingBottom: spacing[8] },
   row: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: colors.white, borderRadius: borderRadius['2xl'],
-    borderWidth: 1, borderColor: colors.gray[100],
-    padding: spacing[3], marginBottom: spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[3],
+    marginBottom: spacing[2],
   },
   avatarWrap: { position: 'relative' },
   avatar: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: colors.blue[50],
-    alignItems: 'center', justifyContent: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.blue[50],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.blue[700] },
   dot: {
-    position: 'absolute', bottom: -2, right: -2, width: 12, height: 12,
-    borderRadius: 6, borderWidth: 2, borderColor: colors.white,
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: colors.white,
   },
   name: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   badge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },

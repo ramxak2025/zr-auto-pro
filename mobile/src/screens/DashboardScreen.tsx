@@ -11,7 +11,7 @@ import {
   Dimensions,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line } from 'react-native-svg';
@@ -21,6 +21,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { checksApi, salaryApi, shiftsApi, scheduleApi, reportsApi, marketingApi, usersApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import AnimatedCard from '../components/AnimatedCard';
 import type {
   SalarySummary,
@@ -1210,6 +1211,8 @@ function QuickActions() {
 export default function DashboardScreen() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
+  const insetsTop = useSafeAreaInsets().top;
   const isMaster = user?.role === UserRole.MASTER;
   const isOwner = user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN;
   const [refreshing, setRefreshing] = useState(false);
@@ -1224,10 +1227,27 @@ export default function DashboardScreen() {
   const displayName = user?.fullName?.split(' ')[0] || '';
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    /* Edge-to-edge wrapper: plain View, no SafeAreaView. The screen
+       background fills the WHOLE viewport including the status bar zone
+       and the area behind the floating tab bar. Safe-area top is
+       applied to the scroll content, NOT to an outer frame, so the
+       app reads as one continuous canvas instead of "content in a
+       window with a separate status-bar strip above it". */
+    <View style={styles.safe}>
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.scrollContent2}
+        contentContainerStyle={[styles.scrollContent2, { paddingTop: insetsTop + spacing[2] }]}
+        // iOS: contentInset.bottom lets scroll content flow UNDER the
+        // floating glass tab bar instead of stopping above it. The
+        // tab-bar-height-sized inset means the user can still scroll
+        // the last item above the bar; in between the last item and
+        // the inset edge nothing is drawn — but the visible region
+        // BEHIND the glass is the scroll content itself, which is
+        // exactly the "screen continues under the bar" feel iOS uses
+        // in Mail / Settings / Music.
+        contentInset={{ bottom: tabBarHeight }}
+        scrollIndicatorInsets={{ bottom: tabBarHeight }}
+        automaticallyAdjustContentInsets={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
@@ -1251,7 +1271,7 @@ export default function DashboardScreen() {
         {/* Quick actions */}
         <QuickActions />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1259,7 +1279,9 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scroll: { flex: 1 },
   // paddingBottom 120 reserves space for the floating iOS tab bar (60+8+34+18)
-  scrollContent2: { padding: spacing[4], gap: spacing[4], paddingBottom: 120 },
+  // No paddingBottom here — contentInset on the ScrollView (iOS) handles
+  // it natively so content flows visibly under the glass tab bar.
+  scrollContent2: { padding: spacing[4], gap: spacing[4] },
   headerSection: { marginBottom: spacing[1] },
   headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   headerSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },

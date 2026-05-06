@@ -13,7 +13,8 @@ import {
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import CachedImage from '../components/CachedImage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Pressable } from 'react-native';
@@ -53,6 +54,7 @@ function formatMoney(v: number) {
 export default function ProductsScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const insetsTop = useSafeAreaInsets().top;
   const { hasPermission, user } = useAuth();
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageWarehouse = hasPermission('warehouse_access');
@@ -798,47 +800,33 @@ export default function ProductsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header with title + action buttons */}
-      <View style={styles.header}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Ionicons name="cube" size={20} color={colors.primary[600]} />
-          <Text style={styles.title}>{'\u0421\u043A\u043B\u0430\u0434'}</Text>
-          <View style={styles.countBadge}>
-            <Text style={styles.countBadgeText}>
-              {data === undefined ? '\u2026' : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`}
-            </Text>
+    <View style={styles.safe}>
+      {/* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
+          / \u041F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0438. Title + product count subtitle on the left,
+          warehouse-ops + add buttons in the trailing slot. */}
+      <IosScreenHeader
+        title={'\u0421\u043A\u043B\u0430\u0434'}
+        subtitle={data === undefined ? undefined : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`}
+        trailing={
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            {hasPermission('warehouse_access') && (
+              <TouchableOpacity style={styles.opsBtn} onPress={() => setShowOpsModal(true)}>
+                <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
+              </TouchableOpacity>
+            )}
+            {hasPermission('warehouse_access') && (
+              <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+                <Ionicons name="add" size={18} color={colors.white} />
+              </TouchableOpacity>
+            )}
           </View>
-        </View>
-        <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-          {hasPermission('warehouse_access') && (
-            <TouchableOpacity style={styles.opsBtn} onPress={() => setShowOpsModal(true)}>
-              <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
-            </TouchableOpacity>
-          )}
-          {hasPermission('warehouse_access') && (
-            <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-              <Ionicons name="add" size={18} color={colors.white} />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
+        }
+      />
 
-      {/* Stats cards */}
-      <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>
-            {
-              '\u0421\u0415\u0411\u0415\u0421\u0422\u041E\u0418\u041C\u041E\u0421\u0422\u042C \u0421\u041A\u041B\u0410\u0414\u0410'
-            }
-          </Text>
-          <Text style={styles.statValue}>{formatMoney(warehouseStats.costTotal)}</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statLabel}>{'\u0412 \u0420\u041E\u0417\u041D. \u0426\u0415\u041D\u0410\u0425'}</Text>
-          <Text style={styles.statValue}>{formatMoney(warehouseStats.sellTotal)}</Text>
-        </View>
-      </View>
+      {/* Stats cards (\u0441\u0435\u0431\u0435\u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C / \u0432 \u0440\u043E\u0437\u043D. \u0446\u0435\u043D\u0430\u0445) intentionally
+          REMOVED from the warehouse top \u2014 these belong in the Reports
+          screen, not in the warehouse header. Owner spec: "\u0441\u043A\u043B\u0430\u0434 \u0438\u043C\u0435\u0435\u0442
+          \u0430\u043A\u043A\u0443\u0440\u0430\u0442\u043D\u0443\u044E \u0448\u0430\u043F\u043A\u0443 \u0431\u0435\u0437 \u0444\u0438\u043D\u0430\u043D\u0441\u043E\u0432\u044B\u0445 \u0441\u0443\u043C\u043C". */}
 
       {/* Breadcrumb */}
       {activePath.length > 0 && !search && (
@@ -947,10 +935,10 @@ export default function ProductsScreen() {
               </AnimatedCard>
             );
           }}
-          contentContainerStyle={{
-            ...styles.list,
-            paddingBottom: tabBarHeight + spacing[4],
-          }}
+          contentContainerStyle={styles.list}
+          contentInset={{ bottom: tabBarHeight }}
+          scrollIndicatorInsets={{ bottom: tabBarHeight }}
+          automaticallyAdjustContentInsets={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -1743,7 +1731,7 @@ export default function ProductsScreen() {
         confirmText="Удалить"
         variant="danger"
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

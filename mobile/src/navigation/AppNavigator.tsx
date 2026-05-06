@@ -119,9 +119,19 @@ const ChecksStack = createNativeStackNavigator();
 //  Navigation
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Transparent contentStyle on every native-stack — otherwise React Native
+// imposes a white scene background, which combined with each screen's own
+// gray-50 wrapper creates a "boxed app" two-tone effect. Making every
+// scene transparent lets the screen's own background fill the viewport
+// continuously, edge-to-edge, behind the floating glass tab bar.
+const TRANSPARENT_STACK_OPTIONS = {
+  headerShown: false,
+  contentStyle: { backgroundColor: 'transparent' },
+} as const;
+
 function MoreStackNavigator() {
   return (
-    <MoreStack.Navigator screenOptions={{ headerShown: false }}>
+    <MoreStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
       <MoreStack.Screen name="MoreHome" component={MoreScreen} />
       <MoreStack.Screen name="Employees" component={EmployeesScreen} />
       <MoreStack.Screen name="EmployeeDetail" component={EmployeeDetailScreen} />
@@ -154,7 +164,7 @@ function MoreStackNavigator() {
  */
 function ChecksStackNavigator() {
   return (
-    <ChecksStack.Navigator screenOptions={{ headerShown: false }}>
+    <ChecksStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
       <ChecksStack.Screen name="ChecksHome" component={ChecksScreen} />
       <ChecksStack.Screen name="CheckDetail" component={CheckDetailScreen} />
     </ChecksStack.Navigator>
@@ -199,7 +209,7 @@ export default function AppNavigator() {
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
       {!user ? (
         <Stack.Screen name="Login" component={LoginScreen} />
       ) : (

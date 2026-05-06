@@ -1,1 +1,5 @@
-android/
+# Prebuild output. Leading slash anchors the rule to mobile/ root so our
+# local Expo Module native folders (mobile/modules/*/ios/, etc.) are NOT
+# accidentally ignored.
+/android/
+/ios/
