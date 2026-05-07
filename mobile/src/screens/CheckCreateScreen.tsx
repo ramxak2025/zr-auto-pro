@@ -11,13 +11,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Dimensions,
-  Animated,
-  Modal as RNModal,
-  PanResponder,
   LayoutAnimation,
   AccessibilityInfo,
 } from 'react-native';
-import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,9 +28,9 @@ import {
   productsApi,
   warehouseCategoriesApi,
 } from '../api/services';
-import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
+import ProductPickerModal from '../components/ProductPickerModal';
 import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
@@ -395,10 +391,6 @@ export default function CheckCreateScreen() {
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [showMasterPicker, setShowMasterPicker] = useState<number | null>(null);
 
-  // Product folder navigation
-  const [productPath, setProductPath] = useState<string[]>([]);
-  const [productSearch, setProductSearch] = useState('');
-
   // Service search
   const [serviceSearch, setServiceSearch] = useState('');
 
@@ -509,47 +501,6 @@ export default function CheckCreateScreen() {
     return services.filter((s) => s.name.toLowerCase().includes(q));
   }, [allServices, serviceSearch]);
 
-  // Product folder navigation
-  const { productFolders, visibleProducts } = useMemo(() => {
-    const products = allProducts || [];
-    if (productSearch) {
-      const q = productSearch.toLowerCase();
-      return {
-        productFolders: new Map<string, number>(),
-        visibleProducts: products.filter(
-          (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
-        ),
-      };
-    }
-
-    const subs = new Map<string, number>();
-    const prods: Product[] = [];
-
-    for (const p of products) {
-      const cat = p.category || '';
-      const catParts = cat ? cat.split('/') : [];
-      const matchesPath = productPath.every((seg, i) => catParts[i] === seg);
-      if (!matchesPath && productPath.length > 0) continue;
-
-      if (catParts.length > productPath.length) {
-        const folderName = catParts[productPath.length];
-        subs.set(folderName, (subs.get(folderName) || 0) + 1);
-      } else if (catParts.length === productPath.length) {
-        prods.push(p);
-      }
-    }
-
-    if (productPath.length === 0) {
-      for (const p of products) {
-        if (!p.category && !prods.includes(p)) prods.push(p);
-      }
-    }
-
-    return { productFolders: subs, visibleProducts: prods };
-  }, [allProducts, productPath, productSearch]);
-
-  const sortedProductFolders = Array.from(productFolders.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-
   // Load existing check for editing
   useEffect(() => {
     if (editId) {
@@ -612,6 +563,11 @@ export default function CheckCreateScreen() {
   // Get current user as default master
   const { user: currentUser } = useAuth();
   const defaultMasterId = currentUser?.id || '';
+  // Mirror warehouse role gating — directors / admins / superadmins see
+  // cost price inside the picker, masters don't. Same predicate as
+  // `ProductsScreen.tsx`'s `canSeeCostPrice`.
+  const canSeeCostPrice =
+    currentUser?.role === 'director' || currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
 
   const addServiceLine = (service: Service) => {
     setServiceLines((prev) => [
@@ -771,27 +727,6 @@ export default function CheckCreateScreen() {
     const line = productLines.find((l) => l.productId === productId);
     return line?.quantity || 0;
   };
-
-  // Product picker swipe-to-go-back gesture
-  const panX = useRef(new Animated.Value(0)).current;
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gs) => gs.dx > 15 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5 && gs.x0 < 40,
-      onPanResponderMove: (_, gs) => {
-        if (gs.dx > 0) panX.setValue(gs.dx);
-      },
-      onPanResponderRelease: (_, gs) => {
-        if (gs.dx > 100) {
-          if (productPath.length > 0) {
-            setProductPath((prev) => prev.slice(0, -1));
-          } else {
-            setShowProductPicker(false);
-          }
-        }
-        Animated.spring(panX, { toValue: 0, useNativeDriver: true }).start();
-      },
-    }),
-  ).current;
 
   return (
     <View style={styles.safe}>
@@ -1167,14 +1102,7 @@ export default function CheckCreateScreen() {
                     </View>
                   )}
                 </View>
-                <TouchableOpacity
-                  style={styles.addLineBtn}
-                  onPress={() => {
-                    setProductPath([]);
-                    setProductSearch('');
-                    setShowProductPicker(true);
-                  }}
-                >
+                <TouchableOpacity style={styles.addLineBtn} onPress={() => setShowProductPicker(true)}>
                   <Ionicons name="add" size={16} color={colors.primary[600]} />
                 </TouchableOpacity>
               </View>
@@ -1215,14 +1143,7 @@ export default function CheckCreateScreen() {
                 </View>
               ))}
               {productLines.length === 0 && (
-                <TouchableOpacity
-                  style={styles.emptyAddBtn}
-                  onPress={() => {
-                    setProductPath([]);
-                    setProductSearch('');
-                    setShowProductPicker(true);
-                  }}
-                >
+                <TouchableOpacity style={styles.emptyAddBtn} onPress={() => setShowProductPicker(true)}>
                   <Ionicons name="add-circle-outline" size={18} color={colors.gray[400]} />
                   <Text style={styles.emptyAddText}>Добавить товар</Text>
                 </TouchableOpacity>
@@ -1486,157 +1407,19 @@ export default function CheckCreateScreen() {
         </ScrollView>
       </Modal>
 
-      {/* Product Picker — 80% of screen height */}
-      <RNModal
+      {/* Product Picker — extracted into <ProductPickerModal/>. Visual rows
+          mirror the warehouse list (`ProductsScreen.tsx`); the modal is
+          virtualised via FlashList and reads from the same
+          `['all-products-check']` cache key prefetched on login + on this
+          screen mount, so opening the picker is a cache-hit, no flash. */}
+      <ProductPickerModal
         visible={showProductPicker}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setShowProductPicker(false)}
-      >
-        <View style={styles.productPickerOverlay}>
-          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setShowProductPicker(false)} />
-          <Animated.View
-            style={[styles.productPickerContainer, { transform: [{ translateX: panX }] }]}
-            {...panResponder.panHandlers}
-          >
-            {/* Handle bar */}
-            <View style={styles.productPickerHandle}>
-              <View style={styles.productPickerHandleBar} />
-            </View>
-
-            {/* Header */}
-            <View style={styles.productPickerHeader}>
-              <TouchableOpacity onPress={() => setShowProductPicker(false)} style={styles.productPickerClose}>
-                <Ionicons name="close" size={22} color={colors.gray[600]} />
-              </TouchableOpacity>
-              <Text style={styles.productPickerTitle}>Товары</Text>
-              {productLines.length > 0 ? (
-                <TouchableOpacity onPress={() => setShowProductPicker(false)} style={styles.productPickerDone}>
-                  <Text style={styles.productPickerDoneText}>Готово ({productLines.length})</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={{ width: 70 }} />
-              )}
-            </View>
-
-            {/* Search */}
-            <View style={styles.productSearchWrap}>
-              <Ionicons name="search-outline" size={16} color={colors.gray[400]} />
-              <TextInput
-                value={productSearch}
-                onChangeText={setProductSearch}
-                style={styles.productSearchInput}
-                placeholder="Поиск товара..."
-                placeholderTextColor={colors.gray[400]}
-              />
-              {productSearch ? (
-                <TouchableOpacity onPress={() => setProductSearch('')}>
-                  <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-
-            {/* Breadcrumbs */}
-            {!productSearch && productPath.length > 0 && (
-              <View style={styles.breadcrumbRow}>
-                <TouchableOpacity onPress={() => setProductPath([])} style={styles.breadcrumbItem}>
-                  <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
-                </TouchableOpacity>
-                {productPath.map((seg, i) => (
-                  <React.Fragment key={i}>
-                    <Ionicons name="chevron-forward" size={12} color={colors.gray[300]} />
-                    <TouchableOpacity
-                      onPress={() => setProductPath((prev) => prev.slice(0, i + 1))}
-                      style={styles.breadcrumbItem}
-                    >
-                      <Text
-                        style={[
-                          styles.breadcrumbText,
-                          i === productPath.length - 1 && { color: colors.gray[900], fontWeight: fontWeight.bold },
-                        ]}
-                      >
-                        {seg}
-                      </Text>
-                    </TouchableOpacity>
-                  </React.Fragment>
-                ))}
-              </View>
-            )}
-
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: spacing[4], paddingBottom: spacing[12] }}>
-              {/* Folders */}
-              {!productSearch && sortedProductFolders.length > 0 && (
-                <View style={styles.productFoldersGrid}>
-                  {sortedProductFolders.map(([name, count]) => (
-                    <TouchableOpacity
-                      key={name}
-                      style={styles.productFolderCard}
-                      onPress={() => setProductPath((prev) => [...prev, name])}
-                    >
-                      <Ionicons name="folder-open" size={22} color={colors.primary[500]} />
-                      <Text style={styles.productFolderName} numberOfLines={2}>
-                        {name}
-                      </Text>
-                      <Text style={styles.productFolderCount}>{count} тов.</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              )}
-
-              {/* Products */}
-              {visibleProducts.map((product) => {
-                const cartQty = getProductCartQty(product.id);
-                const photoUrl = getImageUrl((product as any).photo);
-                return (
-                  <TouchableOpacity
-                    key={product.id}
-                    style={styles.productItem}
-                    onPress={() => addProductLine(product)}
-                    activeOpacity={0.6}
-                  >
-                    {photoUrl ? (
-                      <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} />
-                    ) : (
-                      <View style={[styles.productPhoto, styles.productPhotoPlaceholder]}>
-                        <Ionicons name="cube-outline" size={20} color={colors.gray[300]} />
-                      </View>
-                    )}
-                    <View style={styles.productInfo}>
-                      <Text style={styles.productName} numberOfLines={2}>
-                        {product.name}
-                      </Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 }}>
-                        <Text style={styles.productPrice}>{formatMoney(product.sellPrice)}</Text>
-                        <Text style={styles.productStock}>Ост: {product.stock} шт</Text>
-                      </View>
-                    </View>
-                    {cartQty > 0 ? (
-                      <View style={styles.productCartBadge}>
-                        <Text style={styles.productCartBadgeText}>{cartQty}</Text>
-                      </View>
-                    ) : (
-                      <Ionicons name="add-circle" size={28} color={colors.primary[500]} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-
-              {!productSearch && sortedProductFolders.length === 0 && visibleProducts.length === 0 && (
-                <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
-                  <Ionicons name="cube-outline" size={40} color={colors.gray[300]} />
-                  <Text style={{ color: colors.gray[400], marginTop: spacing[2] }}>Нет товаров</Text>
-                </View>
-              )}
-              {productSearch && visibleProducts.length === 0 && (
-                <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
-                  <Ionicons name="search-outline" size={40} color={colors.gray[300]} />
-                  <Text style={{ color: colors.gray[400], marginTop: spacing[2] }}>Ничего не найдено</Text>
-                </View>
-              )}
-            </ScrollView>
-          </Animated.View>
-        </View>
-      </RNModal>
+        onClose={() => setShowProductPicker(false)}
+        onSelectProduct={addProductLine}
+        getCartQty={getProductCartQty}
+        title={'Товары'}
+        showCostPrice={canSeeCostPrice}
+      />
     </View>
   );
 }
@@ -2184,116 +1967,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Product Picker — 80% height bottom sheet
-  productPickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  productPickerContainer: {
-    height: SCREEN_HEIGHT * 0.82,
-    backgroundColor: colors.white,
-    borderTopLeftRadius: borderRadius['3xl'],
-    borderTopRightRadius: borderRadius['3xl'],
-    overflow: 'hidden',
-  },
-  productPickerHandle: { alignItems: 'center', paddingVertical: spacing[2] },
-  productPickerHandleBar: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.gray[300] },
-  productPickerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
-  },
-  productPickerClose: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.gray[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  productPickerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  productPickerDone: {
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    backgroundColor: colors.primary[50],
-    borderRadius: borderRadius.lg,
-  },
-  productPickerDoneText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[600] },
-  productSearchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    marginHorizontal: spacing[4],
-    marginVertical: spacing[2],
-    backgroundColor: colors.gray[50],
-    borderRadius: borderRadius.xl,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
-  },
-  productSearchInput: { flex: 1, fontSize: fontSize.sm, color: colors.gray[900], paddingVertical: 0 },
-  breadcrumbRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: spacing[1.5],
-    paddingHorizontal: spacing[4],
-    marginBottom: spacing[1],
-  },
-  breadcrumbItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingVertical: 2,
-    paddingHorizontal: spacing[1],
-  },
-  breadcrumbText: { fontSize: 13, color: colors.primary[600], fontWeight: fontWeight.medium },
-  productFoldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3], marginBottom: spacing[4] },
-  productFolderCard: {
-    width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3] * 2) / 3,
-    backgroundColor: colors.gray[50],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[3],
-    alignItems: 'center',
-    gap: spacing[1],
-  },
-  productFolderName: {
-    fontSize: 12,
-    fontWeight: fontWeight.semibold,
-    color: colors.gray[900],
-    textAlign: 'center',
-    lineHeight: 16,
-  },
-  productFolderCount: { fontSize: 10, color: colors.gray[400] },
-  productItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingVertical: spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[50],
-  },
-  productPhoto: { width: 52, height: 52, borderRadius: borderRadius.lg },
-  productPhotoPlaceholder: {
-    backgroundColor: colors.gray[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-  },
-  productInfo: { flex: 1 },
-  productName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  productPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[600] },
-  productStock: { fontSize: 11, color: colors.gray[400] },
-  productCartBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.primary[600],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  productCartBadgeText: { fontSize: 13, fontWeight: fontWeight.bold, color: colors.white },
+  // (Product Picker styles moved into <ProductPickerModal/>.)
 });

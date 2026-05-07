@@ -64,6 +64,7 @@ export default function CashFlowScreen() {
       return res.data;
     },
     enabled: canFilterByMaster,
+    placeholderData: (prev) => prev,
   });
 
   const { data: cashflow, isLoading } = useQuery<any>({
@@ -74,6 +75,9 @@ export default function CashFlowScreen() {
       const res = await reportsApi.getCashFlow(params);
       return res.data;
     },
+    // Keep previous period's cashflow visible while the user picks
+    // a new range — no flash to "Нет данных" between fetches.
+    placeholderData: (prev: unknown) => prev,
   });
 
   const onRefresh = async () => {
@@ -195,9 +199,12 @@ export default function CashFlowScreen() {
           </TouchableOpacity>
         )}
 
-        {isLoading ? (
+        {/* Cold-start: keep loading spinner until a real response
+            lands. Once we have any data (cached or fresh), SWR keeps
+            it on screen across period changes — no "Нет данных" flash. */}
+        {cashflow === undefined ? (
           <LoadingSpinner />
-        ) : !cashflow ? (
+        ) : !cashflow && !isLoading ? (
           <Text style={styles.empty}>Нет данных</Text>
         ) : (
           <>

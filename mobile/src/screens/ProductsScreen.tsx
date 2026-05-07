@@ -32,6 +32,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
+import TrashScreen from './TrashScreen';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { tapMedium, notifySuccess } from '../utils/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -79,6 +80,10 @@ export default function ProductsScreen() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showOpsModal, setShowOpsModal] = useState(false);
+  // Корзина склада — full-screen modal hosted from the warehouse ops modal,
+  // rather than a separate "Ещё" tab item, because soft-deleted products are
+  // a warehouse concern.
+  const [showTrashModal, setShowTrashModal] = useState(false);
 
   // Fullscreen photo view
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
@@ -1221,7 +1226,34 @@ export default function ProductsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
         </TouchableOpacity>
+
+        {/* Корзина склада — soft-deleted products. Lives here (not in
+            "Ещё") because it's a warehouse-only concern. */}
+        {canManageWarehouse && (
+          <TouchableOpacity
+            style={styles.opsItem}
+            onPress={() => {
+              setShowOpsModal(false);
+              setShowTrashModal(true);
+            }}
+          >
+            <View style={[styles.opsIcon, { backgroundColor: colors.rose[50] }]}>
+              <Ionicons name="trash-bin-outline" size={22} color={colors.rose[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.opsItemTitle}>{'Корзина'}</Text>
+              <Text style={styles.opsItemDesc}>{'Восстановление удалённых товаров'}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+          </TouchableOpacity>
+        )}
       </Modal>
+
+      {/* Full-screen Корзина modal — hosts TrashScreen with an explicit
+          onClose so it can be dismissed without touching the navigator. */}
+      <RNModal visible={showTrashModal} animationType="slide" onRequestClose={() => setShowTrashModal(false)}>
+        <TrashScreen onClose={() => setShowTrashModal(false)} />
+      </RNModal>
 
       {/* Full-screen Inventory Modal */}
       <RNModal visible={showInventoryModal} animationType="slide" onRequestClose={() => setShowInventoryModal(false)}>

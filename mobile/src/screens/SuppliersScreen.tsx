@@ -64,6 +64,9 @@ export default function SuppliersScreen() {
       const res = await suppliersApi.getAll({ search });
       return res.data?.data || res.data;
     },
+    // SWR: when `search` mutates the key, keep the previous results
+    // visible until the new ones arrive. No empty flash mid-typing.
+    placeholderData: (prev) => prev,
   });
 
   const createMutation = useMutation({
@@ -238,9 +241,12 @@ export default function SuppliersScreen() {
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск поставщика..." />
       </View>
 
-      {isLoading ? (
+      {suppliers === undefined ? (
+        // Cold-start guard — show skeleton, never EmptyState while
+        // data is genuinely unknown. Once any response (even cached)
+        // lands, EmptyState becomes legitimate again.
         <ListSkeleton count={6} />
-      ) : !suppliers?.length ? (
+      ) : !suppliers.length && !isLoading ? (
         <EmptyState
           title="Нет поставщиков"
           description="Добавьте первого поставщика"

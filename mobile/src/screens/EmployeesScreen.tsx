@@ -64,6 +64,9 @@ export default function EmployeesScreen() {
       return res.data;
     },
     staleTime: 60_000,
+    // SWR: keep the previous user list while a refresh runs,
+    // matches the global default but documented per-screen.
+    placeholderData: (prev) => prev,
   });
 
   const { data: today } = useQuery<TodayEmployeeStatus[]>({
@@ -74,6 +77,7 @@ export default function EmployeesScreen() {
     },
     staleTime: 30_000,
     refetchInterval: 60_000,
+    placeholderData: (prev) => prev,
   });
 
   const todayMap = useMemo(() => {
@@ -139,9 +143,11 @@ export default function EmployeesScreen() {
     <View style={styles.safe}>
       <IosScreenHeader title="Сотрудники" onBack={() => navigation.goBack()} />
 
-      {isLoading ? (
+      {users === undefined ? (
+        // Cold-start: skeleton until any data lands (cache or
+        // network). Empty state only after a real response.
         <ListSkeleton count={6} />
-      ) : sortedUsers.length === 0 ? (
+      ) : sortedUsers.length === 0 && !isLoading ? (
         <EmptyState title="Сотрудников пока нет" description="Пригласите команду через раздел «Пользователи»." />
       ) : (
         <FlashList

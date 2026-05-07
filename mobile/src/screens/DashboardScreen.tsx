@@ -18,7 +18,17 @@ import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line } from 'react-na
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
-import { checksApi, salaryApi, shiftsApi, scheduleApi, reportsApi, marketingApi, usersApi } from '../api/services';
+import {
+  checksApi,
+  salaryApi,
+  shiftsApi,
+  scheduleApi,
+  reportsApi,
+  marketingApi,
+  usersApi,
+  productsApi,
+  callsApi,
+} from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -30,6 +40,8 @@ import type {
   Shift,
   ScheduleEntry,
   User,
+  DashboardStats,
+  Product,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
@@ -1119,6 +1131,148 @@ function MasterDashboard() {
   );
 }
 
+// ── Today Quick Stats (owner) ──
+// Three-stat ribbon: today revenue / profit / checks. Backed by
+// checksApi.getDashboard which already aggregates server-side, so
+// nothing here costs more than one HTTP call.
+function TodayQuickStats() {
+  const { data } = useQuery<DashboardStats>({
+    queryKey: ['checks-dashboard'],
+    queryFn: async () => {
+      const res = await checksApi.getDashboard();
+      return res.data;
+    },
+    staleTime: 30_000,
+  });
+
+  // While the (cache-first / SWR) data is undefined on cold start, render
+  // a slim placeholder so the layout doesn't jump.
+  const revenue = data?.todayRevenue ?? 0;
+  const profit = data?.todayProfit ?? 0;
+  const checks = data?.todayChecks ?? 0;
+
+  return (
+    <AnimatedCard index={0} style={styles.qsCard}>
+      <View style={styles.qsHeaderRow}>
+        <Ionicons name="sparkles-outline" size={14} color={colors.gray[500]} />
+        <Text style={styles.qsHeaderText}>Сегодня</Text>
+      </View>
+      <View style={styles.qsStatsRow}>
+        <View style={styles.qsStatItem}>
+          <Text style={styles.qsStatLabel}>Выручка</Text>
+          <Text style={styles.qsStatValue}>{formatMoney(revenue)}</Text>
+        </View>
+        <View style={styles.qsStatDivider} />
+        <View style={styles.qsStatItem}>
+          <Text style={styles.qsStatLabel}>Прибыль</Text>
+          <Text style={[styles.qsStatValue, { color: colors.green[600] }]}>{formatMoney(profit)}</Text>
+        </View>
+        <View style={styles.qsStatDivider} />
+        <View style={styles.qsStatItem}>
+          <Text style={styles.qsStatLabel}>Чеков</Text>
+          <Text style={[styles.qsStatValue, { color: colors.primary[600] }]}>{checks}</Text>
+        </View>
+      </View>
+    </AnimatedCard>
+  );
+}
+
+// ── Low Stock Widget (owner) ──
+// Top 5 products at or below their minStock threshold. Tap → Warehouse tab.
+// Hidden when nothing is low — empty state would be visual noise.
+function LowStockWidget() {
+  const navigation = useNavigation<any>();
+  const { data } = useQuery<Product[]>({
+    queryKey: ['low-stock'],
+    queryFn: async () => {
+      const res = await productsApi.getLowStock();
+      return res.data;
+    },
+    staleTime: 60_000,
+  });
+
+  const items = (data ?? []).slice(0, 5);
+  if (items.length === 0) return null;
+
+  return (
+    <AnimatedCard index={3} style={styles.card} onPress={() => navigation.navigate('Main', { screen: 'Products' })}>
+      <View style={styles.widgetHeaderRow}>
+        <View style={[styles.widgetIconBox, { backgroundColor: colors.amber[50] }]}>
+          <Ionicons name="alert-circle-outline" size={16} color={colors.amber[600]} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>Низкий остаток</Text>
+          <Text style={styles.widgetSubtitle}>
+            {data && data.length > 5
+              ? `Показано 5 из ${data.length}`
+              : `${items.length} ${items.length === 1 ? 'товар' : 'товаров'}`}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+      </View>
+      <View style={{ marginTop: spacing[3], gap: spacing[2] }}>
+        {items.map((p) => (
+          <View key={p.id} style={styles.lowStockRow}>
+            <Text style={styles.lowStockName} numberOfLines={1}>
+              {p.name}
+            </Text>
+            <View style={styles.lowStockStockPill}>
+              <Text style={styles.lowStockStockText}>
+                {p.stock} / {p.minStock} шт
+              </Text>
+            </View>
+          </View>
+        ))}
+      </View>
+    </AnimatedCard>
+  );
+}
+
+// ── Missed Calls Widget (owner) ──
+// Today's missed + not-called-back. Hidden when both are zero.
+function MissedCallsWidget() {
+  const navigation = useNavigation<any>();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data } = useQuery({
+    queryKey: ['calls-summary', today],
+    queryFn: async () => {
+      const res = await callsApi.getCalls({ date: today });
+      return res.data.summary;
+    },
+    staleTime: 60_000,
+  });
+
+  const missed = data?.missed ?? 0;
+  const notCalledBack = data?.notCalledBack ?? 0;
+  if (missed === 0 && notCalledBack === 0) return null;
+
+  return (
+    <AnimatedCard index={4} style={styles.card} onPress={() => navigation.navigate('MoreTab', { screen: 'Calls' })}>
+      <View style={styles.widgetHeaderRow}>
+        <View style={[styles.widgetIconBox, { backgroundColor: colors.red[50] }]}>
+          <Ionicons name="call-outline" size={16} color={colors.red[600]} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>Звонки сегодня</Text>
+          <Text style={styles.widgetSubtitle}>Требуют внимания</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+      </View>
+      <View style={styles.callsStatsRow}>
+        <View style={styles.callsStatItem}>
+          <Text style={[styles.callsStatValue, { color: colors.red[600] }]}>{missed}</Text>
+          <Text style={styles.callsStatLabel}>Пропущено</Text>
+        </View>
+        <View style={styles.qsStatDivider} />
+        <View style={styles.callsStatItem}>
+          <Text style={[styles.callsStatValue, { color: colors.amber[600] }]}>{notCalledBack}</Text>
+          <Text style={styles.callsStatLabel}>Не перезвонили</Text>
+        </View>
+      </View>
+    </AnimatedCard>
+  );
+}
+
 // ── Admin Dashboard ──
 function AdminDashboard() {
   const { user } = useAuth();
@@ -1126,8 +1280,11 @@ function AdminDashboard() {
 
   return (
     <View style={{ gap: spacing[4] }}>
+      {isOwner && <TodayQuickStats />}
       {isOwner && <RevenueChart />}
       <StaffStatus />
+      {isOwner && <LowStockWidget />}
+      {isOwner && <MissedCallsWidget />}
       {isOwner && <EmployeeRankingSection />}
     </View>
   );
@@ -1298,6 +1455,128 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+
+  // Today Quick Stats — compact 3-stat ribbon at the top of the owner
+  // dashboard. Prefixed `qs*` to avoid collision with the `todayStat*`
+  // styles RevenueChart already uses for its empty-state.
+  qsCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[4],
+    shadowColor: colors.black,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  qsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: spacing[2],
+  },
+  qsHeaderText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.gray[500],
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  qsStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  qsStatItem: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  qsStatLabel: {
+    fontSize: 11,
+    color: colors.gray[400],
+    fontWeight: '500',
+  },
+  qsStatValue: {
+    fontSize: fontSize.lg,
+    fontWeight: '700',
+    color: colors.gray[900],
+    marginTop: 2,
+    letterSpacing: -0.3,
+  },
+  qsStatDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 28,
+    backgroundColor: colors.gray[200],
+    marginHorizontal: spacing[3],
+  },
+
+  // Widget header (icon + title + chevron)
+  widgetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  widgetIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  widgetSubtitle: {
+    fontSize: 11,
+    color: colors.gray[400],
+    marginTop: 1,
+  },
+
+  // Low stock rows
+  lowStockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  lowStockName: {
+    flex: 1,
+    fontSize: fontSize.sm,
+    color: colors.gray[900],
+    fontWeight: '500',
+  },
+  lowStockStockPill: {
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.amber[50],
+  },
+  lowStockStockText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.amber[600],
+  },
+
+  // Calls widget
+  callsStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing[3],
+  },
+  callsStatItem: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  callsStatValue: {
+    fontSize: fontSize['2xl'],
+    fontWeight: '700',
+    letterSpacing: -0.5,
+  },
+  callsStatLabel: {
+    fontSize: 11,
+    color: colors.gray[400],
+    marginTop: 2,
+    fontWeight: '500',
+  },
+
   // Chart
   chartCard: {
     borderRadius: borderRadius['3xl'],

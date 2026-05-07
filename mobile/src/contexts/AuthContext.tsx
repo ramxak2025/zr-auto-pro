@@ -11,6 +11,8 @@ import {
   clientsApi,
   carsApi,
   equipmentApi,
+  checksApi,
+  callsApi,
 } from '../api/services';
 import { onAuthExpired } from '../api/axios';
 import { clearPersistentCache } from '../utils/persistentCache';
@@ -37,6 +39,12 @@ interface AuthProviderProps {
    * successful login so the user perceives subsequent screens as instant.
    */
   queryClient?: QueryClient;
+  /**
+   * Fired once when the initial auth check finishes — regardless of
+   * outcome. Lets `App.tsx` time the splash dismissal precisely instead
+   * of relying on an in-tree spinner.
+   */
+  onAuthResolve?: () => void;
 }
 
 /**
@@ -49,6 +57,20 @@ function prefetchAfterLogin(qc: QueryClient): void {
     queryFn: async () => {
       const res = await productsApi.getAll({ search: '', page: 1, limit: 500 });
       return res.data;
+    },
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  // Mirror key for the cash-side product picker. `ProductPickerModal`
+  // reads `['all-products-check']` so opening the picker is a cache hit
+  // on the first try right after login. Different shape (flat array)
+  // than the warehouse `['products', ...]` key, so a separate prefetch
+  // is needed instead of aliasing.
+  qc.prefetchQuery({
+    queryKey: ['all-products-check'],
+    queryFn: async () => {
+      const res = await productsApi.getAll({ search: '', page: 1, limit: 500 });
+      return (res.data as { data?: unknown }).data ?? res.data;
     },
     staleTime: 5 * 60_000,
   }).catch(() => {});
@@ -109,15 +131,81 @@ function prefetchAfterLogin(qc: QueryClient): void {
     queryFn: async () => (await equipmentApi.getSummary()).data,
     staleTime: 5 * 60_000,
   }).catch(() => {});
+
+  // ── Journal (Чеки) — owner explicitly reported this list opens
+  // slowly with a flash of empty. Match the EXACT default query key
+  // that ChecksScreen uses for the first page with no filters:
+  //   ['checks', page=1, search='', dateFrom='', dateTo='', masterId='']
+  // so the prefetch result lands directly in the slot the screen
+  // reads from. Persistent cache (PERSISTED_KEYS) takes over on
+  // cold start; this prefetch warms the slot the first time.
+  qc.prefetchQuery({
+    queryKey: ['checks', 1, '', '', '', ''],
+    queryFn: async () => {
+      const res = await checksApi.getAll({ page: 1, limit: 20 });
+      return res.data;
+    },
+    staleTime: 60_000,
+  }).catch(() => {});
+
+  // ChecksScreen's master-filter dropdown uses a separate key so the
+  // dropdown opens populated even before the user touches anything.
+  qc.prefetchQuery({
+    queryKey: ['users-for-filter'],
+    queryFn: async () => (await usersApi.getAll()).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  // EmployeesScreen uses 'users-all' (separate key from 'users' /
+  // 'all-users' to avoid invalidation cross-talk). Prefetch so the
+  // More → Сотрудники screen is instant.
+  qc.prefetchQuery({
+    queryKey: ['users-all'],
+    queryFn: async () => (await usersApi.getAll()).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  // ServicesScreen first page (default filters: search='', page=1, limit=30).
+  qc.prefetchQuery({
+    queryKey: ['services', { search: '', page: 1, limit: 30 }],
+    queryFn: async () => (await servicesApi.getAll({ search: '', page: 1, limit: 30 })).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  // Dashboard widgets — owners see TodayQuickStats / LowStockWidget /
+  // MissedCallsWidget. Tiny endpoints, prefetch always (master role
+  // simply won't render the widgets, no cost on render).
+  qc.prefetchQuery({
+    queryKey: ['checks-dashboard'],
+    queryFn: async () => (await checksApi.getDashboard()).data,
+    staleTime: 30_000,
+  }).catch(() => {});
+
+  qc.prefetchQuery({
+    queryKey: ['low-stock'],
+    queryFn: async () => (await productsApi.getLowStock()).data,
+    staleTime: 60_000,
+  }).catch(() => {});
+
+  const today = new Date().toISOString().slice(0, 10);
+  qc.prefetchQuery({
+    queryKey: ['calls-summary', today],
+    queryFn: async () => (await callsApi.getCalls({ date: today })).data.summary,
+    staleTime: 60_000,
+  }).catch(() => {});
 }
 
-export function AuthProvider({ children, queryClient }: AuthProviderProps) {
+export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Load token on mount
   useEffect(() => {
+    const finish = () => {
+      setLoading(false);
+      onAuthResolve?.();
+    };
     AsyncStorage.getItem('token').then((stored) => {
       if (stored) {
         setToken(stored);
@@ -132,11 +220,14 @@ export function AuthProvider({ children, queryClient }: AuthProviderProps) {
             AsyncStorage.removeItem('token');
             setToken(null);
           })
-          .finally(() => setLoading(false));
+          .finally(finish);
       } else {
-        setLoading(false);
+        finish();
       }
     });
+    // onAuthResolve is captured intentionally — we only fire it for the
+    // initial mount cycle, not on prop changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient]);
 
   // Listen for 401 events from axios interceptor

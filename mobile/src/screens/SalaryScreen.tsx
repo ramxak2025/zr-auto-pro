@@ -140,6 +140,9 @@ export default function SalaryScreen() {
       const res = await salaryApi.getAll({ dateFrom, dateTo });
       return res.data;
     },
+    // SWR — keep previous month's salary card visible while the user
+    // navigates between months; no spinner mid-swipe.
+    placeholderData: (prev) => prev,
   });
 
   const onRefresh = async () => {
@@ -284,13 +287,16 @@ export default function SalaryScreen() {
           </LinearGradient>
         </AnimatedCard>
 
-        {/* Loading */}
-        {isLoading ? (
+        {/* Cold-start: spinner only until ANY response lands. Once we
+            have data — even from cache — SWR keeps it visible across
+            month navigation. */}
+        {salaries === undefined ? (
           <LoadingSpinner />
         ) : (
           <>
-            {/* Empty state */}
-            {(!salaries || salaries.length === 0) && (
+            {/* Empty state — only when a real response said empty,
+                NOT mid-fetch. Avoids "пусто" flash on month swipe. */}
+            {salaries.length === 0 && !isLoading && (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIcon}>
                   <Ionicons name="wallet-outline" size={36} color={colors.gray[300]} />

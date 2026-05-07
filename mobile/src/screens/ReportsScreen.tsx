@@ -65,6 +65,9 @@ export default function ReportsScreen() {
       return res.data;
     },
     enabled: canView,
+    // SWR — keep previous period's report visible while the user
+    // taps between Сегодня / Неделя / Месяц.
+    placeholderData: (prev) => prev,
   });
 
   const handlePeriodChange = (p: string) => {
@@ -123,9 +126,12 @@ export default function ReportsScreen() {
           ))}
         </View>
 
-        {isLoading ? (
+        {/* Cold-start: spinner only until any report lands. Once we
+            have one (even from a previous period via SWR), keep it
+            visible across period changes. */}
+        {report === undefined ? (
           <LoadingSpinner />
-        ) : !report ? (
+        ) : !report && !isLoading ? (
           <Text style={styles.empty}>Нет данных за выбранный период</Text>
         ) : (
           <>

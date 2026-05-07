@@ -139,6 +139,12 @@ export default function ChecksScreen() {
       return res.data;
     },
     staleTime: 30_000,
+    // Belt-and-suspenders: a per-screen `placeholderData` re-asserts
+    // the global stale-while-revalidate. When the user changes a
+    // filter (search, date, master), we keep showing the previous
+    // page until the new one arrives — no skeleton flash, no empty
+    // state in between.
+    placeholderData: (prev) => prev,
   });
 
   // Warehouse documents queries
@@ -590,9 +596,17 @@ export default function ChecksScreen() {
       {/* Content */}
       {activeTab === 'checks' ? (
         <>
-          {isLoading ? (
+          {/* Cold-start path:
+             - `checksData === undefined` ⇒ never fetched yet AND no cached
+               value — show skeleton (NOT an EmptyState — empty state on
+               cold start was the "пусто" flash the owner reported).
+             - `checksData` defined but list empty AND not currently fetching ⇒
+               legitimate empty state.
+             - `checksData` defined ⇒ render the list immediately, even
+               while a background refetch is in flight (SWR). */}
+          {checksData === undefined ? (
             <ListSkeleton count={8} />
-          ) : checks.length === 0 ? (
+          ) : checks.length === 0 && !isLoading ? (
             <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
           ) : (
             <FlashList
@@ -616,12 +630,16 @@ export default function ChecksScreen() {
         </>
       ) : (
         <>
-          {isWarehouseLoading ? (
+          {/* Same cold-start logic as the checks tab — skeleton until at
+             least one of the two underlying queries has data, then render
+             the merged list. EmptyState only when both queries finished
+             AND the merged list is still empty. */}
+          {movementsData === undefined && deliveriesData === undefined ? (
             /* Skeleton list — gradual reveal from top, no white-empty
                flash. Same component the checks list uses, so the two
                tabs feel identical during loading. */
             <ListSkeleton count={8} />
-          ) : warehouseDocs.length === 0 ? (
+          ) : warehouseDocs.length === 0 && !isWarehouseLoading ? (
             <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
           ) : (
             <FlashList

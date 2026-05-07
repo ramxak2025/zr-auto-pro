@@ -1,6 +1,31 @@
 # Autexa — Security & Performance audit
 
-Дата: 2026-05-06. Iter#8. Этот документ — точечный аудит безопасности и производительности проекта; **исправления внесены только там, где это безопасно и не выходит за пределы mobile**. Изменения backend / API / DB схемы НЕ вносятся без отдельного разрешения владельца — они задокументированы как рекомендации.
+Дата: 2026-05-07. Iter#9. Этот документ — точечный аудит безопасности и производительности проекта; **исправления внесены только там, где это безопасно и не выходит за пределы mobile**. Изменения backend / API / DB схемы НЕ вносятся без отдельного разрешения владельца — они задокументированы как рекомендации.
+
+## Iter#9 — что добавилось
+
+### Multi-tenant data isolation (mobile)
+
+Новый раунд аудита по запросу владельца — гарантировать, что данные одного автосервиса не утекают другому через mobile-кеш.
+
+**SEC-NEW-A (P0, исправлено):** `mobile/src/utils/persistentCache.ts` — `hydrateCache` теперь читает `AsyncStorage.getItem('token')` ПЕРВЫМ. Если токена нет (logout / fresh install / killed app mid-logout) — функция (a) НЕ загружает persisted query data в `QueryClient`, (b) **активно вычищает все ключи с префиксом `@autexa/qc/`** из AsyncStorage. Это закрывает race-condition: «User A logout прерван kill'ом процесса → User B запускает приложение → видел кеш A». Теперь невозможно даже теоретически.
+
+**SEC-NEW-B (P0, задокументирован, требует prebuild):** `mobile/src/api/axios.ts` — JWT всё ещё в plain `AsyncStorage`. На iOS файлы AsyncStorage хранятся в незащищённом sandbox; jailbreak / резервная копия = чтение токена. Правильный фикс — `expo-secure-store` (iOS Keychain / Android Keystore). **Не внесён в этой итерации**, потому что добавление native-зависимости требует `expo prebuild --clean` + `pod install` + native rebuild, и без этих шагов running build падает на `SecureStore.getItemAsync`. Запланировано в следующую итерацию с полным native rebuild цикл.
+
+**SEC-NEW-C (P1, документ):** Query keys в `useQuery` не содержат `tenantId` — они глобальны по entity-name (`['products', ...]`, `['clients', ...]`). Backend корректно фильтрует по `tenantID` из JWT (см. `backend/src/auth/jwt.strategy.ts:40-54`, контроллеры используют `@CurrentUser()`), поэтому через API утечь данные нельзя. Но в client-side cache два tenant'а на одном устройстве делят слоты по entity-name. Сегодня защищены через clear-on-logout + новый hydrate-gate (SEC-NEW-A). Defense-in-depth: следующая итерация — расширить `queryKey` префиксом tenantId (`['t', user.tenantId, 'products', ...]`), тогда даже без clear-on-logout кросс-tenant хит невозможен.
+
+**SEC-NEW-D (информация, не уязвимость):** Backend audit подтверждает корректность tenant isolation на server-side: `JwtStrategy.validate()` извлекает `tenantID` из БД через userID и пишет в `JwtPayload`; контроллеры читают `tenantID` через `@CurrentUser()` декоратор, не из request params/query. Mobile НЕ может spoof'нуть tenantId через API. Backend secure.
+
+**SEC-NEW-E (информация):** `grep -r 'console.log' mobile/src` → 0 результатов. Sensitive data в логах не утекает.
+
+**SEC-NEW-F (информация):** `FeatureGate` обходит paywall для `superadmin` на client-side, но реальная проверка происходит на backend через `RolesGuard` + `@Roles(...)`. Подделать роль на client невозможно (роль приходит из JWT).
+
+### Performance + UX (iter#9)
+
+- **P11 (P0)** Product picker унифицирован к стилю warehouse: `ProductPickerModal.tsx` переписан на FlashList + warehouse-style row (photo 56×56, name 2 lines, category, sellPrice, optional cost, stock + alert + cart-qty badge), inline picker в `CheckCreateScreen.tsx` заменён на `<ProductPickerModal>` (минус ~370 строк дубликата). Cache-first через `placeholderData: prev => prev` + prefetch `['all-products-check']` в `AuthContext.prefetchAfterLogin`.
+- **P12 (P0)** Журнал чеков (`ChecksScreen.tsx`) и тяжёлые списки (`Clients`, `Cars`, `Suppliers`, `Services`, `Employees`, `CashFlow`, `Salary`, `Reports`) переведены на cache-first SWR pattern: cold-start gate переключён с `isLoading` на `data === undefined`, EmptyState теперь требует `!isLoading`. Whitelist `PERSISTED_KEYS` расширен (`'checks'`, `'users-for-filter'`, `'stock-movements'`, `'supplier-deliveries'`, `'services'`, `'users-all'`, `'masters'`, `'cashflow'`, `'financial-report'`). Prefetch'и в AuthContext добавлены для `['checks', 1, '', '', '', '']`, `['users-for-filter']`, `['users-all']`, `['services', { search:'', page:1, limit:30 }]`. Никакого «flash of empty/white».
+- **P13** Dashboard — добавлены три виджета для owner/director/superadmin: `TodayQuickStats` (выручка/прибыль/чеки сегодня), `LowStockWidget` (top 5 товаров с низким остатком + tap → Склад), `MissedCallsWidget` (пропущенные/не перезвонили сегодня + tap → Звонки). Все на доступных API (`checksApi.getDashboard`, `productsApi.getLowStock`, `callsApi.getCalls`). Backend не трогался. Prefetch'и + persistence whitelist обновлены (`'checks-dashboard'`, `'low-stock'`).
+- **P14** Корзина склада перенесена из `MoreScreen` (раздел «Ещё») в `ProductsScreen` ops modal как 4-й пункт. `TrashScreen.tsx` принимает optional `onClose` prop, рендерится через full-screen RNModal. Доступ — за permission `warehouse_access`, как и было. Логически правильное место (склад).
 
 ## Iter#8 — что добавилось
 

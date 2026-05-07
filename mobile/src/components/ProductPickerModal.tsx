@@ -1,8 +1,7 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   TouchableOpacity,
   TextInput,
   StyleSheet,
@@ -10,16 +9,22 @@ import {
   Animated,
   Modal as RNModal,
   PanResponder,
+  Pressable,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import CachedImage from './CachedImage';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { ListSkeleton } from './Skeleton';
 import type { Product } from '../../../shared/types';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+const FOLDER_COLS = 3;
+const FOLDER_GAP = spacing[2];
+const FOLDER_WIDTH = (SCREEN_WIDTH - spacing[4] * 2 - FOLDER_GAP * (FOLDER_COLS - 1)) / FOLDER_COLS;
 
 function formatMoney(v: number) {
   return (
@@ -44,6 +49,132 @@ interface ProductPickerModalProps {
   folderAnnotations?: Map<string, FolderAnnotation>;
 }
 
+/**
+ * Discriminated row union for the FlashList — folders sit above products
+ * in the same virtualised list so we never re-render the whole sheet on
+ * folder/product navigation. `header` placeholders the folders grid as a
+ * single sticky-ish row at the top so FlashList can recycle every other
+ * cell as a product row of the same shape.
+ */
+type FolderRow = {
+  type: 'folders';
+  entries: Array<[string, number]>;
+  annotations?: Map<string, FolderAnnotation>;
+};
+type ProductRow = { type: 'product'; product: Product };
+type Row = FolderRow | ProductRow;
+
+interface PickerProductRowItemProps {
+  product: Product;
+  cartQty: number;
+  showCostPrice: boolean;
+  onPress: (product: Product) => void;
+}
+
+/**
+ * Memoised product row — visual mirror of `ProductsScreen.tsx`'s row at
+ * lines ~885-936 so the picker reads as the SAME list, just inside a
+ * modal sheet. Differences vs warehouse:
+ *   - 56x56 photo (warehouse uses 42 — bigger here for thumb-friendly
+ *     tap targets in the cash hot path).
+ *   - Right column shows stock + cart-qty badge instead of an edit
+ *     chevron.
+ * Otherwise: same hairline separators, same numberOfLines={2}, same
+ * category subtitle, same low-stock alert icon, same prices row.
+ */
+const PickerProductRow = React.memo(function PickerProductRow({
+  product,
+  cartQty,
+  showCostPrice,
+  onPress,
+}: PickerProductRowItemProps) {
+  const lowStock = product.stock <= product.minStock && product.minStock > 0;
+  const photoUrl = getImageUrl((product as { photo?: string }).photo);
+  const categoryLeaf = product.category ? product.category.split('/').pop() : null;
+  return (
+    <Pressable
+      onPress={() => onPress(product)}
+      style={({ pressed }) => [styles.productCard, pressed && styles.productCardPressed]}
+    >
+      <View style={styles.productRow}>
+        {photoUrl ? (
+          <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} resizeMode="cover" />
+        ) : (
+          <View style={styles.productPhotoPlaceholder}>
+            <Ionicons name="cube-outline" size={24} color={colors.gray[300]} />
+          </View>
+        )}
+        <View style={styles.productInfo}>
+          <Text style={styles.productName} numberOfLines={2}>
+            {product.name}
+          </Text>
+          {categoryLeaf ? <Text style={styles.productCategory}>{categoryLeaf}</Text> : null}
+          <View style={styles.productPrices}>
+            <Text style={styles.productSellPrice}>{formatMoney(product.sellPrice)}</Text>
+            {showCostPrice ? (
+              <Text style={styles.productCostPrice}>
+                {'Себест.'} {formatMoney(product.costPrice)}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+        <View style={styles.productStockWrap}>
+          {lowStock ? (
+            <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
+          ) : null}
+          <Text style={[styles.productStock, lowStock && styles.productStockLow]}>{product.stock}</Text>
+          <Text style={styles.productStockLabel}>{'шт'}</Text>
+          {cartQty > 0 ? (
+            <View style={styles.cartBadge}>
+              <Text style={styles.cartBadgeText}>{cartQty}</Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    </Pressable>
+  );
+});
+
+interface FolderGridRowProps {
+  entries: Array<[string, number]>;
+  annotations?: Map<string, FolderAnnotation>;
+  onSelect: (name: string) => void;
+}
+
+/**
+ * Folder grid — three columns, mirror of the inventory folder grid in
+ * `ProductsScreen.tsx` (`foldersGrid` style + FOLDER_WIDTH constant).
+ * Lives as ONE FlashList row so it recycles cleanly with the product
+ * cells below.
+ */
+const FolderGridRow = React.memo(function FolderGridRow({ entries, annotations, onSelect }: FolderGridRowProps) {
+  return (
+    <View style={styles.foldersGrid}>
+      {entries.map(([name, count]) => {
+        const annotation = annotations?.get(name);
+        return (
+          <TouchableOpacity key={name} style={styles.folderCard} onPress={() => onSelect(name)} activeOpacity={0.6}>
+            <View style={styles.folderIconBox}>
+              <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+            </View>
+            <Text style={styles.folderName} numberOfLines={2}>
+              {name}
+            </Text>
+            <Text style={styles.folderCount}>
+              {count} {'тов.'}
+            </Text>
+            {annotation ? (
+              <Text style={[styles.folderAnnotation, { color: annotation.color }]} numberOfLines={1}>
+                {annotation.label}
+              </Text>
+            ) : null}
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+});
+
 export default function ProductPickerModal({
   visible,
   onClose,
@@ -54,33 +185,47 @@ export default function ProductPickerModal({
   folderAnnotations,
 }: ProductPickerModalProps) {
   const [productPath, setProductPath] = useState<string[]>([]);
+  // `localSearch` is what the input renders (every keystroke), `productSearch`
+  // is the debounced value that drives the heavy filter+folder useMemo. The
+  // 200 ms debounce keeps the FlashList stable while the user is still
+  // typing, so the rows don't reflow on every character.
+  const [localSearch, setLocalSearch] = useState('');
   const [productSearch, setProductSearch] = useState('');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reuses the SAME prefetched key the AuthContext warms up on login
-  // (`['all-products-check']`) so the picker opens INSTANTLY from cache
-  // on first open, then revalidates in the background. The earlier
-  // implementation used a unique key with `refetchOnMount: 'always'`
-  // and `staleTime: 0` — that forced a full network round-trip every
-  // time the modal opened, which is the source of the slow-open report.
-  const { data: allProducts } = useQuery<Product[]>({
+  const handleSearchChange = useCallback((text: string) => {
+    setLocalSearch(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setProductSearch(text), 200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
+  // Same query key as `CheckCreateScreen` and `AuthContext.prefetchAfterLogin`
+  // so opening the picker is a cache hit on the first try, then revalidates
+  // in the background. `placeholderData: prev => prev` is also redundantly
+  // set on the global QueryClient — kept here too as defence in depth.
+  const { data: allProducts, isLoading } = useQuery<Product[]>({
     queryKey: ['all-products-check'],
     queryFn: async () => {
       const res = await productsApi.getAll({ limit: 500 });
-      return res.data?.data || res.data;
+      return (res.data?.data || res.data) as Product[];
     },
     enabled: visible,
-    // Don't drop the previous cache when re-opening — show last data
-    // immediately while the background revalidation runs.
     placeholderData: (prev) => prev,
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
   });
 
-  const { productFolders, visibleProducts } = useMemo(() => {
+  const { sortedProductFolders, visibleProducts } = useMemo(() => {
     const products = allProducts || [];
     if (productSearch) {
       const q = productSearch.toLowerCase();
       return {
-        productFolders: new Map<string, number>(),
+        sortedProductFolders: [] as Array<[string, number]>,
         visibleProducts: products.filter(
           (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
         ),
@@ -110,12 +255,25 @@ export default function ProductPickerModal({
       }
     }
 
-    return { productFolders: subs, visibleProducts: prods };
+    return {
+      sortedProductFolders: Array.from(subs.entries()).sort((a, b) => a[0].localeCompare(b[0])),
+      visibleProducts: prods,
+    };
   }, [allProducts, productPath, productSearch]);
 
-  const sortedProductFolders = Array.from(productFolders.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  // Compose folders + products into ONE list so FlashList virtualises the
+  // whole sheet (no nested ScrollView, no over-rendering). The folders
+  // grid lives in row 0, products fill the rest.
+  const rows = useMemo<Row[]>(() => {
+    const out: Row[] = [];
+    if (!productSearch && sortedProductFolders.length > 0) {
+      out.push({ type: 'folders', entries: sortedProductFolders, annotations: folderAnnotations });
+    }
+    for (const p of visibleProducts) out.push({ type: 'product', product: p });
+    return out;
+  }, [productSearch, sortedProductFolders, visibleProducts, folderAnnotations]);
 
-  // Swipe-to-go-back
+  // Swipe-to-go-back from the folder navigation
   const panX = useRef(new Animated.Value(0)).current;
   const panResponder = useRef(
     PanResponder.create({
@@ -136,11 +294,51 @@ export default function ProductPickerModal({
     }),
   ).current;
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
+    setLocalSearch('');
     setProductSearch('');
     setProductPath([]);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
     onClose();
-  };
+  }, [onClose]);
+
+  const handleSelect = useCallback(
+    (product: Product) => {
+      onSelectProduct(product);
+    },
+    [onSelectProduct],
+  );
+
+  const handleEnterFolder = useCallback((name: string) => {
+    setProductPath((prev) => [...prev, name]);
+  }, []);
+
+  const renderItem = useCallback(
+    ({ item }: { item: Row }) => {
+      if (item.type === 'folders') {
+        return <FolderGridRow entries={item.entries} annotations={item.annotations} onSelect={handleEnterFolder} />;
+      }
+      const qty = getCartQty ? getCartQty(item.product.id) : 0;
+      return (
+        <PickerProductRow product={item.product} cartQty={qty} showCostPrice={showCostPrice} onPress={handleSelect} />
+      );
+    },
+    [getCartQty, handleEnterFolder, handleSelect, showCostPrice],
+  );
+
+  const keyExtractor = useCallback((item: Row, index: number) => {
+    if (item.type === 'folders') return `folders-${index}`;
+    return item.product.id;
+  }, []);
+
+  const getItemType = useCallback((item: Row) => item.type, []);
+
+  // First-load skeleton fires ONLY when there is no data at all yet
+  // (`data === undefined`). When `data` is `[]` we trust the query and
+  // show the genuine "Нет товаров" empty state — no flash before data
+  // arrives because `placeholderData` keeps the previous list visible.
+  const showInitialSkeleton = visible && allProducts === undefined && isLoading;
+  const queryResolvedEmpty = visible && Array.isArray(allProducts) && allProducts.length === 0;
 
   return (
     <RNModal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
@@ -165,27 +363,34 @@ export default function ProductPickerModal({
           <View style={styles.searchWrap}>
             <Ionicons name="search-outline" size={16} color={colors.gray[400]} />
             <TextInput
-              value={productSearch}
-              onChangeText={setProductSearch}
+              value={localSearch}
+              onChangeText={handleSearchChange}
               style={styles.searchInput}
-              placeholder="Поиск товара..."
+              placeholder={'Поиск товара...'}
               placeholderTextColor={colors.gray[400]}
+              autoCorrect={false}
+              autoCapitalize="none"
             />
-            {productSearch ? (
-              <TouchableOpacity onPress={() => setProductSearch('')}>
+            {localSearch ? (
+              <TouchableOpacity
+                onPress={() => {
+                  setLocalSearch('');
+                  setProductSearch('');
+                }}
+              >
                 <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
               </TouchableOpacity>
             ) : null}
           </View>
 
           {/* Breadcrumbs */}
-          {!productSearch && productPath.length > 0 && (
+          {!productSearch && productPath.length > 0 ? (
             <View style={styles.breadcrumbRow}>
               <TouchableOpacity onPress={() => setProductPath([])} style={styles.breadcrumbItem}>
                 <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
               </TouchableOpacity>
               {productPath.map((seg, i) => (
-                <React.Fragment key={i}>
+                <React.Fragment key={`${seg}-${i}`}>
                   <Ionicons name="chevron-forward" size={12} color={colors.gray[300]} />
                   <TouchableOpacity
                     onPress={() => setProductPath((prev) => prev.slice(0, i + 1))}
@@ -194,7 +399,10 @@ export default function ProductPickerModal({
                     <Text
                       style={[
                         styles.breadcrumbText,
-                        i === productPath.length - 1 && { color: colors.gray[900], fontWeight: fontWeight.bold },
+                        i === productPath.length - 1 && {
+                          color: colors.gray[900],
+                          fontWeight: fontWeight.bold,
+                        },
                       ]}
                     >
                       {seg}
@@ -203,92 +411,36 @@ export default function ProductPickerModal({
                 </React.Fragment>
               ))}
             </View>
-          )}
+          ) : null}
 
-          <ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ padding: spacing[4], paddingBottom: spacing[12] }}
-            keyboardShouldPersistTaps="handled"
-          >
-            {/* Folders */}
-            {!productSearch && sortedProductFolders.length > 0 && (
-              <View style={styles.foldersGrid}>
-                {sortedProductFolders.map(([name, count]) => {
-                  const annotation = folderAnnotations?.get(name);
-                  return (
-                    <TouchableOpacity
-                      key={name}
-                      style={styles.folderCard}
-                      onPress={() => setProductPath((prev) => [...prev, name])}
-                    >
-                      <Ionicons name="folder-open" size={22} color={colors.primary[500]} />
-                      <Text style={styles.folderName} numberOfLines={2}>
-                        {name}
-                      </Text>
-                      <Text style={styles.folderCount}>{count} тов.</Text>
-                      {annotation && (
-                        <Text style={[styles.folderAnnotation, { color: annotation.color }]} numberOfLines={1}>
-                          {annotation.label}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            )}
-
-            {/* Products */}
-            {visibleProducts.map((product) => {
-              const cartQty = getCartQty ? getCartQty(product.id) : 0;
-              const photoUrl = getImageUrl((product as any).photo);
-              const price = showCostPrice ? product.costPrice : product.sellPrice;
-              return (
-                <TouchableOpacity
-                  key={product.id}
-                  style={styles.productItem}
-                  onPress={() => onSelectProduct(product)}
-                  activeOpacity={0.6}
-                >
-                  {photoUrl ? (
-                    <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} />
-                  ) : (
-                    <View style={[styles.productPhoto, styles.productPhotoPlaceholder]}>
-                      <Ionicons name="cube-outline" size={20} color={colors.gray[300]} />
-                    </View>
-                  )}
-                  <View style={styles.productInfo}>
-                    <Text style={styles.productName} numberOfLines={2}>
-                      {product.name}
-                    </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 }}>
-                      <Text style={styles.productPrice}>{formatMoney(price)}</Text>
-                      <Text style={styles.productStock}>Ост: {product.stock} шт</Text>
-                    </View>
+          {/* Body — skeleton on cold start, FlashList otherwise */}
+          {showInitialSkeleton ? (
+            <View style={styles.skeletonWrap}>
+              <ListSkeleton count={8} />
+            </View>
+          ) : (
+            <FlashList
+              data={rows}
+              renderItem={renderItem}
+              keyExtractor={keyExtractor}
+              getItemType={getItemType}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.listContent}
+              ListEmptyComponent={
+                queryResolvedEmpty ? (
+                  <View style={styles.empty}>
+                    <Ionicons name="cube-outline" size={40} color={colors.gray[300]} />
+                    <Text style={styles.emptyText}>{'Нет товаров'}</Text>
                   </View>
-                  {cartQty > 0 ? (
-                    <View style={styles.cartBadge}>
-                      <Text style={styles.cartBadgeText}>{cartQty}</Text>
-                    </View>
-                  ) : (
-                    <Ionicons name="add-circle" size={28} color={colors.primary[500]} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-
-            {!productSearch && sortedProductFolders.length === 0 && visibleProducts.length === 0 && (
-              <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
-                <Ionicons name="cube-outline" size={40} color={colors.gray[300]} />
-                <Text style={{ color: colors.gray[400], marginTop: spacing[2] }}>Нет товаров</Text>
-              </View>
-            )}
-            {productSearch && visibleProducts.length === 0 && (
-              <View style={{ alignItems: 'center', paddingVertical: spacing[8] }}>
-                <Ionicons name="search-outline" size={40} color={colors.gray[300]} />
-                <Text style={{ color: colors.gray[400], marginTop: spacing[2] }}>Ничего не найдено</Text>
-              </View>
-            )}
-          </ScrollView>
+                ) : productSearch ? (
+                  <View style={styles.empty}>
+                    <Ionicons name="search-outline" size={40} color={colors.gray[300]} />
+                    <Text style={styles.emptyText}>{'Ничего не найдено'}</Text>
+                  </View>
+                ) : null
+              }
+            />
+          )}
         </Animated.View>
       </View>
     </RNModal>
@@ -312,8 +464,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
   },
   closeBtn: {
     width: 36,
@@ -346,53 +498,97 @@ const styles = StyleSheet.create({
   },
   breadcrumbItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingVertical: 2 },
   breadcrumbText: { fontSize: fontSize.xs, color: colors.primary[600], fontWeight: fontWeight.medium },
-  foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3], marginBottom: spacing[4] },
+  // Folders — three-column grid, mirror of ProductsScreen.foldersGrid /
+  // folderCard / folderIconBox so the picker reads as the same surface.
+  foldersGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: FOLDER_GAP,
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[2],
+    paddingBottom: spacing[3],
+  },
   folderCard: {
-    width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3] * 2) / 3,
-    backgroundColor: colors.gray[50],
+    width: FOLDER_WIDTH,
+    backgroundColor: colors.white,
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: colors.gray[100],
     padding: spacing[3],
     alignItems: 'center',
     gap: spacing[1],
+    shadowColor: colors.black,
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  folderIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[1],
   },
   folderName: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: fontWeight.semibold,
     color: colors.gray[900],
     textAlign: 'center',
-    lineHeight: 16,
+    lineHeight: 14,
   },
-  folderCount: { fontSize: 10, color: colors.gray[400] },
+  folderCount: { fontSize: 10, color: colors.gray[400], marginTop: 2 },
   folderAnnotation: { fontSize: 9, fontWeight: fontWeight.medium, marginTop: 2, textAlign: 'center' },
-  productItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingVertical: spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[50],
+  // Products — visual mirror of ProductsScreen.productCard / productRow.
+  // 56-pt photo (warehouse uses 42) for thumb-friendly cash hot-path taps.
+  productCard: {
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
   },
-  productPhoto: { width: 52, height: 52, borderRadius: borderRadius.lg },
+  productCardPressed: { backgroundColor: colors.gray[50] },
+  productRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  productPhoto: { width: 56, height: 56, borderRadius: borderRadius.lg },
   productPhotoPlaceholder: {
-    backgroundColor: colors.gray[50],
+    width: 56,
+    height: 56,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.gray[100],
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: colors.gray[100],
   },
   productInfo: { flex: 1, minWidth: 0 },
-  productName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  productPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  productStock: { fontSize: fontSize.xs, color: colors.gray[400] },
+  productName: {
+    fontSize: 15,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+    letterSpacing: -0.1,
+  },
+  productCategory: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+  productPrices: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 },
+  productSellPrice: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[700] },
+  productCostPrice: { fontSize: 11, color: colors.gray[400] },
+  productStockWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 48, paddingLeft: spacing[1] },
+  productStock: { fontSize: 16, fontWeight: '700' as const, color: colors.gray[900], letterSpacing: -0.3 },
+  productStockLow: { color: colors.red[500] },
+  productStockLabel: { fontSize: 10, color: colors.gray[400], marginTop: -1 },
   cartBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
     backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 4,
   },
-  cartBadgeText: { fontSize: 13, fontWeight: fontWeight.bold, color: colors.white },
+  cartBadgeText: { fontSize: 12, fontWeight: fontWeight.bold, color: colors.white },
+  // List
+  listContent: { paddingBottom: spacing[12] },
+  skeletonWrap: { flex: 1, paddingTop: spacing[2] },
+  empty: { alignItems: 'center', paddingVertical: spacing[10] },
+  emptyText: { color: colors.gray[400], marginTop: spacing[2], fontSize: fontSize.sm },
 });

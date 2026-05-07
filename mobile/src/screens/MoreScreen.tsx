@@ -49,15 +49,6 @@ const menuItems: MenuItem[] = [
     iconColor: colors.cyan[600],
   },
   {
-    label: 'Корзина склада',
-    description: 'Восстановление удалённых товаров',
-    screen: 'Trash',
-    permission: 'warehouse_access',
-    icon: 'trash-outline',
-    iconBg: colors.rose[50],
-    iconColor: colors.rose[600],
-  },
-  {
     label: 'Расписание',
     description: 'График работы и смены',
     screen: 'Schedule',

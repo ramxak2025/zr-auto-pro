@@ -55,6 +55,10 @@ export default function ServicesScreen() {
       const res = await servicesApi.getAll({ search, page, limit });
       return res.data;
     },
+    // Per-screen SWR — keep previous page while search/pagination
+    // mutates the key, so the breadcrumb folder view never falls
+    // back to a skeleton between transitions.
+    placeholderData: (prev) => prev,
   });
 
   const createMutation = useMutation({
@@ -232,9 +236,12 @@ export default function ServicesScreen() {
         />
       </View>
 
-      {isLoading || data === undefined ? (
+      {data === undefined ? (
+        // Cold-start: skeleton until ANY data (cached or freshly
+        // fetched) lands. After that, SWR keeps the list visible
+        // across filter mutations.
         <ListSkeleton count={8} />
-      ) : !search && folders.length === 0 && currentServices.length === 0 ? (
+      ) : !search && folders.length === 0 && currentServices.length === 0 && !isLoading ? (
         <EmptyState
           title="Нет услуг"
           description="Добавьте первую услугу"

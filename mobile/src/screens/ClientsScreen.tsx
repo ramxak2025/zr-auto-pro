@@ -69,6 +69,10 @@ export default function ClientsScreen() {
       const res = await clientsApi.getAll({ search, page, limit });
       return res.data;
     },
+    // Local re-assertion of the global SWR — keeps the previous page
+    // visible while pagination/search keys mutate, eliminating the
+    // skeleton-flash between filters.
+    placeholderData: (prev) => prev,
   });
 
   const createMutation = useMutation({
@@ -267,9 +271,12 @@ export default function ClientsScreen() {
 
       {/* Content — single screen renders either clients or cars based on mode */}
       {mode === 'cars' ? (
-        carsQuery.isLoading ? (
+        // Cold-start guard: only show skeleton while we genuinely have
+        // no data yet (cache miss + no prefetch). Once data exists,
+        // SWR keeps it visible across filter changes — no flash.
+        carsQuery.data === undefined ? (
           <ListSkeleton count={8} />
-        ) : carsList.length === 0 ? (
+        ) : carsList.length === 0 && !carsQuery.isLoading ? (
           <EmptyState
             title="Нет автомобилей"
             description={search ? 'Ничего не найдено' : 'Добавьте машину к клиенту'}
@@ -309,9 +316,12 @@ export default function ClientsScreen() {
             }
           />
         )
-      ) : isLoading ? (
+      ) : data === undefined ? (
+        // Cold-start: no cached value AND no prefetch hit yet — show
+        // the skeleton instead of an EmptyState. EmptyState ("Нет
+        // клиентов") on cold-start was the perceived "пусто" flash.
         <ListSkeleton count={8} />
-      ) : clients.length === 0 && !search ? (
+      ) : clients.length === 0 && !search && !isLoading ? (
         <EmptyState
           title="Нет клиентов"
           description="Добавьте первого клиента"

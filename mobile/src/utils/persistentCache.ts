@@ -58,8 +58,32 @@ const PERSISTED_KEYS = [
   'salary',
   // Calls + services list
   'calls-summary',
+  // Dashboard widgets (TodayQuickStats / LowStockWidget) — small payloads,
+  // cold-start instant.
+  'checks-dashboard',
+  'low-stock',
   'services-list',
   'service-categories',
+  // ── Journal (Чеки) ─────────────────────────────────────────────
+  // 'checks' is a paginated history; the first-page default-filter
+  // snapshot is the slowest to render, so we cache the whole first
+  // segment. SWR replaces it within ~150 ms after mount.
+  'checks',
+  // Filter helpers used by ChecksScreen — small list, mostly static.
+  'users-for-filter',
+  // Warehouse-document tabs inside ChecksScreen.
+  'stock-movements',
+  'supplier-deliveries',
+  // ── Other heavy lists (cold-start instant) ─────────────────────
+  // Services screen uses ['services', { search, page, limit }].
+  'services',
+  // EmployeesScreen uses ['users-all'].
+  'users-all',
+  // CashFlowScreen uses ['masters'] for its filter dropdown.
+  'masters',
+  // CashFlowScreen + ReportsScreen finance reads.
+  'cashflow',
+  'financial-report',
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];
@@ -101,9 +125,27 @@ function storageKey(qk: QueryKey): string {
  *
  * Call once on app start, BEFORE the first render that uses `useQuery`.
  * Failures are silent — the worst case is a cold-start without cache.
+ *
+ * SaaS-isolation safeguard: if no auth token is present, we DO NOT hydrate
+ * cached data — that data belongs to a previous logged-in user. We also
+ * proactively delete all our-prefixed keys in that case so a half-completed
+ * logout (process killed mid-clear) can't leak data to the next user that
+ * logs in on the same device.
  */
 export async function hydrateCache(qc: QueryClient): Promise<void> {
   try {
+    // Tenant isolation gate. Read the auth token first; if it's missing,
+    // the previous session is over and no persisted entries should be
+    // resurrected into the QueryClient. We also flush any orphan entries
+    // so the next login starts clean.
+    const token = await AsyncStorage.getItem('token');
+    if (!token) {
+      const orphanKeys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(STORAGE_PREFIX));
+      if (orphanKeys.length > 0) {
+        await AsyncStorage.multiRemove(orphanKeys).catch(() => {});
+      }
+      return;
+    }
     const allKeys = await AsyncStorage.getAllKeys();
     const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
     if (ourKeys.length === 0) return;

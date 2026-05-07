@@ -22,12 +22,15 @@ export default function CarsScreen() {
   const limit = 30;
   const [refreshing, setRefreshing] = useState(false);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading } = useQuery<any>({
     queryKey: ['cars', { search, page, limit }],
     queryFn: async () => {
       const res = await carsApi.getAll({ search, page, limit });
       return res.data;
     },
+    // Local SWR — keeps previous list while search/pagination
+    // changes the key, no skeleton flash between transitions.
+    placeholderData: (prev: unknown) => prev,
   });
 
   const onRefresh = async () => {
@@ -109,9 +112,11 @@ export default function CarsScreen() {
         />
       </View>
 
-      {isLoading ? (
+      {data === undefined ? (
+        // Cold-start: only render skeleton while genuinely empty,
+        // never flash an EmptyState before the first response.
         <ListSkeleton count={8} />
-      ) : (Array.isArray(cars) ? cars : []).length === 0 ? (
+      ) : (Array.isArray(cars) ? cars : []).length === 0 && !isLoading ? (
         <EmptyState
           title="Нет автомобилей"
           description={search ? 'Ничего не найдено' : 'Автомобили появятся после добавления к клиентам'}
