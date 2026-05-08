@@ -1,9 +1,5 @@
 import React from 'react';
-import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  RefreshControl, Linking,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,6 +7,7 @@ import { useNavigation } from '@react-navigation/native';
 import { subscriptionApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { SubscriptionInfo, Plan } from '../../../shared/types';
 
@@ -41,7 +38,10 @@ export default function SubscriptionScreen() {
 
   const { data: sub, isLoading } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
-    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    queryFn: async () => {
+      const res = await subscriptionApi.get();
+      return res.data;
+    },
   });
 
   const onRefresh = async () => {
@@ -65,26 +65,15 @@ export default function SubscriptionScreen() {
   if (isLoading) return <LoadingSpinner />;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="diamond-outline" size={18} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Подписка</Text>
-        </View>
-        <View style={{ width: 60 }} />
-      </View>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
 
-      <ScrollView contentContainerStyle={styles.scrollContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
+      >
         {/* Current plan info */}
         <AnimatedCard index={0}>
           <View style={styles.card}>
@@ -133,7 +122,9 @@ export default function SubscriptionScreen() {
                   <Ionicons name="people-outline" size={16} color={colors.gray[400]} />
                   <Text style={styles.usersLabel}>Сотрудников</Text>
                 </View>
-                <Text style={styles.usersValue}>{sub.currentUsers} / {sub.maxUsers}</Text>
+                <Text style={styles.usersValue}>
+                  {sub.currentUsers} / {sub.maxUsers}
+                </Text>
               </View>
             )}
 
@@ -164,10 +155,7 @@ export default function SubscriptionScreen() {
                 <AnimatedCard key={plan.id} index={idx + 1}>
                   <View style={[styles.planCard, isCurrent && styles.planCardCurrent]}>
                     {isCurrent && (
-                      <LinearGradient
-                        colors={[colors.primary[500], colors.primary[600]]}
-                        style={styles.currentBanner}
-                      >
+                      <LinearGradient colors={[colors.primary[500], colors.primary[600]]} style={styles.currentBanner}>
                         <Text style={styles.currentBannerText}>Ваш тариф</Text>
                       </LinearGradient>
                     )}
@@ -188,7 +176,7 @@ export default function SubscriptionScreen() {
 
                       {/* Features list */}
                       <View style={styles.featuresList}>
-                        {ALL_FEATURES.map(feat => {
+                        {ALL_FEATURES.map((feat) => {
                           const included = features.includes(feat.key);
                           return (
                             <View key={feat.key} style={styles.featureRow}>
@@ -219,44 +207,88 @@ export default function SubscriptionScreen() {
           </>
         )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },
   // Main card
-  card: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[5], gap: spacing[4] },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[5],
+    gap: spacing[4],
+  },
   planHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  planIconWrap: { width: 48, height: 48, borderRadius: borderRadius.xl, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
+  planIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   planOrgName: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   planName: { fontSize: fontSize.sm, color: colors.gray[500], marginTop: 2 },
   // Info grid
   infoGrid: { gap: spacing[3] },
-  infoBlock: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3], backgroundColor: colors.gray[50], padding: spacing[3.5], borderRadius: borderRadius.xl },
+  infoBlock: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[3],
+    backgroundColor: colors.gray[50],
+    padding: spacing[3.5],
+    borderRadius: borderRadius.xl,
+  },
   infoLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
   infoValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: 2 },
   // Users
-  usersRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: spacing[3], borderTopWidth: 1, borderTopColor: colors.gray[100] },
+  usersRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[100],
+  },
   usersLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   usersLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
   usersValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   // Note
-  noteBlock: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2], backgroundColor: colors.blue[50], padding: spacing[3.5], borderRadius: borderRadius.xl },
+  noteBlock: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    backgroundColor: colors.blue[50],
+    padding: spacing[3.5],
+    borderRadius: borderRadius.xl,
+  },
   noteText: { fontSize: fontSize.sm, color: colors.blue[600], flex: 1 },
   // WhatsApp
-  whatsappBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: '#25D366', paddingVertical: spacing[3.5], borderRadius: borderRadius.xl },
+  whatsappBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: '#25D366',
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+  },
   whatsappText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
   // Section
   sectionTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   // Plan cards
-  planCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], overflow: 'hidden' },
+  planCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    overflow: 'hidden',
+  },
   planCardCurrent: { borderColor: colors.primary[500], borderWidth: 2 },
   currentBanner: { paddingVertical: spacing[1.5], alignItems: 'center' },
   currentBannerText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.white },
@@ -266,7 +298,14 @@ const styles = StyleSheet.create({
   priceRow: { flexDirection: 'row', alignItems: 'baseline' },
   priceValue: { fontSize: 32, fontWeight: fontWeight.bold, color: colors.gray[900] },
   priceSuffix: { fontSize: fontSize.sm, color: colors.gray[500] },
-  maxUsersRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.primary[50], padding: spacing[3], borderRadius: borderRadius.xl },
+  maxUsersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.primary[50],
+    padding: spacing[3],
+    borderRadius: borderRadius.xl,
+  },
   maxUsersText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[700] },
   // Features
   featuresList: { gap: spacing[1.5] },
@@ -274,6 +313,15 @@ const styles = StyleSheet.create({
   featureText: { fontSize: fontSize.sm, color: colors.gray[700] },
   featureTextDisabled: { color: colors.gray[400], textDecorationLine: 'line-through' },
   // Connect
-  connectBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.primary[600], paddingVertical: spacing[3], borderRadius: borderRadius.xl, marginTop: spacing[1] },
+  connectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.primary[600],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    marginTop: spacing[1],
+  },
   connectBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
 });

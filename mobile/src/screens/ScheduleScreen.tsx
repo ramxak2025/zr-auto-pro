@@ -31,6 +31,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
+import { openEmployee } from '../navigation/entityLinks';
 import { scheduleApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -362,6 +363,7 @@ function GridTab() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const reduceMotion = useReduceMotion();
+  const navigation = useNavigation<any>();
   const { user } = useAuth();
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   // Lifted month state — same Date instance across the screen, driven
@@ -924,8 +926,15 @@ function GridTab() {
                 return (
                   <TouchableOpacity
                     key={u.id}
-                    onPress={() => canEdit && setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx })}
-                    activeOpacity={canEdit ? 0.7 : 1}
+                    // Tap → открыть карточку сотрудника. Reorder теперь
+                    // спрятан под long-press, чтобы не конфликтовать с
+                    // привычным iOS-навигационным жестом.
+                    onPress={() => openEmployee(navigation, u.id)}
+                    onLongPress={() => {
+                      if (canEdit) setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx });
+                    }}
+                    delayLongPress={350}
+                    activeOpacity={0.7}
                     style={[
                       styles.gridNameCell,
                       { width: NAME_W, height: ROW_H },
@@ -1203,6 +1212,7 @@ function GridTab() {
 // ============== TODAY TAB ==============
 function TodayTab() {
   const queryClient = useQueryClient();
+  const navigation = useNavigation<any>();
   const [refreshing, setRefreshing] = useState(false);
 
   const { data: todayData, isLoading } = useQuery<TodayEmployeeStatus[]>({
@@ -1356,7 +1366,7 @@ function TodayTab() {
         statuses.map((s, idx) => {
           const info = getStatusInfo(s);
           return (
-            <AnimatedCard key={s.userId} index={idx + 2}>
+            <AnimatedCard key={s.userId} index={idx + 2} onPress={() => openEmployee(navigation, s.userId)}>
               <View style={styles.todayCard}>
                 <View style={[styles.todayCardAccent, { backgroundColor: info.accentColor }]} />
                 <View style={styles.todayCardContent}>

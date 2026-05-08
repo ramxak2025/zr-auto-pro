@@ -1,12 +1,18 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert, Switch, Dimensions,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  RefreshControl,
+  ActivityIndicator,
+  Alert,
+  Switch,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
@@ -18,11 +24,10 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
 import type { User, UserPermissions, Product } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
-
-const SCREEN_WIDTH = Dimensions.get('window').width;
 
 const roleBadgeMap: Record<string, string> = {
   director: 'purple',
@@ -39,7 +44,11 @@ const roleLabels: Record<string, string> = {
 };
 
 // Grouped permissions for better UX
-const permissionGroups: { title: string; icon: keyof typeof Ionicons.glyphMap; items: { key: keyof UserPermissions; label: string }[] }[] = [
+const permissionGroups: {
+  title: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  items: { key: keyof UserPermissions; label: string }[];
+}[] = [
   {
     title: 'Заказ-наряды',
     icon: 'receipt-outline',
@@ -83,15 +92,31 @@ const permissionGroups: { title: string; icon: keyof typeof Ionicons.glyphMap; i
 ];
 
 const defaultPermissions: UserPermissions = {
-  checks_view: true, checks_create: true, checks_edit: false, checks_delete: false,
+  checks_view: true,
+  checks_create: true,
+  checks_edit: false,
+  checks_delete: false,
   checks_change_datetime: false,
-  profit_view: false, clients_view: true, clients_edit: false,
-  warehouse_access: false, suppliers_access: false, financial_reports: false,
-  export_data: false, user_management: false,
-  schedule_view: false, salary_view: false, marketing_access: false,
+  profit_view: false,
+  clients_view: true,
+  clients_edit: false,
+  warehouse_access: false,
+  suppliers_access: false,
+  financial_reports: false,
+  export_data: false,
+  user_management: false,
+  schedule_view: false,
+  salary_view: false,
+  marketing_access: false,
 };
 
-function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
+function formatMoney(v: number) {
+  return (
+    Math.round(v)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
+  );
+}
 
 interface UserForm {
   fullName: string;
@@ -105,8 +130,13 @@ interface UserForm {
 }
 
 const emptyForm: UserForm = {
-  fullName: '', phone: '', password: '',
-  role: UserRole.MASTER, salaryPercent: 0, productSalaryPercent: 0, isActive: true,
+  fullName: '',
+  phone: '',
+  password: '',
+  role: UserRole.MASTER,
+  salaryPercent: 0,
+  productSalaryPercent: 0,
+  isActive: true,
   permissions: { ...defaultPermissions },
 };
 
@@ -145,7 +175,10 @@ export default function UsersScreen() {
 
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: ['all-products-commissions'],
-    queryFn: async () => { const res = await productsApi.getAll({ limit: 500 }); return res.data.data || res.data; },
+    queryFn: async () => {
+      const res = await productsApi.getAll({ limit: 500 });
+      return res.data.data || res.data;
+    },
     enabled: !!commissionUserId,
   });
 
@@ -205,9 +238,10 @@ export default function UsersScreen() {
 
   if (!hasPermission('user_management')) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <View style={styles.safe}>
+        <IosScreenHeader title="Сотрудники" onBack={() => navigation.goBack()} />
         <EmptyState title="Нет доступа" description="У вас нет прав для управления сотрудниками" />
-      </SafeAreaView>
+      </View>
     );
   }
 
@@ -246,12 +280,25 @@ export default function UsersScreen() {
     }
   };
 
-  const closeModal = () => { setModalOpen(false); setEditingUser(null); setForm({ ...emptyForm }); };
+  const closeModal = () => {
+    setModalOpen(false);
+    setEditingUser(null);
+    setForm({ ...emptyForm });
+  };
 
   const handleSubmit = () => {
-    if (!form.fullName.trim()) { Alert.alert('Ошибка', 'Введите ФИО'); return; }
-    if (!form.phone.trim()) { Alert.alert('Ошибка', 'Введите телефон'); return; }
-    if (!editingUser && !form.password) { Alert.alert('Ошибка', 'Введите пароль'); return; }
+    if (!form.fullName.trim()) {
+      Alert.alert('Ошибка', 'Введите ФИО');
+      return;
+    }
+    if (!form.phone.trim()) {
+      Alert.alert('Ошибка', 'Введите телефон');
+      return;
+    }
+    if (!editingUser && !form.password) {
+      Alert.alert('Ошибка', 'Введите пароль');
+      return;
+    }
 
     const payload: any = {
       fullName: form.fullName,
@@ -273,7 +320,7 @@ export default function UsersScreen() {
   };
 
   const togglePermission = (key: keyof UserPermissions) => {
-    setForm(prev => ({
+    setForm((prev) => ({
       ...prev,
       permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
     }));
@@ -319,23 +366,26 @@ export default function UsersScreen() {
   };
 
   const addCommissionProduct = (product: Product) => {
-    setCommissionItems(prev => [...prev, {
-      productId: product.id,
-      productName: product.name,
-      percent: 10,
-      sellPrice: product.sellPrice,
-      costPrice: product.costPrice,
-    }]);
+    setCommissionItems((prev) => [
+      ...prev,
+      {
+        productId: product.id,
+        productName: product.name,
+        percent: 10,
+        sellPrice: product.sellPrice,
+        costPrice: product.costPrice,
+      },
+    ]);
     setShowAddProduct(false);
     setProductSearchText('');
   };
 
   const removeCommissionItem = (productId: string) => {
-    setCommissionItems(prev => prev.filter(c => c.productId !== productId));
+    setCommissionItems((prev) => prev.filter((c) => c.productId !== productId));
   };
 
   const updateCommissionPercent = (productId: string, percent: number) => {
-    setCommissionItems(prev => prev.map(c => c.productId === productId ? { ...c, percent } : c));
+    setCommissionItems((prev) => prev.map((c) => (c.productId === productId ? { ...c, percent } : c)));
   };
 
   const handleSaveCommissions = () => {
@@ -344,45 +394,36 @@ export default function UsersScreen() {
       userId: commissionUserId,
       data: {
         productSalaryPercent: globalProductPercent,
-        items: commissionItems.map(c => ({ productId: c.productId, percent: c.percent })),
+        items: commissionItems.map((c) => ({ productId: c.productId, percent: c.percent })),
       },
     });
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <LinearGradient
-        colors={[colors.white, colors.gray[50]] as [string, string]}
-        style={styles.header}
-      >
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.primary[400], colors.primary[600]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="people-outline" size={16} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Сотрудники</Text>
-          <View style={styles.countBadge}>
-            <Text style={styles.countBadgeText}>{users.length}</Text>
-          </View>
-        </View>
-        <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
-          <Ionicons name="add" size={20} color={colors.white} />
-        </TouchableOpacity>
-      </LinearGradient>
+    <View style={styles.safe}>
+      <IosScreenHeader
+        title="Сотрудники"
+        subtitle={users.length ? `Всего: ${users.length}` : undefined}
+        onBack={() => navigation.goBack()}
+        trailing={
+          <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
+            <Ionicons name="add" size={20} color={colors.white} />
+          </TouchableOpacity>
+        }
+      />
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
       >
         {users.length === 0 ? (
-          <EmptyState title="Нет сотрудников" description="Добавьте первого сотрудника" action={{ label: 'Добавить', onPress: openCreate }} />
+          <EmptyState
+            title="Нет сотрудников"
+            description="Добавьте первого сотрудника"
+            action={{ label: 'Добавить', onPress: openCreate }}
+          />
         ) : (
           users.map((user, idx) => {
             const badge = getRoleBadge(user.role);
@@ -395,26 +436,38 @@ export default function UsersScreen() {
                       <CachedImage source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
                     ) : (
                       <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
-                        <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
+                        <Text style={[styles.avatarText, { color: badge.text }]}>
+                          {user.fullName?.charAt(0) || 'U'}
+                        </Text>
                       </View>
                     )}
                     {isDirectorOrSuperadmin && (
-                      <TouchableOpacity style={styles.avatarCameraBtn} onPress={() => handleAvatarChange(user.id)} activeOpacity={0.7}>
+                      <TouchableOpacity
+                        style={styles.avatarCameraBtn}
+                        onPress={() => handleAvatarChange(user.id)}
+                        activeOpacity={0.7}
+                      >
                         <Ionicons name="camera" size={12} color={colors.white} />
                       </TouchableOpacity>
                     )}
                   </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                      <Text style={styles.userName} numberOfLines={1}>{user.fullName}</Text>
+                      <Text style={styles.userName} numberOfLines={1}>
+                        {user.fullName}
+                      </Text>
                       <View style={[styles.roleBadge, { backgroundColor: badge.bg }]}>
-                        <Text style={[styles.roleBadgeText, { color: badge.text }]}>{roleLabels[user.role] || user.role}</Text>
+                        <Text style={[styles.roleBadgeText, { color: badge.text }]}>
+                          {roleLabels[user.role] || user.role}
+                        </Text>
                       </View>
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 4 }}>
                       <Text style={styles.userPhone}>{user.phone}</Text>
                       <Text style={styles.userDivider}>|</Text>
-                      <Text style={styles.userPhone}>{user.salaryPercent}%{user.productSalaryPercent ? ` / ${user.productSalaryPercent}%` : ''}</Text>
+                      <Text style={styles.userPhone}>
+                        {user.salaryPercent}%{user.productSalaryPercent ? ` / ${user.productSalaryPercent}%` : ''}
+                      </Text>
                       <Text style={styles.userDivider}>|</Text>
                       {user.isActive ? (
                         <Text style={[styles.statusText, { color: colors.green[600] }]}>Активен</Text>
@@ -431,12 +484,18 @@ export default function UsersScreen() {
                     <Ionicons name="pencil-outline" size={14} color={colors.primary[600]} />
                     <Text style={styles.actionChipText}>Права</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={[styles.actionChip, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]} onPress={() => openCommissions(user)}>
+                  <TouchableOpacity
+                    style={[styles.actionChip, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}
+                    onPress={() => openCommissions(user)}
+                  >
                     <Ionicons name="gift-outline" size={14} color={colors.green[600]} />
                     <Text style={[styles.actionChipText, { color: colors.green[700] }]}>Комиссии</Text>
                   </TouchableOpacity>
                   {canDelete && (
-                    <TouchableOpacity style={[styles.actionChip, { backgroundColor: colors.red[50], borderColor: colors.red[200] }]} onPress={() => setDeleteId(user.id)}>
+                    <TouchableOpacity
+                      style={[styles.actionChip, { backgroundColor: colors.red[50], borderColor: colors.red[200] }]}
+                      onPress={() => setDeleteId(user.id)}
+                    >
                       <Ionicons name="trash-outline" size={14} color={colors.red[500]} />
                     </TouchableOpacity>
                   )}
@@ -452,29 +511,51 @@ export default function UsersScreen() {
         <ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
           <View style={styles.formField}>
             <Text style={styles.formLabel}>ФИО</Text>
-            <TextInput value={form.fullName} onChangeText={v => setForm({ ...form, fullName: v })} style={styles.formInput}
-              placeholder="Иванов Иван Иванович" placeholderTextColor={colors.gray[400]} />
+            <TextInput
+              value={form.fullName}
+              onChangeText={(v) => setForm({ ...form, fullName: v })}
+              style={styles.formInput}
+              placeholder="Иванов Иван Иванович"
+              placeholderTextColor={colors.gray[400]}
+            />
           </View>
 
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Телефон (логин)</Text>
-            <TextInput value={form.phone} onChangeText={v => setForm({ ...form, phone: v })} style={styles.formInput}
-              placeholder="+7 (XXX) XXX-XX-XX" placeholderTextColor={colors.gray[400]} keyboardType="phone-pad" />
+            <TextInput
+              value={form.phone}
+              onChangeText={(v) => setForm({ ...form, phone: v })}
+              style={styles.formInput}
+              placeholder="+7 (XXX) XXX-XX-XX"
+              placeholderTextColor={colors.gray[400]}
+              keyboardType="phone-pad"
+            />
           </View>
 
           <View style={styles.formField}>
             <Text style={styles.formLabel}>{editingUser ? 'Новый пароль (пустой = не менять)' : 'Пароль'}</Text>
-            <TextInput value={form.password} onChangeText={v => setForm({ ...form, password: v })} style={styles.formInput}
-              placeholder={editingUser ? 'Новый пароль' : 'Введите пароль'} placeholderTextColor={colors.gray[400]} secureTextEntry />
+            <TextInput
+              value={form.password}
+              onChangeText={(v) => setForm({ ...form, password: v })}
+              style={styles.formInput}
+              placeholder={editingUser ? 'Новый пароль' : 'Введите пароль'}
+              placeholderTextColor={colors.gray[400]}
+              secureTextEntry
+            />
           </View>
 
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Роль</Text>
             <View style={styles.roleRow}>
-              {[UserRole.DIRECTOR, UserRole.ADMIN, UserRole.MASTER].map(r => (
-                <TouchableOpacity key={r} style={[styles.roleChip, form.role === r && styles.roleChipActive]}
-                  onPress={() => setForm({ ...form, role: r })}>
-                  <Text style={[styles.roleChipText, form.role === r && styles.roleChipTextActive]}>{roleLabels[r] || r}</Text>
+              {[UserRole.DIRECTOR, UserRole.ADMIN, UserRole.MASTER].map((r) => (
+                <TouchableOpacity
+                  key={r}
+                  style={[styles.roleChip, form.role === r && styles.roleChipActive]}
+                  onPress={() => setForm({ ...form, role: r })}
+                >
+                  <Text style={[styles.roleChipText, form.role === r && styles.roleChipTextActive]}>
+                    {roleLabels[r] || r}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -483,32 +564,48 @@ export default function UsersScreen() {
           <View style={{ flexDirection: 'row', gap: spacing[3] }}>
             <View style={[styles.formField, { flex: 1 }]}>
               <Text style={styles.formLabel}>% от услуг</Text>
-              <TextInput value={String(form.salaryPercent)} onChangeText={v => setForm({ ...form, salaryPercent: Number(v) || 0 })}
-                style={styles.formInput} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.gray[400]} />
+              <TextInput
+                value={String(form.salaryPercent)}
+                onChangeText={(v) => setForm({ ...form, salaryPercent: Number(v) || 0 })}
+                style={styles.formInput}
+                keyboardType="numeric"
+                placeholder="0"
+                placeholderTextColor={colors.gray[400]}
+              />
             </View>
             <View style={[styles.formField, { flex: 1 }]}>
               <Text style={styles.formLabel}>% от товаров</Text>
-              <TextInput value={String(form.productSalaryPercent)} onChangeText={v => setForm({ ...form, productSalaryPercent: Number(v) || 0 })}
-                style={styles.formInput} keyboardType="numeric" placeholder="0" placeholderTextColor={colors.gray[400]} />
+              <TextInput
+                value={String(form.productSalaryPercent)}
+                onChangeText={(v) => setForm({ ...form, productSalaryPercent: Number(v) || 0 })}
+                style={styles.formInput}
+                keyboardType="numeric"
+                placeholder="0"
+                placeholderTextColor={colors.gray[400]}
+              />
             </View>
           </View>
 
           <View style={styles.switchRow}>
             <Text style={styles.formLabel}>Активен</Text>
-            <Switch value={form.isActive} onValueChange={v => setForm({ ...form, isActive: v })}
-              trackColor={{ false: colors.gray[300], true: colors.primary[400] }} thumbColor={form.isActive ? colors.primary[600] : colors.gray[100]} />
+            <Switch
+              value={form.isActive}
+              onValueChange={(v) => setForm({ ...form, isActive: v })}
+              trackColor={{ false: colors.gray[300], true: colors.primary[400] }}
+              thumbColor={form.isActive ? colors.primary[600] : colors.gray[100]}
+            />
           </View>
 
           {/* Permissions — grouped */}
           <View style={styles.formField}>
             <Text style={[styles.formLabel, { marginBottom: spacing[3] }]}>Права доступа</Text>
-            {permissionGroups.map(group => (
+            {permissionGroups.map((group) => (
               <View key={group.title} style={styles.permGroup}>
                 <View style={styles.permGroupHeader}>
                   <Ionicons name={group.icon} size={14} color={colors.gray[500]} />
                   <Text style={styles.permGroupTitle}>{group.title}</Text>
                 </View>
-                {group.items.map(item => (
+                {group.items.map((item) => (
                   <TouchableOpacity key={item.key} style={styles.permRow} onPress={() => togglePermission(item.key)}>
                     <Ionicons
                       name={form.permissions[item.key] ? 'checkbox' : 'square-outline'}
@@ -527,7 +624,9 @@ export default function UsersScreen() {
               <Text style={styles.cancelBtnText}>Отмена</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={isSaving}>
-              {isSaving ? <ActivityIndicator color={colors.white} size="small" /> : (
+              {isSaving ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
                 <Text style={styles.submitBtnText}>{editingUser ? 'Сохранить' : 'Создать'}</Text>
               )}
             </TouchableOpacity>
@@ -536,8 +635,15 @@ export default function UsersScreen() {
       </Modal>
 
       {/* Product Commission Modal */}
-      <Modal visible={!!commissionUserId} onClose={() => setCommissionUserId(null)} title={`Комиссии — ${commissionUserName?.split(' ')[0]}`}>
-        <ScrollView contentContainerStyle={{ gap: spacing[4], paddingBottom: spacing[4] }} showsVerticalScrollIndicator={false}>
+      <Modal
+        visible={!!commissionUserId}
+        onClose={() => setCommissionUserId(null)}
+        title={`Комиссии — ${commissionUserName?.split(' ')[0]}`}
+      >
+        <ScrollView
+          contentContainerStyle={{ gap: spacing[4], paddingBottom: spacing[4] }}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Global product percent */}
           <View style={styles.commGlobalCard}>
             <View style={styles.commGlobalHeader}>
@@ -550,7 +656,7 @@ export default function UsersScreen() {
             <View style={styles.commPercentRow}>
               <TextInput
                 value={String(globalProductPercent)}
-                onChangeText={v => setGlobalProductPercent(Number(v) || 0)}
+                onChangeText={(v) => setGlobalProductPercent(Number(v) || 0)}
                 style={styles.commPercentInput}
                 keyboardType="numeric"
                 placeholder="0"
@@ -567,24 +673,38 @@ export default function UsersScreen() {
                 <Text style={styles.commSectionTitle}>Акционные товары</Text>
                 <Text style={styles.commSectionSub}>Отдельный % с прибыли для конкретных товаров</Text>
               </View>
-              <TouchableOpacity style={styles.commAddBtn} onPress={() => { setProductSearchText(''); setShowAddProduct(true); }}>
+              <TouchableOpacity
+                style={styles.commAddBtn}
+                onPress={() => {
+                  setProductSearchText('');
+                  setShowAddProduct(true);
+                }}
+              >
                 <Ionicons name="add" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
             </View>
 
             {commissionItems.length === 0 ? (
-              <TouchableOpacity style={styles.commEmptyAdd} onPress={() => { setProductSearchText(''); setShowAddProduct(true); }}>
+              <TouchableOpacity
+                style={styles.commEmptyAdd}
+                onPress={() => {
+                  setProductSearchText('');
+                  setShowAddProduct(true);
+                }}
+              >
                 <Ionicons name="gift-outline" size={20} color={colors.gray[400]} />
                 <Text style={styles.commEmptyText}>Добавить акционный товар</Text>
               </TouchableOpacity>
             ) : (
-              commissionItems.map(item => {
+              commissionItems.map((item) => {
                 const profit = item.sellPrice - item.costPrice;
                 const bonus = Math.round(profit * (item.percent / 100));
                 return (
                   <View key={item.productId} style={styles.commItem}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.commItemName} numberOfLines={1}>{item.productName}</Text>
+                      <Text style={styles.commItemName} numberOfLines={1}>
+                        {item.productName}
+                      </Text>
                       <Text style={styles.commItemInfo}>
                         Цена: {formatMoney(item.sellPrice)} · Прибыль: {formatMoney(profit)}
                       </Text>
@@ -593,7 +713,7 @@ export default function UsersScreen() {
                       <View style={styles.commItemPercentRow}>
                         <TextInput
                           value={String(item.percent)}
-                          onChangeText={v => updateCommissionPercent(item.productId, Number(v) || 0)}
+                          onChangeText={(v) => updateCommissionPercent(item.productId, Number(v) || 0)}
                           style={styles.commItemPercentInput}
                           keyboardType="numeric"
                         />
@@ -601,7 +721,10 @@ export default function UsersScreen() {
                       </View>
                       <Text style={styles.commItemBonus}>+{formatMoney(bonus)}</Text>
                     </View>
-                    <TouchableOpacity style={styles.commItemDelete} onPress={() => removeCommissionItem(item.productId)}>
+                    <TouchableOpacity
+                      style={styles.commItemDelete}
+                      onPress={() => removeCommissionItem(item.productId)}
+                    >
                       <Ionicons name="close-circle" size={18} color={colors.red[400]} />
                     </TouchableOpacity>
                   </View>
@@ -615,8 +738,14 @@ export default function UsersScreen() {
             <TouchableOpacity style={styles.cancelBtn} onPress={() => setCommissionUserId(null)}>
               <Text style={styles.cancelBtnText}>Отмена</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.submitBtn} onPress={handleSaveCommissions} disabled={saveCommissionsMutation.isPending}>
-              {saveCommissionsMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : (
+            <TouchableOpacity
+              style={styles.submitBtn}
+              onPress={handleSaveCommissions}
+              disabled={saveCommissionsMutation.isPending}
+            >
+              {saveCommissionsMutation.isPending ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
                 <Text style={styles.submitBtnText}>Сохранить</Text>
               )}
             </TouchableOpacity>
@@ -626,15 +755,20 @@ export default function UsersScreen() {
         {/* Add product sub-modal */}
         <Modal visible={showAddProduct} onClose={() => setShowAddProduct(false)} title="Выбрать товар">
           <TextInput
-            value={productSearchText} onChangeText={setProductSearchText}
+            value={productSearchText}
+            onChangeText={setProductSearchText}
             style={[styles.formInput, { marginBottom: spacing[3] }]}
-            placeholder="Поиск товара..." placeholderTextColor={colors.gray[400]} autoFocus
+            placeholder="Поиск товара..."
+            placeholderTextColor={colors.gray[400]}
+            autoFocus
           />
           <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
-            {filteredProducts.map(p => (
+            {filteredProducts.map((p) => (
               <TouchableOpacity key={p.id} style={styles.productPickerItem} onPress={() => addCommissionProduct(p)}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.productPickerName} numberOfLines={1}>{p.name}</Text>
+                  <Text style={styles.productPickerName} numberOfLines={1}>
+                    {p.name}
+                  </Text>
                   <Text style={styles.productPickerPrice}>
                     {formatMoney(p.sellPrice)} · Прибыль: {formatMoney(p.sellPrice - p.costPrice)}
                   </Text>
@@ -643,7 +777,9 @@ export default function UsersScreen() {
               </TouchableOpacity>
             ))}
             {productSearchText && filteredProducts.length === 0 && (
-              <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[4] }}>Ничего не найдено</Text>
+              <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[4] }}>
+                Ничего не найдено
+              </Text>
             )}
           </ScrollView>
         </Modal>
@@ -652,35 +788,61 @@ export default function UsersScreen() {
       <ConfirmDialog
         visible={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => { if (deleteId) deleteMutation.mutate(deleteId); setDeleteId(null); }}
+        onConfirm={() => {
+          if (deleteId) deleteMutation.mutate(deleteId);
+          setDeleteId(null);
+        }}
         title="Удалить сотрудника"
         message="Вы уверены? Это действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
-  countBadge: { backgroundColor: colors.primary[50], paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
-  countBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600] },
-  addBtn: { width: 36, height: 36, borderRadius: borderRadius.xl, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center' },
+  addBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
   // User card
-  userCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4], shadowColor: colors.black, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2, gap: spacing[3] },
+  userCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+    shadowColor: colors.black,
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+    gap: spacing[3],
+  },
   userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   avatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   avatarImage: { width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: colors.gray[100] },
   avatarText: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
   avatarWrap: { position: 'relative' },
-  avatarCameraBtn: { position: 'absolute', bottom: -2, right: -2, width: 22, height: 22, borderRadius: 11, backgroundColor: colors.primary[600], alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.white },
+  avatarCameraBtn: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
   userName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900], flexShrink: 1 },
   roleBadge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
   roleBadgeText: { fontSize: 11, fontWeight: fontWeight.medium },
@@ -688,57 +850,198 @@ const styles = StyleSheet.create({
   userDivider: { color: colors.gray[300] },
   statusText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   // Action row
-  actionRow: { flexDirection: 'row', gap: spacing[2], borderTopWidth: 1, borderTopColor: colors.gray[100], paddingTop: spacing[3] },
-  actionChip: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], paddingHorizontal: spacing[3], paddingVertical: spacing[2], borderRadius: borderRadius.lg, backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
+  actionRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[100],
+    paddingTop: spacing[3],
+  },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[50],
+    borderWidth: 1,
+    borderColor: colors.primary[200],
+  },
   actionChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.primary[700] },
   // Form
   formContent: { gap: spacing[1], paddingBottom: spacing[4] },
   formField: { marginBottom: spacing[4] },
-  formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], marginBottom: spacing[1.5] },
-  formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
+  formLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[700],
+    marginBottom: spacing[1.5],
+  },
+  formInput: {
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+    color: colors.gray[900],
+  },
   roleRow: { flexDirection: 'row', gap: spacing[2] },
-  roleChip: { flex: 1, paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.gray[300], alignItems: 'center', backgroundColor: colors.gray[50] },
+  roleChip: {
+    flex: 1,
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+    alignItems: 'center',
+    backgroundColor: colors.gray[50],
+  },
   roleChipActive: { backgroundColor: colors.primary[50], borderColor: colors.primary[500] },
   roleChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
   roleChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[4] },
   // Permissions — grouped
-  permGroup: { marginBottom: spacing[3], backgroundColor: colors.gray[50], borderRadius: borderRadius.xl, padding: spacing[3], borderWidth: 1, borderColor: colors.gray[100] },
-  permGroupHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[2], paddingBottom: spacing[1.5], borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
-  permGroupTitle: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.gray[600], textTransform: 'uppercase', letterSpacing: 0.5 },
+  permGroup: {
+    marginBottom: spacing[3],
+    backgroundColor: colors.gray[50],
+    borderRadius: borderRadius.xl,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+  },
+  permGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginBottom: spacing[2],
+    paddingBottom: spacing[1.5],
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[200],
+  },
+  permGroupTitle: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[600],
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   permRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[1.5] },
   permLabel: { fontSize: fontSize.sm, color: colors.gray[700] },
-  formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing[3], paddingTop: spacing[4], borderTopWidth: 1, borderTopColor: colors.gray[200] },
-  cancelBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.gray[300] },
+  formActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing[3],
+    paddingTop: spacing[4],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[200],
+  },
+  cancelBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+  },
   cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  submitBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
+  submitBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[600],
+  },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
   // Commission modal
-  commGlobalCard: { backgroundColor: colors.blue[50], borderRadius: borderRadius.xl, padding: spacing[4], borderWidth: 1, borderColor: colors.blue[200], gap: spacing[3] },
+  commGlobalCard: {
+    backgroundColor: colors.blue[50],
+    borderRadius: borderRadius.xl,
+    padding: spacing[4],
+    borderWidth: 1,
+    borderColor: colors.blue[200],
+    gap: spacing[3],
+  },
   commGlobalHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2.5] },
   commGlobalTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   commGlobalSub: { fontSize: 11, color: colors.gray[500], marginTop: 2 },
   commPercentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  commPercentInput: { backgroundColor: colors.white, borderWidth: 1, borderColor: colors.blue[300], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], width: 80, textAlign: 'center' },
+  commPercentInput: {
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.blue[300],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.lg,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[900],
+    width: 80,
+    textAlign: 'center',
+  },
   commPercentSign: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[500] },
   commSection: { gap: spacing[2] },
   commSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   commSectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   commSectionSub: { fontSize: 11, color: colors.gray[500] },
-  commAddBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
-  commEmptyAdd: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], paddingVertical: spacing[4], borderWidth: 1, borderStyle: 'dashed', borderColor: colors.gray[200], borderRadius: borderRadius.xl },
+  commAddBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commEmptyAdd: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[4],
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.gray[200],
+    borderRadius: borderRadius.xl,
+  },
   commEmptyText: { fontSize: fontSize.sm, color: colors.gray[400] },
-  commItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], backgroundColor: colors.white, borderRadius: borderRadius.xl, padding: spacing[3], borderWidth: 1, borderColor: colors.gray[100] },
+  commItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.xl,
+    padding: spacing[3],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+  },
   commItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   commItemInfo: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
   commItemRight: { alignItems: 'flex-end' },
   commItemPercentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
-  commItemPercentInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.md, paddingHorizontal: spacing[2], paddingVertical: spacing[1], fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], width: 50, textAlign: 'center' },
+  commItemPercentInput: {
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+    borderRadius: borderRadius.md,
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[1],
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[900],
+    width: 50,
+    textAlign: 'center',
+  },
   commItemPercentSign: { fontSize: fontSize.sm, color: colors.gray[500] },
   commItemBonus: { fontSize: 12, fontWeight: fontWeight.bold, color: colors.green[600], marginTop: 2 },
   commItemDelete: { padding: spacing[1] },
   // Product picker for commissions
-  productPickerItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3], borderBottomWidth: 1, borderBottomColor: colors.gray[100] },
+  productPickerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[100],
+  },
   productPickerName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   productPickerPrice: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
 });

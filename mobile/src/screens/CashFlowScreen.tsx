@@ -11,7 +11,7 @@ import {
   Platform,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -41,7 +41,6 @@ function formatDateLabel(dateStr: string) {
 }
 
 export default function CashFlowScreen() {
-  const insetsTop = useSafeAreaInsets().top;
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user, isRole } = useAuth();
@@ -123,23 +122,8 @@ export default function CashFlowScreen() {
 
   return (
     <View style={styles.safe}>
-      <View style={[styles.header, { paddingTop: insetsTop + spacing[2] }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.green[500], colors.green[700]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="cash-outline" size={18} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Движение денег</Text>
-        </View>
-        <View style={{ width: 22 }} />
-      </View>
+      {/* Унифицированная iOS-шапка — единый стиль с Расписанием/Журналом. */}
+      <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}

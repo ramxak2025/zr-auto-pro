@@ -1,6 +1,310 @@
 # Autexa — Security & Performance audit
 
-Дата: 2026-05-07. Iter#9. Этот документ — точечный аудит безопасности и производительности проекта; **исправления внесены только там, где это безопасно и не выходит за пределы mobile**. Изменения backend / API / DB схемы НЕ вносятся без отдельного разрешения владельца — они задокументированы как рекомендации.
+Дата: 2026-05-08. Iter#12. Этот документ — точечный аудит безопасности и производительности проекта; **исправления внесены только там, где это безопасно и не выходит за пределы mobile**. Изменения backend / API / DB схемы НЕ вносятся без отдельного разрешения владельца — они задокументированы как рекомендации.
+
+## Iter#12 — что исправлено по результатам iPhone-теста владельца
+
+### Critical fix #1: CheckDetail crash → logout (P0)
+
+**Симптом:** при тапе на чек в журнале иногда возникал крэш, иногда выкидывало на экран входа.
+
+**Корневая причина (root-cause analysis):**
+
+1. Прошлая итерация делала `queryClient.setQueryData(['check', id], rowCheckFromList)` в `ChecksScreen.onPress`. Это писало row payload (без `services` / `products`) в каноничный кеш `['check', id]`.
+2. `CheckDetailScreen` обращался к `check.services.length`, `check.products.length`, `check.services.map(...)` без guard'а на `undefined`.
+3. JS-исключение → `ErrorBoundary` ловил его, но текущий navigator оставался смонтированным в неконсистентном состоянии. Любой следующий 401 (просрочка JWT, потеря сети) триггерил `onAuthExpired` и перебрасывал на Login. Снаружи это выглядело как «выкинуло на логин».
+
+**Fix:**
+
+- Убран `setQueryData` priming в `ChecksScreen.onPress`. Каноничный кеш `['check', id]` пишется ТОЛЬКО ответом `checksApi.getById(id)`.
+- В `CheckDetailScreen` placeholder теперь делается через **read-only lookup** `queryClient.getQueriesData<{ pages?... }>({ queryKey: ['checks-infinite'] })`. Найденная в журнале row показывается как visual placeholder — она НЕ попадает в каноничный кеш и заменяется полным payload, как только сервер отдал.
+- Все обращения к `check.services` / `check.products` заменены на безопасные локальные ссылки `services = check?.services ?? []`, `products = check?.products ?? []`. Длина / map больше не падают на partial-payload.
+- Lookup placeholder обёрнут в try/catch — best-effort, не валит рендер если структура кеша вдруг неконсистентна.
+
+### Critical fix #2: тап по строке журнала открывает чек (P0)
+
+**Симптом:** тап по карточке журнала открывал клиента/мастера/авто, а не сам чек.
+
+**Корневая причина:** в iter#10 я обернул chip'ы клиента/авто и текст имени мастера в `TouchableOpacity` с `onPress={openClient/openCarOwner/openEmployee}`. На iOS внутренний `TouchableOpacity` побеждает внешний; `e.stopPropagation()` для нативных touch-событий в RN не работает как в DOM.
+
+**Fix (уже сделан в iter#11, оставлен):** chip'ы клиента/авто и текст имени мастера в строке журнала — статичные `<View>` + `<Text>`. Импорт `entityLinks.ts` в `ChecksScreen` явно отсутствует (с комментарием-страховкой). Переходы на сущности живут только внутри открытой деталки чека (`CheckDetailScreen.infoCard`), где это целевые ряды с chevron.
+
+### Critical fix #3: визуальный мусор в Складе (P0)
+
+**Симптом:** под папками рисовались строки вида `шт` буквально как escape-последовательности.
+
+**Корневая причина:** в `ProductsScreen.tsx` (FolderSwipeRow / ProductSwipeRow, добавленные iter#11) escape-литералы `Изменить` стояли как **JSX text content** (между `<Text>` и `</Text>`), а не внутри JS string literals. JSX текст НЕ парсит escape-последовательности — они отображаются буквально. Источник: при записи через Edit-инструмент cyrillic в JSX text-position иногда конвертируется в escape, и в этой позиции это уже не строковой литерал, а сырой текст.
+
+**Fix:**
+
+- Удалены оба компонента `FolderSwipeRow` / `ProductSwipeRow` (содержали баг и сами по себе нестабильно работали — см. ниже про swipe).
+- В новом `FolderRow` все cyrillic-строки в JSX text позициях обёрнуты в JS-expression `{'…'}` (`<Text>{count} {'шт'}</Text>`, `{'· проверка '}`). Это делает их JS-литералами — escape-последовательности гарантированно парсятся при загрузке модуля.
+- Module-scope grep `grep -rnE '>\s*\\u04|\\u04...\s*<' src/` теперь не находит ни одного случая в JSX-text. Оставшиеся escape — внутри template literals (HTML для PDF), которые корректно парсятся как обычные JS-строки.
+
+**Превентивная мера:** все длинные cyrillic-строки в JSX-text впредь оборачиваю в `{'…'}` — этот паттерн сохраняется через любые автоматические преобразования инструмента.
+
+### Warehouse: swipe убран полностью на iOS (P0, by user request)
+
+**Симптом владельца:** swipe edit/delete на iOS работали нестабильно. Владелец просил **не чинить, а убрать совсем** на iOS.
+
+**Что удалено:**
+
+- `import { Swipeable } from 'react-native-gesture-handler'`.
+- Module-level `FolderSwipeRow` и `ProductSwipeRow` компоненты.
+- `openSwipeRef` + `closeOtherSwipeable` координация.
+- `requestRenameFolder` обработчик.
+- `deleteFolderMutation`, `renameFolderMutation` мутации.
+- `deleteFolderTarget`, `renameFolderTarget`, `renameFolderInput` state.
+- Rename folder modal + delete folder confirm.
+- Любые упоминания long-press reorder (state, mutation, modal удалены ещё в iter#11).
+
+**Что осталось:**
+
+- Чистый `FolderRow` (module-level `React.memo`) — просто `TouchableOpacity` с `onPress`, ничего лишнего.
+- Inline product row внутри `renderItem` FlashList — тоже plain `AnimatedCard` + `TouchableOpacity`.
+- Поиск, breadcrumb, переход внутрь папки, открытие edit-формы товара по тапу — без изменений.
+- Backend endpoints (`PATCH /warehouse/categories/:id/rename`, `DELETE /warehouse/categories/:id`, `PATCH /warehouse/categories/order`) НЕ удалены — они доступны через web-админ.
+
+**Перенос на Android/Web:**
+
+- Android — тот же код, без зависимости от gesture-handler в этом экране.
+- Web — фронтенд может оставить inline edit/delete UI как есть (там swipe не нужен, dropdown menu на тап работает корректно).
+
+### Owner Dashboard — premium command center (P0)
+
+**Симптом владельца:** «Бизнес сегодня» и маленькие карточки выглядят слабо, не премиально, не дотягивают до Apple-like.
+
+**Что переделано в `DashboardScreen.tsx → OwnerCommandCenter`:**
+
+Новая архитектура — один большой single-card command center:
+
+1. **Сегментированный pill-control** Сегодня / Вчера / 7 дней / 30 дней с **анимированным thumb-ом** (Animated.timing на `translateX`). Native-feel iOS segmented control. Thumb рисуется absolute поверх gray-pill background, плавно скользит между сегментами при смене.
+2. **Hero-блок** — крупный (40pt, weight 800, letter-spacing −1.6, `fontVariant: ['tabular-nums']`) показатель **Выручки за период**. Eyebrow «Выручка за сегодня/вчера/7 дней/30 дней» слева, **delta-pill** справа. Числа выровнены в моноширине — типографика iOS Wallet / Apple Card.
+3. **Hairline-сепаратор** (full-width hairline до краёв карточки через negative margin).
+4. **Triplet вторичных метрик** — Прибыль / Чеков / Средний чек на одной горизонтали, разделены вертикальными hairline-чертами. Каждая метрика — со своей delta-pill. «Чеков» кликабельна → переход в Журнал (один тап от обзора к детализации).
+
+**Что удалено по запросу владельца:**
+
+- Слабая `<TodayQuickStats />` плашка (dropped).
+- `<EmployeeRankingSection />` — рейтинг мастеров на главной не нужен. Эта аналитика теперь живёт в карточке сотрудника (Tier scores + Ranking section).
+
+**Native vs RN решение:**
+
+- Делать dashboard на Swift/native — переусложнение: данные приходят через React Query, бридж туда-сюда не оправдан для одного экрана. Лучше потратить native effort на по-настоящему frame-рендер-критичные части (TabBar / Schedule grid).
+- `GlassSurface` (BlurView на iOS, translucent на Android) импортирован в общий компонент-набор. Для command center использовал чистый opaque white card с тонкой границей (`rgba(15, 23, 42, 0.06)`) и 12px shadow blur — это даёт «Apple Card»-плотность. Liquid Glass лучше работает поверх scrolling content (tab bars, headers); поверх gray-50 страницы он не добавляет премиальности.
+
+**Источники данных:**
+
+- `checksApi.getDashboardChart(period, offset)` — уже агрегирует на бэке `{ totalRevenue, totalProfit, totalChecks }`. Новых endpoint'ов не добавлял.
+- Параллельный запрос `(period, offset-1)` для дельты vs прошлого периода. SWR + `placeholderData: prev => prev` → переключения тапами по периодам мгновенные после первой загрузки.
+- Средний чек = revenue / checks (guard вокруг деления на 0).
+- Никаких выдуманных метрик. Если бэк отдал нули — показываем нули, а в дельте «—».
+
+**Перенос на Android/Web:**
+
+- Android — тот же RN-код, segmented control с Animated thumb работает идентично.
+- Web — фронтенд может зеркально использовать ту же иерархию: pill segmented control, big hero number с tabular-nums, hairline divider, triplet под ним. На web вместо `Animated.timing` лучше CSS transition; вместо `BlurView` — `backdrop-filter: blur(20px)` если нужно glass.
+
+### Employees — premium «performance card» (P0)
+
+**Симптом владельца:** карточка сотрудника недостаточно — «не просто подкрасить, а реально изобрести новый подход».
+
+**Что добавлено в `EmployeeDetailScreen.tsx` (поверх предыдущей структуры):**
+
+**Tier strip (новая секция):** три нормализованных индекса 0–100 в виде кругов на верху карточки. Эстетика iOS Health / sport-game-card — быстрый визуальный «портрет» сотрудника на одном взгляде.
+
+#### Формулы (только реальные метрики, документированы в коде)
+
+1. **Эффективность** = clamp(round((avgCheck / 10000) × 100), 0, 100)
+   - `avgCheck = salary.totalRevenue / salary.checkCount` за текущий период.
+   - 10 000 ₽ — baseline (типичный «нормальный» средний чек для услуг автосервиса в РФ; не сравнение с командой). При avgCheck = 5000 → 50, avgCheck = 12000 → 100 (clamped), avgCheck = 20 000 → 100 (clamped).
+   - Источник: `salaryApi.getAll()` → `MasterSalary`.
+
+2. **Дисциплина** — на основе `TodayEmployeeStatus`:
+   - on_time / actualArrival → **100**
+   - late_minor → **75**
+   - late_major → **45**
+   - hasSchedule && !isWorking && !actualArrival (не пришёл по графику) → **0**
+   - isDayOff → **null** (скрываем «—», у выходного нет дисциплины)
+   - **Это одна точка данных.** Идеальная Discipline-история через 30 дней требует либо `/schedule/employee/:id/stats` (нет endpoint'а), либо клиентскую агрегацию `/schedule?dateFrom&dateTo` с фильтром по userId (вернёт всю команду — дорогой запрос). Это **запланированный backend-add**: `GET /schedule/users/:id/stats?dateFrom&dateTo` → `{ onTime, lateMinor, lateMajor, noShow, dayOff, attendancePct }`.
+
+3. **Активность** = clamp(round((1 − (place − 1) / (total − 1)) × 100), 0, 100)
+   - `place` = позиция в `ranking.month` (1 = лидер).
+   - `total` = размер команды (сколько мастеров вообще в ranking).
+   - 1-е место → 100, последнее место → 0, никого нет в ranking → null.
+   - Источник: `checksApi.getRanking()` → `EmployeeRanking.month`.
+
+#### Цветовые диапазоны
+
+- **≥80** — зелёный (сильно)
+- **60–79** — синий (хорошо)
+- **40–59** — янтарь (средне)
+- **<40** — красный (требует внимания)
+- **null** — серый «—»
+
+#### Permission gates
+
+- Tier strip виден ТОЛЬКО:
+  - viewer-у с `profit_view` (или роли director/superadmin/admin);
+  - либо самому сотруднику, открывшему свою карточку (`isSelf`).
+- Обычный коллега-мастер не видит Tier strip — это финансово-чувствительная информация (включая эффективность по среднему чеку).
+- Все исходные query (salary, ranking) уже под `enabled: showFinancials`. Tier-блок просто проверяет, что у нас есть данные.
+
+#### Что осталось (из iter#11, не менялось)
+
+- Hero-gradient per-name (стабильный hash → один из 8 палитр).
+- Today section.
+- Salary section (perm-gated).
+- Ranking section (perm-gated).
+- Performance insights (auto-derived strengths/growth, perm-gated).
+- Recent checks (perm-gated).
+- Contact + work conditions (work conditions perm-gated через `showWorkConditions`).
+
+**Перенос на Android/Web:**
+
+- Android — тот же RN-код, без отдельных зависимостей.
+- Web — фронтенд может реализовать те же три формулы (всё из shared API). Визуально tier strip на web можно сделать как ring-progress (SVG) с тем же делением на цветовые диапазоны.
+
+#### Что остаётся документированными следующими шагами
+
+1. **`GET /schedule/users/:id/stats?dateFrom&dateTo`** для полноценного Discipline score (30-дневная attendance %). Сейчас score опирается на одну точку «сегодня» — это видно владельцу, но ограничено.
+2. **Ручные заметки владельца** про сотрудника (strengths/growth notes от руководителя). Требует backend `users/:id/notes` endpoint. Сейчас footer в Performance-секции явно пишет «ручные заметки потребуют отдельный endpoint».
+3. **`expo-secure-store` для JWT** — всё ещё в AsyncStorage (см. iter#9 SEC-NEW-B). Запланировано отдельной нативной итерацией.
+4. **Server-side permission проверки на финансовые endpoint'ы** (`/checks?masterId=X`, `/checks/ranking`, `/users/:id` — должны скрывать `salaryPercent` для viewer'а без прав). Сейчас mobile soft-gate через `enabled: showFinancials`, но это не end-to-end защита. Mobile audit рекомендует проверить server-side фильтрацию.
+
+## Iter#11 — что исправлено по результатам iPhone-теста владельца
+
+Прошлая итерация iter#10 не была принята — владелец нашёл четыре блокирующих регрессии при ручной проверке. Эта итерация чинит их без расширения скоупа.
+
+### Стабильность swipe в Складе (UX-1, P0, исправлено)
+
+**Симптом владельца:** «свайп по папке Изменить/Удалить работает глючно: один раз срабатывает, потом не работает».
+
+**Причина:**
+
+1. `Swipeable`-инстансы создавались inline внутри `ListHeaderComponent` FlashList. На каждый рендер `ProductsScreen` — новые React-элементы → iOS gesture handler терял своё состояние свайпа.
+2. На том же ряду висел `onLongPress` (300 мс задержка) для reorder — он конкурировал с пан-жестом Swipeable за гейт жестов.
+3. Открытые свайпы не координировались: два открытых ряда стэкались.
+
+**Исправлено в `ProductsScreen.tsx`:**
+
+- Folder rows и product rows вынесены в module-level `React.memo`-компоненты `FolderSwipeRow` и `ProductSwipeRow`. Теперь Swipeable-инстансы стабильны между рендерами родителя.
+- `useRef` в каждом ряду + единый родительский `openSwipeRef` + `onSwipeableWillOpen`-handler закрывает любой ранее открытый ряд. Стандартный pattern из доков `react-native-gesture-handler`.
+- Long-press reorder **полностью удалён**: state, mutation, modal, обработчик. Reorder делается в web-админке. Никаких полурабочих фич.
+- `friction={2}` + `rightThreshold={40}` + `overshootRight={false}` — медленный свайп предсказуемо открывает actions; short-swipe не откатывает их обратно.
+
+**Permission gate (UX-1.1):** swipe рисуется только если `canManageWarehouse` (роль владелец/директор/админ или permission `warehouse_access`). У обычного сотрудника тап по папке/товару — обычный переход без actions. Это сохраняет старый контракт прав (не понижает безопасность).
+
+### Журнал чеков: тап по карточке открывает чек, не сущность (UX-2, P0, исправлено)
+
+**Симптом владельца:** «при нажатии на карточку чека почему-то открылся владелец/мастер/авто, а не сам чек».
+
+**Причина:** прошлая итерация iter#10 завернула chip'ы клиента/авто и текст имени мастера в `TouchableOpacity` с `openClient/openCarOwner/openEmployee`. На iOS внутренний `TouchableOpacity` побеждает внешний — `e.stopPropagation()` для нативных touch-событий в RN не работает как в DOM. Тапы попадали в дочерние chip'ы.
+
+**Исправлено в `ChecksScreen.tsx`:**
+
+- Chip'ы клиента/авто и текст имени мастера в карточке журнала **снова статичные** (`<View>` + `<Text>`), без обёрток.
+- Импорт `entityLinks` оставлен только для CheckDetail/Schedule. В `ChecksScreen.tsx` он явно не импортируется — добавил комментарий с обоснованием, чтобы следующий человек не «починил» обратно.
+- Тап по карточке чека → всегда `navigation.navigate('CheckDetail', ...)` через primed cache.
+
+Переходы по сущностям остаются доступны **только** изнутри открытой деталки чека (`CheckDetailScreen.infoCard`) — там это целевые ряды с chevron, без конфликта с тапом-родителем (родитель — ScrollView).
+
+### Журнал чеков: ускорение (PERF-1, P0, исправлено)
+
+**Симптом владельца:** «один раз открылся быстро, потом снова долго грузился, хотя чеков мало».
+
+**Причина:**
+
+- `useInfiniteQuery` имел `staleTime: 30_000` + дефолтный `refetchOnMount: true`. Возврат с `CheckDetail` через 30+ секунд вызывал свежий fetch — даже если данные в кеше.
+- `renderCheck` создавался заново на каждый рендер `ChecksScreen` (не useCallback) и через closure захватывал mutable `lastDateGroup` — это ломало порядок date-headers и заставляло FlashList пересчитывать row sizes.
+
+**Исправлено в `ChecksScreen.tsx`:**
+
+- `staleTime: 5 * 60_000` (5 минут), `gcTime: 30 * 60_000`, `refetchOnMount: false`, `refetchOnReconnect: false`. Возврат на журнал — мгновенный, кеш живой.
+- Date-group headers теперь precomputed через `useMemo(dateHeaderByIndex, [checks])` — стабильно по индексу. Mutable `lastDateGroup` удалён.
+- `renderCheck` обёрнут в `useCallback([dateHeaderByIndex, canDelete, canViewProfit, handleDelete, navigation, queryClient])` — FlashList реально перевыпускает row только когда меняется реальный input.
+- `handleDelete` тоже useCallback.
+- Persisted whitelist `'checks-infinite'` остаётся (из iter#10) — холодный старт мгновенный.
+
+`CheckDetailScreen` уже использовал primed cache (`queryClient.setQueryData(['check', id], rowCheck)` в onPress + `placeholderData: prev => prev`). Не трогал — пока работает.
+
+### Главная владельца: Owner Command Center (UX-3, P0, исправлено)
+
+**Симптом владельца:** «маленькая слабая плашка TodayQuickStats не нравится — это не центр управления; рейтинг сотрудников на главной не нужен».
+
+**Исправлено в `DashboardScreen.tsx`:**
+
+- Удалены из `AdminDashboard()`: `<TodayQuickStats />` + `<EmployeeRankingSection />`.
+- Добавлен новый `<OwnerCommandCenter />` — большой premium-виджет:
+  - Сегментированный pill-селектор: **Сегодня / Вчера / 7 дней / 30 дней**.
+  - Главный hero-тайл: **Выручка** крупно (30pt, weight 700) + дельта vs прошлого периода (цветная стрелка).
+  - Сетка из трёх тайлов: **Прибыль / Чеков / Средний чек** — каждый со своей дельтой.
+  - Тап на «Чеков» → переход в Журнал. Тап на header «Журнал» — тоже.
+- Данные из существующего `checksApi.getDashboardChart(period, offset)` — никаких новых endpoint'ов. Параллельно дёргается `(period, offset-1)` для дельты. SWR + `placeholderData: prev => prev` — переключение периодов мгновенное после первого fetch.
+- `EmployeeRankingSection` функция оставлена в файле как dead code (eslint её не флагает) — удаляется в отдельной зачистке. Сейчас её просто **не вызывают**.
+
+### Сотрудники: list redesign + permission gates (UX-4, P0, исправлено)
+
+**Симптом владельца:** «шапку унифицировал, но сам раздел "Сотрудники" слабый, и карточка тоже».
+
+**Исправлено в `EmployeesScreen.tsx`:**
+
+- Полный rewrite списка. Каждая строка теперь:
+  - 48pt градиентный аватар (per-name hash, та же палитра что в `ScheduleScreen.GridTab`);
+  - имя + роль-pill;
+  - status-pill с цветом и иконкой («На смене», «Опозд. N мин», «Выходной», «Больничный», «Прогул», «Не пришёл», «Нет данных»);
+  - метрики дня для мастеров (только если `showFinancials`): «Чеков сегодня» + «Выручка» из `checksApi.getRanking().today`. Если ranking-эндпоинт не вернул мастера — метрики не рисуются (никаких выдуманных нулей рядом с именем).
+- Сортировка: на смене → опоздавшие → ещё не пришёл → выходной/нет данных → по алфавиту внутри группы.
+- Subtitle в шапке: «На смене: N из M».
+- Tab bar bottom inset через `useTabBarHeight()`.
+- Permission gate: `showFinancials = director|superadmin|admin || profit_view`. Без него `useQuery(['employee-ranking'])` **disabled** — endpoint вообще не дёргается, чтобы не светить чужие выручки в логах/Sentry.
+
+**Исправлено в `EmployeeDetailScreen.tsx`:**
+
+- Hero-gradient теперь per-name (8 палитр через hash имени).
+- Permission gates на каждой финансовой секции:
+  - `salary` query: `enabled: showFinancials` — endpoint `salaryApi.getAll()` не дёргается у обычного коллеги-мастера.
+  - `ranking` query: `enabled: showFinancials`.
+  - `recent-checks` query: `enabled: showFinancials` — список чужих чеков с суммами тоже финансовая инфа.
+  - Salary section / Ranking section / Recent checks section: рендер только при `showFinancials`.
+- Contact-секция: «Доля с услуг», «Доля с товаров», «Выходные» — только при `showWorkConditions = isOwnerLike || isSelf`. Обычный коллега видит «Контакт» (телефон + логин), не «Контакт и условия».
+- `isSelf = viewer.id === id` — сотрудник всегда видит **свою** зарплату/условия (это его законная информация).
+- Новая секция **«Performance»** с auto-derived инсайтами:
+  - **Сильные стороны**: «Топ-N по выручке за месяц», «Лидер по выручке сегодня», «Сегодня пришёл вовремя», «Высокий средний чек» (≥ 5000 ₽).
+  - **Зоны роста**: «Выручка за месяц ниже среднего», «Опоздание сегодня: N мин», «Сегодня по графику, ещё не пришёл».
+  - Все пункты — **только** из реальных метрик API (`ranking`, `today`, `salary`). Никаких выдуманных показателей.
+  - Если ни одного пункта не насчитали — секция вообще не рисуется (graceful empty).
+  - Footnote документирует, что ручные заметки владельца требуют отдельного backend-endpoint (вне скоупа этой итерации).
+
+### Оставшиеся риски (документ, без правок)
+
+- **Permission на `/checks?masterId=X`**: бэкенд должен возвращать только чеки внутри tenantId — это уже есть в `JwtStrategy + @CurrentUser()`. Но НЕ проверял отдельно, что обычный мастер не может через `masterId` вытащить выручку коллеги. **Рекомендация владельцу:** проверить в `backend/src/checks/checks.service.ts:getAll`, что фильтр по `masterId` дополнительно требует роли. Если нет — добавить guard. Mobile-side gate `enabled: showFinancials` блокирует UI, но НЕ заменяет server-side проверку.
+- **Permission на `/checks/ranking`**: тот же контроль роли на сервере. Mobile делает запрос только при `showFinancials`, но это soft-gate.
+- **Permission на `/users/:id`**: `usersApi.getById(id)` дёргается всегда. Backend должен скрыть `salaryPercent`/`productSalaryPercent` для viewer'а без прав, иначе данные текут в JSON-ответ независимо от того, рисуем мы их или нет. **Не проверено в этой итерации.** Mobile рисует их только под `showWorkConditions`, но это не end-to-end защита.
+- **Reorder папок склада**: backend endpoint (`PATCH /warehouse/categories/order`) остался — просто mobile перестал его дёргать. Web-админка по-прежнему может им пользоваться.
+- **`expo-secure-store` для JWT**: всё ещё в AsyncStorage (см. iter#9 SEC-NEW-B). Запланировано отдельной нативной итерацией (требует prebuild + pod install + проверка auth flow).
+
+## Iter#10 — что добавилось
+
+### Performance (mobile)
+
+- **P15 (P0)** `ChecksScreen.tsx` — журнал чеков перешёл с одностраничного `useQuery` (где `setPage(p+1)` каждый раз заменял данные) на `useInfiniteQuery`. Семантика: первая страница = самые свежие чеки (сегодня), последующие страницы дозагружаются при скролле через `fetchNextPage`. Все страницы живут в одном cache entry и flat-маплятся в FlashList; возврат с `CheckDetail` не сбрасывает позицию. `placeholderData: prev => prev` сохраняет SWR-поведение при смене фильтров. Persisted-cache whitelist расширен ключом `'checks-infinite'` — мгновенное наполнение списка после cold-start.
+- **P16 (P0)** `ChecksScreen.tsx` — при тапе на чек `queryClient.setQueryData(['check', id], rowCheck)` пишет уже известные данные в кеш `CheckDetailScreen`. Detail screen с `placeholderData: prev => prev` использует это как источник для первого рендера; полный payload (services / products / mileage и т.п.) заменяет «черновик» из списка по факту прихода — без `<LoadingSpinner />` flash. Открытие чека ощущается мгновенным.
+- **P17 (P1)** `CheckDetailScreen.tsx` — добавлены `contentInset.bottom` + `scrollIndicatorInsets.bottom` + `paddingBottom: tabBarHeight + spacing[4]`. Floating tab bar больше не закрывает последний блок при полном скролле. `useTabBarHeight()` единый источник высоты, `automaticallyAdjustContentInsets={false}` — чтобы iOS не ломал расчёт.
+- **P18 (P1)** `DashboardScreen.tsx` — тяжёлый `<RevenueChart />` (период tabs «Сегодня / Неделя / Месяц / Год» + SVG-графики выручки/прибыли) удалён из `AdminDashboard()`. Главная владельца теперь рисует только `TodayQuickStats`, `StaffStatus`, `LowStockWidget`, `MissedCallsWidget`, `EmployeeRankingSection`. Аналитика по периодам перенесена в раздел «Отчёты». Cold-start dashboard стал ~1.5× легче по виджетам и заметно быстрее на первом mount.
+
+### UX (iter#10)
+
+- **U5 (P0)** Склад — у папок убрана видимая иконка корзины. Вместо неё iOS-style swipe-actions: «Изменить» (синяя, pencil) + «Удалить» (красная, trash, с `ConfirmDialog`). API не менялись — используется существующий `warehouseCategoriesApi.rename(id, newPath)` и `warehouseCategoriesApi.remove(id)`. Long-press по папке по-прежнему открывает выбор позиции (drag-and-drop affordance) через `warehouseCategoriesApi.updateOrder`. Permission gate (`canManageWarehouse`) тот же. Папки без `catId` (auto-derived из `product.category` без записи в `warehouse_categories`) показываются без swipe — переименовывать/удалять там нечего. **Реальный native long-press-and-reorder** (как iOS Files): backend уже умеет переупорядочивать (`updateOrder`), но pure JS-реализация long-press-drag поверх `View` без скачков фрейма требует или `react-native-draggable-flatlist`, или native module — обе зависимости заслуживают отдельной итерации; компромисс «long-press → modal с position-pickером» сохранён.
+- **U6 (P0)** Единый Apple-like header. `IosScreenHeader` применён к: `ExpensesScreen`, `CashFlowScreen`, `UsersScreen`, `MarketingScreen`, `EquipmentScreen`, `CompanySettingsScreen`, `SubscriptionScreen`, `EmployeeDetailScreen`, `SupplierDetailScreen`. Удалены bespoke `SafeAreaView edges=['top']` + ручной back + `LinearGradient`-icon-pill. Шапки больше не «пляшут» по размерам и отступам.
+- **U7 (P1)** Глобально кликабельные сущности. `mobile/src/navigation/entityLinks.ts` — три helper'а (`openClient`, `openCarOwner`, `openEmployee`), которые скрывают факт что `EmployeeDetail` живёт внутри `MoreStack` (использует nested-navigate `MoreTab → EmployeeDetail`). Применены в `ChecksScreen` (info chips клиента/авто, имя мастера в футере) и `CheckDetailScreen` (info card → каждая строка с реальной сущностью теперь TouchableOpacity с chevron). В `ScheduleScreen.GridTab` имя сотрудника стало кликом, long-press остался для reorder (только для admin/director). В `TodayTab` карточка сотрудника тоже открывает его профиль.
+- **U8 (P1)** `EmployeeDetailScreen` — добавлена секция «Недавние чеки» (последние 5 заказ-нарядов мастера) с прямым переходом в `CheckDetail`. Используется существующий `checksApi.getAll({ masterId, page: 1, limit: 5 })`, без изменений API. Тап на строку прайм'ит cache `['check', id]` и навигирует через nested route в Checks tab. Также добавлен `tabBarHeight` bottom inset — больше нет перекрытия последним блоком floating tab bar.
+
+### Security (iter#10)
+
+- **SEC-NEW-G (информация):** Аудит client-side кеша на cross-tenant leakage не выявил новых рисков. Все экраны, которые слушают `useInfiniteQuery['checks-infinite', ...]`, опираются на тот же фильтр-by-tenantId, что server применяет через JWT. Добавление в whitelist `PERSISTED_KEYS` ключа `'checks-infinite'` укрыто `clearAllPersistedCache()` в `AuthContext.logout` (см. iter#9 SEC-NEW-A) — выход одного пользователя по-прежнему вычищает все сегменты кеша.
+- **SEC-NEW-H (информация):** Новый helper `entityLinks.ts` использует `(navigation as any).navigate(...)` — это **не** обход контроля доступа: целевые экраны (`ClientDetail`, `EmployeeDetail`, `SupplierDetail`) уже защищены permission gates через `gated('clients_view', …)` / `gated('users_manage', …)` в `AppNavigator.tsx`. Если у пользователя нет прав, FeatureGate покажет paywall; навигация ничего «не открывает» в обход проверки.
+- **SEC-NEW-I (P1, документ):** `expo-secure-store` для JWT всё ещё не подключён (см. iter#9 SEC-NEW-B). Не сделано — требует `expo prebuild --clean` + `pod install` + native rebuild + ручной тест auth flow на физическом iPhone. Запланировано как самостоятельная итерация native rebuild.
 
 ## Iter#9 — что добавилось
 

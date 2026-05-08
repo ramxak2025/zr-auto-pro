@@ -1,12 +1,16 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
+// entityLinks намеренно не импортируются здесь: тап по карточке журнала
+// должен всегда вести в CheckDetail, а не на клиента/авто/мастера.
+// Переходы на сущности живут внутри открытой деталки чека.
 import { checksApi, usersApi, productsApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
@@ -88,9 +92,18 @@ export default function ChecksScreen() {
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('checks');
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
+  // Page-based infinite scroll. The first page is the most recent checks
+  // (the API sorts desc by date, so today's rows land first); subsequent
+  // pages are appended below as the user scrolls. We stay on a small page
+  // size so the first paint feels instant and old data is fetched lazily.
   const limit = 20;
   const [refreshing, setRefreshing] = useState(false);
+  // No-op kept so historical onChange handlers below stay readable.
+  // Filter changes flip the queryKey; useInfiniteQuery resets to page 1
+  // automatically — we never need to reset a page counter explicitly.
+  const setPage = (_: number | ((p: number) => number)) => {
+    /* noop — useInfiniteQuery owns paging now */
+  };
 
   // Filters
   const [showFilters, setShowFilters] = useState(false);
@@ -120,17 +133,27 @@ export default function ChecksScreen() {
   const toISODate = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-  const { data: checksData, isLoading } = useQuery<PaginatedResponse<Check>>({
+  const {
+    data: checksData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<PaginatedResponse<Check>>({
+    // Page key intentionally excludes the page number so all loaded
+    // pages share a single cache entry. This is what lets the user
+    // come back from a check detail and still see today + older
+    // pages already loaded — no re-fetch flash.
     queryKey: [
-      'checks',
-      page,
+      'checks-infinite',
       search,
       dateFrom ? toISODate(dateFrom) : '',
       dateTo ? toISODate(dateTo) : '',
       filterMasterId,
     ],
-    queryFn: async () => {
-      const params: Record<string, any> = { page, limit };
+    initialPageParam: 1,
+    queryFn: async ({ pageParam = 1 }) => {
+      const params: Record<string, any> = { page: pageParam as number, limit };
       if (search) params.search = search;
       if (dateFrom) params.dateFrom = toISODate(dateFrom);
       if (dateTo) params.dateTo = toISODate(dateTo);
@@ -138,12 +161,19 @@ export default function ChecksScreen() {
       const res = await checksApi.getAll(params);
       return res.data;
     },
-    staleTime: 30_000,
-    // Belt-and-suspenders: a per-screen `placeholderData` re-asserts
-    // the global stale-while-revalidate. When the user changes a
-    // filter (search, date, master), we keep showing the previous
-    // page until the new one arrives — no skeleton flash, no empty
-    // state in between.
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((acc, p) => acc + (p?.data?.length ?? 0), 0);
+      return loaded < (lastPage?.total ?? 0) ? allPages.length + 1 : undefined;
+    },
+    // Журнал — холодный список, который меняется редко (новые чеки идут
+    // через invalidate в delete/create мутациях). 5 минут «свежо», 30 минут
+    // живёт в памяти — возврат с CheckDetail попадает прямо в кеш.
+    staleTime: 5 * 60 * 1000,
+    gcTime: 30 * 60 * 1000,
+    // Принципиально: не перезапрашивать на каждый mount. Возврат с детали
+    // чека не должен снова грузить страницу — данные уже в кеше.
+    refetchOnMount: false,
+    refetchOnReconnect: false,
     placeholderData: (prev) => prev,
   });
 
@@ -187,23 +217,31 @@ export default function ChecksScreen() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => checksApi.remove(id),
     onSuccess: () => {
+      // Cover both the legacy `['checks', ...]` key (used by paginated
+      // queries elsewhere — Reports / Salary etc.) and the new infinite
+      // key the journal owns. invalidateQueries with a prefix invalidates
+      // any longer key that starts with it, so this is intentional.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
     onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить'),
   });
 
-  const handleDelete = (checkId: string, checkNumber: number) => {
-    Alert.alert('Удалить чек', `Удалить чек #${checkNumber}? Это действие необратимо.`, [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate(checkId) },
-    ]);
-  };
+  const handleDelete = useCallback(
+    (checkId: string, checkNumber: number) => {
+      Alert.alert('Удалить чек', `Удалить чек #${checkNumber}? Это действие необратимо.`, [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate(checkId) },
+      ]);
+    },
+    [deleteMutation],
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
     if (activeTab === 'checks') {
-      await queryClient.invalidateQueries({ queryKey: ['checks'] });
+      await queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
     } else {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
@@ -213,118 +251,153 @@ export default function ChecksScreen() {
     setRefreshing(false);
   };
 
-  const checks = checksData?.data ?? [];
-  const total = checksData?.total ?? 0;
-  const hasMore = page * limit < total;
+  // Flatten all loaded pages — newest first comes from page 1, older
+  // appended below from page 2+. The reduce avoids creating a fresh
+  // array on every render unless the underlying pages change.
+  const checks = useMemo(() => (checksData?.pages ?? []).flatMap((p) => p?.data ?? []), [checksData?.pages]);
+  const total = checksData?.pages?.[0]?.total ?? 0;
 
-  // Group checks by date for visual separation
-  let lastDateGroup = '';
+  // Group checks by date — precompute «у этого индекса нужен заголовок?»
+  // на основе всего массива `checks`. Раньше использовался mutable
+  // `lastDateGroup`, который через closure rendered'ил неправильно при
+  // recycling в FlashList (карточки рисовались не строго по порядку).
+  const dateHeaderByIndex = useMemo(() => {
+    const flags: boolean[] = new Array(checks.length).fill(false);
+    let prev = '';
+    for (let i = 0; i < checks.length; i++) {
+      const grp = formatDateGroup(checks[i].date);
+      if (grp !== prev) {
+        flags[i] = true;
+        prev = grp;
+      }
+    }
+    return flags;
+  }, [checks]);
 
-  const renderCheck = ({ item: check, index }: { item: Check; index: number }) => {
-    const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-    const badge = badgeColors[badgeKey];
-    const currentDateGroup = formatDateGroup(check.date);
-    const showDateHeader = currentDateGroup !== lastDateGroup;
-    if (showDateHeader) lastDateGroup = currentDateGroup;
+  const renderCheck = useCallback(
+    ({ item: check, index }: { item: Check; index: number }) => {
+      const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
+      const badge = badgeColors[badgeKey];
+      const currentDateGroup = formatDateGroup(check.date);
+      const showDateHeader = dateHeaderByIndex[index] === true;
 
-    return (
-      <View>
-        {showDateHeader && (
-          <View style={styles.dateGroupHeader}>
-            <View style={styles.dateGroupLine} />
-            <Text style={styles.dateGroupText}>{currentDateGroup}</Text>
-            <View style={styles.dateGroupLine} />
-          </View>
-        )}
-        <TouchableOpacity
-          style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
-          onPress={() => navigation.navigate('CheckDetail', { id: check.id })}
-          activeOpacity={0.7}
-        >
-          {/* Left accent bar */}
-          <View
-            style={[
-              styles.accentBar,
-              check.isDeferred ? { backgroundColor: colors.red[400] } : { backgroundColor: colors.primary[400] },
-            ]}
-          />
+      return (
+        <View>
+          {showDateHeader && (
+            <View style={styles.dateGroupHeader}>
+              <View style={styles.dateGroupLine} />
+              <Text style={styles.dateGroupText}>{currentDateGroup}</Text>
+              <View style={styles.dateGroupLine} />
+            </View>
+          )}
+          <TouchableOpacity
+            style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
+            onPress={() => {
+              // ВАЖНО: НЕ прайми кеш `['check', id]` row-данными из журнала.
+              // Прошлая итерация делала setQueryData с row payload, в котором
+              // `services` / `products` могут быть undefined (list endpoint
+              // не отдаёт их детально), и CheckDetailScreen потом крэшил на
+              // `check.services.length` / `(check.products || []).map(...)`.
+              // CheckDetailScreen теперь сам делает безопасный placeholderData
+              // lookup через queryClient.getQueriesData(['checks-infinite']),
+              // и при этом guard'ит .length / .map от undefined. См. iter#12.
+              navigation.navigate('CheckDetail', { id: check.id });
+            }}
+            activeOpacity={0.7}
+          >
+            {/* Left accent bar */}
+            <View
+              style={[
+                styles.accentBar,
+                check.isDeferred ? { backgroundColor: colors.red[400] } : { backgroundColor: colors.primary[400] },
+              ]}
+            />
 
-          <View style={styles.checkContent}>
-            {/* Top row: number + badges + delete */}
-            <View style={styles.checkHeader}>
-              <View style={styles.checkHeaderLeft}>
-                <Text style={styles.checkNumber}>#{check.number}</Text>
-                {check.isDeferred && (
-                  <View style={styles.deferredBadge}>
-                    <Text style={styles.deferredText}>Отложен</Text>
+            <View style={styles.checkContent}>
+              {/* Top row: number + badges + delete */}
+              <View style={styles.checkHeader}>
+                <View style={styles.checkHeaderLeft}>
+                  <Text style={styles.checkNumber}>#{check.number}</Text>
+                  {check.isDeferred && (
+                    <View style={styles.deferredBadge}>
+                      <Text style={styles.deferredText}>Отложен</Text>
+                    </View>
+                  )}
+                  <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
+                    <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
+                      {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+                    </Text>
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
+                  {canDelete && (
+                    <TouchableOpacity
+                      onPress={() => handleDelete(check.id, check.number)}
+                      style={styles.deleteBtn}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close" size={14} color={colors.gray[300]} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+
+              {/* Client & car — статичные chip'ы. Раньше были TouchableOpacity
+                с openClient / openCarOwner внутри; на iPhone это перехватывало
+                основной тап по карточке и иногда вместо чека открывалась
+                карточка клиента/авто. Переходы по сущностям остаются доступны
+                из самой деталки чека (CheckDetailScreen.infoCard) — там это
+                целевые ряды с chevron, без конфликта с тапом-родителем. */}
+              <View style={styles.checkInfoRow}>
+                {check.client?.fullName ? (
+                  <View style={styles.infoChip}>
+                    <Ionicons name="person-outline" size={11} color={colors.gray[400]} />
+                    <Text style={styles.infoChipText} numberOfLines={1}>
+                      {check.client.fullName}
+                    </Text>
+                  </View>
+                ) : null}
+                {check.car && (
+                  <View style={styles.infoChip}>
+                    <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
+                    <Text style={styles.infoChipText} numberOfLines={1}>
+                      {check.car.makeModel}
+                    </Text>
+                    {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
                   </View>
                 )}
-                <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
-                  <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                    {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
-                  </Text>
-                </View>
               </View>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
-                {canDelete && (
-                  <TouchableOpacity
-                    onPress={() => handleDelete(check.id, check.number)}
-                    style={styles.deleteBtn}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+
+              {/* Comment preview */}
+              {check.comment && (
+                <Text style={styles.commentText} numberOfLines={1}>
+                  {check.comment}
+                </Text>
+              )}
+
+              {/* Footer: time + master + profit */}
+              <View style={styles.checkFooter}>
+                <Text style={styles.footerTime}>
+                  {new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+                {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
+                {canViewProfit && (
+                  <Text
+                    style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}
                   >
-                    <Ionicons name="close" size={14} color={colors.gray[300]} />
-                  </TouchableOpacity>
+                    {check.profit >= 0 ? '+' : ''}
+                    {formatMoney(check.profit)}
+                  </Text>
                 )}
               </View>
             </View>
-
-            {/* Client & car -- compact single row */}
-            <View style={styles.checkInfoRow}>
-              {check.client?.fullName ? (
-                <View style={styles.infoChip}>
-                  <Ionicons name="person-outline" size={11} color={colors.gray[400]} />
-                  <Text style={styles.infoChipText} numberOfLines={1}>
-                    {check.client.fullName}
-                  </Text>
-                </View>
-              ) : null}
-              {check.car && (
-                <View style={styles.infoChip}>
-                  <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
-                  <Text style={styles.infoChipText} numberOfLines={1}>
-                    {check.car.makeModel}
-                  </Text>
-                  {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
-                </View>
-              )}
-            </View>
-
-            {/* Comment preview */}
-            {check.comment && (
-              <Text style={styles.commentText} numberOfLines={1}>
-                {check.comment}
-              </Text>
-            )}
-
-            {/* Footer: time + master + profit */}
-            <View style={styles.checkFooter}>
-              <Text style={styles.footerTime}>
-                {new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-              {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
-              {canViewProfit && (
-                <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
-                  {check.profit >= 0 ? '+' : ''}
-                  {formatMoney(check.profit)}
-                </Text>
-              )}
-            </View>
-          </View>
-        </TouchableOpacity>
-      </View>
-    );
-  };
+          </TouchableOpacity>
+        </View>
+      );
+    },
+    [dateHeaderByIndex, canDelete, canViewProfit, handleDelete, navigation, queryClient],
+  );
 
   const renderWarehouseDoc = ({ item }: { item: WarehouseDoc }) => {
     if (item.kind === 'movement') {
@@ -408,9 +481,6 @@ export default function ChecksScreen() {
     );
   };
 
-  // Reset lastDateGroup when data changes
-  lastDateGroup = '';
-
   const isWarehouseLoading = movementsLoading || deliveriesLoading;
 
   return (
@@ -426,7 +496,6 @@ export default function ChecksScreen() {
             onChange={(v) => {
               setSearch(v);
               setPage(1);
-              lastDateGroup = '';
             }}
             placeholder="Поиск по клиенту, авто, номеру..."
           />
@@ -621,10 +690,17 @@ export default function ChecksScreen() {
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
               onEndReached={() => {
-                if (hasMore) setPage((p) => p + 1);
+                if (hasNextPage && !isFetchingNextPage) fetchNextPage();
               }}
-              onEndReachedThreshold={0.5}
+              onEndReachedThreshold={0.6}
               ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
+              ListFooterComponent={
+                isFetchingNextPage ? (
+                  <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color={colors.primary[500]} />
+                  </View>
+                ) : null
+              }
             />
           )}
         </>

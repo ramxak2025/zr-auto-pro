@@ -1,11 +1,17 @@
 import React, { useState } from 'react';
 import {
-  View, Text, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, Alert, ActivityIndicator,
+  View,
+  Text,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  RefreshControl,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -19,9 +25,19 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
-function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
-function formatDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
-function toDateStr(d: Date) { return d.toISOString().slice(0, 10); }
+function formatMoney(v: number) {
+  return (
+    Math.round(v)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
+  );
+}
+function formatDate(d: string) {
+  return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+function toDateStr(d: Date) {
+  return d.toISOString().slice(0, 10);
+}
 
 const PERIODS = [
   { key: 'today', label: 'Сегодня' },
@@ -86,12 +102,18 @@ export default function ExpensesScreen() {
 
   const { data: categories = [] } = useQuery({
     queryKey: ['expense-categories'],
-    queryFn: async () => { const res = await expensesApi.getCategories(); return res.data; },
+    queryFn: async () => {
+      const res = await expensesApi.getCategories();
+      return res.data;
+    },
   });
 
   const { data: expenses = [], isLoading } = useQuery({
     queryKey: ['expenses', dateFrom, dateTo],
-    queryFn: async () => { const res = await expensesApi.getAll({ dateFrom, dateTo }); return res.data; },
+    queryFn: async () => {
+      const res = await expensesApi.getAll({ dateFrom, dateTo });
+      return res.data;
+    },
   });
 
   const createMutation = useMutation({
@@ -127,7 +149,10 @@ export default function ExpensesScreen() {
   });
 
   const resetForm = () => {
-    setAmount(''); setDescription(''); setSelectedCategoryId(''); setExpenseDate(toDateStr(new Date()));
+    setAmount('');
+    setDescription('');
+    setSelectedCategoryId('');
+    setExpenseDate(toDateStr(new Date()));
   };
 
   const handlePeriodChange = (p: string) => {
@@ -160,7 +185,7 @@ export default function ExpensesScreen() {
     byCategory[cat].total += exp.amount;
   }
   const categoryBreakdown = Object.values(byCategory).sort((a, b) => b.total - a.total);
-  const allCategoryNames = categoryBreakdown.map(c => c.name);
+  const allCategoryNames = categoryBreakdown.map((c) => c.name);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -205,7 +230,11 @@ export default function ExpensesScreen() {
                 )}
               </View>
               {isDirector && (
-                <TouchableOpacity onPress={() => setDeleteId(item.id)} style={styles.deleteBtn} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <TouchableOpacity
+                  onPress={() => setDeleteId(item.id)}
+                  style={styles.deleteBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
                   <Ionicons name="trash-outline" size={15} color={colors.gray[300]} />
                 </TouchableOpacity>
               )}
@@ -217,45 +246,31 @@ export default function ExpensesScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <LinearGradient
-        colors={[colors.white, colors.gray[50]] as [string, string]}
-        style={styles.header}
-      >
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.red[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.red[500], colors.red[700]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="wallet-outline" size={18} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Расходы</Text>
-          {expenses.length > 0 && (
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>{expenses.length}</Text>
-            </View>
-          )}
-        </View>
-        {isDirector ? (
-          <TouchableOpacity style={styles.addBtn} onPress={() => { resetForm(); setModalOpen(true); }}>
-            <Ionicons name="add-circle-outline" size={16} color={colors.white} style={{ marginRight: 4 }} />
-            <Text style={styles.addBtnText}>Новый</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={{ width: 60 }} />
-        )}
-      </LinearGradient>
+    <View style={styles.safe}>
+      {/* Унифицированная iOS-шапка — единый стиль с Расписанием/Журналом. */}
+      <IosScreenHeader
+        title="Расходы"
+        subtitle={expenses.length > 0 ? `Всего: ${expenses.length}` : undefined}
+        onBack={() => navigation.goBack()}
+        trailing={
+          isDirector ? (
+            <TouchableOpacity
+              style={styles.addBtn}
+              onPress={() => {
+                resetForm();
+                setModalOpen(true);
+              }}
+            >
+              <Text style={styles.addBtnText}>+ Новый</Text>
+            </TouchableOpacity>
+          ) : undefined
+        }
+      />
 
       {/* Period selector */}
       <View style={styles.periodWrapper}>
         <View style={styles.periodContainer}>
-          {PERIODS.map(p => (
+          {PERIODS.map((p) => (
             <TouchableOpacity
               key={p.key}
               style={[styles.periodChip, period === p.key && styles.periodChipActive]}
@@ -325,10 +340,24 @@ export default function ExpensesScreen() {
         </View>
       )}
 
-      {isLoading ? <ListSkeleton count={6} /> : !expenses?.length ? (
-        <EmptyState title="Нет расходов" description="Добавьте расходы за выбранный период" action={isDirector ? { label: 'Добавить', onPress: () => setModalOpen(true) } : undefined} />
+      {isLoading ? (
+        <ListSkeleton count={6} />
+      ) : !expenses?.length ? (
+        <EmptyState
+          title="Нет расходов"
+          description="Добавьте расходы за выбранный период"
+          action={isDirector ? { label: 'Добавить', onPress: () => setModalOpen(true) } : undefined}
+        />
       ) : (
-        <FlashList data={expenses} keyExtractor={i => i.id} renderItem={renderExpense} contentContainerStyle={styles.list} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />} />
+        <FlashList
+          data={expenses}
+          keyExtractor={(i) => i.id}
+          renderItem={renderExpense}
+          contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+          }
+        />
       )}
 
       {/* Add expense modal */}
@@ -340,7 +369,9 @@ export default function ExpensesScreen() {
               style={[styles.catPickerItem, !selectedCategoryId && styles.catPickerItemActive]}
               onPress={() => setSelectedCategoryId('')}
             >
-              <Text style={[styles.catPickerText, !selectedCategoryId && styles.catPickerTextActive]}>Без категории</Text>
+              <Text style={[styles.catPickerText, !selectedCategoryId && styles.catPickerTextActive]}>
+                Без категории
+              </Text>
             </TouchableOpacity>
             {categories.map((c: any) => (
               <TouchableOpacity
@@ -348,7 +379,9 @@ export default function ExpensesScreen() {
                 style={[styles.catPickerItem, selectedCategoryId === c.id && styles.catPickerItemActive]}
                 onPress={() => setSelectedCategoryId(c.id)}
               >
-                <Text style={[styles.catPickerText, selectedCategoryId === c.id && styles.catPickerTextActive]}>{c.name}</Text>
+                <Text style={[styles.catPickerText, selectedCategoryId === c.id && styles.catPickerTextActive]}>
+                  {c.name}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -383,7 +416,11 @@ export default function ExpensesScreen() {
             <Text style={styles.cancelBtnText}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} activeOpacity={0.8}>
-            {createMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.submitBtnText}>Добавить</Text>}
+            {createMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.submitBtnText}>Добавить</Text>
+            )}
           </TouchableOpacity>
         </View>
       </Modal>
@@ -400,7 +437,9 @@ export default function ExpensesScreen() {
           />
           <TouchableOpacity
             style={[styles.catAddBtn, !newCatName.trim() && styles.catAddBtnDisabled]}
-            onPress={() => { if (newCatName.trim()) createCatMutation.mutate({ name: newCatName.trim() }); }}
+            onPress={() => {
+              if (newCatName.trim()) createCatMutation.mutate({ name: newCatName.trim() });
+            }}
             disabled={!newCatName.trim()}
           >
             <Ionicons name="add" size={20} color={colors.white} />
@@ -429,13 +468,16 @@ export default function ExpensesScreen() {
       <ConfirmDialog
         visible={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => { if (deleteId) deleteMutation.mutate(deleteId); setDeleteId(null); }}
+        onConfirm={() => {
+          if (deleteId) deleteMutation.mutate(deleteId);
+          setDeleteId(null);
+        }}
         title="Удалить расход"
         message="Вы уверены, что хотите удалить этот расход?"
         confirmText="Удалить"
         variant="danger"
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

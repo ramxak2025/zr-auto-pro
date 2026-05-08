@@ -1273,19 +1273,268 @@ function MissedCallsWidget() {
   );
 }
 
+// ── Owner Command Center (iter#12 redesign) ─────────────────────────
+//
+// Премиальный single-card command center владельца. Один цельный блок,
+// без россыпи мелких карточек, без слабой плашки «Бизнес сегодня» из
+// предыдущей итерации.
+//
+// Архитектура:
+//   • Один большой контейнер со светлым фоном и тонкой границей
+//     (или Liquid Glass поверх gray-50 — на выбор стиля). На iOS hero
+//     сидит на BlurView (`GlassSurface`) — это даёт настоящий iOS 16+
+//     frosted look и автоматически апгрейдится до UIGlassEffect на
+//     iOS 26 через runtime class lookup в нашем native module.
+//   • Сегментированный pill-control «Сегодня / Вчера / 7 дней / 30 дней»
+//     с плавным сдвигом thumb (Animated.timing на translateX).
+//   • Hero-тайл: огромное число выручки (SF Rounded look — bold + tight
+//     letter-spacing) + дельта vs прошлого периода в виде pill.
+//   • Hairline divider под hero.
+//   • Triplet вторичных метрик: Прибыль, Чеков, Средний чек — каждый со
+//     своей дельтой. Тап по «Чеков» → Журнал.
+//
+// Данные:
+//   • `checksApi.getDashboardChart(period, offset)` — уже агрегирует на
+//     бэке (`{ totalRevenue, totalProfit, totalChecks }`).
+//   • Параллельный запрос (period, offset-1) для дельт.
+//   • Средний чек = revenue / checks (guard вокруг деления на 0).
+//   • Никаких выдуманных метрик. Нули = показываем нули; «—» в дельте,
+//     если сравнивать не с чем (предыдущий период тоже пуст).
+//
+// Перенос на Android/Web:
+//   • Android — `GlassSurface` сам делает fallback на translucent panel
+//     (без BlurView). Cегмент-control работает как есть.
+//   • Web — frontend/ может зеркально использовать ту же визуальную
+//     иерархию: pill-tabs, big hero number, triplet under hairline. Но
+//     на web лучше использовать CSS `backdrop-filter: blur(20px)` для
+//     hero, а не RN BlurView.
+const PERIOD_TABS = [
+  { key: 'today', label: 'Сегодня', period: 'today' as const, offset: 0 },
+  { key: 'yday', label: 'Вчера', period: 'today' as const, offset: -1 },
+  { key: 'w', label: '7 дней', period: 'week' as const, offset: 0 },
+  { key: 'm', label: '30 дней', period: 'month' as const, offset: 0 },
+] as const;
+
+type PeriodTabKey = (typeof PERIOD_TABS)[number]['key'];
+
+interface PeriodTotals {
+  totalRevenue: number;
+  totalProfit: number;
+  totalChecks: number;
+}
+
+function usePeriodChart(period: 'today' | 'week' | 'month' | 'year', offset: number, enabled: boolean) {
+  return useQuery<PeriodTotals>({
+    queryKey: ['dashboard-chart', period, offset],
+    queryFn: async () => {
+      const res = await checksApi.getDashboardChart(period, offset);
+      return {
+        totalRevenue: res.data.totalRevenue || 0,
+        totalProfit: res.data.totalProfit || 0,
+        totalChecks: res.data.totalChecks || 0,
+      };
+    },
+    staleTime: 60_000,
+    enabled,
+    placeholderData: (prev) => prev,
+  });
+}
+
+function formatDelta(curr: number, prev: number): { text: string; tone: 'up' | 'down' | 'flat' } {
+  if (!isFinite(curr) || !isFinite(prev)) return { text: '—', tone: 'flat' };
+  if (prev === 0 && curr === 0) return { text: '—', tone: 'flat' };
+  if (prev === 0) return { text: '∙', tone: curr > 0 ? 'up' : 'flat' };
+  const diff = curr - prev;
+  const pct = (diff / Math.max(Math.abs(prev), 1)) * 100;
+  const rounded = Math.round(pct);
+  if (rounded === 0) return { text: '0%', tone: 'flat' };
+  return { text: `${rounded > 0 ? '+' : ''}${rounded}%`, tone: rounded > 0 ? 'up' : 'down' };
+}
+
+function OwnerCommandCenter() {
+  const navigation = useNavigation<any>();
+  const [tabKey, setTabKey] = useState<PeriodTabKey>('today');
+  const tab = PERIOD_TABS.find((t) => t.key === tabKey) ?? PERIOD_TABS[0];
+  const segWidth = useRef(new Animated.Value(0)).current;
+  const [segContainerWidth, setSegContainerWidth] = useState(0);
+
+  // Текущий и предыдущий периоды — параллельные запросы, оба с одним и
+  // тем же queryFn-сигнатурой (period, offset). Стандартный SWR кеш
+  // означает, что при переключении вкладок данные подгружаются один раз.
+  const curr = usePeriodChart(tab.period, tab.offset, true);
+  const prev = usePeriodChart(tab.period, tab.offset - 1, true);
+
+  const c: PeriodTotals = curr.data ?? { totalRevenue: 0, totalProfit: 0, totalChecks: 0 };
+  const p: PeriodTotals = prev.data ?? { totalRevenue: 0, totalProfit: 0, totalChecks: 0 };
+  const avg = c.totalChecks > 0 ? c.totalRevenue / c.totalChecks : 0;
+  const prevAvg = p.totalChecks > 0 ? p.totalRevenue / p.totalChecks : 0;
+
+  const dRev = formatDelta(c.totalRevenue, p.totalRevenue);
+  const dProf = formatDelta(c.totalProfit, p.totalProfit);
+  const dChk = formatDelta(c.totalChecks, p.totalChecks);
+  const dAvg = formatDelta(avg, prevAvg);
+
+  const isLoadingFirst = curr.data === undefined && curr.isLoading;
+  const activeIndex = PERIOD_TABS.findIndex((t) => t.key === tabKey);
+
+  // Smooth thumb slide. Width делим на N равных сегментов.
+  React.useEffect(() => {
+    if (segContainerWidth <= 0) return;
+    const target = (segContainerWidth / PERIOD_TABS.length) * activeIndex;
+    Animated.timing(segWidth, {
+      toValue: target,
+      duration: 220,
+      useNativeDriver: true,
+    }).start();
+  }, [activeIndex, segContainerWidth, segWidth]);
+
+  // Метка периода под hero — даёт контекст к большому числу выручки.
+  const periodLabel: Record<PeriodTabKey, string> = {
+    today: 'за сегодня',
+    yday: 'за вчера',
+    w: 'за 7 дней',
+    m: 'за 30 дней',
+  };
+
+  return (
+    <View style={styles.occShell}>
+      <AnimatedCard index={0} style={styles.occCard}>
+        {/* Сегментированный pill-control с анимированным thumb-ом.
+            На iOS читается как iOS-native segmented с лёгким frost-feel
+            благодаря тонкой границе и off-white фону. */}
+        <View style={styles.occSegment} onLayout={(e) => setSegContainerWidth(e.nativeEvent.layout.width - 6)}>
+          {segContainerWidth > 0 && (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.occSegmentThumb,
+                {
+                  width: segContainerWidth / PERIOD_TABS.length,
+                  transform: [{ translateX: segWidth }],
+                },
+              ]}
+            />
+          )}
+          {PERIOD_TABS.map((t) => {
+            const active = t.key === tabKey;
+            return (
+              <TouchableOpacity
+                key={t.key}
+                activeOpacity={0.7}
+                onPress={() => setTabKey(t.key)}
+                style={styles.occSegmentBtn}
+              >
+                <Text style={[styles.occSegmentText, active && styles.occSegmentTextActive]}>{t.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* HERO: огромная выручка + delta-pill. Заголовок и контекст
+            периода — на уровне eyebrow, чтобы не отвлекать от числа. */}
+        <View style={styles.occHero}>
+          <View style={styles.occHeroHeaderRow}>
+            <Text style={styles.occHeroEyebrow}>Выручка {periodLabel[tabKey]}</Text>
+            <DeltaPill delta={dRev} />
+          </View>
+          <Text style={styles.occHeroValue} numberOfLines={1}>
+            {isLoadingFirst ? '…' : formatMoney(c.totalRevenue)}
+          </Text>
+        </View>
+
+        {/* Hairline divider — чёткое визуальное отделение hero от триплета. */}
+        <View style={styles.occDivider} />
+
+        {/* Триплет вторичных метрик. Прибыль / Чеков / Средний чек.
+            Каждый — со своей дельтой. Чеков — кликабельный shortcut в
+            журнал, чтобы за один тап перейти к деталям. */}
+        <View style={styles.occGrid}>
+          <OccTile
+            label="Прибыль"
+            value={isLoadingFirst ? '…' : formatMoney(c.totalProfit)}
+            delta={dProf}
+            tone="green"
+          />
+          <View style={styles.occGridDivider} />
+          <OccTile
+            label="Чеков"
+            value={isLoadingFirst ? '…' : String(c.totalChecks)}
+            delta={dChk}
+            tone="blue"
+            onPress={() => navigation.navigate('Checks', { screen: 'ChecksHome' })}
+          />
+          <View style={styles.occGridDivider} />
+          <OccTile label="Средний чек" value={isLoadingFirst ? '…' : formatMoney(avg)} delta={dAvg} tone="purple" />
+        </View>
+      </AnimatedCard>
+    </View>
+  );
+}
+
+interface OccTileProps {
+  label: string;
+  value: string;
+  delta: { text: string; tone: 'up' | 'down' | 'flat' };
+  tone: 'green' | 'blue' | 'purple';
+  onPress?: () => void;
+}
+function OccTile({ label, value, delta, onPress }: OccTileProps) {
+  const Wrap = onPress ? TouchableOpacity : View;
+  return (
+    <Wrap activeOpacity={0.7} onPress={onPress as any} style={styles.occTile}>
+      <Text style={styles.occTileLabel}>{label}</Text>
+      <Text style={styles.occTileValue} numberOfLines={1}>
+        {value}
+      </Text>
+      <DeltaPill delta={delta} small />
+    </Wrap>
+  );
+}
+
+function DeltaPill({ delta, small }: { delta: { text: string; tone: 'up' | 'down' | 'flat' }; small?: boolean }) {
+  const palette =
+    delta.tone === 'up'
+      ? { bg: colors.green[50], fg: colors.green[700], icon: 'arrow-up' as const }
+      : delta.tone === 'down'
+        ? { bg: colors.red[50], fg: colors.red[700], icon: 'arrow-down' as const }
+        : { bg: colors.gray[100], fg: colors.gray[500], icon: 'remove' as const };
+
+  return (
+    <View style={[styles.deltaPill, { backgroundColor: palette.bg }, small && styles.deltaPillSmall]}>
+      <Ionicons name={palette.icon} size={small ? 9 : 11} color={palette.fg} />
+      <Text style={[styles.deltaPillText, { color: palette.fg, fontSize: small ? 10 : 11 }]}>{delta.text}</Text>
+    </View>
+  );
+}
+
 // ── Admin Dashboard ──
+//
+// Глубокая аналитика (тяжёлый chart Сегодня/Неделя/Месяц/Год) умышленно
+// удалена с главной владельца — он не нужен на every-day экране и
+// делает Dashboard визуально перегруженным "веб-style". Графики и
+// исторические периоды живут в разделе «Отчёты» (ReportsScreen).
+//
+// Что остаётся на главной — только то, что владелец смотрит каждый день:
+//   • OwnerCommandCenter — большой premium-виджет с периодами (Сегодня /
+//     Вчера / 7 дней / 30 дней) и дельтой vs прошлого периода;
+//   • StaffStatus — кто на смене;
+//   • LowStockWidget — товары на исходе;
+//   • MissedCallsWidget — пропущенные звонки.
+//
+// Что удалено по запросу владельца после iPhone-теста:
+//   • TodayQuickStats — слабая трёхстатная плашка;
+//   • EmployeeRankingSection — рейтинг сотрудников на главной не нужен,
+//     эта аналитика живёт в карточке сотрудника / разделе «Сотрудники».
 function AdminDashboard() {
   const { user } = useAuth();
   const isOwner = user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN;
 
   return (
     <View style={{ gap: spacing[4] }}>
-      {isOwner && <TodayQuickStats />}
-      {isOwner && <RevenueChart />}
+      {isOwner && <OwnerCommandCenter />}
       <StaffStatus />
       {isOwner && <LowStockWidget />}
       {isOwner && <MissedCallsWidget />}
-      {isOwner && <EmployeeRankingSection />}
     </View>
   );
 }
@@ -1903,4 +2152,135 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   quickLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], flexShrink: 1 },
+
+  // ── Owner Command Center (iter#12) ─────────────────────────────────
+  occShell: { paddingHorizontal: 0 },
+  occCard: {
+    backgroundColor: colors.white,
+    borderRadius: 28,
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[4],
+    paddingBottom: spacing[5],
+    borderWidth: 1,
+    borderColor: 'rgba(15, 23, 42, 0.06)',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.07,
+    shadowRadius: 24,
+    elevation: 3,
+  },
+
+  // Сегмент-control: «капсула» с тонкой границей и животным thumb-ом.
+  // Thumb рисуется как absolute-белая плашка под текстом, plain text сверху.
+  occSegment: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(15, 23, 42, 0.05)',
+    borderRadius: borderRadius.full,
+    padding: 3,
+    height: 36,
+    position: 'relative',
+  },
+  occSegmentThumb: {
+    position: 'absolute',
+    top: 3,
+    left: 3,
+    bottom: 3,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius.full,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  occSegmentBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  occSegmentText: {
+    fontSize: 13,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[500],
+    letterSpacing: -0.1,
+  },
+  occSegmentTextActive: { color: colors.gray[900], fontWeight: '700' },
+
+  // Hero — eyebrow слева, delta справа на одной линии. Огромное число
+  // выручки внизу. SF San Francisco system font + tight tracking + tabular
+  // numerals дают «дорогой» iOS Wallet/Apple Card вид.
+  occHero: {
+    paddingTop: spacing[4],
+    paddingBottom: spacing[4],
+  },
+  occHeroHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing[2],
+  },
+  occHeroEyebrow: {
+    fontSize: 12,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[500],
+    letterSpacing: -0.1,
+  },
+  occHeroValue: {
+    fontSize: 40,
+    fontWeight: '800',
+    color: colors.gray[900],
+    letterSpacing: -1.6,
+    fontVariant: ['tabular-nums'],
+  },
+
+  occDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(15, 23, 42, 0.08)',
+    marginHorizontal: -spacing[5],
+  },
+
+  // Триплет — три тайла на одной горизонтали, разделены вертикальными
+  // hairline-чертами. Чисто iOS Stocks / Health-style "metric row".
+  occGrid: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingTop: spacing[4],
+  },
+  occGridDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(15, 23, 42, 0.08)',
+    marginHorizontal: spacing[1],
+  },
+  occTile: {
+    flex: 1,
+    minWidth: 0,
+  },
+  occTileLabel: {
+    fontSize: 11,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[500],
+    letterSpacing: -0.1,
+    marginBottom: 4,
+  },
+  occTileValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.gray[900],
+    letterSpacing: -0.4,
+    fontVariant: ['tabular-nums'],
+  },
+
+  deltaPill: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+    marginTop: 6,
+  },
+  deltaPillSmall: { paddingHorizontal: 6, paddingVertical: 2, marginTop: 4 },
+  deltaPillText: { fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
 });

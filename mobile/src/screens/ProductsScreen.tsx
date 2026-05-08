@@ -34,7 +34,6 @@ import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
 import TrashScreen from './TrashScreen';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import { tapMedium, notifySuccess } from '../utils/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Product, PaginatedResponse, StockMovement } from '../../../shared/types';
 
@@ -51,6 +50,67 @@ function formatMoney(v: number) {
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD'
   );
 }
+
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// FolderRow \u2014 \u0441\u0442\u0430\u0442\u0438\u0447\u043D\u0430\u044F \u0441\u0442\u0440\u043E\u043A\u0430 \u043F\u0430\u043F\u043A\u0438 (iOS, \u0431\u0435\u0437 swipe).
+//
+// \u0420\u0435\u0448\u0435\u043D\u0438\u0435 iter#12 \u043F\u043E\u0441\u043B\u0435 iPhone-\u0442\u0435\u0441\u0442\u0430: \u043D\u0430 iOS swipe-actions \u0434\u043B\u044F \u043F\u0430\u043F\u043E\u043A \u0438
+// \u0442\u043E\u0432\u0430\u0440\u043E\u0432 \u043D\u0435 \u0440\u0430\u0431\u043E\u0442\u0430\u043B\u0438 \u0441\u0442\u0430\u0431\u0438\u043B\u044C\u043D\u043E (gesture handler \u0442\u0435\u0440\u044F\u043B \u0441\u043E\u0441\u0442\u043E\u044F\u043D\u0438\u0435 \u0432\u043D\u0443\u0442\u0440\u0438
+// FlashList ListHeaderComponent), \u0438 \u0432\u043B\u0430\u0434\u0435\u043B\u0435\u0446 \u044F\u0432\u043D\u043E \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u043B \u0443\u0431\u0440\u0430\u0442\u044C \u0438\u0445
+// \u043F\u043E\u043B\u043D\u043E\u0441\u0442\u044C\u044E. \u0423\u0434\u0430\u043B\u0435\u043D\u0438\u0435/\u043F\u0435\u0440\u0435\u0438\u043C\u0435\u043D\u043E\u0432\u0430\u043D\u0438\u0435 \u043F\u0430\u043F\u043E\u043A \u0438 \u0442\u043E\u0432\u0430\u0440\u043E\u0432 \u043D\u0430 iOS \u0442\u0435\u043F\u0435\u0440\u044C \u043D\u0435
+// \u0434\u0435\u043B\u0430\u0435\u0442\u0441\u044F \u0438\u0437 \u043C\u043E\u0431\u0438\u043B\u043A\u0438 \u2014 \u0441\u043E\u043E\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0443\u044E\u0449\u0438\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438 \u043E\u0441\u0442\u0430\u044E\u0442\u0441\u044F \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B \u0447\u0435\u0440\u0435\u0437
+// web-\u0430\u0434\u043C\u0438\u043D. \u041A\u043E\u043C\u043F\u043E\u043D\u0435\u043D\u0442 \u0432\u044B\u043D\u0435\u0441\u0435\u043D \u043D\u0430 module-level, \u0447\u0442\u043E\u0431\u044B FlashList \u043F\u0435\u0440\u0435\u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043B
+// React-\u044D\u043B\u0435\u043C\u0435\u043D\u0442 \u043F\u0440\u0438 \u0441\u043A\u0440\u043E\u043B\u043B\u0435.
+//
+// \u041F\u0435\u0440\u0435\u043D\u043E\u0441 \u043D\u0430 Android/Web:
+//   \u2022 Android \u2014 \u0442\u043E\u0442 \u0436\u0435 React-\u043A\u043E\u043C\u043F\u043E\u043D\u0435\u043D\u0442, \u043D\u0438\u043A\u0430\u043A\u0438\u0445 swipe-\u0437\u0430\u0432\u0438\u0441\u0438\u043C\u043E\u0441\u0442\u0435\u0439.
+//   \u2022 Web \u2014 \u044D\u0442\u043E\u0442 \u0436\u0435 \u0432\u0438\u0437\u0443\u0430\u043B\u044C\u043D\u044B\u0439 \u044F\u0437\u044B\u043A; \u043D\u0430 web edit/delete \u0434\u043E\u0441\u0442\u0443\u043F\u043D\u044B \u0447\u0435\u0440\u0435\u0437
+//     SuppliersPage-style swipe \u0438\u043B\u0438 dropdown-\u043C\u0435\u043D\u044E \u043F\u043E \u0442\u0430\u043F\u0443.
+// \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+interface FolderRowProps {
+  folderName: string;
+  count: number;
+  hasLow: boolean;
+  lastCheckIso?: string;
+  onOpen: (name: string) => void;
+}
+
+const FolderRow = React.memo(function FolderRow({ folderName, count, hasLow, lastCheckIso, onOpen }: FolderRowProps) {
+  return (
+    <TouchableOpacity onPress={() => onOpen(folderName)} activeOpacity={0.6} style={styles.folderRow}>
+      <View style={styles.folderIconBox}>
+        <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+      </View>
+      <View style={styles.folderRowInfo}>
+        <Text style={styles.folderRowName} numberOfLines={1}>
+          {folderName}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Text style={styles.folderRowCount}>
+            {count} {'\u0448\u0442'}
+          </Text>
+          {lastCheckIso && (
+            <Text style={[styles.folderRowCount, { color: colors.green[600] }]}>
+              {'\u00B7 \u043F\u0440\u043E\u0432\u0435\u0440\u043A\u0430 '}
+              {new Date(lastCheckIso).toLocaleDateString('ru-RU', {
+                day: '2-digit',
+                month: '2-digit',
+                year: '2-digit',
+              })}
+            </Text>
+          )}
+        </View>
+      </View>
+      {hasLow && (
+        <View style={styles.folderRowAlert}>
+          <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
+        </View>
+      )}
+      <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+    </TouchableOpacity>
+  );
+});
 
 export default function ProductsScreen() {
   const queryClient = useQueryClient();
@@ -214,23 +274,11 @@ export default function ProductsScreen() {
       ),
   });
 
-  // Folder mutations
-  const deleteFolderMutation = useMutation({
-    mutationFn: (id: string) => warehouseCategoriesApi.remove(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-    },
-    onError: () => Alert.alert('Ошибка', 'Не удалось удалить папку'),
-  });
-
-  const reorderFoldersMutation = useMutation({
-    mutationFn: (orderedIds: string[]) => warehouseCategoriesApi.updateOrder(orderedIds),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] }),
-  });
-
-  const [deleteFolderTarget, setDeleteFolderTarget] = useState<{ id: string; name: string } | null>(null);
-  const [reorderFolderTarget, setReorderFolderTarget] = useState<{ name: string; catId: string } | null>(null);
+  // Удаление/переименование папок и реордер на iOS отключены iter#12 —
+  // ни одно из этих действий из мобилки сейчас не делается. Соответствующие
+  // мутации (`warehouseCategoriesApi.remove/rename/updateOrder`) остались
+  // на бэке и доступны через web-админ. Никакого UI они здесь больше не
+  // имеют, чтобы не подкидывать нестабильный gesture-стек.
 
   const allProducts = data?.data || [];
 
@@ -804,6 +852,28 @@ export default function ProductsScreen() {
     return getImageUrl(photo);
   };
 
+  // Header for the products FlashList — папки + breadcrumb. Мемоизирован,
+  // чтобы FlashList не пересоздавал ListHeaderComponent на каждый рендер
+  // ProductsScreen и folder rows физически переиспользовались.
+  const ListHeader = useMemo(() => {
+    if (search || sortedFolders.length === 0) return null;
+    return (
+      <View style={styles.foldersList}>
+        {sortedFolders.map(([folderName, info]) => (
+          <FolderRow
+            key={folderName}
+            folderName={folderName}
+            count={info.count}
+            hasLow={info.hasLow}
+            lastCheckIso={folderLastCheck.get(folderName)}
+            onOpen={enterFolder}
+          />
+        ))}
+      </View>
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, sortedFolders, folderLastCheck]);
+
   return (
     <View style={styles.safe}>
       {/* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
@@ -888,6 +958,12 @@ export default function ProductsScreen() {
           data={currentProducts}
           keyExtractor={(item) => item.id}
           renderItem={({ item, index }) => {
+            // Чистая product-row без swipe-actions (iter#12). Тап по
+            // строке открывает существующую edit-форму (тут же открывает
+            // её только тот, у кого есть warehouse_access — gate стоит
+            // на самом `openEdit`). Без swipe строка просто остаётся
+            // навигационной — это совпадает с поведением iOS Settings/Mail
+            // первого уровня списка.
             const lowStock = item.stock <= item.minStock && item.minStock > 0;
             const pUri = getImageUrl(item.photo);
             return (
@@ -897,13 +973,6 @@ export default function ProductsScreen() {
                     onPress={() => {
                       if (pUri) setFullscreenPhoto(pUri);
                     }}
-                    onLongPress={() => {
-                      if (pUri) {
-                        tapMedium();
-                        setFullscreenPhoto(pUri);
-                      }
-                    }}
-                    delayLongPress={400}
                   >
                     {pUri ? (
                       <CachedImage source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
@@ -923,9 +992,7 @@ export default function ProductsScreen() {
                     <View style={styles.productPrices}>
                       <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
                       {canSeeCostPrice && (
-                        <Text style={styles.productCostPrice}>
-                          {'\u0421\u0435\u0431\u0435\u0441\u0442.'} {formatMoney(item.costPrice)}
-                        </Text>
+                        <Text style={styles.productCostPrice}>Себест. {formatMoney(item.costPrice)}</Text>
                       )}
                     </View>
                   </View>
@@ -934,7 +1001,7 @@ export default function ProductsScreen() {
                       <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
                     )}
                     <Text style={[styles.productStock, lowStock && styles.productStockLow]}>{item.stock}</Text>
-                    <Text style={styles.productStockLabel}>{'\u0448\u0442'}</Text>
+                    <Text style={styles.productStockLabel}>шт</Text>
                   </View>
                 </View>
               </AnimatedCard>
@@ -947,75 +1014,7 @@ export default function ProductsScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
-          ListHeaderComponent={
-            !search && sortedFolders.length > 0 ? (
-              <View style={styles.foldersList}>
-                {sortedFolders.map(([folderName, info]) => {
-                  return (
-                    <View key={folderName} style={styles.folderRow}>
-                      {/* Main clickable area — tap to open, long-press to reorder */}
-                      <TouchableOpacity
-                        onPress={() => enterFolder(folderName)}
-                        onLongPress={() => {
-                          if (!canManageWarehouse || !info.catId) return;
-                          tapMedium();
-                          setReorderFolderTarget({ name: folderName, catId: info.catId });
-                        }}
-                        delayLongPress={300}
-                        activeOpacity={0.6}
-                        style={styles.folderRowMain}
-                      >
-                        <View style={styles.folderIconBox}>
-                          <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
-                        </View>
-                        <View style={styles.folderRowInfo}>
-                          <Text style={styles.folderRowName} numberOfLines={1}>
-                            {folderName}
-                          </Text>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            <Text style={styles.folderRowCount}>{info.count} шт</Text>
-                            {folderLastCheck.get(folderName) && (
-                              <Text style={[styles.folderRowCount, { color: colors.green[600] }]}>
-                                · проверка{' '}
-                                {new Date(folderLastCheck.get(folderName)!).toLocaleDateString('ru-RU', {
-                                  day: '2-digit',
-                                  month: '2-digit',
-                                  year: '2-digit',
-                                })}
-                              </Text>
-                            )}
-                          </View>
-                        </View>
-                        {info.hasLow && (
-                          <View style={styles.folderRowAlert}>
-                            <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
-                          </View>
-                        )}
-                        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-                      </TouchableOpacity>
-
-                      {/* Delete button */}
-                      {canManageWarehouse && (
-                        <TouchableOpacity
-                          onPress={() => {
-                            if (!info.catId) {
-                              Alert.alert('Не удалить', 'Эту папку нельзя удалить — переместите все товары из неё');
-                              return;
-                            }
-                            setDeleteFolderTarget({ id: info.catId, name: folderName });
-                          }}
-                          style={styles.folderDeleteBtn}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Ionicons name="trash-outline" size={16} color={colors.gray[400]} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-            ) : null
-          }
+          ListHeaderComponent={ListHeader}
         />
       )}
 
@@ -1694,75 +1693,10 @@ export default function ProductsScreen() {
         variant="danger"
       />
 
-      {/* Folder reorder modal — long-press on folder → pick position */}
-      {reorderFolderTarget && (
-        <Modal visible onClose={() => setReorderFolderTarget(null)} title={`Позиция: ${reorderFolderTarget.name}`}>
-          <View style={{ gap: spacing[1] }}>
-            {sortedFolders.map(([name], idx) => {
-              const isCurrent = name === reorderFolderTarget.name;
-              return (
-                <TouchableOpacity
-                  key={name}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: spacing[3],
-                    paddingHorizontal: spacing[3],
-                    paddingVertical: spacing[2.5],
-                    borderRadius: borderRadius.lg,
-                    backgroundColor: isCurrent ? colors.primary[50] : 'transparent',
-                  }}
-                  onPress={() => {
-                    if (isCurrent) {
-                      setReorderFolderTarget(null);
-                      return;
-                    }
-                    // Build new order: remove target, insert at idx
-                    const ids = sortedFolders.map(([, d]) => d.catId).filter(Boolean);
-                    const currentIdx = ids.indexOf(reorderFolderTarget.catId);
-                    if (currentIdx < 0) return;
-                    const reordered = ids.filter((id) => id !== reorderFolderTarget.catId);
-                    reordered.splice(idx, 0, reorderFolderTarget.catId);
-                    reorderFoldersMutation.mutate(reordered);
-                    notifySuccess();
-                    setReorderFolderTarget(null);
-                  }}
-                >
-                  <Text
-                    style={{ width: 24, fontSize: 11, fontWeight: '700', color: colors.gray[400], textAlign: 'center' }}
-                  >
-                    {idx + 1}
-                  </Text>
-                  <Text
-                    style={{
-                      flex: 1,
-                      fontSize: fontSize.sm,
-                      fontWeight: isCurrent ? fontWeight.bold : fontWeight.medium,
-                      color: isCurrent ? colors.primary[700] : colors.gray[700],
-                    }}
-                  >
-                    {isCurrent ? `— ${name} (сейчас) —` : name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </Modal>
-      )}
-
-      {/* Delete folder confirmation */}
-      <ConfirmDialog
-        visible={!!deleteFolderTarget}
-        onClose={() => setDeleteFolderTarget(null)}
-        onConfirm={() => {
-          if (deleteFolderTarget?.id) deleteFolderMutation.mutate(deleteFolderTarget.id);
-          setDeleteFolderTarget(null);
-        }}
-        title="Удалить папку"
-        message={`Удалить папку "${deleteFolderTarget?.name}"? Товары внутри будут перемещены в корень.`}
-        confirmText="Удалить"
-        variant="danger"
-      />
+      {/* iter#12: на iOS убран весь UI редактирования и удаления папок —
+          swipe-actions работали нестабильно, владелец явно попросил
+          выкинуть. Удаление/переименование/реордер папок остаются
+          доступны через web-админ (backend endpoints не трогали). */}
     </View>
   );
 }
@@ -1847,7 +1781,27 @@ const styles = StyleSheet.create({
   folderRowName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   folderRowCount: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
   folderRowAlert: { marginRight: spacing[2] },
-  folderDeleteBtn: { padding: spacing[1.5], marginLeft: spacing[2] },
+  // Swipe-left actions on a folder row (Изменить + Удалить).
+  // Same UX language as Поставщики (SuppliersScreen).
+  swipeActionsRow: { flexDirection: 'row' },
+  swipeEditAction: {
+    backgroundColor: colors.primary[600],
+    width: 84,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  swipeEditText: { color: colors.white, fontSize: 12, fontWeight: '600', letterSpacing: 0.2 },
+  swipeDeleteAction: {
+    backgroundColor: colors.red[500],
+    width: 84,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  swipeDeleteText: { color: colors.white, fontSize: 12, fontWeight: '600', letterSpacing: 0.2 },
   foldersGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: FOLDER_GAP, marginBottom: spacing[4] },
   folderCard: {
     width: FOLDER_WIDTH,

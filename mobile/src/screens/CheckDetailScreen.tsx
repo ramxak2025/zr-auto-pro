@@ -1,7 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Animated,
-} from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -10,19 +8,46 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { checksApi, myCompanyApi } from '../api/services';
+import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Check, Tenant } from '../../../shared/types';
 
-function formatMoney(v: number) { return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD'; }
-function formatDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' }); }
-function formatDateTime(d: string) { const dt = new Date(d); return formatDate(d) + ', ' + dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); }
-function formatShortDate(d: string) { return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
-function formatTime(d: string) { return new Date(d).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); }
+function formatMoney(v: number) {
+  return (
+    Math.round(v)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD'
+  );
+}
+function formatDate(d: string) {
+  return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+function formatDateTime(d: string) {
+  const dt = new Date(d);
+  return formatDate(d) + ', ' + dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+function formatShortDate(d: string) {
+  return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+function formatTime(d: string) {
+  return new Date(d).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
 
-const paymentLabels: Record<string, string> = { cash: 'Наличные', card: 'Карта', warranty: 'Гарантия', cash_card: 'Нал/Карта' };
-const paymentIcons: Record<string, keyof typeof Ionicons.glyphMap> = { cash: 'cash-outline', card: 'card-outline', warranty: 'shield-checkmark-outline', cash_card: 'swap-horizontal-outline' };
+const paymentLabels: Record<string, string> = {
+  cash: 'Наличные',
+  card: 'Карта',
+  warranty: 'Гарантия',
+  cash_card: 'Нал/Карта',
+};
+const paymentIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
+  cash: 'cash-outline',
+  card: 'card-outline',
+  warranty: 'shield-checkmark-outline',
+  cash_card: 'swap-horizontal-outline',
+};
 
 export default function CheckDetailScreen() {
   const route = useRoute<any>();
@@ -30,6 +55,11 @@ export default function CheckDetailScreen() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   const { id } = route.params;
+  // Floating tab bar covers the bottom edge (CheckDetail lives inside the
+  // tab navigator's stack, so the bar IS visible). Reserve its height so
+  // the last block can scroll fully into view + leaves a small breathing
+  // gap above the icon row.
+  const tabBarHeight = useTabBarHeight();
 
   // Entrance animation
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -41,11 +71,43 @@ export default function CheckDetailScreen() {
     ]).start();
   }, []);
 
+  // placeholderData выполняет lookup в кеше журнала (`['checks-infinite', ...]`)
+  // безопасно: если row найдена — возвращаем её ТОЛЬКО как visual placeholder,
+  // в каноничный кеш не пишем. Это значит, что full payload, придя с сервера,
+  // полностью заменит её без mutation-клина. Раньше ChecksScreen делал
+  // queryClient.setQueryData(...), что приводило к крэшу: list-payload не
+  // содержит services/products, а CheckDetailScreen обращался к ним через
+  // .length. Теперь даже если placeholder неполный — guards ниже спасают,
+  // и реальные данные подъезжают через queryFn.
   const { data: check, isLoading } = useQuery<Check>({
     queryKey: ['check', id],
-    queryFn: async () => { const res = await checksApi.getById(id); return res.data; },
+    queryFn: async () => {
+      const res = await checksApi.getById(id);
+      return res.data;
+    },
     staleTime: 30_000,
+    placeholderData: (prev) => {
+      if (prev) return prev;
+      try {
+        const queries = queryClient.getQueriesData<{ pages?: { data?: Check[] }[] }>({
+          queryKey: ['checks-infinite'],
+        });
+        for (const [, data] of queries) {
+          for (const page of data?.pages ?? []) {
+            const found = page?.data?.find((c) => c.id === id);
+            if (found) return found;
+          }
+        }
+      } catch {
+        /* swallow — placeholder is best-effort */
+      }
+      return undefined;
+    },
   });
+
+  // Безопасные локальные ссылки на массивы (list-payload может вернуть undefined).
+  const services = check?.services ?? [];
+  const products = check?.products ?? [];
 
   const { data: company } = useQuery<Tenant>({
     queryKey: ['my-company'],
@@ -62,12 +124,20 @@ export default function CheckDetailScreen() {
     const phone = c?.phone || '';
     const footer = c?.receiptFooter || '';
     const date = formatShortDate(check.date) + ' ' + formatTime(check.date);
-    const servicesHtml = (check.services || []).map(s =>
-      `<tr><td>${s.name}</td><td style="text-align:right">${s.quantity}</td><td style="text-align:right">${formatMoney(s.total)}</td></tr>`
-    ).join('');
-    const productsHtml = (check.products || []).map(p =>
-      `<tr><td>${p.name}</td><td style="text-align:right">${p.quantity}</td><td style="text-align:right">${formatMoney(p.totalSell)}</td></tr>`
-    ).join('');
+    const safeServices = check.services ?? [];
+    const safeProducts = check.products ?? [];
+    const servicesHtml = safeServices
+      .map(
+        (s) =>
+          `<tr><td>${s.name}</td><td style="text-align:right">${s.quantity}</td><td style="text-align:right">${formatMoney(s.total)}</td></tr>`,
+      )
+      .join('');
+    const productsHtml = safeProducts
+      .map(
+        (p) =>
+          `<tr><td>${p.name}</td><td style="text-align:right">${p.quantity}</td><td style="text-align:right">${formatMoney(p.totalSell)}</td></tr>`,
+      )
+      .join('');
     const html = `
       <html><head><meta charset="utf-8"/><style>
         body { font-family: sans-serif; font-size: 12px; padding: 16px; }
@@ -87,16 +157,24 @@ export default function CheckDetailScreen() {
         ${check.client ? `<div>\u041A\u043B\u0438\u0435\u043D\u0442: ${check.client.fullName}</div>` : '<div>\u041A\u043B\u0438\u0435\u043D\u0442: \u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C</div>'}
         ${check.car ? `<div>\u0410\u0432\u0442\u043E: ${check.car.makeModel} ${check.car.plateNumber || ''}</div>` : ''}
         ${check.master ? `<div>\u041C\u0430\u0441\u0442\u0435\u0440: ${check.master.fullName}</div>` : ''}
-        ${check.services.length > 0 ? `
+        ${
+          safeServices.length > 0
+            ? `
           <h3 style="margin:12px 0 4px">\u0423\u0441\u043B\u0443\u0433\u0438</h3>
           <table><thead><tr><th>\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435</th><th style="text-align:right">\u041A\u043E\u043B.</th><th style="text-align:right">\u0421\u0443\u043C\u043C\u0430</th></tr></thead>
           <tbody>${servicesHtml}</tbody></table>
-        ` : ''}
-        ${check.products.length > 0 ? `
+        `
+            : ''
+        }
+        ${
+          safeProducts.length > 0
+            ? `
           <h3 style="margin:12px 0 4px">\u0422\u043E\u0432\u0430\u0440\u044B</h3>
           <table><thead><tr><th>\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435</th><th style="text-align:right">\u041A\u043E\u043B.</th><th style="text-align:right">\u0421\u0443\u043C\u043C\u0430</th></tr></thead>
           <tbody>${productsHtml}</tbody></table>
-        ` : ''}
+        `
+            : ''
+        }
         <hr/>
         ${(check.discount ?? 0) > 0 ? `<div>\u0421\u043A\u0438\u0434\u043A\u0430: -${formatMoney(check.discount ?? 0)}</div>` : ''}
         <div class="total">\u0418\u0422\u041E\u0413\u041E: ${formatMoney(check.totalRevenue)}</div>
@@ -108,12 +186,18 @@ export default function CheckDetailScreen() {
     try {
       const { uri } = await Print.printToFileAsync({ html, base64: false });
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: `\u0427\u0435\u043A #${check.number}` });
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `\u0427\u0435\u043A #${check.number}`,
+        });
       } else {
         Alert.alert('PDF \u0441\u043E\u0437\u0434\u0430\u043D', uri);
       }
     } catch {
-      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C PDF');
+      Alert.alert(
+        '\u041E\u0448\u0438\u0431\u043A\u0430',
+        '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C PDF',
+      );
     }
   };
 
@@ -126,7 +210,12 @@ export default function CheckDetailScreen() {
   });
 
   if (isLoading) return <LoadingSpinner />;
-  if (!check) return <Text style={{ padding: 20, textAlign: 'center' }}>{'\u0427\u0435\u043A \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D'}</Text>;
+  if (!check)
+    return (
+      <Text style={{ padding: 20, textAlign: 'center' }}>
+        {'\u0427\u0435\u043A \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D'}
+      </Text>
+    );
 
   const canEdit = hasPermission('checks_edit');
   const canDelete = hasPermission('checks_delete');
@@ -143,7 +232,9 @@ export default function CheckDetailScreen() {
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>{'\u0427\u0435\u043A'} #{check.number}</Text>
+          <Text style={styles.headerTitle}>
+            {'\u0427\u0435\u043A'} #{check.number}
+          </Text>
           <Text style={styles.headerDate}>{formatShortDate(check.date)}</Text>
         </View>
         <View style={styles.headerActions}>
@@ -151,17 +242,31 @@ export default function CheckDetailScreen() {
             <Ionicons name="document-text-outline" size={17} color={colors.violet[600]} />
           </TouchableOpacity>
           {canEdit && (
-            <TouchableOpacity onPress={() => navigation.navigate('CheckCreate', { id: check.id })} style={styles.actionBtn}>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('CheckCreate', { id: check.id })}
+              style={styles.actionBtn}
+            >
               <Ionicons name="create-outline" size={17} color={colors.primary[600]} />
             </TouchableOpacity>
           )}
           {canDelete && (
-            <TouchableOpacity onPress={() => {
-              Alert.alert('\u0423\u0434\u0430\u043B\u0438\u0442\u044C?', '\u042D\u0442\u043E \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043D\u0435\u043E\u0431\u0440\u0430\u0442\u0438\u043C\u043E', [
-                { text: '\u041E\u0442\u043C\u0435\u043D\u0430', style: 'cancel' },
-                { text: '\u0423\u0434\u0430\u043B\u0438\u0442\u044C', style: 'destructive', onPress: () => deleteMutation.mutate() },
-              ]);
-            }} style={[styles.actionBtn, { backgroundColor: colors.red[50] }]}>
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  '\u0423\u0434\u0430\u043B\u0438\u0442\u044C?',
+                  '\u042D\u0442\u043E \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043D\u0435\u043E\u0431\u0440\u0430\u0442\u0438\u043C\u043E',
+                  [
+                    { text: '\u041E\u0442\u043C\u0435\u043D\u0430', style: 'cancel' },
+                    {
+                      text: '\u0423\u0434\u0430\u043B\u0438\u0442\u044C',
+                      style: 'destructive',
+                      onPress: () => deleteMutation.mutate(),
+                    },
+                  ],
+                );
+              }}
+              style={[styles.actionBtn, { backgroundColor: colors.red[50] }]}
+            >
               <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
             </TouchableOpacity>
           )}
@@ -170,28 +275,51 @@ export default function CheckDetailScreen() {
 
       <Animated.ScrollView
         style={[styles.scroll, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        scrollIndicatorInsets={{ bottom: tabBarHeight }}
+        contentInset={{ bottom: tabBarHeight }}
+        automaticallyAdjustContentInsets={false}
         showsVerticalScrollIndicator={false}
       >
         {/* Status chip row */}
         <View style={styles.chipRow}>
-          <View style={[styles.statusChip, isDeferred ? { backgroundColor: colors.amber[50], borderColor: colors.amber[200] } : { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}>
-            <View style={[styles.statusDot, isDeferred ? { backgroundColor: colors.amber[600] } : { backgroundColor: colors.green[500] }]} />
-            <Text style={[styles.statusChipText, isDeferred ? { color: colors.amber[600] } : { color: colors.green[700] }]}>
+          <View
+            style={[
+              styles.statusChip,
+              isDeferred
+                ? { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }
+                : { backgroundColor: colors.green[50], borderColor: colors.green[200] },
+            ]}
+          >
+            <View
+              style={[
+                styles.statusDot,
+                isDeferred ? { backgroundColor: colors.amber[600] } : { backgroundColor: colors.green[500] },
+              ]}
+            />
+            <Text
+              style={[styles.statusChipText, isDeferred ? { color: colors.amber[600] } : { color: colors.green[700] }]}
+            >
               {isDeferred ? '\u041E\u0442\u043B\u043E\u0436\u0435\u043D' : '\u0417\u0430\u043A\u0440\u044B\u0442'}
             </Text>
           </View>
           <View style={[styles.paymentChip, { backgroundColor: badge.bg, borderColor: badge.bg }]}>
             <Ionicons name={paymentIcons[check.paymentMethod] || 'cash-outline'} size={13} color={badge.text} />
-            <Text style={[styles.paymentChipText, { color: badge.text }]}>{paymentLabels[check.paymentMethod] ?? check.paymentMethod}</Text>
+            <Text style={[styles.paymentChipText, { color: badge.text }]}>
+              {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+            </Text>
           </View>
           {check.paymentMethod === 'cash_card' && (check.cashAmount || check.cardAmount) && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
               <Ionicons name="cash-outline" size={12} color={colors.green[600]} />
-              <Text style={{ fontSize: 11, color: colors.green[600], fontWeight: fontWeight.semibold }}>{formatMoney(check.cashAmount || 0)}</Text>
+              <Text style={{ fontSize: 11, color: colors.green[600], fontWeight: fontWeight.semibold }}>
+                {formatMoney(check.cashAmount || 0)}
+              </Text>
               <Text style={{ fontSize: 11, color: colors.gray[300] }}>/</Text>
               <Ionicons name="card-outline" size={12} color={colors.blue[600]} />
-              <Text style={{ fontSize: 11, color: colors.blue[600], fontWeight: fontWeight.semibold }}>{formatMoney(check.cardAmount || 0)}</Text>
+              <Text style={{ fontSize: 11, color: colors.blue[600], fontWeight: fontWeight.semibold }}>
+                {formatMoney(check.cardAmount || 0)}
+              </Text>
             </View>
           )}
           <Text style={styles.timeChip}>{formatTime(check.date)}</Text>
@@ -199,20 +327,34 @@ export default function CheckDetailScreen() {
 
         {/* Client & info — modern glassmorphism style card */}
         <View style={styles.infoCard}>
-          <View style={styles.infoRow}>
+          <TouchableOpacity
+            style={styles.infoRow}
+            activeOpacity={check.clientId ? 0.6 : 1}
+            disabled={!check.clientId}
+            onPress={() => openClient(navigation, check.clientId)}
+          >
             <View style={[styles.infoIconCircle, { backgroundColor: colors.blue[50] }]}>
               <Ionicons name="person" size={16} color={colors.blue[600]} />
             </View>
             <View style={styles.infoContent}>
               <Text style={styles.infoLabel}>Клиент</Text>
-              <Text style={styles.infoValue}>{check.client?.fullName ?? '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}</Text>
+              <Text style={styles.infoValue}>
+                {check.client?.fullName ??
+                  '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}
+              </Text>
             </View>
-          </View>
+            {check.clientId ? <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} /> : null}
+          </TouchableOpacity>
 
           {check.car && (
             <>
               <View style={styles.infoDivider} />
-              <View style={styles.infoRow}>
+              <TouchableOpacity
+                style={styles.infoRow}
+                activeOpacity={check.clientId ? 0.6 : 1}
+                disabled={!check.clientId}
+                onPress={() => openCarOwner(navigation, check.clientId)}
+              >
                 <View style={[styles.infoIconCircle, { backgroundColor: colors.indigo[50] }]}>
                   <Ionicons name="car-sport" size={16} color={colors.indigo[600]} />
                 </View>
@@ -227,14 +369,20 @@ export default function CheckDetailScreen() {
                     )}
                   </View>
                 </View>
-              </View>
+                {check.clientId ? <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} /> : null}
+              </TouchableOpacity>
             </>
           )}
 
           {check.master && (
             <>
               <View style={styles.infoDivider} />
-              <View style={styles.infoRow}>
+              <TouchableOpacity
+                style={styles.infoRow}
+                activeOpacity={check.masterId ? 0.6 : 1}
+                disabled={!check.masterId}
+                onPress={() => openEmployee(navigation, check.masterId)}
+              >
                 <View style={[styles.infoIconCircle, { backgroundColor: colors.orange[50] }]}>
                   <Ionicons name="build" size={16} color={colors.orange[500]} />
                 </View>
@@ -242,7 +390,8 @@ export default function CheckDetailScreen() {
                   <Text style={styles.infoLabel}>Мастер</Text>
                   <Text style={styles.infoValue}>{check.master.fullName}</Text>
                 </View>
-              </View>
+                {check.masterId ? <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} /> : null}
+              </TouchableOpacity>
             </>
           )}
 
@@ -270,25 +419,35 @@ export default function CheckDetailScreen() {
           </View>
         )}
 
-        {/* Services */}
-        {check.services.length > 0 && (
+        {/* Services — services может быть undefined в placeholder-данных
+            из journal cache; используем безопасную локальную ссылку. */}
+        {services.length > 0 && (
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeader}>
-              <LinearGradient colors={[colors.orange[50], '#fff']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.sectionGradient}>
+              <LinearGradient
+                colors={[colors.orange[50], '#fff']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.sectionGradient}
+              >
                 <Ionicons name="build" size={15} color={colors.orange[500]} />
                 <Text style={styles.sectionTitle}>Услуги</Text>
               </LinearGradient>
               <View style={styles.sectionBadge}>
-                <Text style={styles.sectionBadgeText}>{check.services.length}</Text>
+                <Text style={styles.sectionBadgeText}>{services.length}</Text>
               </View>
             </View>
-            {(check.services || []).map((line, idx) => (
+            {services.map((line, idx) => (
               <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
                 <View style={styles.lineItemLeft}>
                   <Text style={styles.lineItemName}>{line.name}</Text>
                   <View style={styles.lineItemMeta}>
                     {line.master && <Text style={styles.lineItemMetaText}>{line.master.fullName}</Text>}
-                    {line.quantity > 1 && <Text style={styles.lineItemMetaText}>{line.quantity} x {formatMoney(line.price)}</Text>}
+                    {line.quantity > 1 && (
+                      <Text style={styles.lineItemMetaText}>
+                        {line.quantity} x {formatMoney(line.price)}
+                      </Text>
+                    )}
                   </View>
                 </View>
                 <Text style={styles.lineItemPrice}>{formatMoney(line.total)}</Text>
@@ -301,25 +460,32 @@ export default function CheckDetailScreen() {
           </View>
         )}
 
-        {/* Products */}
-        {check.products.length > 0 && (
+        {/* Products — same defensive pattern as services. */}
+        {products.length > 0 && (
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeader}>
-              <LinearGradient colors={[colors.blue[50], '#fff']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.sectionGradient}>
+              <LinearGradient
+                colors={[colors.blue[50], '#fff']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.sectionGradient}
+              >
                 <Ionicons name="cube" size={15} color={colors.blue[600]} />
                 <Text style={styles.sectionTitle}>Товары</Text>
               </LinearGradient>
               <View style={styles.sectionBadge}>
-                <Text style={styles.sectionBadgeText}>{check.products.length}</Text>
+                <Text style={styles.sectionBadgeText}>{products.length}</Text>
               </View>
             </View>
-            {(check.products || []).map((line, idx) => (
+            {products.map((line, idx) => (
               <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
                 <View style={styles.lineItemLeft}>
                   <Text style={styles.lineItemName}>{line.name}</Text>
                   {line.quantity > 1 && (
                     <View style={styles.lineItemMeta}>
-                      <Text style={styles.lineItemMetaText}>{line.quantity} x {formatMoney(line.sellPrice)}</Text>
+                      <Text style={styles.lineItemMetaText}>
+                        {line.quantity} x {formatMoney(line.sellPrice)}
+                      </Text>
                     </View>
                   )}
                 </View>
@@ -360,11 +526,21 @@ export default function CheckDetailScreen() {
           {canViewProfit && (
             <View style={styles.profitRow}>
               <View style={styles.profitLeft}>
-                <Ionicons name="trending-up" size={16} color={check.profit >= 0 ? colors.green[600] : colors.red[500]} />
+                <Ionicons
+                  name="trending-up"
+                  size={16}
+                  color={check.profit >= 0 ? colors.green[600] : colors.red[500]}
+                />
                 <Text style={styles.profitLabel}>Прибыль</Text>
               </View>
-              <Text style={[styles.profitValue, check.profit >= 0 ? { color: colors.green[600] } : { color: colors.red[500] }]}>
-                {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+              <Text
+                style={[
+                  styles.profitValue,
+                  check.profit >= 0 ? { color: colors.green[600] } : { color: colors.red[500] },
+                ]}
+              >
+                {check.profit >= 0 ? '+' : ''}
+                {formatMoney(check.profit)}
               </Text>
             </View>
           )}

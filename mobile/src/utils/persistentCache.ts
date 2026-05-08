@@ -69,6 +69,11 @@ const PERSISTED_KEYS = [
   // snapshot is the slowest to render, so we cache the whole first
   // segment. SWR replaces it within ~150 ms after mount.
   'checks',
+  // useInfiniteQuery key for the Journal — cold-start instant: we
+  // render the previously seen pages immediately, then SWR refetches
+  // page 1 in the background. Older pages stay cached too, so coming
+  // back from a CheckDetail doesn't drop scroll position.
+  'checks-infinite',
   // Filter helpers used by ChecksScreen — small list, mostly static.
   'users-for-filter',
   // Warehouse-document tabs inside ChecksScreen.
