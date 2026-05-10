@@ -24,6 +24,16 @@ export class ClientsController {
     res.send('\uFEFF' + csv);
   }
 
+  /**
+   * Look up an existing client by phone in the current tenant. Used by the
+   * UI to warn the user before creating a duplicate. Returns null when no
+   * match found, or the client record otherwise.
+   */
+  @Get('lookup-by-phone')
+  lookupByPhone(@CurrentUser() user: JwtPayload, @Query('phone') phone: string) {
+    return this.clientsService.findByPhone(user.tenantID, phone || '');
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.clientsService.getById(id, user.tenantID);

@@ -23,6 +23,7 @@ import { ExpensesModule } from './expenses/expenses.module';
 import { MarketingModule } from './marketing/marketing.module';
 import { CallsModule } from './calls/calls.module';
 import { EquipmentModule } from './equipment/equipment.module';
+import { ImportsModule } from './imports/imports.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { EquipmentModule } from './equipment/equipment.module';
     MarketingModule,
     CallsModule,
     EquipmentModule,
+    ImportsModule,
   ],
   providers: [MigrationRunner],
 })

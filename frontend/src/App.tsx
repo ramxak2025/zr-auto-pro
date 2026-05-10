@@ -54,6 +54,7 @@ const CheckDetailPage = lazyWithRetry(() => import('./pages/CheckDetailPage'));
 const ClientsPage = lazyWithRetry(() => import('./pages/ClientsPage'));
 const ClientDetailPage = lazyWithRetry(() => import('./pages/ClientDetailPage'));
 const CarsPage = lazyWithRetry(() => import('./pages/CarsPage'));
+const ImportClientsCarsPage = lazyWithRetry(() => import('./pages/ImportClientsCarsPage'));
 const ProductsPage = lazyWithRetry(() => import('./pages/ProductsPage'));
 const ServicesPage = lazyWithRetry(() => import('./pages/ServicesPage'));
 const SuppliersPage = lazyWithRetry(() => import('./pages/SuppliersPage'));
@@ -192,6 +193,7 @@ export default function App() {
                   <Route path="/checks/:id" element={<CheckDetailPage />} />
                   <Route path="/clients" element={gated('clients_view', <ClientsPage />)} />
                   <Route path="/clients/retail" element={gated('clients_view', <RetailChecksPage />)} />
+                  <Route path="/clients/import" element={gated('clients_view', <ImportClientsCarsPage />)} />
                   <Route path="/clients/:id" element={gated('clients_view', <ClientDetailPage />)} />
                   <Route path="/cars" element={gated('clients_view', <CarsPage />)} />
                   <Route path="/products" element={<ProductsPage />} />

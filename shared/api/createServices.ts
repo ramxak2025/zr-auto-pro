@@ -22,6 +22,7 @@ import type {
   CreateDeliveryRequest, CreatePaymentRequest, CreateScheduleRequest, UpdateScheduleRequest,
   CreateWorkModeRequest, UpdateWorkModeRequest, CreateTenantRequest, UpdateTenantRequest,
   CreatePlanRequest, UpdatePlanRequest,
+  ImportPreviewRequest, ImportPreviewResponse, ImportConfirmRequest, ImportConfirmResponse,
 } from './types';
 
 export function createAuthApi(api: AxiosInstance) {
@@ -90,6 +91,12 @@ export function createClientsApi(api: AxiosInstance) {
     update: (id: string, data: UpdateClientRequest) => api.patch<Client>(`/clients/${id}`, data),
     remove: (id: string) => api.delete(`/clients/${id}`),
     exportCsv: () => api.get('/clients/export-csv', { responseType: 'blob' }),
+    /** Returns existing client with the given phone in the current tenant, or null. */
+    lookupByPhone: (phone: string) =>
+      api.get<{ id: string; fullName: string; phone: string; createdAt: string } | null>(
+        '/clients/lookup-by-phone',
+        { params: { phone } },
+      ),
   };
 }
 
@@ -100,6 +107,16 @@ export function createCarsApi(api: AxiosInstance) {
     create: (data: CreateCarRequest) => api.post<Car>('/cars', data),
     update: (id: string, data: UpdateCarRequest) => api.patch<Car>(`/cars/${id}`, data),
     remove: (id: string) => api.delete(`/cars/${id}`),
+    /** Returns existing car with the given plate (normalized) in the current tenant, or null. */
+    lookupByPlate: (plate: string) =>
+      api.get<{
+        id: string;
+        plateNumber: string;
+        makeModel: string;
+        clientId: string | null;
+        createdAt: string;
+        client: { id: string; fullName: string; phone: string } | null;
+      } | null>('/cars/lookup-by-plate', { params: { plate } }),
   };
 }
 
@@ -300,5 +317,19 @@ export function createEquipmentApi(api: AxiosInstance) {
     remove: (id: string) => api.delete(`/equipment/${id}`),
     // Trash
     getTrash: () => api.get<any[]>('/equipment/trash'),
+  };
+}
+
+export function createImportsApi(api: AxiosInstance) {
+  return {
+    /** Returns a CSV template for clients+cars import (text/csv). */
+    getClientsCarsTemplate: () =>
+      api.get<string>('/imports/clients-cars/template', { responseType: 'text' as any }),
+    /** Dry-run: validates and groups rows, returns preview without writing. */
+    previewClientsCars: (data: ImportPreviewRequest) =>
+      api.post<ImportPreviewResponse>('/imports/clients-cars/preview', data),
+    /** Commits the import in a transaction. Re-runs validation server-side. */
+    confirmClientsCars: (data: ImportConfirmRequest) =>
+      api.post<ImportConfirmResponse>('/imports/clients-cars/confirm', data),
   };
 }
