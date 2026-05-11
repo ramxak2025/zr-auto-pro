@@ -1,10 +1,34 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { normalizePhone } from '../common/normalize-phone';
 
 @Injectable()
 export class ClientsService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * Find an existing client by phone within the current tenant.
+   * Used by the UI to warn the user before creating a duplicate.
+   * Returns at most one match (the first by created_at).
+   */
+  async findByPhone(tenantID: string, phone: string) {
+    const normalized = normalizePhone(phone || '');
+    if (!normalized) return null;
+    const { rows } = await this.pool.query(
+      `SELECT id, full_name, phone, created_at
+       FROM clients WHERE tenant_id = $1 AND phone = $2
+       ORDER BY created_at LIMIT 1`,
+      [tenantID, normalized],
+    );
+    if (rows.length === 0) return null;
+    return {
+      id: rows[0].id as string,
+      fullName: rows[0].full_name as string,
+      phone: rows[0].phone as string,
+      createdAt: rows[0].created_at as string,
+    };
+  }
 
   private mapClient(row: any) {
     return {

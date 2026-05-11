@@ -5,6 +5,9 @@ import {
   splitPlate,
   isValidPlate,
   isRussianInput,
+  normalizeForeignPlate,
+  normalizePlateForSearch,
+  detectPlateMode,
   PLATE_MAX_LENGTH,
 } from '../plateMask';
 
@@ -158,5 +161,63 @@ describe('isRussianInput', () => {
     expect(isRussianInput('1')).toBe(false);
     expect(isRussianInput('Z')).toBe(false);
     expect(isRussianInput('')).toBe(false);
+  });
+});
+
+describe('normalizeForeignPlate', () => {
+  it('uppercases and trims', () => {
+    expect(normalizeForeignPlate('  bg-3845-pa  ')).toBe('BG-3845-PA');
+  });
+  it('collapses internal whitespace', () => {
+    expect(normalizeForeignPlate('t   123    ab')).toBe('T 123 AB');
+  });
+  it('drops cyrillic / specials', () => {
+    expect(normalizeForeignPlate('Привет!BG-1')).toBe('BG-1');
+  });
+  it('caps at 20 chars', () => {
+    expect(normalizeForeignPlate('A'.repeat(40)).length).toBe(20);
+  });
+  it('returns empty for empty input', () => {
+    expect(normalizeForeignPlate('')).toBe('');
+  });
+});
+
+describe('normalizePlateForSearch', () => {
+  it('handles RU latin → cyrillic', () => {
+    expect(normalizePlateForSearch('p332pa05', 'ru')).toBe('Р332РА05');
+  });
+  it('handles RU with spaces', () => {
+    expect(normalizePlateForSearch('р 332 ра 05', 'ru')).toBe('Р332РА05');
+  });
+  it('handles RU lowercase cyrillic', () => {
+    expect(normalizePlateForSearch('р332ра05', 'ru')).toBe('Р332РА05');
+  });
+  it('returns empty for empty', () => {
+    expect(normalizePlateForSearch('', 'ru')).toBe('');
+    expect(normalizePlateForSearch('', 'foreign')).toBe('');
+  });
+  it('foreign mode strips separators', () => {
+    expect(normalizePlateForSearch('bg-3845-pa', 'foreign')).toBe('BG3845PA');
+  });
+  it('foreign mode preserves alphanumeric', () => {
+    expect(normalizePlateForSearch('BG3845PA', 'foreign')).toBe('BG3845PA');
+  });
+});
+
+describe('detectPlateMode', () => {
+  it('returns ru for empty', () => {
+    expect(detectPlateMode('')).toBe('ru');
+  });
+  it('returns ru for cyrillic', () => {
+    expect(detectPlateMode('А123')).toBe('ru');
+  });
+  it('returns ru for latin that maps to cyrillic', () => {
+    expect(detectPlateMode('A123')).toBe('ru');
+  });
+  it('returns foreign for digit start', () => {
+    expect(detectPlateMode('1234AB')).toBe('foreign');
+  });
+  it('returns foreign for non-mappable latin', () => {
+    expect(detectPlateMode('ZZZ')).toBe('foreign');
   });
 });

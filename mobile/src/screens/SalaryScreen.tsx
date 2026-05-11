@@ -1,9 +1,16 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  RefreshControl,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -20,17 +27,41 @@ import type { MasterSalary, SalaryPayment } from '../../../shared/types';
 // ── Helpers ──
 
 const MONTH_NAMES = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
 ];
 
 const MONTH_NAMES_GEN = [
-  'Января', 'Февраля', 'Марта', 'Апреля', 'Мая', 'Июня',
-  'Июля', 'Августа', 'Сентября', 'Октября', 'Ноября', 'Декабря',
+  'Января',
+  'Февраля',
+  'Марта',
+  'Апреля',
+  'Мая',
+  'Июня',
+  'Июля',
+  'Августа',
+  'Сентября',
+  'Октября',
+  'Ноября',
+  'Декабря',
 ];
 
 function formatMoney(v: number): string {
-  return Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD';
+  return (
+    Math.round(v)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD'
+  );
 }
 
 function formatDate(d: Date): string {
@@ -105,7 +136,13 @@ export default function SalaryScreen() {
   // Data
   const { data: salaries, isLoading } = useQuery<MasterSalary[]>({
     queryKey: ['salary', dateFrom, dateTo],
-    queryFn: async () => { const res = await salaryApi.getAll({ dateFrom, dateTo }); return res.data; },
+    queryFn: async () => {
+      const res = await salaryApi.getAll({ dateFrom, dateTo });
+      return res.data;
+    },
+    // SWR — keep previous month's salary card visible while the user
+    // navigates between months; no spinner mid-swipe.
+    placeholderData: (prev) => prev,
   });
 
   const onRefresh = async () => {
@@ -116,8 +153,13 @@ export default function SalaryScreen() {
 
   // Payment mutation
   const paymentMutation = useMutation({
-    mutationFn: (data: { userId: string; amount: number; monthYear: string; type: 'salary' | 'advance'; comment?: string }) =>
-      salaryApi.createPayment(data),
+    mutationFn: (data: {
+      userId: string;
+      amount: number;
+      monthYear: string;
+      type: 'salary' | 'advance';
+      comment?: string;
+    }) => salaryApi.createPayment(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['salary'] });
       setPayModalVisible(false);
@@ -174,28 +216,8 @@ export default function SalaryScreen() {
   const goToToday = () => setSelectedMonth(new Date());
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <LinearGradient
-        colors={[colors.white, colors.gray[50]] as [string, string]}
-        style={styles.header}
-      >
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.green[500], colors.green[700]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="wallet" size={16} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Зарплата</Text>
-        </View>
-        <View style={{ width: 40 }} />
-      </LinearGradient>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Зарплата" onBack={() => navigation.goBack()} />
 
       {/* Month Navigation */}
       <View style={styles.monthNav}>
@@ -213,7 +235,9 @@ export default function SalaryScreen() {
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
         showsVerticalScrollIndicator={false}
       >
         {/* Summary Card */}
@@ -248,7 +272,12 @@ export default function SalaryScreen() {
             {totalEarnings > 0 && (
               <View style={styles.summaryProgressWrap}>
                 <View style={styles.summaryProgressTrack}>
-                  <View style={[styles.summaryProgressBar, { width: `${Math.min((totalPaid / totalEarnings) * 100, 100)}%` }]} />
+                  <View
+                    style={[
+                      styles.summaryProgressBar,
+                      { width: `${Math.min((totalPaid / totalEarnings) * 100, 100)}%` },
+                    ]}
+                  />
                 </View>
                 <Text style={styles.summaryProgressText}>
                   {Math.round((totalPaid / totalEarnings) * 100)}% выплачено
@@ -258,11 +287,16 @@ export default function SalaryScreen() {
           </LinearGradient>
         </AnimatedCard>
 
-        {/* Loading */}
-        {isLoading ? <LoadingSpinner /> : (
+        {/* Cold-start: spinner only until ANY response lands. Once we
+            have data — even from cache — SWR keeps it visible across
+            month navigation. */}
+        {salaries === undefined ? (
+          <LoadingSpinner />
+        ) : (
           <>
-            {/* Empty state */}
-            {(!salaries || salaries.length === 0) && (
+            {/* Empty state — only when a real response said empty,
+                NOT mid-fetch. Avoids "пусто" flash on month swipe. */}
+            {salaries.length === 0 && !isLoading && (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIcon}>
                   <Ionicons name="wallet-outline" size={36} color={colors.gray[300]} />
@@ -277,9 +311,8 @@ export default function SalaryScreen() {
               const isExpanded = expandedId === master.masterId;
               const avatarColors = getAvatarColors(master.masterName);
               const initials = getInitials(master.masterName);
-              const paidPercent = master.totalEarnings > 0
-                ? Math.min((master.paidAmount / master.totalEarnings) * 100, 100)
-                : 0;
+              const paidPercent =
+                master.totalEarnings > 0 ? Math.min((master.paidAmount / master.totalEarnings) * 100, 100) : 0;
               const payments = master.payments || [];
 
               return (
@@ -308,20 +341,18 @@ export default function SalaryScreen() {
                         {master.productSalaryPercent ? (
                           <View style={[styles.percentBadge, { backgroundColor: colors.amber[50] }]}>
                             <Ionicons name="cube-outline" size={10} color={colors.amber[600]} />
-                            <Text style={[styles.percentText, { color: colors.amber[600] }]}>{master.productSalaryPercent}%</Text>
+                            <Text style={[styles.percentText, { color: colors.amber[600] }]}>
+                              {master.productSalaryPercent}%
+                            </Text>
                           </View>
                         ) : null}
                       </View>
                     </View>
-                    <Ionicons
-                      name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                      size={18}
-                      color={colors.gray[400]}
-                    />
+                    <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.gray[400]} />
                   </TouchableOpacity>
 
                   {/* Earnings breakdown */}
-                  {(master.serviceEarnings || master.productEarnings) ? (
+                  {master.serviceEarnings || master.productEarnings ? (
                     <View style={styles.earningsRow}>
                       {master.serviceEarnings ? (
                         <View style={styles.earningsPill}>
@@ -332,7 +363,9 @@ export default function SalaryScreen() {
                       {master.productEarnings ? (
                         <View style={[styles.earningsPill, { backgroundColor: colors.amber[50] }]}>
                           <Ionicons name="cube-outline" size={11} color={colors.amber[600]} />
-                          <Text style={[styles.earningsPillText, { color: colors.amber[600] }]}>Товары: {formatMoney(master.productEarnings)}</Text>
+                          <Text style={[styles.earningsPillText, { color: colors.amber[600] }]}>
+                            Товары: {formatMoney(master.productEarnings)}
+                          </Text>
                         </View>
                       ) : null}
                     </View>
@@ -357,7 +390,9 @@ export default function SalaryScreen() {
                     <View style={styles.paymentRow}>
                       <View style={styles.paymentItem}>
                         <Text style={styles.paymentLabel}>Начислено</Text>
-                        <Text style={[styles.paymentValue, { color: colors.green[600] }]}>{formatMoney(master.totalEarnings)}</Text>
+                        <Text style={[styles.paymentValue, { color: colors.green[600] }]}>
+                          {formatMoney(master.totalEarnings)}
+                        </Text>
                       </View>
                       <View style={styles.paymentItem}>
                         <Text style={styles.paymentLabel}>Выплачено</Text>
@@ -365,7 +400,12 @@ export default function SalaryScreen() {
                       </View>
                       <View style={styles.paymentItem}>
                         <Text style={styles.paymentLabel}>Остаток</Text>
-                        <Text style={[styles.paymentValue, { color: master.remainingAmount > 0 ? colors.orange[500] : colors.green[600] }]}>
+                        <Text
+                          style={[
+                            styles.paymentValue,
+                            { color: master.remainingAmount > 0 ? colors.orange[500] : colors.green[600] },
+                          ]}
+                        >
                           {formatMoney(master.remainingAmount)}
                         </Text>
                       </View>
@@ -399,14 +439,18 @@ export default function SalaryScreen() {
                         payments.map((p: SalaryPayment) => (
                           <View key={p.id} style={styles.paymentHistoryItem}>
                             <View style={styles.paymentHistoryLeft}>
-                              <View style={[
-                                styles.paymentTypeBadge,
-                                { backgroundColor: p.type === 'salary' ? colors.green[50] : colors.amber[50] },
-                              ]}>
-                                <Text style={[
-                                  styles.paymentTypeBadgeText,
-                                  { color: p.type === 'salary' ? colors.green[700] : colors.amber[600] },
-                                ]}>
+                              <View
+                                style={[
+                                  styles.paymentTypeBadge,
+                                  { backgroundColor: p.type === 'salary' ? colors.green[50] : colors.amber[50] },
+                                ]}
+                              >
+                                <Text
+                                  style={[
+                                    styles.paymentTypeBadgeText,
+                                    { color: p.type === 'salary' ? colors.green[700] : colors.amber[600] },
+                                  ]}
+                                >
                                   {p.type === 'salary' ? 'Зарплата' : 'Аванс'}
                                 </Text>
                               </View>
@@ -561,11 +605,7 @@ export default function SalaryScreen() {
           <TouchableOpacity style={styles.cancelBtn} onPress={() => setPayModalVisible(false)}>
             <Text style={styles.cancelBtnText}>Отмена</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.submitBtn}
-            onPress={submitPayment}
-            activeOpacity={0.7}
-          >
+          <TouchableOpacity style={styles.submitBtn} onPress={submitPayment} activeOpacity={0.7}>
             {paymentMutation.isPending ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
@@ -582,7 +622,7 @@ export default function SalaryScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 

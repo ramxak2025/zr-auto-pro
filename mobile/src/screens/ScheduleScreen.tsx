@@ -1,30 +1,90 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert, Dimensions, NativeSyntheticEvent, NativeScrollEvent,
+  Animated as RNAnimated,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  RefreshControl,
+  ActivityIndicator,
+  AccessibilityInfo,
+  Alert,
+  Dimensions,
 } from 'react-native';
-import Reanimated, { FadeIn } from 'react-native-reanimated';
+// Native AutexaScheduleGrid was integrated in iter#2 but disabled in
+// iter#3 — see comment near the schedule grid render. The Swift module
+// remains in mobile/modules/autexa-liquid-glass/ios/ for a future
+// retry; we only stop importing it here.
+import Reanimated, {
+  FadeIn,
+  FadeInDown,
+  useAnimatedRef,
+  useAnimatedScrollHandler,
+  useSharedValue,
+  scrollTo,
+} from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+// SafeAreaView no longer used — IosScreenHeader handles top inset
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
+import { openEmployee } from '../navigation/entityLinks';
 import { scheduleApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
+import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 
+/**
+ * Schedule month state lifted to the parent screen so the month picker
+ * can live in the unified IosScreenHeader (trailing slot) instead of
+ * floating as a separate row inside GridTab.
+ *
+ * GridTab and TodayTab consume the context; missing-context fallback
+ * returns the local state pattern from before, so older code paths keep
+ * working in isolation.
+ */
+const ScheduleMonthCtx = React.createContext<{
+  currentMonth: Date;
+  setCurrentMonth: (d: Date) => void;
+} | null>(null);
+
+function useScheduleMonth() {
+  const ctx = React.useContext(ScheduleMonthCtx);
+  if (!ctx) {
+    throw new Error('useScheduleMonth must be inside ScheduleMonthCtx.Provider');
+  }
+  return ctx;
+}
+
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DAY_ABBR = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
-const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const MONTH_NAMES = [
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
+];
 
 function formatDate(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -35,6 +95,35 @@ function getDaysInMonth(year: number, month: number): Date[] {
   const count = new Date(year, month + 1, 0).getDate();
   for (let i = 1; i <= count; i++) days.push(new Date(year, month, i));
   return days;
+}
+
+/**
+ * useReduceMotion — reads iOS / Android system "Reduce Motion" preference.
+ * Defensive: never throws even if the platform API behaves oddly.
+ */
+function useReduceMotion(): boolean {
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    let sub: { remove?: () => void } | null = null;
+    try {
+      AccessibilityInfo.isReduceMotionEnabled?.().then((v) => {
+        if (alive) setReduce(!!v);
+      });
+      sub = AccessibilityInfo.addEventListener?.('reduceMotionChanged', (v) => setReduce(!!v));
+    } catch {
+      // ignore — animations will run by default
+    }
+    return () => {
+      alive = false;
+      try {
+        sub?.remove?.();
+      } catch {
+        /* noop */
+      }
+    };
+  }, []);
+  return reduce;
 }
 
 function getInitials(fullName?: string): string {
@@ -70,28 +159,117 @@ function getCellDot(entry?: ScheduleEntry) {
   const isToday = entry.date.slice(0, 10) === new Date().toISOString().slice(0, 10);
 
   // 1. Больничный
-  if (note.includes('больнич')) return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50], label: '' };
+  if (note.includes('больнич'))
+    return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50], label: '' };
   // 2. Прогул из note
-  if (note.includes('прогул')) return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50], label: '' };
+  if (note.includes('прогул'))
+    return {
+      dotColor: colors.red[500],
+      hasEntry: true,
+      icon: 'close-circle' as const,
+      bgColor: colors.red[50],
+      label: '',
+    };
   // 3. Выходной
-  if (entry.isDayOff) return { dotColor: colors.gray[500], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100], label: '' };
+  if (entry.isDayOff)
+    return { dotColor: colors.gray[500], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100], label: '' };
   // 4. Опоздание >1ч (треугольник)
-  if (entry.lateStatus === 'late_major' || lateMin >= 60) return { dotColor: colors.yellow[600], hasEntry: true, icon: 'warning' as const, bgColor: colors.yellow[50], label: '' };
+  if (entry.lateStatus === 'late_major' || lateMin >= 60)
+    return {
+      dotColor: colors.yellow[600],
+      hasEntry: true,
+      icon: 'warning' as const,
+      bgColor: colors.yellow[50],
+      label: '',
+    };
   // 5. Опоздание <1ч (будильник)
-  if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60)) return { dotColor: colors.yellow[500], hasEntry: true, icon: 'alarm' as const, bgColor: colors.yellow[50], label: '' };
+  if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60))
+    return {
+      dotColor: colors.yellow[500],
+      hasEntry: true,
+      icon: 'alarm' as const,
+      bgColor: colors.yellow[50],
+      label: '',
+    };
   // 6. Открыл смену вовремя — показываем время
   if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
-    return { dotColor: colors.green[600], hasEntry: true, icon: null, bgColor: colors.green[100], label: entry.shiftStart.slice(0, 5) };
+    return {
+      dotColor: colors.green[600],
+      hasEntry: true,
+      icon: null,
+      bgColor: colors.green[100],
+      label: entry.shiftStart.slice(0, 5),
+    };
   }
   // 7. Прогул для прошедших дней без смены
   if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) {
-    return { dotColor: colors.red[500], hasEntry: true, icon: 'close-circle' as const, bgColor: colors.red[50], label: '' };
+    return {
+      dotColor: colors.red[500],
+      hasEntry: true,
+      icon: 'close-circle' as const,
+      bgColor: colors.red[50],
+      label: '',
+    };
   }
   // 8. Запланирована смена (сегодня или будущее) — зелёная галочка
   if (entry.shiftStart) {
-    return { dotColor: colors.green[500], hasEntry: true, icon: 'checkmark' as const, bgColor: colors.green[50], label: '' };
+    return {
+      dotColor: colors.green[500],
+      hasEntry: true,
+      icon: 'checkmark' as const,
+      bgColor: colors.green[50],
+      label: '',
+    };
   }
   return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
+}
+
+/**
+ * TodayPill — the date number for "today" with an extra-soft halo pulse so
+ * the eye finds it instantly when scanning the grid header. The pulse is
+ * a slow ~2s opacity loop on a separate halo view (the number itself stays
+ * crisp). Disabled when the user has Reduce Motion on.
+ */
+function TodayPill({ day }: { day: number; reduceMotion?: boolean }) {
+  return (
+    <View style={styles.gridTodayCircle}>
+      <Text style={styles.gridTodayNum}>{day}</Text>
+    </View>
+  );
+}
+
+// Skeleton placeholder shown while the schedule grid loads for the first time.
+// Renders 6 ghost rows so the user sees the structure of the grid instead of
+// a generic spinner — much closer to native iOS apps (Calendar, Reminders).
+function GridSkeleton() {
+  return (
+    <View style={{ flex: 1, paddingTop: 4 }}>
+      {[...Array(6)].map((_, i) => (
+        <View
+          key={i}
+          style={{
+            flexDirection: 'row',
+            paddingHorizontal: spacing[4],
+            paddingVertical: spacing[2],
+            gap: spacing[3],
+            alignItems: 'center',
+            opacity: 1 - i * 0.12,
+          }}
+        >
+          <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.gray[200] }} />
+          <View style={{ flex: 1, gap: 6 }}>
+            <View style={{ width: '50%', height: 11, borderRadius: 4, backgroundColor: colors.gray[200] }} />
+            <View style={{ width: '30%', height: 9, borderRadius: 4, backgroundColor: colors.gray[100] }} />
+          </View>
+          <View style={{ flexDirection: 'row', gap: 4 }}>
+            {[...Array(5)].map((__, j) => (
+              <View key={j} style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.gray[100] }} />
+            ))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
 }
 
 // Memoized grid row to avoid re-rendering all cells on unrelated state changes.
@@ -108,11 +286,24 @@ interface GridDayRowProps {
   onCellPress: (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => void;
 }
 
-const GridDayRow = memo(function GridDayRow({ userId, userName, days, entryMap, rowIdx, today, canEdit, CELL_W, ROW_H, onCellPress }: GridDayRowProps) {
+const GridDayRow = memo(function GridDayRow({
+  userId,
+  userName,
+  days,
+  entryMap,
+  rowIdx,
+  today,
+  canEdit,
+  CELL_W,
+  ROW_H,
+  onCellPress,
+}: GridDayRowProps) {
   const firstName = userName?.split(' ')[0];
   return (
-    <View style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}>
-      {days.map(d => {
+    <View
+      style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}
+    >
+      {days.map((d) => {
         const ds = formatDate(d);
         const entry = entryMap.get(`${userId}-${ds}`);
         const cell = getCellDot(entry);
@@ -129,17 +320,28 @@ const GridDayRow = memo(function GridDayRow({ userId, userName, days, entryMap, 
               isWeekend && !cell.hasEntry && { backgroundColor: colors.red[50] + '40' },
               isToday && styles.gridCellToday,
             ]}
-            onPress={() => onCellPress(userId, ds, entry, firstName)}
+            onPress={() => {
+              if (canEdit) haptic('tap');
+              onCellPress(userId, ds, entry, firstName);
+            }}
             activeOpacity={canEdit ? 0.5 : 1}
           >
             {cell.hasEntry ? (
-              <View style={[styles.gridDot, { backgroundColor: cell.bgColor || cell.dotColor + '30' }, cell.label ? styles.gridDotLabel : styles.gridDotRound]}>
+              <View
+                style={[
+                  styles.gridDot,
+                  { backgroundColor: cell.bgColor || cell.dotColor + '30' },
+                  cell.label ? styles.gridDotLabel : styles.gridDotRound,
+                ]}
+              >
                 {cell.label ? (
                   <Text
                     style={{ fontSize: 9, fontWeight: '700', color: cell.dotColor }}
                     numberOfLines={1}
                     allowFontScaling={false}
-                  >{cell.label}</Text>
+                  >
+                    {cell.label}
+                  </Text>
                 ) : cell.icon ? (
                   <Ionicons name={cell.icon} size={14} color={cell.dotColor} />
                 ) : (
@@ -159,46 +361,136 @@ const GridDayRow = memo(function GridDayRow({ userId, userName, days, entryMap, 
 // ============== GRID TAB ==============
 function GridTab() {
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
+  const reduceMotion = useReduceMotion();
+  const navigation = useNavigation<any>();
   const { user } = useAuth();
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
-  const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [quickPopup, setQuickPopup] = useState<{ userId: string; date: string; entry?: ScheduleEntry; userName?: string } | null>(null);
+  // Lifted month state — same Date instance across the screen, driven
+  // from the IosScreenHeader month picker.
+  const { currentMonth, setCurrentMonth } = useScheduleMonth();
+  const [quickPopup, setQuickPopup] = useState<{
+    userId: string;
+    date: string;
+    entry?: ScheduleEntry;
+    userName?: string;
+  } | null>(null);
   const [reorderUser, setReorderUser] = useState<{ userId: string; name: string; index: number } | null>(null);
-  const [pendingChanges, setPendingChanges] = useState<Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>>({});
+  const [pendingChanges, setPendingChanges] = useState<
+    Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>
+  >({});
 
-  // Synced vertical scroll refs
-  const leftScrollRef = useRef<ScrollView>(null);
-  const rightScrollRef = useRef<ScrollView>(null);
-  const isLeftScrolling = useRef(false);
-  const isRightScrolling = useRef(false);
+  // Synced vertical scroll refs.
+  //
+  // The grid has two ScrollViews that must scroll vertically together:
+  //   • left  — sticky names column
+  //   • right — day cells
+  //
+  // Earlier iterations used onScroll (JS) → scrollTo() (JS) sync with a
+  // setTimeout debounce. On a 120Hz iPhone that fired up to 120 events
+  // per second, each round-tripping through the bridge — the source of
+  // the lag the owner reported. We now sync ON THE UI THREAD with
+  // Reanimated's useAnimatedScrollHandler + scrollTo:
+  //   • the LEFT scroll is the master; its onScroll is a worklet that
+  //     writes its offset into a sharedValue and immediately calls
+  //     scrollTo(rightAnimatedRef, ...) — both happen on the UI thread,
+  //     no bridge.
+  //   • when the user scrolls the RIGHT side, the same logic mirrors
+  //     back so the names column follows.
+  //   • a guard sharedValue prevents the two handlers from echoing each
+  //     other into an infinite loop.
+  const leftAnimatedRef = useAnimatedRef<Reanimated.ScrollView>();
+  const rightAnimatedRef = useAnimatedRef<Reanimated.ScrollView>();
+  const scrollY = useSharedValue(0);
+  const scrollSource = useSharedValue<'idle' | 'left' | 'right'>('idle');
 
-  const year = currentMonth.getFullYear();
-  const month = currentMonth.getMonth();
+  // Defensive: currentMonth defaults to today, but in case state ever
+  // gets out of shape we fall back to "now" so year/month never become
+  // NaN and the header text always renders.
+  const safeMonth = currentMonth instanceof Date && !isNaN(currentMonth.getTime()) ? currentMonth : new Date();
+  const year = safeMonth.getFullYear();
+  const month = safeMonth.getMonth();
   const dateFrom = formatDate(new Date(year, month, 1));
   const dateTo = formatDate(new Date(year, month + 1, 0));
   const today = formatDate(new Date());
 
-  const { data: entries, isLoading } = useQuery<ScheduleEntry[]>({
+  const {
+    data: entries,
+    isLoading,
+    isFetching,
+    isError,
+    refetch,
+  } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', dateFrom, dateTo],
-    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom, dateTo }); return res.data; },
+    queryFn: async () => {
+      const res = await scheduleApi.getAll({ dateFrom, dateTo });
+      return res.data ?? [];
+    },
+    // keep previous month visible while next month loads — no flash to empty
+    placeholderData: (prev) => prev,
     staleTime: 30_000,
   });
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
-    queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await usersApi.getAll();
+      return res.data ?? [];
+    },
+    placeholderData: (prev) => prev,
+    staleTime: 5 * 60_000,
   });
 
-  // Global master order — uses backend sortOrder field
-  const activeUsers = useMemo(() => {
-    const list = (usersData || []).filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
-    return list.sort((a: any, b: any) => {
-      const ao = a.sortOrder ?? 0;
-      const bo = b.sortOrder ?? 0;
-      if (ao !== bo) return ao - bo;
-      return (a.fullName || '').localeCompare(b.fullName || '');
+  // Prefetch adjacent months so swiping the month pager feels instant — by
+  // the time the user actually goes to Dec/Feb, the data is already cached.
+  React.useEffect(() => {
+    const prevMonth = new Date(year, month - 1, 1);
+    const nextMonth = new Date(year, month + 1, 1);
+    [prevMonth, nextMonth].forEach((m) => {
+      const from = formatDate(new Date(m.getFullYear(), m.getMonth(), 1));
+      const to = formatDate(new Date(m.getFullYear(), m.getMonth() + 1, 0));
+      queryClient.prefetchQuery({
+        queryKey: ['schedule', from, to],
+        queryFn: async () => {
+          const res = await scheduleApi.getAll({ dateFrom: from, dateTo: to });
+          return res.data ?? [];
+        },
+        staleTime: 30_000,
+      });
     });
-  }, [usersData]);
+  }, [year, month, queryClient]);
+
+  // Master list shown as rows in the schedule grid. Robust against any
+  // shape of usersData (undefined, null, empty, missing isActive flags):
+  //   1. Take everything that has an id and isn't explicitly inactive.
+  //   2. If we got nothing AND we know the current user → fall back to it
+  //      so the grid never looks "broken" for a fresh tenant.
+  //   3. Sort by sortOrder, then by fullName.
+  // Schedule grid shows MASTERS only — owners (superadmin / director)
+  // and back-office admins don't need shifts on a service-bay roster.
+  // The auth-user fallback also gets filtered here so a director who
+  // signs in alone doesn't see themselves on the grid.
+  const activeUsers = useMemo(() => {
+    const isSchedulable = (u: any) => {
+      if (!u || !u.id) return false;
+      if (u.isActive === false) return false;
+      const role = (u.role || '').toString().toLowerCase();
+      return role !== 'superadmin' && role !== 'director' && role !== 'owner';
+    };
+    const raw = (usersData || []).filter(isSchedulable);
+    if (raw.length > 0) {
+      return raw.sort((a: any, b: any) => {
+        const ao = a.sortOrder ?? 0;
+        const bo = b.sortOrder ?? 0;
+        if (ao !== bo) return ao - bo;
+        return (a.fullName || '').localeCompare(b.fullName || '');
+      });
+    }
+    if (user && isSchedulable(user)) {
+      return [user as unknown as User];
+    }
+    return [];
+  }, [usersData, user]);
 
   const updateOrderMut = useMutation({
     mutationFn: (orderedIds: string[]) => usersApi.updateOrder(orderedIds),
@@ -214,12 +506,14 @@ function GridTab() {
       });
       return prev;
     },
-    onError: (_e, _v, ctx) => { if (ctx) queryClient.setQueryData(['users'], ctx); },
+    onError: (_e, _v, ctx) => {
+      if (ctx) queryClient.setQueryData(['users'], ctx);
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 
   const moveMaster = (userId: string, dir: 'up' | 'down') => {
-    const ids = activeUsers.map(u => u.id);
+    const ids = activeUsers.map((u) => u.id);
     const idx = ids.indexOf(userId);
     if (idx < 0) return;
     const newIdx = dir === 'up' ? Math.max(0, idx - 1) : Math.min(ids.length - 1, idx + 1);
@@ -233,25 +527,29 @@ function GridTab() {
 
   const entryMap = useMemo(() => {
     const map = new Map<string, ScheduleEntry>();
-    (entries ?? []).forEach(e => {
+    (entries ?? []).forEach((e) => {
       const d = e.date?.split('T')[0] || '';
       map.set(`${e.userId}-${d}`, e);
     });
     // Overlay pending changes
-    Object.values(pendingChanges).forEach(c => {
+    Object.values(pendingChanges).forEach((c) => {
       const d = c.date.slice(0, 10);
       const key = `${c.userId}-${d}`;
       const existing = map.get(key);
-      map.set(key, { ...(existing || { id: `pending-${key}`, tenantId: '', userId: c.userId, date: c.date, isManualOverride: true }), ...c.payload } as ScheduleEntry);
+      map.set(key, {
+        ...(existing || { id: `pending-${key}`, tenantId: '', userId: c.userId, date: c.date, isManualOverride: true }),
+        ...c.payload,
+      } as ScheduleEntry);
     });
     return map;
   }, [entries, pendingChanges]);
 
   const userStats = useMemo(() => {
     const stats = new Map<string, { worked: number; off: number }>();
-    activeUsers.forEach(u => {
-      let worked = 0, off = 0;
-      days.forEach(d => {
+    activeUsers.forEach((u) => {
+      let worked = 0,
+        off = 0;
+      days.forEach((d) => {
         const entry = entryMap.get(`${u.id}-${formatDate(d)}`);
         if (entry?.shiftStart && !entry.isDayOff) worked++;
         if (entry?.isDayOff) off++;
@@ -268,9 +566,16 @@ function GridTab() {
     const previous = queryClient.getQueryData(scheduleQueryKey);
     queryClient.setQueryData(scheduleQueryKey, (old: any) => {
       const arr = (old ?? []) as ScheduleEntry[];
-      const temp = { id: existingEntry?.id || `temp-${userId}-${date}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry;
+      const temp = {
+        id: existingEntry?.id || `temp-${userId}-${date}`,
+        tenantId: '',
+        userId,
+        date,
+        isManualOverride: true,
+        ...payload,
+      } as ScheduleEntry;
       if (existingEntry) {
-        return arr.map(e => e.id === existingEntry.id ? { ...e, ...temp } : e);
+        return arr.map((e) => (e.id === existingEntry.id ? { ...e, ...temp } : e));
       }
       return [...arr, temp];
     });
@@ -282,21 +587,28 @@ function GridTab() {
     queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
       const arr = old ?? [];
       if (isNew) {
-        return [...arr, { id: `t-${Date.now()}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry];
+        return [
+          ...arr,
+          { id: `t-${Date.now()}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry,
+        ];
       }
-      return arr.map(e => (e.userId === userId && e.date.slice(0, 10) === date) ? { ...e, ...payload } : e);
+      return arr.map((e) => (e.userId === userId && e.date.slice(0, 10) === date ? { ...e, ...payload } : e));
     });
   };
 
   const createMutation = useMutation({
     mutationFn: (d: any) => scheduleApi.create(d),
-    onSuccess: () => { setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500); },
+    onSuccess: () => {
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500);
+    },
     onError: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onSuccess: () => { setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500); },
+    onSuccess: () => {
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500);
+    },
     onError: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }),
   });
 
@@ -305,11 +617,18 @@ function GridTab() {
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
       const previous = queryClient.getQueryData(scheduleQueryKey);
-      queryClient.setQueryData(scheduleQueryKey, (old: any) => ((old ?? []) as ScheduleEntry[]).filter(e => e.id !== id));
+      queryClient.setQueryData(scheduleQueryKey, (old: any) =>
+        ((old ?? []) as ScheduleEntry[]).filter((e) => e.id !== id),
+      );
       return previous;
     },
-    onError: (_e: any, _d: any, ctx: any) => { if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx); },
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: ['schedule'] }); setQuickPopup(null); },
+    onError: (_e: any, _d: any, ctx: any) => {
+      if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      setQuickPopup(null);
+    },
   });
 
   const quickAction = (type: string) => {
@@ -317,7 +636,10 @@ function GridTab() {
     const { userId, date, entry } = quickPopup;
     const base: any = { userId, date };
 
-    if (type === 'delete' && entry) { deleteMutation.mutate(entry.id); return; }
+    if (type === 'delete' && entry) {
+      deleteMutation.mutate(entry.id);
+      return;
+    }
 
     // Pin actualArrival to the SCHEDULED date, not `now()`. Prevents past-date
     // quick-actions from inflating rating counts with today's timestamp.
@@ -330,16 +652,56 @@ function GridTab() {
       return dt.toISOString();
     };
 
-    if (type === 'shift') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.note = ''; base.lateStatus = 'on_time'; base.lateMinutes = 0; base.actualArrival = arrivalForDate(0); }
-    else if (type === 'dayoff') { base.isDayOff = true; base.shiftStart = null; base.shiftEnd = null; base.note = ''; base.lateStatus = null; base.lateMinutes = 0; }
-    else if (type === 'sick') { base.isDayOff = true; base.shiftStart = null; base.shiftEnd = null; base.note = 'Больничный'; base.lateStatus = null; base.lateMinutes = 0; }
-    else if (type === 'late_minor') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.lateStatus = 'late_minor'; base.lateMinutes = 15; base.note = ''; base.actualArrival = arrivalForDate(15); }
-    else if (type === 'late_major') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.lateStatus = 'late_major'; base.lateMinutes = 60; base.note = ''; base.actualArrival = arrivalForDate(60); }
-    else if (type === 'absent') { base.shiftStart = shiftStartStr; base.shiftEnd = shiftEndStr; base.isDayOff = false; base.note = 'Прогул'; base.lateStatus = null; base.lateMinutes = 0; }
+    if (type === 'shift') {
+      base.shiftStart = shiftStartStr;
+      base.shiftEnd = shiftEndStr;
+      base.isDayOff = false;
+      base.note = '';
+      base.lateStatus = 'on_time';
+      base.lateMinutes = 0;
+      base.actualArrival = arrivalForDate(0);
+    } else if (type === 'dayoff') {
+      base.isDayOff = true;
+      base.shiftStart = null;
+      base.shiftEnd = null;
+      base.note = '';
+      base.lateStatus = null;
+      base.lateMinutes = 0;
+    } else if (type === 'sick') {
+      base.isDayOff = true;
+      base.shiftStart = null;
+      base.shiftEnd = null;
+      base.note = 'Больничный';
+      base.lateStatus = null;
+      base.lateMinutes = 0;
+    } else if (type === 'late_minor') {
+      base.shiftStart = shiftStartStr;
+      base.shiftEnd = shiftEndStr;
+      base.isDayOff = false;
+      base.lateStatus = 'late_minor';
+      base.lateMinutes = 15;
+      base.note = '';
+      base.actualArrival = arrivalForDate(15);
+    } else if (type === 'late_major') {
+      base.shiftStart = shiftStartStr;
+      base.shiftEnd = shiftEndStr;
+      base.isDayOff = false;
+      base.lateStatus = 'late_major';
+      base.lateMinutes = 60;
+      base.note = '';
+      base.actualArrival = arrivalForDate(60);
+    } else if (type === 'absent') {
+      base.shiftStart = shiftStartStr;
+      base.shiftEnd = shiftEndStr;
+      base.isDayOff = false;
+      base.note = 'Прогул';
+      base.lateStatus = null;
+      base.lateMinutes = 0;
+    }
 
     // Save to pending changes — applied in batch via Apply button
     const key = `${userId}-${date}`;
-    setPendingChanges(prev => ({
+    setPendingChanges((prev) => ({
       ...prev,
       [key]: { userId, date, payload: base, existingEntryId: entry?.id },
     }));
@@ -354,7 +716,9 @@ function GridTab() {
       try {
         if (c.existingEntryId) await scheduleApi.update(c.existingEntryId, c.payload);
         else await scheduleApi.create(c.payload);
-      } catch { failed++; }
+      } catch {
+        failed++;
+      }
     }
     setPendingChanges({});
     queryClient.invalidateQueries({ queryKey: ['schedule'] });
@@ -368,47 +732,100 @@ function GridTab() {
   const NAME_W = 140;
   const ROW_H = 52;
 
-  // Sync vertical scroll between left (names) and right (cells)
-  const handleLeftScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (isRightScrolling.current) return;
-    isLeftScrolling.current = true;
-    rightScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
-    setTimeout(() => { isLeftScrolling.current = false; }, 16);
-  }, []);
+  // UI-thread scroll handlers — keep names column and grid cells locked
+  // to the same vertical offset on every frame, on the UI thread, with
+  // ZERO JS-bridge round-trip per scroll event. The owner's "names and
+  // cells live as separate screens" complaint was the JS sync drift;
+  // this resolves it.
+  const handleLeftScrollWorklet = useAnimatedScrollHandler(
+    {
+      onScroll: (e) => {
+        'worklet';
+        // Ignore echoes — only the touched side drives the sync.
+        if (scrollSource.value === 'right') return;
+        scrollSource.value = 'left';
+        scrollY.value = e.contentOffset.y;
+        scrollTo(rightAnimatedRef, 0, e.contentOffset.y, false);
+      },
+      onEndDrag: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+      onMomentumEnd: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+    },
+    [],
+  );
 
-  const handleRightScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    if (isLeftScrolling.current) return;
-    isRightScrolling.current = true;
-    leftScrollRef.current?.scrollTo({ y: e.nativeEvent.contentOffset.y, animated: false });
-    setTimeout(() => { isRightScrolling.current = false; }, 16);
-  }, []);
+  const handleRightScrollWorklet = useAnimatedScrollHandler(
+    {
+      onScroll: (e) => {
+        'worklet';
+        if (scrollSource.value === 'left') return;
+        scrollSource.value = 'right';
+        scrollY.value = e.contentOffset.y;
+        scrollTo(leftAnimatedRef, 0, e.contentOffset.y, false);
+      },
+      onEndDrag: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+      onMomentumEnd: () => {
+        'worklet';
+        scrollSource.value = 'idle';
+      },
+    },
+    [],
+  );
 
-  const handleCellPress = useCallback((userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => {
-    if (canEdit) setQuickPopup({ userId, date, entry, userName });
-  }, [canEdit]);
+  const handleCellPress = useCallback(
+    (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => {
+      if (canEdit) setQuickPopup({ userId, date, entry, userName });
+    },
+    [canEdit],
+  );
 
   return (
     <View style={{ flex: 1 }}>
-      {/* Month navigation */}
-      <View style={styles.monthNav}>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
+      {/* Month picker is now lifted to ScheduleScreen's header
+          (ScheduleMonthCtx). A hairline refresh indicator at the top of
+          the tab still tells the user we're re-validating cached data. */}
+      {isFetching && !isLoading && (
+        <View style={styles.bgRefreshIndicator}>
+          <ActivityIndicator size="small" color={colors.primary[500]} />
+        </View>
+      )}
+
+      {/* Error banner — appears only if the network request fails AND we
+          have no cached data to fall back on. With cached data we silently
+          keep showing it, since intermittent connectivity shouldn't break
+          the UX. */}
+      {isError && !entries && (
+        <TouchableOpacity onPress={() => refetch()} style={styles.errorBanner} activeOpacity={0.7}>
+          <Ionicons name="cloud-offline-outline" size={16} color={colors.red[600]} />
+          <Text style={styles.errorBannerText}>Не удалось загрузить расписание. Нажмите чтобы повторить.</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => setCurrentMonth(new Date())}
-          style={styles.monthCenter}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-      </View>
+      )}
 
       {/* Pending changes Apply bar */}
       {Object.keys(pendingChanges).length > 0 && (
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#fde68a', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, marginHorizontal: 16, marginBottom: 8 }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: '#fef3c7',
+            borderWidth: 1,
+            borderColor: '#fde68a',
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            marginHorizontal: 16,
+            marginBottom: 8,
+          }}
+        >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
             <Ionicons name="warning" size={14} color="#d97706" />
             <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400e' }}>
@@ -419,7 +836,10 @@ function GridTab() {
             <TouchableOpacity onPress={discardPending} style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
               <Text style={{ fontSize: 11, fontWeight: '600', color: '#6b7280' }}>Отмена</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={applyPending} style={{ backgroundColor: '#d97706', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+            <TouchableOpacity
+              onPress={applyPending}
+              style={{ backgroundColor: '#d97706', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}
+            >
               <Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>Применить</Text>
             </TouchableOpacity>
           </View>
@@ -443,21 +863,62 @@ function GridTab() {
         ))}
       </View>
 
-      {isLoading ? <LoadingSpinner /> : (
+      {/* Schedule states:
+          1. We don't yet have ANY user info (neither cached usersData nor
+             the authed user) → skeleton.
+          2. We have user info but the master list is empty → onboarding.
+          3. Otherwise → calendar grid. Note: we don't gate on usersData
+             being undefined any more, because activeUsers already falls
+             back to the auth user — that single row is enough to render
+             the grid even on fresh tenants. */}
+      {activeUsers.length === 0 && !user ? (
+        <GridSkeleton />
+      ) : activeUsers.length === 0 ? (
+        <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
+          <View style={[styles.emptyIcon, { width: 72, height: 72, borderRadius: 36 }]}>
+            <Ionicons name="people-outline" size={32} color={colors.gray[400]} />
+          </View>
+          <Text style={[styles.emptyTitle, { fontSize: 17, fontWeight: '600' }]}>Нет мастеров</Text>
+          <Text style={[styles.emptySubtitle, { textAlign: 'center', maxWidth: 260, marginTop: 4 }]}>
+            Чтобы планировать смены, добавьте сотрудников в разделе «Пользователи»
+          </Text>
+        </View>
+      ) : (
+        /* Schedule grid — RN implementation. The native Swift grid built
+           in iter#2 (mobile/modules/autexa-liquid-glass/ios/AutexaScheduleGridView.swift)
+           is intentionally NOT used here: physical-iPhone testing showed
+           the RN visual layer was clearer and the owner asked to keep
+           the familiar design. The lag from iter#2's setTimeout-based
+           scroll sync is fixed below by replacing handleLeftScroll /
+           handleRightScroll with reanimated useAnimatedScrollHandler so
+           the names column and the day grid sync ON THE UI THREAD —
+           no JS bridge round-trip per scroll frame. */
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Sticky left column -- employee names with avatar initials */}
           <View style={styles.stickyColumn}>
             {/* Header cell */}
-            <View style={[styles.gridNameCell, { width: NAME_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] }]}>
+            <View
+              style={[
+                styles.gridNameCell,
+                { width: NAME_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
+              ]}
+            >
               <Text style={styles.gridHeaderLabel}>Сотрудник</Text>
             </View>
-            {/* Name cells */}
-            <ScrollView
-              ref={leftScrollRef}
+            {/* Name cells — Reanimated.ScrollView so the scroll handler
+                runs on the UI thread and can drive the right-grid offset
+                directly via scrollTo without a JS bridge round-trip. */}
+            <Reanimated.ScrollView
+              ref={leftAnimatedRef}
+              style={{ flex: 1 }}
               showsVerticalScrollIndicator={false}
-              onScroll={handleLeftScroll}
-              scrollEventThrottle={16}
+              onScroll={handleLeftScrollWorklet}
+              scrollEventThrottle={1}
               bounces={false}
+              decelerationRate="normal"
+              removeClippedSubviews
+              overScrollMode="never"
+              contentContainerStyle={{ paddingBottom: tabBarHeight }}
             >
               {activeUsers.map((u, rowIdx) => {
                 const stats = userStats.get(u.id);
@@ -465,9 +926,20 @@ function GridTab() {
                 return (
                   <TouchableOpacity
                     key={u.id}
-                    onPress={() => canEdit && setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx })}
-                    activeOpacity={canEdit ? 0.7 : 1}
-                    style={[styles.gridNameCell, { width: NAME_W, height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}
+                    // Tap → открыть карточку сотрудника. Reorder теперь
+                    // спрятан под long-press, чтобы не конфликтовать с
+                    // привычным iOS-навигационным жестом.
+                    onPress={() => openEmployee(navigation, u.id)}
+                    onLongPress={() => {
+                      if (canEdit) setReorderUser({ userId: u.id, name: u.fullName, index: rowIdx });
+                    }}
+                    delayLongPress={350}
+                    activeOpacity={0.7}
+                    style={[
+                      styles.gridNameCell,
+                      { width: NAME_W, height: ROW_H },
+                      rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' },
+                    ]}
                   >
                     <View style={styles.gridNameInner}>
                       <LinearGradient
@@ -479,7 +951,9 @@ function GridTab() {
                         <Text style={styles.gridAvatarText}>{getInitials(u.fullName)}</Text>
                       </LinearGradient>
                       <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.gridName} numberOfLines={1} ellipsizeMode="tail">{u.fullName}</Text>
+                        <Text style={styles.gridName} numberOfLines={1} ellipsizeMode="tail">
+                          {u.fullName}
+                        </Text>
                         {stats && (
                           <View style={styles.gridStatsRow}>
                             <View style={styles.gridStatPill}>
@@ -497,50 +971,70 @@ function GridTab() {
                   </TouchableOpacity>
                 );
               })}
-            </ScrollView>
+            </Reanimated.ScrollView>
           </View>
 
           {/* Scrollable right section -- day columns */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false}>
-            <View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            bounces={false}
+            style={{ flex: 1 }}
+            contentContainerStyle={{ flexGrow: 1 }}
+          >
+            <View style={{ flex: 1 }}>
               {/* Day headers */}
               <View style={{ flexDirection: 'row' }}>
-                {days.map(d => {
+                {days.map((d) => {
                   const ds = formatDate(d);
                   const dow = (d.getDay() + 6) % 7;
                   const isWeekend = dow >= 5;
                   const isToday = ds === today;
                   return (
-                    <View key={ds} style={[
-                      styles.gridHeaderCell,
-                      { width: CELL_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
-                      isWeekend && { backgroundColor: colors.red[50] },
-                      isToday && styles.gridHeaderToday,
-                    ]}>
-                      <Text style={[
-                        styles.gridHeaderDow,
-                        isWeekend && { color: colors.red[400] },
-                        isToday && { color: colors.primary[600] },
-                      ]}>{DAY_ABBR[dow]}</Text>
+                    <View
+                      key={ds}
+                      style={[
+                        styles.gridHeaderCell,
+                        { width: CELL_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
+                        isWeekend && { backgroundColor: colors.red[50] },
+                        isToday && styles.gridHeaderToday,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.gridHeaderDow,
+                          isWeekend && { color: colors.red[400] },
+                          isToday && { color: colors.primary[600] },
+                        ]}
+                      >
+                        {DAY_ABBR[dow]}
+                      </Text>
                       {isToday ? (
-                        <View style={styles.gridTodayCircle}>
-                          <Text style={styles.gridTodayNum}>{d.getDate()}</Text>
-                        </View>
+                        <TodayPill day={d.getDate()} reduceMotion={reduceMotion} />
                       ) : (
-                        <Text style={[styles.gridHeaderDay, isWeekend && { color: colors.red[400] }]}>{d.getDate()}</Text>
+                        <Text style={[styles.gridHeaderDay, isWeekend && { color: colors.red[400] }]}>
+                          {d.getDate()}
+                        </Text>
                       )}
                     </View>
                   );
                 })}
               </View>
 
-              {/* Day cells with dot indicators */}
-              <ScrollView
-                ref={rightScrollRef}
+              {/* Day cells — Reanimated.ScrollView so the UI-thread
+                  worklet handler can mirror its offset to the names
+                  column without any JS bridge work. */}
+              <Reanimated.ScrollView
+                ref={rightAnimatedRef}
+                style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
-                onScroll={handleRightScroll}
-                scrollEventThrottle={16}
+                onScroll={handleRightScrollWorklet}
+                scrollEventThrottle={1}
                 bounces={false}
+                decelerationRate="normal"
+                removeClippedSubviews
+                overScrollMode="never"
+                contentContainerStyle={{ paddingBottom: tabBarHeight }}
               >
                 {activeUsers.map((u, rowIdx) => (
                   <GridDayRow
@@ -557,13 +1051,17 @@ function GridTab() {
                     onCellPress={handleCellPress}
                   />
                 ))}
-              </ScrollView>
+              </Reanimated.ScrollView>
             </View>
           </ScrollView>
         </View>
       )}
 
-      <Modal visible={!!reorderUser} onClose={() => setReorderUser(null)} title={reorderUser ? `Позиция: ${reorderUser.name?.split(' ')[0] || ''}` : ''}>
+      <Modal
+        visible={!!reorderUser}
+        onClose={() => setReorderUser(null)}
+        title={reorderUser ? `Позиция: ${reorderUser.name?.split(' ')[0] || ''}` : ''}
+      >
         {reorderUser && (
           <ScrollView style={{ maxHeight: 400 }}>
             {activeUsers.map((_, idx) => {
@@ -573,22 +1071,42 @@ function GridTab() {
                   key={idx}
                   onPress={() => {
                     if (!isCurrent) {
-                      const ids = activeUsers.map(u => u.id);
-                      const filtered = ids.filter(id => id !== reorderUser.userId);
+                      const ids = activeUsers.map((u) => u.id);
+                      const filtered = ids.filter((id) => id !== reorderUser.userId);
                       filtered.splice(idx, 0, reorderUser.userId);
                       updateOrderMut.mutate(filtered);
                     }
                     setReorderUser(null);
                   }}
                   style={{
-                    flexDirection: 'row', alignItems: 'center', gap: 12,
-                    paddingVertical: 14, paddingHorizontal: 16,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 12,
+                    paddingVertical: 14,
+                    paddingHorizontal: 16,
                     backgroundColor: isCurrent ? colors.primary[50] : 'transparent',
-                    borderBottomWidth: 0.5, borderBottomColor: colors.gray[100],
+                    borderBottomWidth: 0.5,
+                    borderBottomColor: colors.gray[100],
                   }}
                 >
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: isCurrent ? colors.primary[600] : colors.gray[400], width: 24 }}>{idx + 1}</Text>
-                  <Text style={{ fontSize: 14, color: isCurrent ? colors.primary[700] : colors.gray[700], flex: 1, fontWeight: isCurrent ? '600' : '500' }}>
+                  <Text
+                    style={{
+                      fontSize: 11,
+                      fontWeight: '700',
+                      color: isCurrent ? colors.primary[600] : colors.gray[400],
+                      width: 24,
+                    }}
+                  >
+                    {idx + 1}
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 14,
+                      color: isCurrent ? colors.primary[700] : colors.gray[700],
+                      flex: 1,
+                      fontWeight: isCurrent ? '600' : '500',
+                    }}
+                  >
                     {isCurrent ? '— текущая позиция —' : `Переместить на ${idx + 1}`}
                   </Text>
                 </TouchableOpacity>
@@ -598,17 +1116,67 @@ function GridTab() {
         )}
       </Modal>
 
-      <Modal visible={!!quickPopup} onClose={() => setQuickPopup(null)} title={quickPopup?.userName ? `${quickPopup.userName} — ${quickPopup.date?.split('-').reverse().join('.')}` : 'Быстрое действие'}>
+      <Modal
+        visible={!!quickPopup}
+        onClose={() => setQuickPopup(null)}
+        title={
+          quickPopup?.userName
+            ? `${quickPopup.userName} — ${quickPopup.date?.split('-').reverse().join('.')}`
+            : 'Быстрое действие'
+        }
+      >
         {quickPopup && (
           <View style={styles.quickActions}>
             {[
-              { type: 'shift', label: 'Смена', icon: 'checkmark-circle' as const, iconColor: colors.green[500], bg: colors.green[50], gradient: [colors.green[50], colors.green[100]] },
-              { type: 'dayoff', label: 'Выходной', icon: 'moon-outline' as const, iconColor: colors.gray[500], bg: colors.gray[100], gradient: [colors.gray[50], colors.gray[100]] },
-              { type: 'sick', label: 'Больничный', icon: 'medkit-outline' as const, iconColor: colors.rose[500], bg: colors.rose[50], gradient: [colors.rose[50], '#ffe4e6'] },
-              { type: 'late_minor', label: 'Опоздал <1ч', icon: 'alarm-outline' as const, iconColor: colors.yellow[600], bg: colors.yellow[50], gradient: [colors.yellow[50], '#fef9c3'] },
-              { type: 'late_major', label: 'Опоздал >1ч', icon: 'warning-outline' as const, iconColor: colors.orange[500], bg: colors.orange[50], gradient: [colors.orange[50], '#fed7aa'] },
-              { type: 'absent', label: 'Прогул', icon: 'close-circle-outline' as const, iconColor: colors.red[500], bg: colors.red[50], gradient: [colors.red[50], '#fecaca'] },
-            ].map(item => (
+              {
+                type: 'shift',
+                label: 'Смена',
+                icon: 'checkmark-circle' as const,
+                iconColor: colors.green[500],
+                bg: colors.green[50],
+                gradient: [colors.green[50], colors.green[100]],
+              },
+              {
+                type: 'dayoff',
+                label: 'Выходной',
+                icon: 'moon-outline' as const,
+                iconColor: colors.gray[500],
+                bg: colors.gray[100],
+                gradient: [colors.gray[50], colors.gray[100]],
+              },
+              {
+                type: 'sick',
+                label: 'Больничный',
+                icon: 'medkit-outline' as const,
+                iconColor: colors.rose[500],
+                bg: colors.rose[50],
+                gradient: [colors.rose[50], '#ffe4e6'],
+              },
+              {
+                type: 'late_minor',
+                label: 'Опоздал <1ч',
+                icon: 'alarm-outline' as const,
+                iconColor: colors.yellow[600],
+                bg: colors.yellow[50],
+                gradient: [colors.yellow[50], '#fef9c3'],
+              },
+              {
+                type: 'late_major',
+                label: 'Опоздал >1ч',
+                icon: 'warning-outline' as const,
+                iconColor: colors.orange[500],
+                bg: colors.orange[50],
+                gradient: [colors.orange[50], '#fed7aa'],
+              },
+              {
+                type: 'absent',
+                label: 'Прогул',
+                icon: 'close-circle-outline' as const,
+                iconColor: colors.red[500],
+                bg: colors.red[50],
+                gradient: [colors.red[50], '#fecaca'],
+              },
+            ].map((item) => (
               <TouchableOpacity key={item.type} style={styles.quickBtn} onPress={() => quickAction(item.type)}>
                 <LinearGradient
                   colors={item.gradient as [string, string]}
@@ -644,11 +1212,15 @@ function GridTab() {
 // ============== TODAY TAB ==============
 function TodayTab() {
   const queryClient = useQueryClient();
+  const navigation = useNavigation<any>();
   const [refreshing, setRefreshing] = useState(false);
 
   const { data: todayData, isLoading } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
-    queryFn: async () => { const res = await scheduleApi.getToday(); return res.data; },
+    queryFn: async () => {
+      const res = await scheduleApi.getToday();
+      return res.data;
+    },
     staleTime: 30_000,
   });
 
@@ -659,24 +1231,75 @@ function TodayTab() {
   };
 
   const statuses = todayData ?? [];
-  const working = statuses.filter(s => s.isWorking && !(s.note || '').toLowerCase().includes('больнич'));
-  const notWorking = statuses.filter(s => !s.isWorking || (s.note || '').toLowerCase().includes('больнич'));
+  const working = statuses.filter((s) => s.isWorking && !(s.note || '').toLowerCase().includes('больнич'));
+  const notWorking = statuses.filter((s) => !s.isWorking || (s.note || '').toLowerCase().includes('больнич'));
 
   const getStatusInfo = (s: TodayEmployeeStatus) => {
     const note = (s.note || '').toLowerCase();
-    if (note.includes('больнич')) return { label: 'Больничный', color: colors.rose[500], icon: 'medkit-outline' as const, bgColor: colors.rose[50], accentColor: colors.rose[400] };
-    if (s.isDayOff) return { label: 'Выходной', color: colors.gray[500], icon: 'moon-outline' as const, bgColor: colors.gray[100], accentColor: colors.gray[400] };
-    if (s.lateStatus === 'late_major') return { label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. >1ч', color: colors.orange[500], icon: 'warning' as const, bgColor: colors.orange[50], accentColor: colors.orange[500] };
-    if (s.lateStatus === 'late_minor') return { label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. <1ч', color: colors.yellow[600], icon: 'alarm' as const, bgColor: colors.yellow[50], accentColor: colors.yellow[500] };
-    if (s.isWorking) return { label: 'На смене', color: colors.green[600], icon: 'checkmark-circle' as const, bgColor: colors.green[50], accentColor: colors.green[500] };
-    if (s.hasSchedule && !s.isDayOff) return { label: 'Прогул', color: colors.red[500], icon: 'close-circle' as const, bgColor: colors.red[50], accentColor: colors.red[500] };
-    return { label: '—', color: colors.gray[400], icon: 'remove-outline' as const, bgColor: colors.gray[50], accentColor: colors.gray[300] };
+    if (note.includes('больнич'))
+      return {
+        label: 'Больничный',
+        color: colors.rose[500],
+        icon: 'medkit-outline' as const,
+        bgColor: colors.rose[50],
+        accentColor: colors.rose[400],
+      };
+    if (s.isDayOff)
+      return {
+        label: 'Выходной',
+        color: colors.gray[500],
+        icon: 'moon-outline' as const,
+        bgColor: colors.gray[100],
+        accentColor: colors.gray[400],
+      };
+    if (s.lateStatus === 'late_major')
+      return {
+        label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. >1ч',
+        color: colors.orange[500],
+        icon: 'warning' as const,
+        bgColor: colors.orange[50],
+        accentColor: colors.orange[500],
+      };
+    if (s.lateStatus === 'late_minor')
+      return {
+        label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. <1ч',
+        color: colors.yellow[600],
+        icon: 'alarm' as const,
+        bgColor: colors.yellow[50],
+        accentColor: colors.yellow[500],
+      };
+    if (s.isWorking)
+      return {
+        label: 'На смене',
+        color: colors.green[600],
+        icon: 'checkmark-circle' as const,
+        bgColor: colors.green[50],
+        accentColor: colors.green[500],
+      };
+    if (s.hasSchedule && !s.isDayOff)
+      return {
+        label: 'Прогул',
+        color: colors.red[500],
+        icon: 'close-circle' as const,
+        bgColor: colors.red[50],
+        accentColor: colors.red[500],
+      };
+    return {
+      label: '—',
+      color: colors.gray[400],
+      icon: 'remove-outline' as const,
+      bgColor: colors.gray[50],
+      accentColor: colors.gray[300],
+    };
   };
 
   const todayDate = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
-    <ScrollView contentContainerStyle={styles.tabContent} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}>
+    <ScrollView
+      contentContainerStyle={styles.tabContent}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+    >
       {/* Date header card */}
       <AnimatedCard index={0}>
         <LinearGradient
@@ -729,7 +1352,9 @@ function TodayTab() {
         </View>
       </AnimatedCard>
 
-      {isLoading ? <LoadingSpinner /> : statuses.length === 0 ? (
+      {isLoading ? (
+        <LoadingSpinner />
+      ) : statuses.length === 0 ? (
         <View style={styles.emptyState}>
           <View style={styles.emptyIcon}>
             <Ionicons name="calendar-outline" size={36} color={colors.gray[300]} />
@@ -741,7 +1366,7 @@ function TodayTab() {
         statuses.map((s, idx) => {
           const info = getStatusInfo(s);
           return (
-            <AnimatedCard key={s.userId} index={idx + 2}>
+            <AnimatedCard key={s.userId} index={idx + 2} onPress={() => openEmployee(navigation, s.userId)}>
               <View style={styles.todayCard}>
                 <View style={[styles.todayCardAccent, { backgroundColor: info.accentColor }]} />
                 <View style={styles.todayCardContent}>
@@ -754,14 +1379,19 @@ function TodayTab() {
                       {s.shiftStart && s.shiftEnd && (
                         <View style={styles.todayShiftPill}>
                           <Ionicons name="time-outline" size={10} color={colors.gray[500]} />
-                          <Text style={styles.todayShift}>{s.shiftStart} — {s.shiftEnd}</Text>
+                          <Text style={styles.todayShift}>
+                            {s.shiftStart} — {s.shiftEnd}
+                          </Text>
                         </View>
                       )}
                       {s.actualArrival && (
                         <View style={[styles.todayShiftPill, { backgroundColor: colors.primary[50] }]}>
                           <Ionicons name="enter-outline" size={10} color={colors.primary[600]} />
                           <Text style={[styles.todayShift, { color: colors.primary[600] }]}>
-                            {new Date(s.actualArrival).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
                           </Text>
                         </View>
                       )}
@@ -783,46 +1413,60 @@ function TodayTab() {
 
 // ============== SHIFTS TAB ==============
 function ShiftsTab() {
-  const [currentMonth, setCurrentMonth] = useState(new Date());
+  // Same lifted month so changing it in the header reflects across tabs.
+  // ShiftsTab consumes only — the picker lives in the screen header.
+  const { currentMonth } = useScheduleMonth();
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
 
   const { data: stats, isLoading } = useQuery({
     queryKey: ['schedule-my-stats', year, month],
-    queryFn: async () => { const res = await scheduleApi.getMyStats(); return res.data; },
+    queryFn: async () => {
+      const res = await scheduleApi.getMyStats();
+      return res.data;
+    },
   });
 
   const s: any = stats || {};
 
   const statItems = [
-    { label: 'Рабочих дней', value: s.totalWorked || 0, icon: 'calendar' as const, color: colors.primary[700], gradient: [colors.primary[50], colors.primary[100]] },
-    { label: 'Вовремя', value: s.totalOnTime || 0, icon: 'checkmark-circle' as const, color: colors.green[700], gradient: [colors.green[50], colors.green[100]] },
-    { label: 'Опозданий', value: s.totalLate || 0, icon: 'alarm-outline' as const, color: colors.orange[600], gradient: [colors.orange[50], '#fed7aa'] },
-    { label: 'Выходных', value: s.totalDaysOff || 0, icon: 'moon-outline' as const, color: colors.gray[600], gradient: [colors.gray[50], colors.gray[100]] },
+    {
+      label: 'Рабочих дней',
+      value: s.totalWorked || 0,
+      icon: 'calendar' as const,
+      color: colors.primary[700],
+      gradient: [colors.primary[50], colors.primary[100]],
+    },
+    {
+      label: 'Вовремя',
+      value: s.totalOnTime || 0,
+      icon: 'checkmark-circle' as const,
+      color: colors.green[700],
+      gradient: [colors.green[50], colors.green[100]],
+    },
+    {
+      label: 'Опозданий',
+      value: s.totalLate || 0,
+      icon: 'alarm-outline' as const,
+      color: colors.orange[600],
+      gradient: [colors.orange[50], '#fed7aa'],
+    },
+    {
+      label: 'Выходных',
+      value: s.totalDaysOff || 0,
+      icon: 'moon-outline' as const,
+      color: colors.gray[600],
+      gradient: [colors.gray[50], colors.gray[100]],
+    },
   ];
 
   const totalLate = (s.totalLateMinor || 0) + (s.totalLateMajor || 0);
 
   return (
     <ScrollView contentContainerStyle={styles.tabContent}>
-      {/* Month nav */}
-      <View style={styles.monthNav}>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month - 1, 1))} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => setCurrentMonth(new Date())}
-          style={styles.monthCenter}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.monthTitle}>{MONTH_NAMES[month]} {year}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setCurrentMonth(new Date(year, month + 1, 1))} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-      </View>
-
-      {isLoading ? <LoadingSpinner /> : (
+      {isLoading ? (
+        <LoadingSpinner />
+      ) : (
         <>
           {/* 2x2 stat cards */}
           <View style={styles.statsGrid}>
@@ -866,7 +1510,15 @@ function ShiftsTab() {
                     <Text style={[styles.detailValue, { color: colors.yellow[600] }]}>{s.totalLateMinor || 0}</Text>
                   </View>
                   <View style={styles.progressBarBg}>
-                    <View style={[styles.progressBar, { width: `${totalLate > 0 ? ((s.totalLateMinor || 0) / totalLate) * 100 : 0}%`, backgroundColor: colors.yellow[400] }]} />
+                    <View
+                      style={[
+                        styles.progressBar,
+                        {
+                          width: `${totalLate > 0 ? ((s.totalLateMinor || 0) / totalLate) * 100 : 0}%`,
+                          backgroundColor: colors.yellow[400],
+                        },
+                      ]}
+                    />
                   </View>
                 </View>
 
@@ -879,7 +1531,15 @@ function ShiftsTab() {
                     <Text style={[styles.detailValue, { color: colors.orange[600] }]}>{s.totalLateMajor || 0}</Text>
                   </View>
                   <View style={styles.progressBarBg}>
-                    <View style={[styles.progressBar, { width: `${totalLate > 0 ? ((s.totalLateMajor || 0) / totalLate) * 100 : 0}%`, backgroundColor: colors.orange[500] }]} />
+                    <View
+                      style={[
+                        styles.progressBar,
+                        {
+                          width: `${totalLate > 0 ? ((s.totalLateMajor || 0) / totalLate) * 100 : 0}%`,
+                          backgroundColor: colors.orange[500],
+                        },
+                      ]}
+                    />
                   </View>
                 </View>
 
@@ -924,16 +1584,22 @@ function RatingTab() {
     queryFn: async () => (await usersApi.getAll()).data,
   });
 
-  const users = useMemo(() => (usersData || []).filter(u => u.isActive && (u.role === 'master' || u.role === 'admin')), [usersData]);
+  const users = useMemo(() => (usersData || []).filter((u) => u.isActive), [usersData]);
 
   // SHARED attendance utility — same logic everywhere (web + mobile)
   const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
 
-  const ranked = useMemo(() => users.map(u => {
-    const s = stats[u.id] || emptyBreakdown();
-    const score = attendanceScore(s);
-    return { ...u, stats: s, score };
-  }).sort((a, b) => b.score - a.score || b.stats.full - a.stats.full), [users, stats]);
+  const ranked = useMemo(
+    () =>
+      users
+        .map((u) => {
+          const s = stats[u.id] || emptyBreakdown();
+          const score = attendanceScore(s);
+          return { ...u, stats: s, score };
+        })
+        .sort((a, b) => b.score - a.score || b.stats.full - a.stats.full),
+    [users, stats],
+  );
 
   const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
 
@@ -948,12 +1614,35 @@ function RatingTab() {
   })();
 
   return (
-    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3] }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[3], backgroundColor: colors.white, borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], borderWidth: 1, borderColor: colors.gray[100] }}>
+    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3], paddingBottom: 120 }}>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: spacing[3],
+          backgroundColor: colors.white,
+          borderRadius: borderRadius.xl,
+          paddingVertical: spacing[2.5],
+          borderWidth: 1,
+          borderColor: colors.gray[100],
+        }}
+      >
         <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ padding: spacing[1] }}>
           <Ionicons name="chevron-back" size={20} color={colors.gray[500]} />
         </TouchableOpacity>
-        <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], textTransform: 'capitalize' as const, minWidth: 140, textAlign: 'center' }}>{monthLabel}</Text>
+        <Text
+          style={{
+            fontSize: fontSize.sm,
+            fontWeight: fontWeight.bold,
+            color: colors.gray[900],
+            textTransform: 'capitalize' as const,
+            minWidth: 140,
+            textAlign: 'center',
+          }}
+        >
+          {monthLabel}
+        </Text>
         <TouchableOpacity onPress={() => shiftMonth(1)} style={{ padding: spacing[1] }}>
           <Ionicons name="chevron-forward" size={20} color={colors.gray[500]} />
         </TouchableOpacity>
@@ -965,31 +1654,143 @@ function RatingTab() {
         const scoreColor = u.score >= 90 ? colors.green[600] : u.score >= 70 ? colors.yellow[600] : colors.red[500];
         const scoreBg = u.score >= 90 ? colors.green[50] : u.score >= 70 ? colors.yellow[50] : colors.red[50];
         const isExpanded = expandedUserId === u.id;
-        const fmtDate = (d: string) => { const p = d.split('-'); return `${parseInt(p[2])}.${p[1]}`; };
+        const fmtDate = (d: string) => {
+          const p = d.split('-');
+          return `${parseInt(p[2])}.${p[1]}`;
+        };
 
         return (
-          <View key={u.id} style={{ backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: idx < 3 ? colors.amber[200] : colors.gray[100], overflow: 'hidden' }}>
+          <View
+            key={u.id}
+            style={{
+              backgroundColor: colors.white,
+              borderRadius: borderRadius['2xl'],
+              borderWidth: 1,
+              borderColor: idx < 3 ? colors.amber[200] : colors.gray[100],
+              overflow: 'hidden',
+            }}
+          >
             <TouchableOpacity
               activeOpacity={0.7}
               onPress={() => setExpandedUserId(isExpanded ? null : u.id)}
               style={{ padding: spacing[3] }}
             >
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
-                <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: idx < 3 ? colors.amber[100] : colors.gray[100], alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: idx < 3 ? colors.amber[600] : colors.gray[500] }}>{medal || (idx + 1)}</Text>
+                <View
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: idx < 3 ? colors.amber[100] : colors.gray[100],
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: fontSize.sm,
+                      fontWeight: fontWeight.bold,
+                      color: idx < 3 ? colors.amber[600] : colors.gray[500],
+                    }}
+                  >
+                    {medal || idx + 1}
+                  </Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }} numberOfLines={1}>{u.fullName}</Text>
+                  <Text
+                    style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}
+                    numberOfLines={1}
+                  >
+                    {u.fullName}
+                  </Text>
                   <View style={{ flexDirection: 'row', gap: spacing[1.5], marginTop: 4, flexWrap: 'wrap' }}>
-                    <Text style={{ fontSize: 9, backgroundColor: colors.green[50], color: colors.green[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>✓ {s.full}</Text>
-                    {s.lateMinor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.yellow[50], color: colors.yellow[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⏰ {s.lateMinor}</Text>}
-                    {s.lateMajor > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.orange[50], color: colors.orange[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>⚠ {s.lateMajor}</Text>}
-                    {s.absent > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.red[50], color: colors.red[700], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>❌ {s.absent}</Text>}
-                    {s.sick > 0 && <Text style={{ fontSize: 9, backgroundColor: colors.rose[50], color: colors.rose[600], paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8, fontWeight: '600' }}>🏥 {s.sick}</Text>}
+                    <Text
+                      style={{
+                        fontSize: 9,
+                        backgroundColor: colors.green[50],
+                        color: colors.green[700],
+                        paddingHorizontal: 5,
+                        paddingVertical: 2,
+                        borderRadius: 8,
+                        fontWeight: '600',
+                      }}
+                    >
+                      ✓ {s.full}
+                    </Text>
+                    {s.lateMinor > 0 && (
+                      <Text
+                        style={{
+                          fontSize: 9,
+                          backgroundColor: colors.yellow[50],
+                          color: colors.yellow[700],
+                          paddingHorizontal: 5,
+                          paddingVertical: 2,
+                          borderRadius: 8,
+                          fontWeight: '600',
+                        }}
+                      >
+                        ⏰ {s.lateMinor}
+                      </Text>
+                    )}
+                    {s.lateMajor > 0 && (
+                      <Text
+                        style={{
+                          fontSize: 9,
+                          backgroundColor: colors.orange[50],
+                          color: colors.orange[600],
+                          paddingHorizontal: 5,
+                          paddingVertical: 2,
+                          borderRadius: 8,
+                          fontWeight: '600',
+                        }}
+                      >
+                        ⚠ {s.lateMajor}
+                      </Text>
+                    )}
+                    {s.absent > 0 && (
+                      <Text
+                        style={{
+                          fontSize: 9,
+                          backgroundColor: colors.red[50],
+                          color: colors.red[700],
+                          paddingHorizontal: 5,
+                          paddingVertical: 2,
+                          borderRadius: 8,
+                          fontWeight: '600',
+                        }}
+                      >
+                        ❌ {s.absent}
+                      </Text>
+                    )}
+                    {s.sick > 0 && (
+                      <Text
+                        style={{
+                          fontSize: 9,
+                          backgroundColor: colors.rose[50],
+                          color: colors.rose[600],
+                          paddingHorizontal: 5,
+                          paddingVertical: 2,
+                          borderRadius: 8,
+                          fontWeight: '600',
+                        }}
+                      >
+                        🏥 {s.sick}
+                      </Text>
+                    )}
                   </View>
                 </View>
-                <View style={{ backgroundColor: scoreBg, borderRadius: borderRadius.lg, paddingHorizontal: spacing[2.5], paddingVertical: spacing[1.5], alignItems: 'center' }}>
-                  <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: scoreColor }}>{u.score}%</Text>
+                <View
+                  style={{
+                    backgroundColor: scoreBg,
+                    borderRadius: borderRadius.lg,
+                    paddingHorizontal: spacing[2.5],
+                    paddingVertical: spacing[1.5],
+                    alignItems: 'center',
+                  }}
+                >
+                  <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: scoreColor }}>
+                    {u.score}%
+                  </Text>
                   <Text style={{ fontSize: 8, color: colors.gray[400] }}>посещ.</Text>
                 </View>
                 <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.gray[400]} />
@@ -997,7 +1798,15 @@ function RatingTab() {
             </TouchableOpacity>
 
             {isExpanded && (
-              <View style={{ borderTopWidth: 1, borderTopColor: colors.gray[100], backgroundColor: colors.gray[50], padding: spacing[3], gap: spacing[1.5] }}>
+              <View
+                style={{
+                  borderTopWidth: 1,
+                  borderTopColor: colors.gray[100],
+                  backgroundColor: colors.gray[50],
+                  padding: spacing[3],
+                  gap: spacing[1.5],
+                }}
+              >
                 {s.fullDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: colors.gray[700] }}>
                     <Text style={{ fontWeight: '700', color: colors.green[700] }}>✓ Полная смена ({s.full}): </Text>
@@ -1006,13 +1815,17 @@ function RatingTab() {
                 )}
                 {s.lateMinorDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: colors.gray[700] }}>
-                    <Text style={{ fontWeight: '700', color: colors.yellow[700] }}>⏰ Опозд. &lt;1ч ({s.lateMinor}): </Text>
+                    <Text style={{ fontWeight: '700', color: colors.yellow[700] }}>
+                      ⏰ Опозд. &lt;1ч ({s.lateMinor}):{' '}
+                    </Text>
                     {s.lateMinorDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.lateMajorDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: colors.gray[700] }}>
-                    <Text style={{ fontWeight: '700', color: colors.orange[600] }}>⚠ Опозд. &gt;1ч ({s.lateMajor}): </Text>
+                    <Text style={{ fontWeight: '700', color: colors.orange[600] }}>
+                      ⚠ Опозд. &gt;1ч ({s.lateMajor}):{' '}
+                    </Text>
                     {s.lateMajorDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
@@ -1053,21 +1866,27 @@ function SettingsTab() {
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
-    queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await usersApi.getAll();
+      return res.data;
+    },
   });
 
   const { data: workModes } = useQuery<any[]>({
     queryKey: ['work-modes'],
-    queryFn: async () => { const res = await scheduleApi.getWorkModes(); return res.data; },
+    queryFn: async () => {
+      const res = await scheduleApi.getWorkModes();
+      return res.data;
+    },
   });
 
-  const activeUsers = useMemo(() => (usersData || []).filter(u => u.isActive && (u.role === 'master' || u.role === 'admin')), [usersData]);
+  const activeUsers = useMemo(() => (usersData || []).filter((u) => u.isActive), [usersData]);
 
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
-    const user = activeUsers.find(u => u.id === userId);
+    const user = activeUsers.find((u) => u.id === userId);
     if (!user) return;
     const current: number[] = (user as any).daysOff || [];
-    const newDaysOff = current.includes(dayOfWeek) ? current.filter(d => d !== dayOfWeek) : [...current, dayOfWeek];
+    const newDaysOff = current.includes(dayOfWeek) ? current.filter((d) => d !== dayOfWeek) : [...current, dayOfWeek];
     try {
       await usersApi.update(userId, { daysOff: newDaysOff } as any);
       queryClient.invalidateQueries({ queryKey: ['users'] });
@@ -1084,8 +1903,10 @@ function SettingsTab() {
   const [showApplyFromPicker, setShowApplyFromPicker] = useState(false);
   const [showApplyToPicker, setShowApplyToPicker] = useState(false);
 
-  const formatPickerDate = (d: Date) => `${d.getDate().toString().padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
-  const toISODate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const formatPickerDate = (d: Date) =>
+    `${d.getDate().toString().padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+  const toISODate = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
   const applyMutation = useMutation({
     mutationFn: (data: any) => scheduleApi.applyWorkMode(data),
@@ -1118,11 +1939,7 @@ function SettingsTab() {
           onPress={() => setSettingsTab('modes')}
           activeOpacity={0.7}
         >
-          <Ionicons
-            name="time-outline"
-            size={15}
-            color={settingsTab === 'modes' ? colors.white : colors.gray[500]}
-          />
+          <Ionicons name="time-outline" size={15} color={settingsTab === 'modes' ? colors.white : colors.gray[500]} />
           <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>Режимы</Text>
         </TouchableOpacity>
       </View>
@@ -1166,11 +1983,15 @@ function SettingsTab() {
                           onPress={() => toggleDayOff(u.id, dow)}
                           activeOpacity={0.6}
                         >
-                          <Text style={[
-                            styles.dayBtnText,
-                            isOff && styles.dayBtnTextActive,
-                            !isOff && isWeekend && { color: colors.red[400] },
-                          ]}>{label}</Text>
+                          <Text
+                            style={[
+                              styles.dayBtnText,
+                              isOff && styles.dayBtnTextActive,
+                              !isOff && isWeekend && { color: colors.red[400] },
+                            ]}
+                          >
+                            {label}
+                          </Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -1205,7 +2026,13 @@ function SettingsTab() {
                 </View>
                 <TouchableOpacity
                   style={styles.modeApplyBtn}
-                  onPress={() => { setApplyModeId(mode.id); setApplyUserId(''); setApplyFrom(null); setApplyTo(null); setShowApplyModal(true); }}
+                  onPress={() => {
+                    setApplyModeId(mode.id);
+                    setApplyUserId('');
+                    setApplyFrom(null);
+                    setApplyTo(null);
+                    setShowApplyModal(true);
+                  }}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.modeApplyText}>Применить</Text>
@@ -1231,13 +2058,26 @@ function SettingsTab() {
           <Text style={styles.formLabel}>Сотрудник</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-              <TouchableOpacity style={[styles.userChip, !applyUserId && styles.userChipActive]} onPress={() => setApplyUserId('')}>
-                <Ionicons name="people-outline" size={12} color={!applyUserId ? colors.primary[700] : colors.gray[500]} />
+              <TouchableOpacity
+                style={[styles.userChip, !applyUserId && styles.userChipActive]}
+                onPress={() => setApplyUserId('')}
+              >
+                <Ionicons
+                  name="people-outline"
+                  size={12}
+                  color={!applyUserId ? colors.primary[700] : colors.gray[500]}
+                />
                 <Text style={[styles.userChipText, !applyUserId && styles.userChipTextActive]}>Все</Text>
               </TouchableOpacity>
-              {activeUsers.map(u => (
-                <TouchableOpacity key={u.id} style={[styles.userChip, applyUserId === u.id && styles.userChipActive]} onPress={() => setApplyUserId(u.id)}>
-                  <Text style={[styles.userChipText, applyUserId === u.id && styles.userChipTextActive]}>{u.fullName?.split(' ')[0]}</Text>
+              {activeUsers.map((u) => (
+                <TouchableOpacity
+                  key={u.id}
+                  style={[styles.userChip, applyUserId === u.id && styles.userChipActive]}
+                  onPress={() => setApplyUserId(u.id)}
+                >
+                  <Text style={[styles.userChipText, applyUserId === u.id && styles.userChipTextActive]}>
+                    {u.fullName?.split(' ')[0]}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -1267,14 +2107,20 @@ function SettingsTab() {
           visible={showApplyFromPicker}
           value={applyFrom || new Date()}
           mode="date"
-          onConfirm={(d) => { setShowApplyFromPicker(false); setApplyFrom(d); }}
+          onConfirm={(d) => {
+            setShowApplyFromPicker(false);
+            setApplyFrom(d);
+          }}
           onCancel={() => setShowApplyFromPicker(false)}
         />
         <DateTimePickerModal
           visible={showApplyToPicker}
           value={applyTo || new Date()}
           mode="date"
-          onConfirm={(d) => { setShowApplyToPicker(false); setApplyTo(d); }}
+          onConfirm={(d) => {
+            setShowApplyToPicker(false);
+            setApplyTo(d);
+          }}
           onCancel={() => setShowApplyToPicker(false)}
         />
         <View style={styles.formActions}>
@@ -1284,12 +2130,22 @@ function SettingsTab() {
           <TouchableOpacity
             style={styles.applyBtnMain}
             onPress={() => {
-              if (!applyFrom || !applyTo) { Alert.alert('Ошибка', 'Укажите даты'); return; }
-              applyMutation.mutate({ workModeId: applyModeId, userId: applyUserId || undefined, dateFrom: toISODate(applyFrom), dateTo: toISODate(applyTo) });
+              if (!applyFrom || !applyTo) {
+                Alert.alert('Ошибка', 'Укажите даты');
+                return;
+              }
+              applyMutation.mutate({
+                workModeId: applyModeId,
+                userId: applyUserId || undefined,
+                dateFrom: toISODate(applyFrom),
+                dateTo: toISODate(applyTo),
+              });
             }}
             activeOpacity={0.7}
           >
-            {applyMutation.isPending ? <ActivityIndicator color={colors.white} size="small" /> : (
+            {applyMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
               <>
                 <Ionicons name="checkmark" size={16} color={colors.white} />
                 <Text style={styles.applyBtnText}>Применить</Text>
@@ -1308,79 +2164,145 @@ export default function ScheduleScreen() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [tab, setTab] = useState<TabType>('grid');
+  // Single source of truth for the schedule month — provided to GridTab
+  // and ShiftsTab via context, manipulated from the header trailing slot.
+  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const monthCtxValue = useMemo(() => ({ currentMonth, setCurrentMonth }), [currentMonth]);
+  const monthYear = currentMonth.getFullYear();
+  const monthIndex = currentMonth.getMonth();
 
-  const tabConfig: { key: TabType; label: string; icon: keyof typeof Ionicons.glyphMap; activeIcon: keyof typeof Ionicons.glyphMap }[] = [
+  const tabConfig: {
+    key: TabType;
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    activeIcon: keyof typeof Ionicons.glyphMap;
+  }[] = [
     { key: 'grid', label: 'График', icon: 'grid-outline', activeIcon: 'grid' },
     { key: 'today', label: 'Сегодня', icon: 'today-outline', activeIcon: 'today' },
     { key: 'shifts', label: 'Смены', icon: 'stats-chart-outline', activeIcon: 'stats-chart' },
     { key: 'rating', label: 'Рейтинг', icon: 'trophy-outline', activeIcon: 'trophy' },
-    ...(isAdmin ? [{ key: 'settings' as TabType, label: 'Настройки', icon: 'settings-outline' as keyof typeof Ionicons.glyphMap, activeIcon: 'settings' as keyof typeof Ionicons.glyphMap }] : []),
+    ...(isAdmin
+      ? [
+          {
+            key: 'settings' as TabType,
+            label: 'Настройки',
+            icon: 'settings-outline' as keyof typeof Ionicons.glyphMap,
+            activeIcon: 'settings' as keyof typeof Ionicons.glyphMap,
+          },
+        ]
+      : []),
   ];
 
-  return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <LinearGradient
-        colors={[colors.white, colors.gray[50]] as [string, string]}
-        style={styles.header}
+  // Compact month stepper inside the header trailing slot. Tap on the
+  // month label resets to today; arrows step ± one month with a haptic.
+  // Hidden on Today tab (which is single-day), Rating tab (year-wide),
+  // and Settings (no time scope).
+  const showMonthStepper = tab === 'grid' || tab === 'shifts';
+  const trailingMonthStepper = showMonthStepper ? (
+    <View style={styles.headerMonthStepper}>
+      <TouchableOpacity
+        onPress={() => {
+          haptic('select');
+          setCurrentMonth(new Date(monthYear, monthIndex - 1, 1));
+        }}
+        hitSlop={6}
+        style={styles.headerMonthBtn}
       >
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.primary[500], colors.primary[700]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="calendar" size={16} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Расписание</Text>
-        </View>
-        <View style={{ width: 40 }} />
-      </LinearGradient>
+        <Ionicons name="chevron-back" size={16} color={colors.gray[700]} />
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={() => {
+          haptic('tap');
+          setCurrentMonth(new Date());
+        }}
+        activeOpacity={0.7}
+      >
+        <Text style={styles.headerMonthText}>{MONTH_NAMES[monthIndex].slice(0, 3)}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        onPress={() => {
+          haptic('select');
+          setCurrentMonth(new Date(monthYear, monthIndex + 1, 1));
+        }}
+        hitSlop={6}
+        style={styles.headerMonthBtn}
+      >
+        <Ionicons name="chevron-forward" size={16} color={colors.gray[700]} />
+      </TouchableOpacity>
+    </View>
+  ) : undefined;
 
-      {/* Tab bar */}
-      <View style={styles.tabBar}>
-        <View style={styles.tabBarInner}>
-          {tabConfig.map(t => {
-            const isActive = tab === t.key;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                style={[styles.tabItem, isActive && styles.tabItemActive]}
-                onPress={() => setTab(t.key)}
-                activeOpacity={0.7}
-              >
-                {isActive ? (
-                  <LinearGradient
-                    colors={[colors.primary[500], colors.primary[700]] as [string, string]}
-                    style={styles.tabItemGradient}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                  >
-                    <Ionicons name={t.activeIcon} size={16} color={colors.white} />
-                    <Text style={styles.tabItemTextActive} numberOfLines={1} adjustsFontSizeToFit>{t.label}</Text>
-                  </LinearGradient>
-                ) : (
-                  <View style={styles.tabItemInner}>
-                    <Ionicons name={t.icon} size={16} color={colors.gray[400]} />
-                    <Text style={styles.tabItemText} numberOfLines={1} adjustsFontSizeToFit>{t.label}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          })}
+  return (
+    <ScheduleMonthCtx.Provider value={monthCtxValue}>
+      <View style={styles.safe}>
+        {/* Unified iOS header — same component used across screens. */}
+        <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
+
+        {/* Tab bar */}
+        <View style={styles.tabBar}>
+          <View style={styles.tabBarInner}>
+            {tabConfig.map((t) => {
+              const isActive = tab === t.key;
+              return (
+                <TouchableOpacity
+                  key={t.key}
+                  style={[styles.tabItem, isActive && styles.tabItemActive]}
+                  onPress={() => setTab(t.key)}
+                  activeOpacity={0.7}
+                >
+                  {isActive ? (
+                    <LinearGradient
+                      colors={[colors.primary[500], colors.primary[700]] as [string, string]}
+                      style={styles.tabItemGradient}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                    >
+                      <Ionicons name={t.activeIcon} size={16} color={colors.white} />
+                      <Text style={styles.tabItemTextActive} numberOfLines={1} adjustsFontSizeToFit>
+                        {t.label}
+                      </Text>
+                    </LinearGradient>
+                  ) : (
+                    <View style={styles.tabItemInner}>
+                      <Ionicons name={t.icon} size={16} color={colors.gray[400]} />
+                      <Text style={styles.tabItemText} numberOfLines={1} adjustsFontSizeToFit>
+                        {t.label}
+                      </Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
+
+        {tab === 'grid' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="grid" style={{ flex: 1 }}>
+            <GridTab />
+          </Reanimated.View>
+        )}
+        {tab === 'today' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="today" style={{ flex: 1 }}>
+            <TodayTab />
+          </Reanimated.View>
+        )}
+        {tab === 'shifts' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="shifts" style={{ flex: 1 }}>
+            <ShiftsTab />
+          </Reanimated.View>
+        )}
+        {tab === 'rating' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="rating" style={{ flex: 1 }}>
+            <RatingTab />
+          </Reanimated.View>
+        )}
+        {tab === 'settings' && (
+          <Reanimated.View entering={FadeIn.duration(200)} key="settings" style={{ flex: 1 }}>
+            <SettingsTab />
+          </Reanimated.View>
+        )}
       </View>
-
-      {tab === 'grid' && <Reanimated.View entering={FadeIn.duration(200)} key="grid"><GridTab /></Reanimated.View>}
-      {tab === 'today' && <Reanimated.View entering={FadeIn.duration(200)} key="today"><TodayTab /></Reanimated.View>}
-      {tab === 'shifts' && <Reanimated.View entering={FadeIn.duration(200)} key="shifts"><ShiftsTab /></Reanimated.View>}
-      {tab === 'rating' && <Reanimated.View entering={FadeIn.duration(200)} key="rating"><RatingTab /></Reanimated.View>}
-      {tab === 'settings' && <Reanimated.View entering={FadeIn.duration(200)} key="settings"><SettingsTab /></Reanimated.View>}
-    </SafeAreaView>
+    </ScheduleMonthCtx.Provider>
   );
 }
 
@@ -1485,10 +2407,12 @@ const styles = StyleSheet.create({
   },
 
   // ── Tab content ──
+  // paddingBottom reserves space for the floating iOS tab bar:
+  // 60 (bar) + 8 (padTop) + 34 (max home indicator) + 16 (buffer) ≈ 120
   tabContent: {
     padding: spacing[4],
     gap: spacing[3],
-    paddingBottom: spacing[8],
+    paddingBottom: 120,
   },
 
   // ── Empty state ──
@@ -1516,7 +2440,8 @@ const styles = StyleSheet.create({
     color: colors.gray[400],
   },
 
-  // ── Month Navigation ──
+  // ── Month Navigation (legacy in-tab — kept for typecheck of unused
+  //    style references; the actual stepper now lives in the header) ──
   monthNav: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1532,14 +2457,64 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Compact iOS-header-style month stepper for IosScreenHeader.trailing.
+  headerMonthStepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.gray[100],
+    borderRadius: 999,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  headerMonthBtn: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerMonthText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.gray[800],
+    minWidth: 36,
+    textAlign: 'center',
+  },
   monthCenter: {
     alignItems: 'center',
+    flex: 1,
   },
   monthTitle: {
     fontSize: fontSize['2xl'],
     fontWeight: fontWeight.bold,
     color: colors.gray[900],
     letterSpacing: -0.5,
+  },
+  bgRefreshIndicator: {
+    position: 'absolute',
+    right: -4,
+    top: 6,
+    transform: [{ scale: 0.7 }],
+    opacity: 0.7,
+  },
+  errorBanner: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[2],
+    backgroundColor: colors.red[50],
+    borderWidth: 1,
+    borderColor: colors.red[200],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginHorizontal: spacing[4],
+    marginBottom: spacing[2],
+  },
+  errorBannerText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.red[700],
+    fontWeight: '500' as const,
   },
   monthYear: {
     fontSize: fontSize.xs,
@@ -1572,7 +2547,7 @@ const styles = StyleSheet.create({
 
   // ── Sticky Column ──
   stickyColumn: {
-    width: 110,
+    width: 140,
     backgroundColor: colors.white,
     zIndex: 2,
     shadowColor: colors.black,
@@ -1614,7 +2589,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 1,
+  },
+  gridTodayHalo: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primary[300],
   },
   gridTodayNum: {
     fontSize: 11,
@@ -1679,26 +2660,33 @@ const styles = StyleSheet.create({
   gridCell: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRightWidth: 0.5,
+    borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: colors.gray[100],
-    borderBottomWidth: 0.5,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.gray[100],
   },
   gridCellToday: {
-    backgroundColor: colors.primary[50] + '50',
+    backgroundColor: colors.primary[50],
   },
+  // Status pill — slightly larger, continuous corners, pleasant shadow
+  // so the indicator reads as a soft island instead of a flat dot.
   gridDot: {
-    height: 22,
-    borderRadius: 11,
+    height: 26,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 1.5,
+    shadowOffset: { width: 0, height: 1 },
   },
   gridDotRound: {
-    width: 22,
+    width: 26,
+    borderRadius: 13,
   },
   gridDotLabel: {
-    minWidth: 36,
-    paddingHorizontal: 5,
+    minWidth: 38,
+    paddingHorizontal: 6,
   },
   gridCellEmpty: {
     width: 6,

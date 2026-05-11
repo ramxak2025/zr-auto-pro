@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator } from 'react-native';
 import CachedImage from '../components/CachedImage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { uploadsApi, authApi, subscriptionApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
@@ -39,27 +40,164 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
-  { label: 'Сотрудники', description: 'Карточки персонала, статус, рейтинги', screen: 'Employees', icon: 'people-circle-outline', iconBg: colors.cyan[50], iconColor: colors.cyan[600] },
-  { label: 'Корзина склада', description: 'Восстановление удалённых товаров', screen: 'Trash', permission: 'warehouse_access', icon: 'trash-outline', iconBg: colors.rose[50], iconColor: colors.rose[600] },
-  { label: 'Расписание', description: 'График работы и смены', screen: 'Schedule', featureKey: 'schedule_view', icon: 'calendar-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
-  { label: 'Клиенты', description: 'База клиентов', screen: 'Clients', permission: 'clients_view', featureKey: 'clients_view', icon: 'people-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
-  { label: 'Автомобили', description: 'Все автомобили клиентов', screen: 'Cars', permission: 'clients_view', featureKey: 'clients_view', icon: 'car-sport-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
-  { label: 'Услуги', description: 'Каталог услуг', screen: 'Services', featureKey: 'services_view', icon: 'build-outline', iconBg: colors.orange[50], iconColor: colors.orange[600] },
-  { label: 'Поставщики', description: 'Поставки и расчёты', screen: 'Suppliers', permission: 'suppliers_access', featureKey: 'suppliers_view', icon: 'truck-outline' as any, iconBg: colors.amber[50], iconColor: colors.amber[600] },
-  { label: 'Движение денег', description: 'Касса по дням и сотрудникам', screen: 'CashFlow', featureKey: 'cashflow_view', icon: 'swap-horizontal-outline', iconBg: colors.teal[50], iconColor: colors.teal[600] },
-  { label: 'Зарплата', description: 'Заработок мастеров', screen: 'Salary', featureKey: 'salary_view', icon: 'wallet-outline', iconBg: colors.green[50], iconColor: colors.green[600] },
-  { label: 'Расходы', description: 'Аренда, маркетинг и др.', screen: 'Expenses', roles: ['director', 'superadmin'], icon: 'trending-down-outline', iconBg: colors.rose[50], iconColor: colors.rose[600] },
-  { label: 'Отчёты', description: 'Финансовые отчёты', screen: 'Reports', permission: 'financial_reports', featureKey: 'reports_view', icon: 'bar-chart-outline', iconBg: colors.purple[50], iconColor: colors.purple[700] },
-  { label: 'Звонки', description: 'Журнал звонков и записи', screen: 'Calls', roles: ['director', 'superadmin'], icon: 'call-outline', iconBg: colors.blue[50], iconColor: colors.blue[600] },
-  { label: 'Имущество', description: 'Инструменты и оборудование', screen: 'Equipment', icon: 'cube-outline', iconBg: colors.emerald[50], iconColor: colors.emerald[700] },
-  { label: 'Маркетинг', description: 'Отзывы и рассылки', screen: 'Marketing', icon: 'megaphone-outline', iconBg: colors.violet[50], iconColor: colors.violet[600] },
-  { label: 'Пользователи', description: 'Управление доступом', screen: 'Users', permission: 'user_management', featureKey: 'users_manage', icon: 'shield-outline', iconBg: colors.indigo[50], iconColor: colors.indigo[600] },
-  { label: 'Настройки компании', description: 'Реквизиты и данные для чеков', screen: 'CompanySettings', roles: ['director', 'superadmin'], icon: 'business-outline', iconBg: colors.slate[100], iconColor: colors.slate[600] },
-  { label: 'Подписка', description: 'Тариф и оплата', screen: 'Subscription', roles: ['director', 'superadmin'], icon: 'card-outline', iconBg: colors.primary[50], iconColor: colors.primary[600] },
-  { label: 'Админ-панель', description: 'Управление тенантами и планами', screen: 'Admin', roles: ['superadmin'], icon: 'shield-checkmark-outline', iconBg: colors.red[50], iconColor: colors.red[600] },
+  {
+    label: 'Сотрудники',
+    description: 'Карточки персонала, статус, рейтинги',
+    screen: 'Employees',
+    icon: 'people-circle-outline',
+    iconBg: colors.cyan[50],
+    iconColor: colors.cyan[600],
+  },
+  {
+    label: 'Расписание',
+    description: 'График работы и смены',
+    screen: 'Schedule',
+    featureKey: 'schedule_view',
+    icon: 'calendar-outline',
+    iconBg: colors.indigo[50],
+    iconColor: colors.indigo[600],
+  },
+  {
+    label: 'Клиенты',
+    description: 'Клиенты и автомобили',
+    screen: 'Clients',
+    permission: 'clients_view',
+    featureKey: 'clients_view',
+    icon: 'people-outline',
+    iconBg: colors.blue[50],
+    iconColor: colors.blue[600],
+  },
+  {
+    label: 'Услуги',
+    description: 'Каталог услуг',
+    screen: 'Services',
+    featureKey: 'services_view',
+    icon: 'build-outline',
+    iconBg: colors.orange[50],
+    iconColor: colors.orange[600],
+  },
+  {
+    label: 'Поставщики',
+    description: 'Поставки и расчёты',
+    screen: 'Suppliers',
+    permission: 'suppliers_access',
+    featureKey: 'suppliers_view',
+    icon: 'truck-outline' as any,
+    iconBg: colors.amber[50],
+    iconColor: colors.amber[600],
+  },
+  {
+    label: 'Движение денег',
+    description: 'Касса по дням и сотрудникам',
+    screen: 'CashFlow',
+    featureKey: 'cashflow_view',
+    icon: 'swap-horizontal-outline',
+    iconBg: colors.teal[50],
+    iconColor: colors.teal[600],
+  },
+  {
+    label: 'Зарплата',
+    description: 'Заработок мастеров',
+    screen: 'Salary',
+    featureKey: 'salary_view',
+    icon: 'wallet-outline',
+    iconBg: colors.green[50],
+    iconColor: colors.green[600],
+  },
+  {
+    label: 'Расходы',
+    description: 'Аренда, маркетинг и др.',
+    screen: 'Expenses',
+    roles: ['director', 'superadmin'],
+    icon: 'trending-down-outline',
+    iconBg: colors.rose[50],
+    iconColor: colors.rose[600],
+  },
+  {
+    label: 'Отчёты',
+    description: 'Финансовые отчёты',
+    screen: 'Reports',
+    permission: 'financial_reports',
+    featureKey: 'reports_view',
+    icon: 'bar-chart-outline',
+    iconBg: colors.purple[50],
+    iconColor: colors.purple[700],
+  },
+  {
+    label: 'Звонки',
+    description: 'Журнал звонков и записи',
+    screen: 'Calls',
+    roles: ['director', 'superadmin'],
+    icon: 'call-outline',
+    iconBg: colors.blue[50],
+    iconColor: colors.blue[600],
+  },
+  {
+    label: 'Имущество',
+    description: 'Инструменты и оборудование',
+    screen: 'Equipment',
+    icon: 'cube-outline',
+    iconBg: colors.emerald[50],
+    iconColor: colors.emerald[700],
+  },
+  {
+    label: 'Маркетинг',
+    description: 'Отзывы и рассылки',
+    screen: 'Marketing',
+    icon: 'megaphone-outline',
+    iconBg: colors.violet[50],
+    iconColor: colors.violet[600],
+  },
+  {
+    label: 'Пользователи',
+    description: 'Управление доступом',
+    screen: 'Users',
+    permission: 'user_management',
+    featureKey: 'users_manage',
+    icon: 'shield-outline',
+    iconBg: colors.indigo[50],
+    iconColor: colors.indigo[600],
+  },
+  {
+    label: 'Настройки компании',
+    description: 'Реквизиты и данные для чеков',
+    screen: 'CompanySettings',
+    roles: ['director', 'superadmin'],
+    icon: 'business-outline',
+    iconBg: colors.slate[100],
+    iconColor: colors.slate[600],
+  },
+  {
+    label: 'Подписка',
+    description: 'Тариф и оплата',
+    screen: 'Subscription',
+    roles: ['director', 'superadmin'],
+    icon: 'card-outline',
+    iconBg: colors.primary[50],
+    iconColor: colors.primary[600],
+  },
+  {
+    label: 'Админ-панель',
+    description: 'Управление тенантами и планами',
+    screen: 'Admin',
+    roles: ['superadmin'],
+    icon: 'shield-checkmark-outline',
+    iconBg: colors.red[50],
+    iconColor: colors.red[600],
+  },
 ];
 
-function AnimatedMenuItem({ item, index, onPress, locked }: { item: MenuItem; index: number; onPress: () => void; locked?: boolean }) {
+function AnimatedMenuItem({
+  item,
+  index,
+  onPress,
+  locked,
+}: {
+  item: MenuItem;
+  index: number;
+  onPress: () => void;
+  locked?: boolean;
+}) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(24)).current;
 
@@ -94,8 +232,10 @@ function AnimatedMenuItem({ item, index, onPress, locked }: { item: MenuItem; in
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
   const { user, logout, hasPermission, refreshUser } = useAuth();
+  const tabBarHeight = useTabBarHeight();
+  const insetsTop = useSafeAreaInsets().top;
   const [uploading, setUploading] = useState(false);
-  const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
+  const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
   const badgeColor = user?.role ? roleBadgeColors[user.role] || roleBadgeColors.master : roleBadgeColors.master;
   const avatarUrl = getImageUrl(user?.avatar);
@@ -103,11 +243,14 @@ export default function MoreScreen() {
   // Fetch subscription for feature gating
   const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
-    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    queryFn: async () => {
+      const res = await subscriptionApi.get();
+      return res.data;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
-  const currentPlan = sub?.plans?.find(p => p.name === sub?.planName);
+  const currentPlan = sub?.plans?.find((p) => p.name === sub?.planName);
   const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
   const isBypass = user?.role === 'superadmin';
 
@@ -116,7 +259,7 @@ export default function MoreScreen() {
     return !planFeatures.includes(featureKey);
   };
 
-  const filteredItems = menuItems.filter(item => {
+  const filteredItems = menuItems.filter((item) => {
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
     return true;
@@ -155,8 +298,13 @@ export default function MoreScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+    <View style={styles.safe}>
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingTop: insetsTop + spacing[3] }]}
+        contentInset={{ bottom: tabBarHeight }}
+        scrollIndicatorInsets={{ bottom: tabBarHeight }}
+        automaticallyAdjustContentInsets={false}
+      >
         {/* User card */}
         <Animated.View style={[styles.userCard, { opacity: cardFade, transform: [{ scale: cardScale }] }]}>
           <View style={styles.userRow}>
@@ -177,7 +325,9 @@ export default function MoreScreen() {
               </TouchableOpacity>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.userName} numberOfLines={1}>{user?.fullName || 'User'}</Text>
+              <Text style={styles.userName} numberOfLines={1}>
+                {user?.fullName || 'User'}
+              </Text>
               <View style={[styles.roleBadge, { backgroundColor: badgeColor.bg }]}>
                 <Text style={[styles.roleText, { color: badgeColor.text }]}>{roleLabel}</Text>
               </View>
@@ -206,13 +356,15 @@ export default function MoreScreen() {
           <Text style={styles.logoutText}>Выйти из аккаунта</Text>
         </TouchableOpacity>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },
+  // No paddingBottom — handled at the ScrollView level via contentInset
+  // so content flows visibly under the floating glass bar.
+  scrollContent: { padding: spacing[4], gap: spacing[4] },
   // User card
   userCard: {
     backgroundColor: colors.white,
@@ -229,24 +381,46 @@ const styles = StyleSheet.create({
   userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
   avatarWrap: { position: 'relative' },
   avatar: {
-    width: 56, height: 56, borderRadius: borderRadius['2xl'],
+    width: 56,
+    height: 56,
+    borderRadius: borderRadius['2xl'],
     backgroundColor: colors.primary[100],
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarImage: {
-    width: 56, height: 56, borderRadius: borderRadius['2xl'],
-    borderWidth: 2, borderColor: colors.gray[100],
+    width: 56,
+    height: 56,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 2,
+    borderColor: colors.gray[100],
   },
   avatarText: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[700] },
   avatarEditBtn: {
-    position: 'absolute', bottom: -4, right: -4,
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: colors.white, borderWidth: 2, borderColor: colors.gray[200],
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: colors.black, shadowOpacity: 0.08, shadowRadius: 2, elevation: 2,
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.gray[200],
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
   },
   userName: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  roleBadge: { alignSelf: 'flex-start', paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full, marginTop: 4 },
+  roleBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+    marginTop: 4,
+  },
   roleText: { fontSize: 11, fontWeight: fontWeight.semibold },
   // Menu
   menuCard: {
@@ -274,9 +448,11 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing[4],
   },
   menuIcon: {
-    width: 40, height: 40,
+    width: 40,
+    height: 40,
     borderRadius: borderRadius.xl,
-    alignItems: 'center', justifyContent: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   menuTextWrap: { flex: 1, minWidth: 0 },
   menuLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },

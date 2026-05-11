@@ -1,0 +1,212 @@
+/**
+ * Persistent cache for TanStack Query.
+ *
+ * Stores selected query keys to AsyncStorage so a cold-start app sees
+ * the previous successful response instantly while a fresh fetch runs in
+ * the background. Eliminates the "0 товаров" flash on screens that just
+ * opened — `data` is already in `queryClient` before the screen mounts.
+ *
+ * Keys are matched by their FIRST element (which is always a string in our
+ * codebase — e.g. ['products', { search, limit }]), so we don't have to
+ * enumerate every variant of nested params.
+ *
+ * Why a custom helper instead of @tanstack/query-async-storage-persister?
+ *   - smaller surface area, easier to debug
+ *   - we only persist 5 keys, full-cache persistence would be wasteful
+ *   - no extra dependency
+ */
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { QueryClient, QueryKey } from '@tanstack/react-query';
+
+const STORAGE_PREFIX = 'rqcache:v1:';
+
+/**
+ * Query keys whose results we persist.
+ * Add a new entry only if the data is:
+ *   - relatively static (changes < hourly)
+ *   - useful to show stale to the user on cold start
+ *   - not user-input-volatile (e.g. don't persist `['clients-plate', search]`)
+ */
+// Whitelist of query keys we cache to AsyncStorage. Each entry matches the
+// FIRST element of a useQuery key (e.g. ['suppliers', { search: '' }] matches
+// 'suppliers'). Update this list whenever a new screen needs instant cold-start.
+const PERSISTED_KEYS = [
+  // Warehouse + product picker
+  'products',
+  'all-products-check',
+  'warehouse-categories',
+  // Reference data
+  'all-services',
+  'all-users',
+  'users',
+  // Suppliers / clients / cars / equipment
+  'suppliers',
+  'clients',
+  'cars',
+  // Equipment (uses 'eq-*' keys)
+  'eq-summary',
+  'eq-storage-list',
+  'eq-user',
+  // Schedule + today
+  'schedule',
+  'schedule-today',
+  // Dashboard cards
+  'dashboard-chart',
+  'employee-ranking',
+  'marketing-dashboard',
+  'shifts',
+  'salary',
+  // Calls + services list
+  'calls-summary',
+  // Dashboard widgets (TodayQuickStats / LowStockWidget) — small payloads,
+  // cold-start instant.
+  'checks-dashboard',
+  'low-stock',
+  'services-list',
+  'service-categories',
+  // ── Journal (Чеки) ─────────────────────────────────────────────
+  // 'checks' is a paginated history; the first-page default-filter
+  // snapshot is the slowest to render, so we cache the whole first
+  // segment. SWR replaces it within ~150 ms after mount.
+  'checks',
+  // useInfiniteQuery key for the Journal — cold-start instant: we
+  // render the previously seen pages immediately, then SWR refetches
+  // page 1 in the background. Older pages stay cached too, so coming
+  // back from a CheckDetail doesn't drop scroll position.
+  'checks-infinite',
+  // Filter helpers used by ChecksScreen — small list, mostly static.
+  'users-for-filter',
+  // Warehouse-document tabs inside ChecksScreen.
+  'stock-movements',
+  'supplier-deliveries',
+  // ── Other heavy lists (cold-start instant) ─────────────────────
+  // Services screen uses ['services', { search, page, limit }].
+  'services',
+  // EmployeesScreen uses ['users-all'].
+  'users-all',
+  // CashFlowScreen uses ['masters'] for its filter dropdown.
+  'masters',
+  // CashFlowScreen + ReportsScreen finance reads.
+  'cashflow',
+  'financial-report',
+] as const;
+
+type PersistedKey = (typeof PERSISTED_KEYS)[number];
+
+interface StoredEntry {
+  queryKey: QueryKey;
+  data: unknown;
+  storedAt: number;
+}
+
+/**
+ * Max age of a persisted entry — older than this is ignored.
+ *
+ * 7 days: most autosalon data (suppliers, clients, products) doesn't churn
+ * faster than that; users opening the app after a weekend should still see
+ * something instead of a blank screen. Stale data is replaced by a fresh
+ * fetch in the background via TanStack Query's stale-while-revalidate.
+ */
+const MAX_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function firstKey(qk: QueryKey): string | null {
+  if (!Array.isArray(qk) || qk.length === 0) return null;
+  const f = qk[0];
+  return typeof f === 'string' ? f : null;
+}
+
+function isPersisted(key: string | null): key is PersistedKey {
+  return !!key && (PERSISTED_KEYS as readonly string[]).includes(key);
+}
+
+function storageKey(qk: QueryKey): string {
+  // Stringify the full query key so different params (e.g. month in
+  // ['schedule', '2026-05-01', '2026-05-31']) get separate slots.
+  return STORAGE_PREFIX + JSON.stringify(qk);
+}
+
+/**
+ * Hydrate the QueryClient from AsyncStorage.
+ *
+ * Call once on app start, BEFORE the first render that uses `useQuery`.
+ * Failures are silent — the worst case is a cold-start without cache.
+ *
+ * SaaS-isolation safeguard: if no auth token is present, we DO NOT hydrate
+ * cached data — that data belongs to a previous logged-in user. We also
+ * proactively delete all our-prefixed keys in that case so a half-completed
+ * logout (process killed mid-clear) can't leak data to the next user that
+ * logs in on the same device.
+ */
+export async function hydrateCache(qc: QueryClient): Promise<void> {
+  try {
+    // Tenant isolation gate. Read the auth token first; if it's missing,
+    // the previous session is over and no persisted entries should be
+    // resurrected into the QueryClient. We also flush any orphan entries
+    // so the next login starts clean.
+    const token = await AsyncStorage.getItem('token');
+    if (!token) {
+      const orphanKeys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(STORAGE_PREFIX));
+      if (orphanKeys.length > 0) {
+        await AsyncStorage.multiRemove(orphanKeys).catch(() => {});
+      }
+      return;
+    }
+    const allKeys = await AsyncStorage.getAllKeys();
+    const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
+    if (ourKeys.length === 0) return;
+    const pairs = await AsyncStorage.multiGet(ourKeys);
+    const now = Date.now();
+    for (const [, raw] of pairs) {
+      if (!raw) continue;
+      try {
+        const parsed: StoredEntry = JSON.parse(raw);
+        if (!parsed?.queryKey || parsed.data === undefined) continue;
+        if (now - (parsed.storedAt ?? 0) > MAX_STALE_MS) continue;
+        const f = firstKey(parsed.queryKey);
+        if (!isPersisted(f)) continue;
+        qc.setQueryData(parsed.queryKey, parsed.data);
+      } catch {
+        // skip corrupted entry
+      }
+    }
+  } catch {
+    // AsyncStorage unavailable — proceed without hydration
+  }
+}
+
+/**
+ * Subscribe to QueryClient cache updates and persist successful responses
+ * for whitelisted keys.
+ *
+ * Returns an unsubscribe function — keep the reference alive for the
+ * lifetime of the app.
+ */
+export function attachPersistence(qc: QueryClient): () => void {
+  const unsubscribe = qc.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated') return;
+    const query = event.query;
+    if (query.state.status !== 'success') return;
+    const f = firstKey(query.queryKey);
+    if (!isPersisted(f)) return;
+    if (query.state.data === undefined) return;
+
+    const entry: StoredEntry = {
+      queryKey: query.queryKey,
+      data: query.state.data,
+      storedAt: Date.now(),
+    };
+    AsyncStorage.setItem(storageKey(query.queryKey), JSON.stringify(entry)).catch(() => {});
+  });
+  return unsubscribe;
+}
+
+/** Clear all persisted cache — call from logout. */
+export async function clearPersistentCache(): Promise<void> {
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
+    if (ourKeys.length > 0) await AsyncStorage.multiRemove(ourKeys);
+  } catch {
+    // best-effort
+  }
+}

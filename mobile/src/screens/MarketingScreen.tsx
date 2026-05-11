@@ -1,17 +1,23 @@
 import React, { useState } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  RefreshControl, ActivityIndicator, Alert,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  RefreshControl,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import { marketingApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import AnimatedCard from '../components/AnimatedCard';
+import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import { UserRole } from '../../../shared/types';
 
@@ -26,7 +32,7 @@ function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
         name={i <= Math.round(rating) ? 'star' : 'star-outline'}
         size={size}
         color={i <= Math.round(rating) ? colors.amber[200] : colors.gray[300]}
-      />
+      />,
     );
   }
   return <View style={{ flexDirection: 'row', gap: 1 }}>{stars}</View>;
@@ -36,7 +42,10 @@ function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
 function DashboardTab() {
   const { data, isLoading } = useQuery({
     queryKey: ['marketing-dashboard'],
-    queryFn: async () => { const res = await marketingApi.getDashboard(); return res.data; },
+    queryFn: async () => {
+      const res = await marketingApi.getDashboard();
+      return res.data;
+    },
     staleTime: 60_000,
   });
 
@@ -44,10 +53,34 @@ function DashboardTab() {
   if (!data) return <Text style={styles.emptyText}>Нет данных</Text>;
 
   const stats = [
-    { label: 'Всего отзывов', value: data.totalReviews || 0, icon: 'chatbubbles-outline' as const, color: colors.primary[600], bg: colors.primary[50] },
-    { label: 'Средний рейтинг', value: data.avgRating ? data.avgRating.toFixed(1) : '—', icon: 'star' as const, color: colors.amber[600], bg: colors.amber[50] },
-    { label: 'Токенов отправлено', value: data.tokensSent || 0, icon: 'send-outline' as const, color: colors.teal[600], bg: colors.teal[50] },
-    { label: 'Отклик', value: data.responseRate ? `${Math.round(data.responseRate)}%` : '—', icon: 'trending-up-outline' as const, color: colors.green[600], bg: colors.green[50] },
+    {
+      label: 'Всего отзывов',
+      value: data.totalReviews || 0,
+      icon: 'chatbubbles-outline' as const,
+      color: colors.primary[600],
+      bg: colors.primary[50],
+    },
+    {
+      label: 'Средний рейтинг',
+      value: data.avgRating ? data.avgRating.toFixed(1) : '—',
+      icon: 'star' as const,
+      color: colors.amber[600],
+      bg: colors.amber[50],
+    },
+    {
+      label: 'Токенов отправлено',
+      value: data.tokensSent || 0,
+      icon: 'send-outline' as const,
+      color: colors.teal[600],
+      bg: colors.teal[50],
+    },
+    {
+      label: 'Отклик',
+      value: data.responseRate ? `${Math.round(data.responseRate)}%` : '—',
+      icon: 'trending-up-outline' as const,
+      color: colors.green[600],
+      bg: colors.green[50],
+    },
   ];
 
   return (
@@ -70,10 +103,30 @@ function DashboardTab() {
         <AnimatedCard index={4} style={styles.card}>
           <Text style={styles.sectionTitle}>Воронка отзывов</Text>
           <View style={{ gap: spacing[3] }}>
-            <FunnelBar label="Ссылки отправлены" value={data.tokensSent || 0} max={data.tokensSent || 1} color={colors.primary[500]} />
-            <FunnelBar label="Получен отклик" value={data.totalReviews || 0} max={data.tokensSent || 1} color={colors.blue[600]} />
-            <FunnelBar label="Позитивные (4-5)" value={data.positiveReviews || 0} max={data.tokensSent || 1} color={colors.green[500]} />
-            <FunnelBar label="Перешли на площадку" value={data.publicRedirects || 0} max={data.tokensSent || 1} color={colors.emerald[700]} />
+            <FunnelBar
+              label="Ссылки отправлены"
+              value={data.tokensSent || 0}
+              max={data.tokensSent || 1}
+              color={colors.primary[500]}
+            />
+            <FunnelBar
+              label="Получен отклик"
+              value={data.totalReviews || 0}
+              max={data.tokensSent || 1}
+              color={colors.blue[600]}
+            />
+            <FunnelBar
+              label="Позитивные (4-5)"
+              value={data.positiveReviews || 0}
+              max={data.tokensSent || 1}
+              color={colors.green[500]}
+            />
+            <FunnelBar
+              label="Перешли на площадку"
+              value={data.publicRedirects || 0}
+              max={data.tokensSent || 1}
+              color={colors.emerald[700]}
+            />
           </View>
         </AnimatedCard>
       )}
@@ -89,17 +142,15 @@ function DashboardTab() {
             <View key={emp.employeeId || idx} style={[styles.empRow, idx > 0 && styles.empRowBorder]}>
               <View style={styles.empRankBadge}>
                 {idx < 3 ? (
-                  <Ionicons
-                    name="trophy"
-                    size={16}
-                    color={idx === 0 ? '#FFD700' : idx === 1 ? '#C0C0C0' : '#CD7F32'}
-                  />
+                  <Ionicons name="trophy" size={16} color={idx === 0 ? '#FFD700' : idx === 1 ? '#C0C0C0' : '#CD7F32'} />
                 ) : (
                   <Text style={styles.empRankText}>{idx + 1}</Text>
                 )}
               </View>
               <View style={styles.empInfo}>
-                <Text style={styles.empName} numberOfLines={1}>{emp.employeeName}</Text>
+                <Text style={styles.empName} numberOfLines={1}>
+                  {emp.employeeName}
+                </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                   <StarRating rating={emp.averageRating || 0} size={12} />
                   <Text style={styles.empReviewCount}>{emp.reviewCount} отзывов</Text>
@@ -116,9 +167,7 @@ function DashboardTab() {
         <AnimatedCard index={6} style={[styles.card, styles.alertCard]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
             <Ionicons name="warning-outline" size={20} color={colors.red[600]} />
-            <Text style={styles.alertText}>
-              {data.unreadAlerts} непрочитанных оповещений
-            </Text>
+            <Text style={styles.alertText}>{data.unreadAlerts} непрочитанных оповещений</Text>
           </View>
         </AnimatedCard>
       )}
@@ -132,7 +181,9 @@ function FunnelBar({ label, value, max, color }: { label: string; value: number;
     <View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
         <Text style={styles.funnelLabel}>{label}</Text>
-        <Text style={styles.funnelValue}>{value} ({percent}%)</Text>
+        <Text style={styles.funnelValue}>
+          {value} ({percent}%)
+        </Text>
       </View>
       <View style={styles.funnelBarBg}>
         <View style={[styles.funnelBarFill, { width: `${percent}%`, backgroundColor: color }]} />
@@ -150,7 +201,10 @@ function ReviewsTab() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['marketing-reviews', month],
-    queryFn: async () => { const res = await marketingApi.getReviews({ month }); return res.data; },
+    queryFn: async () => {
+      const res = await marketingApi.getReviews({ month });
+      return res.data;
+    },
   });
 
   const reviews: any[] = Array.isArray(data) ? data : [];
@@ -163,7 +217,20 @@ function ReviewsTab() {
 
   const monthLabel = (() => {
     const [y, m] = month.split('-').map(Number);
-    const names = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+    const names = [
+      'Январь',
+      'Февраль',
+      'Март',
+      'Апрель',
+      'Май',
+      'Июнь',
+      'Июль',
+      'Август',
+      'Сентябрь',
+      'Октябрь',
+      'Ноябрь',
+      'Декабрь',
+    ];
     return `${names[m - 1]} ${y}`;
   })();
 
@@ -193,15 +260,11 @@ function ReviewsTab() {
             <View style={styles.reviewHeader}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.reviewClientName}>{review.clientName || 'Клиент'}</Text>
-                <Text style={styles.reviewDate}>
-                  {new Date(review.createdAt).toLocaleDateString('ru-RU')}
-                </Text>
+                <Text style={styles.reviewDate}>{new Date(review.createdAt).toLocaleDateString('ru-RU')}</Text>
               </View>
               <StarRating rating={review.rating} size={16} />
             </View>
-            {review.comment && (
-              <Text style={styles.reviewComment}>{review.comment}</Text>
-            )}
+            {review.comment && <Text style={styles.reviewComment}>{review.comment}</Text>}
             {review.employeeName && (
               <View style={styles.reviewEmployeeTag}>
                 <Ionicons name="person-outline" size={12} color={colors.gray[500]} />
@@ -220,13 +283,19 @@ function IntegrationsTab() {
   const queryClient = useQueryClient();
   const { data: integrations, isLoading } = useQuery({
     queryKey: ['marketing-integrations'],
-    queryFn: async () => { const res = await marketingApi.getIntegrations(); return res.data; },
+    queryFn: async () => {
+      const res = await marketingApi.getIntegrations();
+      return res.data;
+    },
     staleTime: 60_000,
   });
 
   const { data: platformLinks } = useQuery({
     queryKey: ['marketing-platform-links'],
-    queryFn: async () => { const res = await marketingApi.getPlatformLinks(); return res.data; },
+    queryFn: async () => {
+      const res = await marketingApi.getPlatformLinks();
+      return res.data;
+    },
     staleTime: 60_000,
   });
 
@@ -237,7 +306,11 @@ function IntegrationsTab() {
 
   const upsertIntegration = useMutation({
     mutationFn: (data: any) => marketingApi.upsertIntegration(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['marketing-integrations'] }); setEditProvider(null); setApiKey(''); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['marketing-integrations'] });
+      setEditProvider(null);
+      setApiKey('');
+    },
     onError: () => Alert.alert('Ошибка', 'Не удалось сохранить'),
   });
 
@@ -249,7 +322,11 @@ function IntegrationsTab() {
 
   const upsertLink = useMutation({
     mutationFn: (data: any) => marketingApi.upsertPlatformLink(data),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['marketing-platform-links'] }); setEditPlatform(null); setPlatformUrl(''); },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['marketing-platform-links'] });
+      setEditPlatform(null);
+      setPlatformUrl('');
+    },
     onError: () => Alert.alert('Ошибка', 'Не удалось сохранить'),
   });
 
@@ -262,10 +339,34 @@ function IntegrationsTab() {
   if (isLoading) return <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />;
 
   const providers = [
-    { key: 'sms_ru', name: 'SMS.RU', icon: 'chatbox-outline' as const, desc: 'SMS-рассылка', keyLabel: 'API ключ SMS.RU' },
-    { key: 'moi_zvonki', name: 'МоиЗвонки', icon: 'call-outline' as const, desc: 'SMS через МоиЗвонки', keyLabel: 'API ключ МоиЗвонки' },
-    { key: 'whatsapp', name: 'WhatsApp', icon: 'logo-whatsapp' as const, desc: 'Сообщения WhatsApp', keyLabel: 'Token WhatsApp API' },
-    { key: 'email', name: 'Email', icon: 'mail-outline' as const, desc: 'Почтовые рассылки', keyLabel: 'SMTP ключ / API ключ' },
+    {
+      key: 'sms_ru',
+      name: 'SMS.RU',
+      icon: 'chatbox-outline' as const,
+      desc: 'SMS-рассылка',
+      keyLabel: 'API ключ SMS.RU',
+    },
+    {
+      key: 'moi_zvonki',
+      name: 'МоиЗвонки',
+      icon: 'call-outline' as const,
+      desc: 'SMS через МоиЗвонки',
+      keyLabel: 'API ключ МоиЗвонки',
+    },
+    {
+      key: 'whatsapp',
+      name: 'WhatsApp',
+      icon: 'logo-whatsapp' as const,
+      desc: 'Сообщения WhatsApp',
+      keyLabel: 'Token WhatsApp API',
+    },
+    {
+      key: 'email',
+      name: 'Email',
+      icon: 'mail-outline' as const,
+      desc: 'Почтовые рассылки',
+      keyLabel: 'SMTP ключ / API ключ',
+    },
   ];
 
   const platforms = [
@@ -289,8 +390,8 @@ function IntegrationsTab() {
     setEditPlatform(platformKey);
   };
 
-  const editProviderInfo = providers.find(p => p.key === editProvider);
-  const editPlatformInfo = platforms.find(p => p.key === editPlatform);
+  const editProviderInfo = providers.find((p) => p.key === editProvider);
+  const editPlatformInfo = platforms.find((p) => p.key === editPlatform);
 
   return (
     <View style={{ gap: spacing[4] }}>
@@ -303,7 +404,12 @@ function IntegrationsTab() {
         {providers.map((p, idx) => {
           const active = activeIntegrations.find((i: any) => i.provider === p.key);
           return (
-            <TouchableOpacity key={p.key} style={[styles.integrationRow, idx > 0 && styles.integrationBorder]} onPress={() => openProviderEdit(p.key)} activeOpacity={0.7}>
+            <TouchableOpacity
+              key={p.key}
+              style={[styles.integrationRow, idx > 0 && styles.integrationBorder]}
+              onPress={() => openProviderEdit(p.key)}
+              activeOpacity={0.7}
+            >
               <View style={[styles.integrationIcon, { backgroundColor: active ? colors.green[50] : colors.gray[50] }]}>
                 <Ionicons name={p.icon} size={18} color={active ? colors.green[600] : colors.gray[400]} />
               </View>
@@ -333,13 +439,22 @@ function IntegrationsTab() {
         {platforms.map((p, idx) => {
           const link = activeLinks.find((l: any) => l.platform === p.key);
           return (
-            <TouchableOpacity key={p.key} style={[styles.integrationRow, idx > 0 && styles.integrationBorder]} onPress={() => openPlatformEdit(p.key)} activeOpacity={0.7}>
+            <TouchableOpacity
+              key={p.key}
+              style={[styles.integrationRow, idx > 0 && styles.integrationBorder]}
+              onPress={() => openPlatformEdit(p.key)}
+              activeOpacity={0.7}
+            >
               <View style={[styles.integrationIcon, { backgroundColor: link ? colors.blue[50] : colors.gray[50] }]}>
                 <Ionicons name={p.icon} size={18} color={link ? colors.blue[600] : colors.gray[400]} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.integrationName}>{p.name}</Text>
-                {link && <Text style={styles.integrationDesc} numberOfLines={1}>{link.url}</Text>}
+                {link && (
+                  <Text style={styles.integrationDesc} numberOfLines={1}>
+                    {link.url}
+                  </Text>
+                )}
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                 <View style={[styles.statusBadge, link ? styles.statusActive : styles.statusInactive]}>
@@ -355,7 +470,11 @@ function IntegrationsTab() {
       </AnimatedCard>
 
       {/* Integration Edit Modal */}
-      <Modal visible={!!editProvider} onClose={() => setEditProvider(null)} title={editProviderInfo?.name || 'Интеграция'}>
+      <Modal
+        visible={!!editProvider}
+        onClose={() => setEditProvider(null)}
+        title={editProviderInfo?.name || 'Интеграция'}
+      >
         <View style={styles.formField}>
           <Text style={styles.formLabel}>{editProviderInfo?.keyLabel || 'API ключ'}</Text>
           <TextInput
@@ -374,7 +493,10 @@ function IntegrationsTab() {
               style={styles.deleteBtn}
               onPress={() => {
                 const existing = activeIntegrations.find((i: any) => i.provider === editProvider);
-                if (existing) { removeIntegration.mutate(existing.id); setEditProvider(null); }
+                if (existing) {
+                  removeIntegration.mutate(existing.id);
+                  setEditProvider(null);
+                }
               }}
             >
               <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
@@ -387,17 +509,28 @@ function IntegrationsTab() {
           <TouchableOpacity
             style={styles.saveBtn}
             onPress={() => {
-              if (!apiKey.trim()) { Alert.alert('Ошибка', 'Введите API ключ'); return; }
+              if (!apiKey.trim()) {
+                Alert.alert('Ошибка', 'Введите API ключ');
+                return;
+              }
               upsertIntegration.mutate({ provider: editProvider, apiKey: apiKey.trim() });
             }}
           >
-            {upsertIntegration.isPending ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.saveBtnText}>Сохранить</Text>}
+            {upsertIntegration.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.saveBtnText}>Сохранить</Text>
+            )}
           </TouchableOpacity>
         </View>
       </Modal>
 
       {/* Platform Link Edit Modal */}
-      <Modal visible={!!editPlatform} onClose={() => setEditPlatform(null)} title={editPlatformInfo?.name || 'Площадка'}>
+      <Modal
+        visible={!!editPlatform}
+        onClose={() => setEditPlatform(null)}
+        title={editPlatformInfo?.name || 'Площадка'}
+      >
         <View style={styles.formField}>
           <Text style={styles.formLabel}>Ссылка на страницу отзывов</Text>
           <TextInput
@@ -417,7 +550,10 @@ function IntegrationsTab() {
               style={styles.deleteBtn}
               onPress={() => {
                 const existing = activeLinks.find((l: any) => l.platform === editPlatform);
-                if (existing) { removeLink.mutate(existing.id); setEditPlatform(null); }
+                if (existing) {
+                  removeLink.mutate(existing.id);
+                  setEditPlatform(null);
+                }
               }}
             >
               <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
@@ -430,11 +566,18 @@ function IntegrationsTab() {
           <TouchableOpacity
             style={styles.saveBtn}
             onPress={() => {
-              if (!platformUrl.trim()) { Alert.alert('Ошибка', 'Введите ссылку'); return; }
+              if (!platformUrl.trim()) {
+                Alert.alert('Ошибка', 'Введите ссылку');
+                return;
+              }
               upsertLink.mutate({ platform: editPlatform, url: platformUrl.trim() });
             }}
           >
-            {upsertLink.isPending ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.saveBtnText}>Сохранить</Text>}
+            {upsertLink.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.saveBtnText}>Сохранить</Text>
+            )}
           </TouchableOpacity>
         </View>
       </Modal>
@@ -447,7 +590,10 @@ function SettingsTab() {
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useQuery({
     queryKey: ['marketing-settings'],
-    queryFn: async () => { const res = await marketingApi.getSettings(); return res.data; },
+    queryFn: async () => {
+      const res = await marketingApi.getSettings();
+      return res.data;
+    },
     staleTime: 60_000,
   });
 
@@ -489,7 +635,11 @@ function SettingsTab() {
             <Text style={styles.settingsLabel}>Автоматическая отправка</Text>
             <Text style={styles.settingsHint}>Отправлять запросы на отзыв автоматически</Text>
           </View>
-          <Ionicons name={autoSend ? 'checkbox' : 'square-outline'} size={24} color={autoSend ? colors.green[600] : colors.gray[400]} />
+          <Ionicons
+            name={autoSend ? 'checkbox' : 'square-outline'}
+            size={24}
+            color={autoSend ? colors.green[600] : colors.gray[400]}
+          />
         </TouchableOpacity>
       </AnimatedCard>
 
@@ -498,11 +648,24 @@ function SettingsTab() {
         <Text style={styles.sectionTitle}>Время отправки</Text>
         <View style={styles.formField}>
           <Text style={styles.formLabel}>Время отправки (ЧЧ:ММ)</Text>
-          <TextInput value={sendTime} onChangeText={setSendTime} style={styles.formInput} placeholder="10:00" placeholderTextColor={colors.gray[400]} />
+          <TextInput
+            value={sendTime}
+            onChangeText={setSendTime}
+            style={styles.formInput}
+            placeholder="10:00"
+            placeholderTextColor={colors.gray[400]}
+          />
         </View>
         <View style={styles.formField}>
           <Text style={styles.formLabel}>Задержка после визита (часы)</Text>
-          <TextInput value={delayHours} onChangeText={setDelayHours} style={styles.formInput} keyboardType="numeric" placeholder="24" placeholderTextColor={colors.gray[400]} />
+          <TextInput
+            value={delayHours}
+            onChangeText={setDelayHours}
+            style={styles.formInput}
+            keyboardType="numeric"
+            placeholder="24"
+            placeholderTextColor={colors.gray[400]}
+          />
         </View>
       </AnimatedCard>
 
@@ -527,12 +690,14 @@ function SettingsTab() {
       {/* Save button */}
       <TouchableOpacity
         style={styles.settingsSaveBtn}
-        onPress={() => updateSettings.mutate({
-          sendTime,
-          delayHours: Number(delayHours) || 24,
-          autoSendEnabled: autoSend,
-          messageTemplate,
-        })}
+        onPress={() =>
+          updateSettings.mutate({
+            sendTime,
+            delayHours: Number(delayHours) || 24,
+            autoSendEnabled: autoSend,
+            messageTemplate,
+          })
+        }
       >
         {updateSettings.isPending ? (
           <ActivityIndicator color={colors.white} size="small" />
@@ -555,13 +720,15 @@ export default function MarketingScreen() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [refreshing, setRefreshing] = useState(false);
 
-  const isMaster = user?.role === UserRole.MASTER;
-  const isAdmin = user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN || (user?.role as string) === 'admin';
+  const isAdmin =
+    user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN || (user?.role as string) === 'admin';
   const tabs: { key: TabKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
     { key: 'dashboard', label: 'Обзор', icon: 'pie-chart-outline' },
     { key: 'reviews', label: 'Отзывы', icon: 'chatbubbles-outline' },
     { key: 'integrations', label: 'Каналы', icon: 'link-outline' },
-    ...(isAdmin ? [{ key: 'settings' as TabKey, label: 'Настройки', icon: 'settings-outline' as keyof typeof Ionicons.glyphMap }] : []),
+    ...(isAdmin
+      ? [{ key: 'settings' as TabKey, label: 'Настройки', icon: 'settings-outline' as keyof typeof Ionicons.glyphMap }]
+      : []),
   ];
 
   const onRefresh = async () => {
@@ -572,32 +739,12 @@ export default function MarketingScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <LinearGradient
-        colors={[colors.white, colors.gray[50]] as [string, string]}
-        style={styles.header}
-      >
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.orange[500], colors.orange[600]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="megaphone-outline" size={16} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.headerTitle}>Маркетинг</Text>
-        </View>
-        <View style={{ width: 40 }} />
-      </LinearGradient>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Маркетинг" onBack={() => navigation.goBack()} />
 
       {/* Tabs */}
       <View style={styles.tabBar}>
-        {tabs.map(tab => {
+        {tabs.map((tab) => {
           const active = activeTab === tab.key;
           return (
             <TouchableOpacity
@@ -610,9 +757,7 @@ export default function MarketingScreen() {
                 size={18}
                 color={active ? colors.primary[600] : colors.gray[400]}
               />
-              <Text style={[styles.tabText, active && styles.tabTextActive]}>
-                {tab.label}
-              </Text>
+              <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
             </TouchableOpacity>
           );
         })}
@@ -621,36 +766,36 @@ export default function MarketingScreen() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
       >
         {activeTab === 'dashboard' && <DashboardTab />}
         {activeTab === 'reviews' && <ReviewsTab />}
         {activeTab === 'integrations' && <IntegrationsTab />}
         {activeTab === 'settings' && <SettingsTab />}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderBottomWidth: 1, borderBottomColor: colors.gray[100],
-  },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center' },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
   // Tabs
   tabBar: {
-    flexDirection: 'row', backgroundColor: colors.white, paddingHorizontal: spacing[3],
-    paddingBottom: spacing[2], gap: spacing[1.5],
+    flexDirection: 'row',
+    backgroundColor: colors.white,
+    paddingHorizontal: spacing[3],
+    paddingBottom: spacing[2],
+    gap: spacing[1.5],
   },
   tab: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-    paddingVertical: spacing[2], borderRadius: borderRadius.xl, backgroundColor: colors.gray[50],
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.gray[50],
   },
   tabActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
   tabText: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[400], marginTop: 3 },
@@ -661,21 +806,51 @@ const styles = StyleSheet.create({
   // Stats
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
   statCard: {
-    width: '47%', backgroundColor: colors.white, borderRadius: borderRadius['2xl'],
-    borderWidth: 1, borderColor: colors.gray[100], padding: spacing[4],
-    shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
+    width: '47%',
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+    shadowColor: colors.black,
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  statIconBox: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[3] },
+  statIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[3],
+  },
   statValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, color: colors.gray[900] },
   statLabel: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
   // Card
   card: {
-    backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1,
-    borderColor: colors.gray[100], padding: spacing[4],
-    shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+    shadowColor: colors.black,
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900], marginBottom: spacing[3] },
-  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[3] },
+  sectionTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[900],
+    marginBottom: spacing[3],
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing[3],
+  },
   // Funnel
   funnelLabel: { fontSize: fontSize.xs, color: colors.gray[600] },
   funnelValue: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[900] },
@@ -684,7 +859,14 @@ const styles = StyleSheet.create({
   // Employee ratings
   empRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[3], gap: spacing[3] },
   empRowBorder: { borderTopWidth: 1, borderTopColor: colors.gray[50] },
-  empRankBadge: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.gray[50], alignItems: 'center', justifyContent: 'center' },
+  empRankBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.gray[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   empRankText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[400] },
   empInfo: { flex: 1, minWidth: 0 },
   empName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
@@ -699,23 +881,49 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: fontSize.sm, color: colors.gray[400] },
   // Reviews
   monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[4] },
-  monthBtn: { padding: spacing[2], borderRadius: borderRadius.full, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.gray[200] },
+  monthBtn: {
+    padding: spacing[2],
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+  },
   monthLabel: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   reviewCard: {
-    backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1,
-    borderColor: colors.gray[100], padding: spacing[4],
-    shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+    shadowColor: colors.black,
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
   },
   reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   reviewClientName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   reviewDate: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
   reviewComment: { fontSize: fontSize.sm, color: colors.gray[700], marginTop: spacing[3], lineHeight: 20 },
-  reviewEmployeeTag: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginTop: spacing[3], paddingTop: spacing[3], borderTopWidth: 1, borderTopColor: colors.gray[100] },
+  reviewEmployeeTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    marginTop: spacing[3],
+    paddingTop: spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[100],
+  },
   reviewEmployeeText: { fontSize: fontSize.xs, color: colors.gray[500] },
   // Integrations
   integrationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3] },
   integrationBorder: { borderTopWidth: 1, borderTopColor: colors.gray[50] },
-  integrationIcon: { width: 40, height: 40, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  integrationIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   integrationName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   integrationDesc: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 1 },
   statusBadge: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
@@ -726,20 +934,73 @@ const styles = StyleSheet.create({
   statusTextInactive: { color: colors.gray[500] },
   // Form
   formField: { marginBottom: spacing[3] },
-  formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], marginBottom: spacing[1.5] },
-  formInput: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.lg, paddingHorizontal: spacing[3.5], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
-  formActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingTop: spacing[3], borderTopWidth: 1, borderTopColor: colors.gray[100] },
-  cancelBtn: { paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, borderWidth: 1, borderColor: colors.gray[200] },
+  formLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[700],
+    marginBottom: spacing[1.5],
+  },
+  formInput: {
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+    color: colors.gray[900],
+  },
+  formActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingTop: spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[100],
+  },
+  cancelBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+  },
   cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  saveBtn: { paddingHorizontal: spacing[5], paddingVertical: spacing[2.5], borderRadius: borderRadius.lg, backgroundColor: colors.primary[600] },
+  saveBtn: {
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[600],
+  },
   saveBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
-  deleteBtn: { width: 40, height: 40, borderRadius: borderRadius.lg, backgroundColor: colors.red[50], alignItems: 'center', justifyContent: 'center' },
+  deleteBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.red[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   // Settings
   settingsToggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  settingsIconBox: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  settingsIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   settingsLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   settingsHint: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
   templateHint: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[1.5], fontStyle: 'italic' },
-  settingsSaveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.primary[600], borderRadius: borderRadius.xl, paddingVertical: spacing[3.5] },
+  settingsSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.primary[600],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3.5],
+  },
   settingsSaveBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
 });

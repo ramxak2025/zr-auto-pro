@@ -6,7 +6,14 @@
  *
  * A single semantic `name` maps to the correct glyph on each platform.
  * If you need a glyph that isn't mapped yet — add it to GLYPH_MAP below.
+ *
+ * Note: expo-symbols is installed via `npx expo install expo-symbols` on the
+ * developer's machine but isn't pinned in package.json (it's a recent SDK
+ * addition). The @ts-ignore below keeps the typecheck green when the dev
+ * environment hasn't run `expo install` yet — at runtime the module loads
+ * normally on iOS via Expo autolinking.
  */
+// @ts-ignore — optional native module (installed via `expo install expo-symbols`)
 import { SymbolView } from 'expo-symbols';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import React from 'react';
@@ -62,48 +69,51 @@ type Mapping = { ios: string; android: keyof typeof MaterialCommunityIcons.glyph
 // SF Symbols names: https://developer.apple.com/sf-symbols
 // MCI names: https://pictogrammers.com/library/mdi
 const GLYPH_MAP: Record<IconName, Mapping> = {
-  home:           { ios: 'house',                   android: 'home-outline' },
-  warehouse:      { ios: 'shippingbox',             android: 'package-variant-closed' },
-  receipt:        { ios: 'doc.text',                android: 'receipt-outline' as never },
-  journal:        { ios: 'text.bubble',             android: 'text-box-outline' },
-  menu:           { ios: 'square.grid.2x2',        android: 'view-grid-outline' },
-  search:         { ios: 'magnifyingglass',         android: 'magnify' },
-  close:          { ios: 'xmark',                   android: 'close' },
-  'chevron-right':{ ios: 'chevron.right',           android: 'chevron-right' },
-  'chevron-back': { ios: 'chevron.left',            android: 'chevron-left' },
-  'chevron-down': { ios: 'chevron.down',            android: 'chevron-down' },
-  add:            { ios: 'plus.circle',             android: 'plus-circle-outline' },
-  plus:           { ios: 'plus',                    android: 'plus' },
-  person:         { ios: 'person',                  android: 'account-outline' },
-  people:         { ios: 'person.2',                android: 'account-multiple-outline' },
-  car:            { ios: 'car',                     android: 'car-outline' },
-  build:          { ios: 'wrench.and.screwdriver',  android: 'wrench-outline' },
-  truck:          { ios: 'truck.box',               android: 'truck-outline' },
-  wallet:         { ios: 'wallet.pass',             android: 'wallet-outline' },
-  'arrow-swap':   { ios: 'arrow.left.arrow.right',  android: 'swap-horizontal' },
-  'chart-bar':    { ios: 'chart.bar',               android: 'chart-bar' },
-  'trend-up':     { ios: 'chart.line.uptrend.xyaxis', android: 'trending-up' },
-  'trend-down':   { ios: 'chart.line.downtrend.xyaxis', android: 'trending-down' },
-  calendar:       { ios: 'calendar',                android: 'calendar-outline' },
-  clock:          { ios: 'clock',                   android: 'clock-outline' },
-  shield:         { ios: 'shield',                  android: 'shield-outline' },
-  gear:           { ios: 'gearshape',               android: 'cog-outline' },
-  bell:           { ios: 'bell',                    android: 'bell-outline' },
-  phone:          { ios: 'phone',                   android: 'phone-outline' },
-  lock:           { ios: 'lock',                    android: 'lock-outline' },
-  eye:            { ios: 'eye',                     android: 'eye-outline' },
-  'eye-off':      { ios: 'eye.slash',               android: 'eye-off-outline' },
-  logout:         { ios: 'arrow.right.square',      android: 'logout' },
-  camera:         { ios: 'camera',                  android: 'camera-outline' },
-  star:           { ios: 'star',                    android: 'star-outline' },
-  check:          { ios: 'checkmark',               android: 'check' },
-  info:           { ios: 'info.circle',             android: 'information-outline' },
-  warning:        { ios: 'exclamationmark.triangle',android: 'alert-outline' },
-  business:       { ios: 'building.2',              android: 'office-building-outline' },
-  megaphone:      { ios: 'megaphone',               android: 'bullhorn-outline' },
-  cube:           { ios: 'cube',                    android: 'cube-outline' },
-  card:           { ios: 'creditcard',              android: 'credit-card-outline' },
-  'shield-check': { ios: 'checkmark.shield',        android: 'shield-check-outline' },
+  // Tab-bar icons use filled variants — modern iOS pattern (Apple Music,
+  // Wallet, Health all use filled tab icons). Outline-versions read as
+  // disabled/secondary on small bar slots.
+  home: { ios: 'house.fill', android: 'home' },
+  warehouse: { ios: 'shippingbox.fill', android: 'package-variant-closed' },
+  receipt: { ios: 'doc.text.fill', android: 'receipt' as never },
+  journal: { ios: 'text.bubble.fill', android: 'text-box' },
+  menu: { ios: 'square.grid.2x2.fill', android: 'view-grid' },
+  search: { ios: 'magnifyingglass', android: 'magnify' },
+  close: { ios: 'xmark', android: 'close' },
+  'chevron-right': { ios: 'chevron.right', android: 'chevron-right' },
+  'chevron-back': { ios: 'chevron.left', android: 'chevron-left' },
+  'chevron-down': { ios: 'chevron.down', android: 'chevron-down' },
+  add: { ios: 'plus.circle', android: 'plus-circle-outline' },
+  plus: { ios: 'plus', android: 'plus' },
+  person: { ios: 'person', android: 'account-outline' },
+  people: { ios: 'person.2', android: 'account-multiple-outline' },
+  car: { ios: 'car', android: 'car-outline' },
+  build: { ios: 'wrench.and.screwdriver', android: 'wrench-outline' },
+  truck: { ios: 'truck.box', android: 'truck-outline' },
+  wallet: { ios: 'wallet.pass', android: 'wallet-outline' },
+  'arrow-swap': { ios: 'arrow.left.arrow.right', android: 'swap-horizontal' },
+  'chart-bar': { ios: 'chart.bar', android: 'chart-bar' },
+  'trend-up': { ios: 'chart.line.uptrend.xyaxis', android: 'trending-up' },
+  'trend-down': { ios: 'chart.line.downtrend.xyaxis', android: 'trending-down' },
+  calendar: { ios: 'calendar', android: 'calendar-outline' },
+  clock: { ios: 'clock', android: 'clock-outline' },
+  shield: { ios: 'shield', android: 'shield-outline' },
+  gear: { ios: 'gearshape', android: 'cog-outline' },
+  bell: { ios: 'bell', android: 'bell-outline' },
+  phone: { ios: 'phone', android: 'phone-outline' },
+  lock: { ios: 'lock', android: 'lock-outline' },
+  eye: { ios: 'eye', android: 'eye-outline' },
+  'eye-off': { ios: 'eye.slash', android: 'eye-off-outline' },
+  logout: { ios: 'arrow.right.square', android: 'logout' },
+  camera: { ios: 'camera', android: 'camera-outline' },
+  star: { ios: 'star', android: 'star-outline' },
+  check: { ios: 'checkmark', android: 'check' },
+  info: { ios: 'info.circle', android: 'information-outline' },
+  warning: { ios: 'exclamationmark.triangle', android: 'alert-outline' },
+  business: { ios: 'building.2', android: 'office-building-outline' },
+  megaphone: { ios: 'megaphone', android: 'bullhorn-outline' },
+  cube: { ios: 'cube', android: 'cube-outline' },
+  card: { ios: 'creditcard', android: 'credit-card-outline' },
+  'shield-check': { ios: 'checkmark.shield', android: 'shield-check-outline' },
 };
 
 export interface IconProps {

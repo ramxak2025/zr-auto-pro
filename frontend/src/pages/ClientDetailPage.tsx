@@ -27,6 +27,7 @@ import toast from 'react-hot-toast';
 import { clientsApi, carsApi, checksApi } from '../api/services';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
@@ -290,6 +291,16 @@ export default function ClientDetailPage() {
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
+  // Duplicate-by-plate warning
+  const [duplicateCar, setDuplicateCar] = useState<{
+    id: string;
+    plateNumber: string;
+    makeModel: string;
+    clientId: string | null;
+    client: { id: string; fullName: string; phone: string } | null;
+  } | null>(null);
+  const [carSubmitting, setCarSubmitting] = useState(false);
+
   // Expanded car (to show checks)
   const [expandedCarId, setExpandedCarId] = useState<string | null>(null);
 
@@ -417,7 +428,7 @@ export default function ClientDetailPage() {
     setNewOwner(null);
   };
 
-  const handleCarSubmit = (e: FormEvent) => {
+  const handleCarSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const payload: { plateNumber: string; makeModel: string; comment?: string; clientId?: string } = {
       plateNumber,
@@ -430,8 +441,42 @@ export default function ClientDetailPage() {
         payload.clientId = newOwner.id;
       }
       updateCarMutation.mutate({ carId: editingCar.id, data: payload });
-    } else {
+      return;
+    }
+    // Pre-create duplicate check by plate.
+    setCarSubmitting(true);
+    try {
+      const res = await carsApi.lookupByPlate(plateNumber);
+      const existing = res.data;
+      if (existing) {
+        setDuplicateCar(existing);
+        return;
+      }
       createCarMutation.mutate({ ...payload, clientId: id! });
+    } catch {
+      createCarMutation.mutate({ ...payload, clientId: id! });
+    } finally {
+      setCarSubmitting(false);
+    }
+  };
+
+  const handleCreateCarAnyway = () => {
+    setDuplicateCar(null);
+    createCarMutation.mutate({
+      plateNumber,
+      makeModel,
+      comment: carComment || undefined,
+      clientId: id!,
+    });
+  };
+
+  const handleOpenExistingCar = () => {
+    if (!duplicateCar) return;
+    const ownerId = duplicateCar.clientId;
+    setDuplicateCar(null);
+    setCarModalOpen(false);
+    if (ownerId && ownerId !== id) {
+      navigate(`/clients/${ownerId}`);
     }
   };
 
@@ -845,10 +890,10 @@ export default function ClientDetailPage() {
             </button>
             <button
               type="submit"
-              disabled={createCarMutation.isPending || updateCarMutation.isPending}
+              disabled={createCarMutation.isPending || updateCarMutation.isPending || carSubmitting}
               className="btn-primary"
             >
-              {editingCar ? 'Сохранить' : 'Добавить'}
+              {editingCar ? 'Сохранить' : carSubmitting ? 'Проверяем…' : 'Добавить'}
             </button>
           </div>
         </form>
@@ -863,6 +908,27 @@ export default function ClientDetailPage() {
         message="Вы уверены, что хотите удалить этот автомобиль? Это действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
+      />
+
+      {/* Duplicate-by-plate warning */}
+      <DuplicateWarningDialog
+        isOpen={!!duplicateCar}
+        onClose={() => setDuplicateCar(null)}
+        onCreateAnyway={handleCreateCarAnyway}
+        onOpenExisting={handleOpenExistingCar}
+        title="Такой автомобиль уже есть"
+        description={
+          duplicateCar?.clientId === id
+            ? `Госномер ${duplicateCar?.plateNumber} уже привязан к этому клиенту. Создать дубликат?`
+            : `Госномер ${duplicateCar?.plateNumber || plateNumber} уже привязан к другому клиенту. Откройте его карточку, чтобы изменить данные.`
+        }
+        existingLabel={duplicateCar?.makeModel || ''}
+        existingSubtitle={
+          duplicateCar?.client
+            ? `Клиент: ${duplicateCar.client.fullName} · ${duplicateCar.client.phone}`
+            : duplicateCar?.plateNumber
+        }
+        openExistingLabel={duplicateCar?.clientId === id ? 'Закрыть' : 'Открыть владельца'}
       />
     </div>
   );

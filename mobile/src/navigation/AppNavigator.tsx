@@ -113,14 +113,25 @@ export type TabParamList = {
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
+const ChecksStack = createNativeStackNavigator();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Navigation
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Transparent contentStyle on every native-stack — otherwise React Native
+// imposes a white scene background, which combined with each screen's own
+// gray-50 wrapper creates a "boxed app" two-tone effect. Making every
+// scene transparent lets the screen's own background fill the viewport
+// continuously, edge-to-edge, behind the floating glass tab bar.
+const TRANSPARENT_STACK_OPTIONS = {
+  headerShown: false,
+  contentStyle: { backgroundColor: 'transparent' },
+} as const;
+
 function MoreStackNavigator() {
   return (
-    <MoreStack.Navigator screenOptions={{ headerShown: false }}>
+    <MoreStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
       <MoreStack.Screen name="MoreHome" component={MoreScreen} />
       <MoreStack.Screen name="Employees" component={EmployeesScreen} />
       <MoreStack.Screen name="EmployeeDetail" component={EmployeeDetailScreen} />
@@ -145,10 +156,38 @@ function MoreStackNavigator() {
   );
 }
 
+/**
+ * ChecksStackNavigator — local stack inside the Checks tab. Pushing
+ * CheckDetail onto THIS stack (instead of the root) keeps the tab bar
+ * visible while the user reads / edits a check, exactly like Mail
+ * pushing a message stays inside the Inbox tab.
+ */
+function ChecksStackNavigator() {
+  return (
+    <ChecksStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+      <ChecksStack.Screen name="ChecksHome" component={ChecksScreen} />
+      <ChecksStack.Screen name="CheckDetail" component={CheckDetailScreen} />
+    </ChecksStack.Navigator>
+  );
+}
+
 function TabNavigator() {
   return (
     <Tab.Navigator
-      screenOptions={{ headerShown: false }}
+      screenOptions={{
+        headerShown: false,
+        sceneStyle: { backgroundColor: 'transparent' },
+        // Floating pill: the absolute position lifts the bar out of the
+        // layout flow so screen content scrolls UNDER the glass — that's
+        // what makes the bar feel native (visible content blurred through
+        // it) rather than sitting on a flat gray backdrop.
+        tabBarStyle: {
+          position: 'absolute',
+          backgroundColor: 'transparent',
+          borderTopWidth: 0,
+          elevation: 0,
+        },
+      }}
       // Platform-adaptive bar: Metro resolves TabBar.ios.tsx / TabBar.android.tsx
       // eslint-disable-next-line react/no-unstable-nested-components
       tabBar={(props) => <PlatformTabBar {...props} />}
@@ -156,7 +195,7 @@ function TabNavigator() {
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Products" component={ProductsScreen} />
       <Tab.Screen name="NewCheck" component={CheckCreateScreen} />
-      <Tab.Screen name="Checks" component={ChecksScreen} />
+      <Tab.Screen name="Checks" component={ChecksStackNavigator} />
       <Tab.Screen name="MoreTab" component={MoreStackNavigator} />
     </Tab.Navigator>
   );
@@ -170,18 +209,13 @@ export default function AppNavigator() {
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
       {!user ? (
         <Stack.Screen name="Login" component={LoginScreen} />
       ) : (
         <>
           <Stack.Screen name="Main" component={TabNavigator} />
-          <Stack.Screen
-            name="CheckCreate"
-            component={CheckCreateScreen}
-            options={{ animation: 'slide_from_bottom' }}
-          />
-          <Stack.Screen name="CheckDetail" component={CheckDetailScreen} />
+          <Stack.Screen name="CheckCreate" component={CheckCreateScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
         </>

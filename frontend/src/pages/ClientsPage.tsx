@@ -1,12 +1,13 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag, Download } from 'lucide-react';
+import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag, Download, Upload } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { clientsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
@@ -36,6 +37,10 @@ export default function ClientsPage() {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [comment, setComment] = useState('');
+
+  // Duplicate-by-phone warning
+  const [duplicateClient, setDuplicateClient] = useState<{ id: string; fullName: string; phone: string } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   // Query
   const { data, isLoading } = useQuery<PaginatedResponse<Client>>({
@@ -106,14 +111,42 @@ export default function ClientsPage() {
     setEditingClient(null);
   };
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const payload = { fullName, phone, comment: comment || undefined };
     if (editingClient) {
       updateMutation.mutate({ id: editingClient.id, data: payload });
-    } else {
-      createMutation.mutate(payload);
+      return;
     }
+    // Pre-create duplicate check by phone — only on create.
+    setSubmitting(true);
+    try {
+      const res = await clientsApi.lookupByPhone(phone);
+      const existing = res.data;
+      if (existing) {
+        setDuplicateClient(existing);
+        return;
+      }
+      createMutation.mutate(payload);
+    } catch {
+      // Fall back to creating anyway if the lookup endpoint failed.
+      createMutation.mutate(payload);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCreateAnyway = () => {
+    setDuplicateClient(null);
+    createMutation.mutate({ fullName, phone, comment: comment || undefined });
+  };
+
+  const handleOpenExistingClient = () => {
+    if (!duplicateClient) return;
+    const id = duplicateClient.id;
+    setDuplicateClient(null);
+    setModalOpen(false);
+    navigate(`/clients/${id}`);
   };
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
@@ -147,29 +180,40 @@ export default function ClientsPage() {
         <h1 className="page-title">Клиенты</h1>
         <div className="flex items-center gap-2">
           {isDirector && (
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  const res = await clientsApi.exportCsv();
-                  const blob = new Blob([res.data as any], { type: 'text/csv;charset=utf-8' });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = 'clients.csv';
-                  a.click();
-                  URL.revokeObjectURL(url);
-                  toast.success('CSV скачан');
-                } catch {
-                  toast.error('Ошибка экспорта');
-                }
-              }}
-              className="btn-secondary"
-              title="Экспорт CSV"
-            >
-              <Download className="w-4 h-4" />
-              <span className="hidden sm:inline">CSV</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => navigate('/clients/import')}
+                className="btn-secondary"
+                title="Импорт клиентов и авто"
+              >
+                <Upload className="w-4 h-4" />
+                <span className="hidden sm:inline">Импорт</span>
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const res = await clientsApi.exportCsv();
+                    const blob = new Blob([res.data as any], { type: 'text/csv;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'clients.csv';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast.success('CSV скачан');
+                  } catch {
+                    toast.error('Ошибка экспорта');
+                  }
+                }}
+                className="btn-secondary"
+                title="Экспорт CSV"
+              >
+                <Download className="w-4 h-4" />
+                <span className="hidden sm:inline">CSV</span>
+              </button>
+            </>
           )}
           <button onClick={openCreateModal} className="btn-primary">
             <Plus className="w-4 h-4" />
@@ -385,10 +429,10 @@ export default function ClientsPage() {
             </button>
             <button
               type="submit"
-              disabled={createMutation.isPending || updateMutation.isPending}
+              disabled={createMutation.isPending || updateMutation.isPending || submitting}
               className="btn-primary"
             >
-              {editingClient ? 'Сохранить' : 'Создать'}
+              {editingClient ? 'Сохранить' : submitting ? 'Проверяем…' : 'Создать'}
             </button>
           </div>
         </form>
@@ -403,6 +447,19 @@ export default function ClientsPage() {
         message="Вы уверены, что хотите удалить этого клиента? Это действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
+      />
+
+      {/* Duplicate-by-phone warning */}
+      <DuplicateWarningDialog
+        isOpen={!!duplicateClient}
+        onClose={() => setDuplicateClient(null)}
+        onCreateAnyway={handleCreateAnyway}
+        onOpenExisting={handleOpenExistingClient}
+        title="Такой клиент уже есть"
+        description={`Клиент с телефоном ${duplicateClient?.phone || phone} уже существует в вашей базе. Открыть существующего, чтобы дополнить данные, или всё равно создать нового?`}
+        existingLabel={duplicateClient?.fullName || ''}
+        existingSubtitle={duplicateClient?.phone}
+        openExistingLabel="Открыть карточку"
       />
     </div>
   );

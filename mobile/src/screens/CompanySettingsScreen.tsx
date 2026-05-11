@@ -1,15 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet,
-  ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { myCompanyApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Tenant } from '../../../shared/types';
 
@@ -36,8 +43,16 @@ export default function CompanySettingsScreen() {
   });
 
   const [form, setForm] = useState<CompanyForm>({
-    name: '', phone: '', address: '', email: '', description: '',
-    legalName: '', inn: '', kpp: '', ogrn: '', receiptFooter: '',
+    name: '',
+    phone: '',
+    address: '',
+    email: '',
+    description: '',
+    legalName: '',
+    inn: '',
+    kpp: '',
+    ogrn: '',
+    receiptFooter: '',
   });
   const [dirty, setDirty] = useState(false);
 
@@ -70,7 +85,7 @@ export default function CompanySettingsScreen() {
   });
 
   const update = (patch: Partial<CompanyForm>) => {
-    setForm(prev => ({ ...prev, ...patch }));
+    setForm((prev) => ({ ...prev, ...patch }));
     setDirty(true);
   };
 
@@ -91,31 +106,16 @@ export default function CompanySettingsScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safe} edges={['top']}>
+      <View style={styles.safe}>
+        <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
         <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <LinearGradient
-            colors={[colors.gray[600], colors.gray[800]] as [string, string]}
-            style={styles.headerIcon}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          >
-            <Ionicons name="business-outline" size={18} color={colors.white} />
-          </LinearGradient>
-          <Text style={styles.title}>Настройки компании</Text>
-        </View>
-        <View style={{ width: 22 }} />
-      </View>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -131,7 +131,7 @@ export default function CompanySettingsScreen() {
                 <Text style={styles.label}>Название компании</Text>
                 <TextInput
                   value={form.name}
-                  onChangeText={v => update({ name: v })}
+                  onChangeText={(v) => update({ name: v })}
                   style={styles.input}
                   placeholder="Автосервис «Мастер»"
                   placeholderTextColor={colors.gray[400]}
@@ -143,7 +143,7 @@ export default function CompanySettingsScreen() {
                   <Text style={styles.label}>Телефон</Text>
                   <TextInput
                     value={form.phone}
-                    onChangeText={v => update({ phone: v })}
+                    onChangeText={(v) => update({ phone: v })}
                     style={styles.input}
                     placeholder="+7 (999) 123-45-67"
                     placeholderTextColor={colors.gray[400]}
@@ -154,7 +154,7 @@ export default function CompanySettingsScreen() {
                   <Text style={styles.label}>Email</Text>
                   <TextInput
                     value={form.email}
-                    onChangeText={v => update({ email: v })}
+                    onChangeText={(v) => update({ email: v })}
                     style={styles.input}
                     placeholder="info@autoservice.ru"
                     placeholderTextColor={colors.gray[400]}
@@ -168,7 +168,7 @@ export default function CompanySettingsScreen() {
                 <Text style={styles.label}>Адрес</Text>
                 <TextInput
                   value={form.address}
-                  onChangeText={v => update({ address: v })}
+                  onChangeText={(v) => update({ address: v })}
                   style={styles.input}
                   placeholder="г. Москва, ул. Примерная, д. 1"
                   placeholderTextColor={colors.gray[400]}
@@ -179,7 +179,7 @@ export default function CompanySettingsScreen() {
                 <Text style={styles.label}>Описание</Text>
                 <TextInput
                   value={form.description}
-                  onChangeText={v => update({ description: v })}
+                  onChangeText={(v) => update({ description: v })}
                   style={[styles.input, styles.textarea]}
                   placeholder="Краткое описание автосервиса"
                   placeholderTextColor={colors.gray[400]}
@@ -202,9 +202,9 @@ export default function CompanySettingsScreen() {
                 <Text style={styles.label}>Юридическое название</Text>
                 <TextInput
                   value={form.legalName}
-                  onChangeText={v => update({ legalName: v })}
+                  onChangeText={(v) => update({ legalName: v })}
                   style={styles.input}
-                  placeholder='ИП Иванов И.И. или ООО «Мастер»'
+                  placeholder="ИП Иванов И.И. или ООО «Мастер»"
                   placeholderTextColor={colors.gray[400]}
                 />
               </View>
@@ -214,7 +214,7 @@ export default function CompanySettingsScreen() {
                   <Text style={styles.label}>ИНН</Text>
                   <TextInput
                     value={form.inn}
-                    onChangeText={v => update({ inn: v.replace(/\D/g, '').slice(0, 12) })}
+                    onChangeText={(v) => update({ inn: v.replace(/\D/g, '').slice(0, 12) })}
                     style={styles.input}
                     placeholder="1234567890"
                     placeholderTextColor={colors.gray[400]}
@@ -225,7 +225,7 @@ export default function CompanySettingsScreen() {
                   <Text style={styles.label}>КПП</Text>
                   <TextInput
                     value={form.kpp}
-                    onChangeText={v => update({ kpp: v.replace(/\D/g, '').slice(0, 9) })}
+                    onChangeText={(v) => update({ kpp: v.replace(/\D/g, '').slice(0, 9) })}
                     style={styles.input}
                     placeholder="123456789"
                     placeholderTextColor={colors.gray[400]}
@@ -236,7 +236,7 @@ export default function CompanySettingsScreen() {
                   <Text style={styles.label}>ОГРН</Text>
                   <TextInput
                     value={form.ogrn}
-                    onChangeText={v => update({ ogrn: v.replace(/\D/g, '').slice(0, 15) })}
+                    onChangeText={(v) => update({ ogrn: v.replace(/\D/g, '').slice(0, 15) })}
                     style={styles.input}
                     placeholder="1234567890123"
                     placeholderTextColor={colors.gray[400]}
@@ -249,7 +249,7 @@ export default function CompanySettingsScreen() {
                 <Text style={styles.label}>Текст внизу чека</Text>
                 <TextInput
                   value={form.receiptFooter}
-                  onChangeText={v => update({ receiptFooter: v })}
+                  onChangeText={(v) => update({ receiptFooter: v })}
                   style={[styles.input, styles.textarea]}
                   placeholder="Спасибо за визит! Ждём вас снова!"
                   placeholderTextColor={colors.gray[400]}
@@ -278,28 +278,47 @@ export default function CompanySettingsScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
-  title: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scrollContent: { padding: spacing[4], gap: spacing[4], paddingBottom: spacing[8] },
-  card: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[5], gap: spacing[4] },
+  card: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[5],
+    gap: spacing[4],
+  },
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   cardTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   field: { gap: spacing[1] },
   label: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600] },
-  input: { backgroundColor: colors.gray[50], borderWidth: 1, borderColor: colors.gray[200], borderRadius: borderRadius.xl, paddingHorizontal: spacing[4], paddingVertical: spacing[2.5], fontSize: fontSize.sm, color: colors.gray[900] },
+  input: {
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+    color: colors.gray[900],
+  },
   textarea: { minHeight: 60, textAlignVertical: 'top' },
   hint: { fontSize: 11, color: colors.gray[400], marginTop: 4 },
   rowFields: { flexDirection: 'row', gap: spacing[3] },
   rowFields3: { flexDirection: 'row', gap: spacing[2] },
-  saveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], backgroundColor: colors.primary[600], borderRadius: borderRadius.xl, paddingVertical: spacing[4] },
+  saveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.primary[600],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[4],
+  },
   saveBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
 });

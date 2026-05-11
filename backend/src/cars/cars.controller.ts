@@ -13,6 +13,15 @@ export class CarsController {
     return this.carsService.getAll(user.tenantID, query);
   }
 
+  /**
+   * Look up an existing car by plate in the current tenant. Used by the UI
+   * to warn before creating a duplicate. Plate is normalized server-side.
+   */
+  @Get('lookup-by-plate')
+  lookupByPlate(@CurrentUser() user: JwtPayload, @Query('plate') plate: string) {
+    return this.carsService.findByPlate(user.tenantID, plate || '');
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.carsService.getById(id, user.tenantID);

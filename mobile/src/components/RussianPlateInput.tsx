@@ -2,12 +2,17 @@ import React, { useCallback, useMemo, useRef } from 'react';
 import { View, TextInput, Text, StyleSheet, Platform } from 'react-native';
 import { colors, spacing } from '../theme';
 import {
-  processPlateInput,
+  processPlateMainInput,
+  processPlateRegionInput,
+  combinePlate,
   formatMain,
   splitPlate,
   isValidPlate,
   isRussianInput,
+  normalizeForeignPlate,
 } from '../utils/plateMask';
+
+export type PlateMode = 'ru' | 'foreign';
 
 interface Props {
   value: string;
@@ -15,18 +20,32 @@ interface Props {
   onValidPlate?: (plate: string) => void;
   autoFocus?: boolean;
   placeholder?: string;
+  /**
+   * Explicit mode. When provided, the input is locked to this mode and
+   * does NOT auto-switch based on value. Recommended — pair with
+   * <PlateModeSwitcher /> from the parent.
+   *
+   * When undefined, falls back to legacy auto-detect via isRussianInput().
+   */
+  mode?: PlateMode;
 }
 
 /**
- * Russian license plate input that looks like a real plate.
+ * Russian / foreign license plate input.
  *
- * One string under the hood (e.g. "А123АА77"), displayed as two visual
- * blocks: [А 123 АА] | [77 + 🇷🇺 RUS]. Backspace deletes one character
- * from the right, seamlessly crossing the region/main boundary.
+ * RU mode renders TWO independent <TextInput> blocks — main (А 123 АА) and
+ * region (77) — visually divided by a 2px black line. The parent receives
+ * a single clean string ('А123АА77') so backend search and storage stay
+ * unchanged. The previous implementation kept everything in one TextInput
+ * and ALSO rendered the region in a separate <Text>, which caused the
+ * region to appear twice on screen ('Р 332 РА 05 | 05'). Splitting into
+ * two separate fields makes the duplicate impossible by construction.
  *
- * Latin input auto-converts to Cyrillic (A→А, B→В, etc.).
- * When input doesn't start with a valid plate letter → falls back to
- * plain text input (for foreign plates or free-text search).
+ * Foreign mode is a simple uppercase free-text input with an INT marker.
+ *
+ * Region tip: when the user fills the main block (6 chars), focus is
+ * automatically forwarded to the region. Backspace at the start of the
+ * empty region returns focus to main.
  */
 export default function RussianPlateInput({
   value,
@@ -34,51 +53,68 @@ export default function RussianPlateInput({
   onValidPlate,
   autoFocus = false,
   placeholder = 'Введите госномер',
+  mode,
 }: Props) {
-  const inputRef = useRef<TextInput>(null);
-  const isRu = useMemo(() => !value || isRussianInput(value), [value]);
+  const mainRef = useRef<TextInput>(null);
+  const regionRef = useRef<TextInput>(null);
+
+  const effectiveMode: PlateMode = mode ?? (!value || isRussianInput(value) ? 'ru' : 'foreign');
+  const isRu = effectiveMode === 'ru';
+
   const { main, region } = useMemo(() => splitPlate(value), [value]);
+  const mainDisplay = useMemo(() => formatMain(main), [main]);
 
-  const handleChange = useCallback(
+  const handleMainChange = useCallback(
     (text: string) => {
-      if (!isRu && value && !isRussianInput(value)) {
-        // Foreign mode: free text
-        onChangeText(text.toUpperCase());
-        return;
-      }
-
-      // Russian mode: process through mask
-      // Remove display spaces before processing
       const raw = text.replace(/\s/g, '');
-      const clean = processPlateInput(raw);
-      onChangeText(clean);
-
-      if (isValidPlate(clean) && onValidPlate) {
-        onValidPlate(clean);
+      const cleanMain = processPlateMainInput(raw);
+      const next = combinePlate(cleanMain, region);
+      onChangeText(next);
+      // Auto-advance to region once main is complete
+      if (cleanMain.length === 6 && main.length < 6) {
+        setTimeout(() => regionRef.current?.focus(), 0);
       }
+      if (isValidPlate(next) && onValidPlate) onValidPlate(next);
     },
-    [isRu, value, onChangeText, onValidPlate],
+    [region, main.length, onChangeText, onValidPlate],
   );
 
-  // Display value: Russian plates get visual formatting, foreign = raw
-  const displayValue = useMemo(() => {
-    if (!value) return '';
-    if (!isRu) return value;
-    const { main: m, region: r } = splitPlate(value);
-    return r ? `${formatMain(m)} ${r}` : formatMain(m);
-  }, [value, isRu]);
+  const handleRegionChange = useCallback(
+    (text: string) => {
+      const cleanRegion = processPlateRegionInput(text);
+      const next = combinePlate(main, cleanRegion);
+      onChangeText(next);
+      if (isValidPlate(next) && onValidPlate) onValidPlate(next);
+    },
+    [main, onChangeText, onValidPlate],
+  );
 
-  if (!isRu && value) {
-    // Foreign plate — simple styled input
+  // Backspace on an empty region jumps focus back to main
+  const handleRegionKeyPress = useCallback(
+    (e: { nativeEvent: { key: string } }) => {
+      if (e.nativeEvent.key === 'Backspace' && region.length === 0) {
+        mainRef.current?.focus();
+      }
+    },
+    [region.length],
+  );
+
+  const handleForeignChange = useCallback(
+    (text: string) => {
+      onChangeText(normalizeForeignPlate(text));
+    },
+    [onChangeText],
+  );
+
+  if (!isRu) {
     return (
       <View style={[styles.plateContainer, styles.plateForeign]}>
         <View style={styles.foreignStrip}>
           <Text style={styles.foreignStripText}>INT</Text>
         </View>
         <TextInput
-          ref={inputRef}
           value={value}
-          onChangeText={handleChange}
+          onChangeText={handleForeignChange}
           style={styles.foreignInput}
           placeholder={placeholder}
           placeholderTextColor={colors.gray[300]}
@@ -92,35 +128,41 @@ export default function RussianPlateInput({
     );
   }
 
-  // Russian plate — visual plate design
   return (
     <View style={styles.plateContainer}>
-      {/* Main section */}
-      <View style={styles.mainSection}>
-        <TextInput
-          ref={inputRef}
-          value={displayValue}
-          onChangeText={handleChange}
-          style={styles.mainInput}
-          placeholder="А 000 АА"
-          placeholderTextColor={colors.gray[300]}
-          autoCapitalize="characters"
-          autoCorrect={false}
-          autoFocus={autoFocus}
-          maxLength={14} // "А 123 АА 177" = 12 chars + buffer
-          returnKeyType="search"
-        />
-      </View>
+      {/* MAIN block — 1 letter + 3 digits + 2 letters, never carries the region */}
+      <TextInput
+        ref={mainRef}
+        value={mainDisplay}
+        onChangeText={handleMainChange}
+        style={styles.mainInput}
+        placeholder="А 000 АА"
+        placeholderTextColor={colors.gray[300]}
+        autoCapitalize="characters"
+        autoCorrect={false}
+        autoFocus={autoFocus}
+        maxLength={8} // "А 000 АА" = 8 visible chars
+        returnKeyType="next"
+        onSubmitEditing={() => regionRef.current?.focus()}
+      />
 
-      {/* Divider */}
+      {/* Vertical divider */}
       <View style={styles.divider} />
 
-      {/* Region section */}
+      {/* REGION block — 2-3 digits only */}
       <View style={styles.regionSection}>
-        <Text style={[styles.regionText, !region && styles.regionPlaceholder]}>
-          {region || '00'}
-        </Text>
-        {/* Russian flag */}
+        <TextInput
+          ref={regionRef}
+          value={region}
+          onChangeText={handleRegionChange}
+          onKeyPress={handleRegionKeyPress}
+          style={styles.regionInput}
+          placeholder="00"
+          placeholderTextColor={colors.gray[300]}
+          keyboardType="number-pad"
+          maxLength={3}
+          returnKeyType="search"
+        />
         <View style={styles.flagRow}>
           <View style={[styles.flagBand, { backgroundColor: '#fff' }]} />
           <View style={[styles.flagBand, { backgroundColor: '#0039A6' }]} />
@@ -132,7 +174,14 @@ export default function RussianPlateInput({
   );
 }
 
-const PLATE_HEIGHT = 56;
+// Visual replica of a real Russian plate, calibrated against physical
+// iPhone testing. ГОСТ Р 50577-93 sets the right-hand strip as a square
+// (height = 1 × plate height) with three stacked elements: region digits
+// (top), tricolor flag (middle), RUS legend (bottom). Earlier 56pt+64pt
+// strip cramped them — bumped to 64pt plate + 76pt strip + space-between
+// distribution so each element gets real breathing room.
+const PLATE_HEIGHT = 64;
+const PLATE_REGION_WIDTH = 76;
 
 const styles = StyleSheet.create({
   plateContainer: {
@@ -140,26 +189,27 @@ const styles = StyleSheet.create({
     height: PLATE_HEIGHT,
     backgroundColor: '#FFFFFF',
     borderWidth: 2,
-    borderColor: '#1a1a1a',
-    borderRadius: 6,
+    borderColor: '#0A0A0A',
+    borderRadius: 8,
     overflow: 'hidden',
   },
   plateForeign: {
     borderColor: colors.blue[500],
   },
 
-  // ── Main section (А 123 АА) ──
-  mainSection: {
-    flex: 1,
-    justifyContent: 'center',
-  },
+  // ── Main input (А 123 АА) ──
+  // Slightly smaller font + more H-padding gives the GOST letters
+  // breathing room from the rim. The 1.6 letterSpacing matches the
+  // tracking of the open-source RoadNumbers font used by Ministry of
+  // Internal Affairs source plates.
   mainInput: {
-    fontSize: 22,
+    flex: 1,
+    fontSize: 30,
     fontWeight: '800',
-    color: '#1a1a1a',
+    color: '#000000',
     textAlign: 'center',
-    letterSpacing: Platform.OS === 'ios' ? 3 : 2,
-    paddingHorizontal: spacing[2],
+    letterSpacing: Platform.OS === 'ios' ? 1.6 : 1.2,
+    paddingHorizontal: spacing[3],
     paddingVertical: 0,
     ...Platform.select({
       android: { paddingTop: 0, paddingBottom: 0, textAlignVertical: 'center' },
@@ -169,41 +219,49 @@ const styles = StyleSheet.create({
   // ── Divider ──
   divider: {
     width: 2,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: '#0A0A0A',
   },
 
-  // ── Region section (77 + flag + RUS) ──
+  // ── Region (77 + flag + RUS) ──
+  // Square strip per ГОСТ. justifyContent='space-between' distributes
+  // the three elements top→middle→bottom, giving each its own band of
+  // breathing room. Internal padding pulls them off the rim.
   regionSection: {
-    width: 58,
+    width: PLATE_REGION_WIDTH,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 3,
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    paddingHorizontal: 5,
   },
-  regionText: {
-    fontSize: 20,
+  regionInput: {
+    fontSize: 28,
     fontWeight: '800',
-    color: '#1a1a1a',
-    letterSpacing: 2,
+    color: '#000000',
+    letterSpacing: 0.8,
     textAlign: 'center',
-  },
-  regionPlaceholder: {
-    color: colors.gray[300],
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    width: '100%',
+    lineHeight: 30,
+    ...Platform.select({
+      android: { paddingTop: 0, paddingBottom: 0, textAlignVertical: 'center' },
+    }),
   },
   flagRow: {
-    flexDirection: 'row',
-    marginTop: 2,
+    flexDirection: 'column',
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0A0A0A',
   },
   flagBand: {
-    width: 10,
-    height: 3,
-    borderRadius: 0.5,
+    width: 28,
+    height: 3.6,
   },
   rusLabel: {
-    fontSize: 6,
+    fontSize: 11,
     fontWeight: '900',
-    color: '#1a1a1a',
-    letterSpacing: 1,
-    marginTop: 1,
+    color: '#000000',
+    letterSpacing: 1.4,
   },
 
   // ── Foreign plate ──

@@ -4,9 +4,7 @@
  * Footer button empties the bin in one call after a confirm.
  */
 import React, { useMemo, useState } from 'react';
-import {
-  View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,9 +18,19 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Product } from '../../../shared/types';
 
 const formatMoney = (v: number): string =>
-  Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+  Math.round(v)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 
-export default function TrashScreen() {
+interface TrashScreenProps {
+  /** Optional close handler — when provided (e.g. when rendered inside the
+   *  warehouse ops modal), the back-chevron calls this instead of
+   *  `navigation.goBack()`. Lets us host TrashScreen inline as a sheet
+   *  without disturbing the navigator stack. */
+  onClose?: () => void;
+}
+
+export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
@@ -30,7 +38,10 @@ export default function TrashScreen() {
 
   const { data: items, isLoading } = useQuery<Product[]>({
     queryKey: ['products-trash'],
-    queryFn: async () => { const res = await productsApi.getTrash(); return res.data; },
+    queryFn: async () => {
+      const res = await productsApi.getTrash();
+      return res.data;
+    },
   });
 
   const filtered = useMemo(() => {
@@ -70,26 +81,18 @@ export default function TrashScreen() {
   };
 
   const confirmHardDelete = (p: Product) => {
-    Alert.alert(
-      'Удалить навсегда',
-      `Удалить "${p.name}" безвозвратно? Восстановление будет невозможно.`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        { text: 'Удалить', style: 'destructive', onPress: () => hardDeleteMut.mutate(p.id) },
-      ],
-    );
+    Alert.alert('Удалить навсегда', `Удалить "${p.name}" безвозвратно? Восстановление будет невозможно.`, [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Удалить', style: 'destructive', onPress: () => hardDeleteMut.mutate(p.id) },
+    ]);
   };
 
   const confirmEmpty = () => {
     if (!items || items.length === 0) return;
-    Alert.alert(
-      'Очистить корзину',
-      `Удалить все ${items.length} товаров навсегда? Восстановление будет невозможно.`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        { text: 'Очистить', style: 'destructive', onPress: () => emptyMut.mutate() },
-      ],
-    );
+    Alert.alert('Очистить корзину', `Удалить все ${items.length} товаров навсегда? Восстановление будет невозможно.`, [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Очистить', style: 'destructive', onPress: () => emptyMut.mutate() },
+    ]);
   };
 
   const renderItem = ({ item }: { item: Product }) => (
@@ -98,10 +101,13 @@ export default function TrashScreen() {
         <Ionicons name="trash-outline" size={20} color={colors.rose[500]} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+        <Text style={styles.name} numberOfLines={1}>
+          {item.name}
+        </Text>
         <Text style={styles.sub} numberOfLines={1}>
           {item.category || 'Без папки'}
-          {'  ·  '}{formatMoney(item.sellPrice)}
+          {'  ·  '}
+          {formatMoney(item.sellPrice)}
         </Text>
       </View>
       <TouchableOpacity
@@ -124,7 +130,7 @@ export default function TrashScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+        <TouchableOpacity onPress={() => (onClose ? onClose() : navigation.goBack())} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -154,14 +160,12 @@ export default function TrashScreen() {
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
             contentContainerStyle={styles.list}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+            }
           />
           <View style={styles.footer}>
-            <TouchableOpacity
-              style={styles.emptyBtn}
-              onPress={confirmEmpty}
-              disabled={emptyMut.isPending}
-            >
+            <TouchableOpacity style={styles.emptyBtn} onPress={confirmEmpty} disabled={emptyMut.isPending}>
               <Ionicons name="trash" size={16} color={colors.red[600]} />
               <Text style={styles.emptyBtnText}>
                 {emptyMut.isPending ? 'Очищаю…' : `Очистить корзину (${items.length})`}
@@ -177,46 +181,76 @@ export default function TrashScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing[4], paddingVertical: spacing[3],
-    borderBottomWidth: 1, borderBottomColor: colors.gray[100], backgroundColor: colors.white,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[100],
+    backgroundColor: colors.white,
   },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: colors.primary[50], alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primary[50],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   headerIcon: {
-    width: 30, height: 30, borderRadius: borderRadius.lg,
-    backgroundColor: colors.rose[50], alignItems: 'center', justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.rose[50],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], letterSpacing: -0.3 },
   searchWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[3] },
   list: { paddingHorizontal: spacing[4], paddingTop: spacing[3], paddingBottom: spacing[4] },
   row: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing[3],
-    backgroundColor: colors.white, borderRadius: borderRadius['2xl'],
-    borderWidth: 1, borderColor: colors.gray[100],
-    padding: spacing[3], marginBottom: spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[3],
+    marginBottom: spacing[2],
   },
   iconBox: {
-    width: 40, height: 40, borderRadius: borderRadius.lg,
-    backgroundColor: colors.rose[50], alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.rose[50],
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   name: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   sub: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
   actionBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    alignItems: 'center', justifyContent: 'center',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   footer: {
     padding: spacing[4],
-    borderTopWidth: 1, borderTopColor: colors.gray[100],
+    borderTopWidth: 1,
+    borderTopColor: colors.gray[100],
     backgroundColor: colors.white,
   },
   emptyBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2],
-    paddingVertical: spacing[3], borderRadius: borderRadius.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
     backgroundColor: colors.red[50],
   },
   emptyBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.red[600] },

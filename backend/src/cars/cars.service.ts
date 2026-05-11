@@ -1,10 +1,48 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { normalizePlate } from '../imports/normalize-plate';
 
 @Injectable()
 export class CarsService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * Find an existing car by plate within the current tenant.
+   * Plate matching is normalized: spaces, dashes and slashes are stripped,
+   * Cyrillic look-alikes transliterated, so "Р 332 РА 05" and "P332PA05"
+   * resolve to the same record. Used by the UI duplicate-warning popup.
+   */
+  async findByPlate(tenantID: string, plate: string) {
+    const norm = normalizePlate(plate || '');
+    if (!norm.key) return null;
+    const { rows } = await this.pool.query(
+      `SELECT ca.id, ca.plate_number, ca.make_model, ca.client_id, ca.created_at,
+              cl.full_name AS client_full_name, cl.phone AS client_phone
+       FROM cars ca
+       LEFT JOIN clients cl ON cl.id = ca.client_id
+       WHERE ca.tenant_id = $1
+         AND REPLACE(REPLACE(REPLACE(UPPER(ca.plate_number), ' ', ''), '-', ''), '/', '') = $2
+       ORDER BY ca.created_at LIMIT 1`,
+      [tenantID, norm.key],
+    );
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      id: r.id as string,
+      plateNumber: r.plate_number as string,
+      makeModel: r.make_model as string,
+      clientId: r.client_id as string | null,
+      createdAt: r.created_at as string,
+      client: r.client_full_name
+        ? {
+            id: r.client_id as string,
+            fullName: r.client_full_name as string,
+            phone: r.client_phone as string,
+          }
+        : null,
+    };
+  }
 
   private mapCar(row: any) {
     const car: any = {

@@ -307,3 +307,133 @@ export interface UpdatePlanRequest {
   isActive?: boolean;
   sortOrder?: number;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Imports — clients & cars
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Frontend parses the spreadsheet (xlsx/csv) on the client and sends a JSON
+// payload to the backend. One file row = one ImportRowInput (a client paired
+// with at most one car). Multiple rows can share the same phone — they get
+// folded into one client with multiple cars.
+
+export interface ImportRowInput {
+  /** 1-based row number from the source file (used in messages). */
+  sourceRow: number;
+  clientName?: string | null;
+  /** Raw phone exactly as it appeared in the source file. */
+  phoneRaw?: string | null;
+  /** Normalized phone, if the file already had one. Backend re-normalizes anyway. */
+  phone?: string | null;
+  carPlate?: string | null;
+  carModel?: string | null;
+  /** Free-form data-quality tags from the source ("unclear_car_model", "no_phone", …). */
+  notes?: string | null;
+  /** Original raw client text — preserved for audit. */
+  originalClientText?: string | null;
+}
+
+/** Per-row issue surfaced in preview. Severity drives the UI section. */
+export type ImportIssueKind =
+  | 'no_phone'
+  | 'invalid_phone'
+  | 'no_name'
+  | 'no_plate'
+  | 'invalid_plate'
+  | 'foreign_plate'
+  | 'unclear_car_model'
+  | 'plate_belongs_to_other_client'
+  | 'duplicate_in_file'
+  | 'multiple_name_candidates'
+  | 'name_conflict_same_phone';
+
+export interface ImportRowIssue {
+  sourceRow: number;
+  kind: ImportIssueKind;
+  message: string;
+  /** Hint about which side of a conflict already exists. */
+  existing?: {
+    clientId?: string;
+    clientName?: string;
+    plateNumber?: string;
+  };
+}
+
+/** Plan for one phone-grouped client computed by preview. */
+export interface ImportClientGroup {
+  /** Canonical phone (`+7…`). */
+  phoneKey: string;
+  /** Client name we plan to use. */
+  fullName: string;
+  /** Matching existing client (if any) — full record, by phone within the tenant. */
+  existingClientId?: string | null;
+  /** Names present in the file under this phone. */
+  candidateNames: string[];
+  /** Source rows that contributed to this group. */
+  sourceRows: number[];
+  cars: ImportPlannedCar[];
+}
+
+export interface ImportPlannedCar {
+  /** Canonical key for dedup — RU plate w/o spaces or normalized foreign string. */
+  plateKey: string;
+  /** Display value to be written into `cars.plate_number`. */
+  plateDisplay: string;
+  /** Will be written into `cars.make_model` (placeholder for unclear). */
+  makeModel: string;
+  /** Original raw model text — preserved into `cars.comment` if it differs. */
+  rawModel?: string | null;
+  /** True if plate parsed as foreign / unrecognized RU. */
+  isForeign: boolean;
+  sourceRow: number;
+  /** True if the plate already exists for this tenant. */
+  existsForCurrentClient?: boolean;
+  /** Set when plate is bound to a different client — preview blocks this row. */
+  conflictsWithClientId?: string | null;
+  conflictsWithClientName?: string | null;
+}
+
+export interface ImportPreviewSummary {
+  totalRows: number;
+  uniqueClients: number;
+  clientsWillCreate: number;
+  clientsWillReuse: number;
+  carsWillCreate: number;
+  carsAlreadyExist: number;
+  rowsSkipped: number;
+  errors: number;
+  warnings: number;
+}
+
+export interface ImportPreviewRequest {
+  rows: ImportRowInput[];
+  options?: ImportOptions;
+}
+
+export interface ImportOptions {
+  /** Allow `foreign_plate` rows to create cars (default true). */
+  allowForeignPlates?: boolean;
+}
+
+export interface ImportPreviewResponse {
+  summary: ImportPreviewSummary;
+  groups: ImportClientGroup[];
+  issues: ImportRowIssue[];
+  /** Rows that were dropped before grouping (no phone, invalid phone, etc.). */
+  skippedRows: Array<{ sourceRow: number; reason: ImportIssueKind; message: string }>;
+}
+
+export interface ImportConfirmRequest {
+  rows: ImportRowInput[];
+  options?: ImportOptions;
+}
+
+export interface ImportConfirmResponse {
+  importRunId: string;
+  summary: ImportPreviewSummary;
+  createdClientIds: string[];
+  createdCarIds: string[];
+  reusedClientIds: string[];
+  /** Rows that were skipped despite confirmation (e.g. plate stolen between preview and confirm). */
+  skipped: Array<{ sourceRow: number; reason: ImportIssueKind; message: string }>;
+}
