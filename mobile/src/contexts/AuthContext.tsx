@@ -13,6 +13,8 @@ import {
   equipmentApi,
   checksApi,
   callsApi,
+  subscriptionApi,
+  scheduleApi,
 } from '../api/services';
 import { onAuthExpired } from '../api/axios';
 import { clearPersistentCache } from '../utils/persistentCache';
@@ -191,6 +193,22 @@ function prefetchAfterLogin(qc: QueryClient): void {
   qc.prefetchQuery({
     queryKey: ['calls-summary', today],
     queryFn: async () => (await callsApi.getCalls({ date: today })).data.summary,
+    staleTime: 60_000,
+  }).catch(() => {});
+
+  // Subscription gates the entire app (FeatureGate paywall). Prefetch it
+  // so the first protected screen doesn't flash the loading state.
+  qc.prefetchQuery({
+    queryKey: ['subscription'],
+    queryFn: async () => (await subscriptionApi.get()).data,
+    staleTime: 5 * 60_000,
+  }).catch(() => {});
+
+  // ScheduleScreen's first paint shows "today's shifts". Prefetch the
+  // current week so even the schedule tab is instant on open.
+  qc.prefetchQuery({
+    queryKey: ['schedule-today'],
+    queryFn: async () => (await scheduleApi.getToday()).data,
     staleTime: 60_000,
   }).catch(() => {});
 }

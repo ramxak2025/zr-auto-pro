@@ -8,6 +8,14 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Tuned postgres config (see infra/postgres/postgresql.conf for rationale).
+      # Mounted read-only and pointed at via -c config_file=. Falls back to the
+      # image default if this file is missing or unreadable.
+      - ./infra/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s
