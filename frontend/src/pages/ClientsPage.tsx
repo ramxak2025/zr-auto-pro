@@ -184,11 +184,11 @@ export default function ClientsPage() {
               <button
                 type="button"
                 onClick={() => navigate('/clients/import')}
-                className="btn-secondary"
-                title="Импорт клиентов и авто"
+                className="btn-secondary hidden md:inline-flex"
+                title="Импорт клиентов и авто (только на компьютере)"
               >
                 <Upload className="w-4 h-4" />
-                <span className="hidden sm:inline">Импорт</span>
+                <span>Импорт</span>
               </button>
               <button
                 type="button"

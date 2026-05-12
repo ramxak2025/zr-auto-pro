@@ -321,15 +321,19 @@ export function createEquipmentApi(api: AxiosInstance) {
 }
 
 export function createImportsApi(api: AxiosInstance) {
+  // Bulk imports can run for a couple of minutes server-side; default axios
+  // timeout of 15s would kill the request well before preview/confirm finishes.
+  // Match the nginx `proxy_read_timeout` (600s) with a small headroom.
+  const longTimeout = { timeout: 600_000 };
   return {
     /** Returns a CSV template for clients+cars import (text/csv). */
     getClientsCarsTemplate: () =>
       api.get<string>('/imports/clients-cars/template', { responseType: 'text' as any }),
     /** Dry-run: validates and groups rows, returns preview without writing. */
     previewClientsCars: (data: ImportPreviewRequest) =>
-      api.post<ImportPreviewResponse>('/imports/clients-cars/preview', data),
+      api.post<ImportPreviewResponse>('/imports/clients-cars/preview', data, longTimeout),
     /** Commits the import in a transaction. Re-runs validation server-side. */
     confirmClientsCars: (data: ImportConfirmRequest) =>
-      api.post<ImportConfirmResponse>('/imports/clients-cars/confirm', data),
+      api.post<ImportConfirmResponse>('/imports/clients-cars/confirm', data, longTimeout),
   };
 }
