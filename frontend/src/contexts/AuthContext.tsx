@@ -1,6 +1,57 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { authApi } from '../api/services';
+import { useQueryClient, QueryClient } from '@tanstack/react-query';
+import {
+  authApi,
+  productsApi,
+  servicesApi,
+  clientsApi,
+  carsApi,
+  usersApi,
+  warehouseCategoriesApi,
+  subscriptionApi,
+} from '../api/services';
 import { User, UserPermissions, UserRole } from '../types';
+
+/**
+ * Warm the React Query cache with data the user is likely to open next.
+ *
+ * Runs in the background after login / session restore. Failures are silent —
+ * this is a perf optimization, not a contract. Screens still fetch their own
+ * data via useQuery if prefetch lost the race.
+ *
+ * Mirrors `prefetchAfterLogin` in `mobile/src/contexts/AuthContext.tsx` so
+ * web and mobile feel equally fast on first navigation.
+ */
+function prefetchAfterLogin(qc: QueryClient): void {
+  const limit = 50;
+  type PrefetchPair = [unknown[], () => Promise<unknown>];
+  const pairs: PrefetchPair[] = [
+    [
+      ['products', { page: 1, limit, search: '' }],
+      () => productsApi.getAll({ page: 1, limit, search: '' }).then((r: { data: unknown }) => r.data),
+    ],
+    [
+      ['services', { page: 1, limit, search: '' }],
+      () => servicesApi.getAll({ page: 1, limit, search: '' }).then((r: { data: unknown }) => r.data),
+    ],
+    [
+      ['clients', { search: '', page: 1, limit: 20 }],
+      () => clientsApi.getAll({ search: '', page: 1, limit: 20 }).then((r: { data: unknown }) => r.data),
+    ],
+    [
+      ['cars', { search: '', page: 1, limit: 20 }],
+      () => carsApi.getAll({ search: '', page: 1, limit: 20 }).then((r: { data: unknown }) => r.data),
+    ],
+    [['users'], () => usersApi.getAll().then((r: { data: unknown }) => r.data)],
+    [['warehouse-categories'], () => warehouseCategoriesApi.getAll().then((r: { data: unknown }) => r.data)],
+    [['subscription'], () => subscriptionApi.get().then((r: { data: unknown }) => r.data)],
+  ];
+  for (const [key, fn] of pairs) {
+    qc.prefetchQuery({ queryKey: key, queryFn: fn, staleTime: 60_000 }).catch(() => {
+      // Silent — prefetch is best-effort.
+    });
+  }
+}
 
 interface AuthContextType {
   user: User | null;
@@ -22,12 +73,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (token) {
       authApi
         .me()
-        .then((res: any) => setUser(res.data))
+        .then((res: any) => {
+          setUser(res.data);
+          // Warm reference data immediately after session restore so the
+          // first navigation feels instant.
+          prefetchAfterLogin(queryClient);
+        })
         .catch((err: any) => {
           // Only clear the token on a genuine auth failure (401/403).
           // Network errors, 5xx, or transient SW offline responses must NOT
@@ -45,7 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, queryClient]);
 
   const login = async (phone: string, password: string) => {
     const res = await authApi.login({ phone, password });
@@ -53,6 +110,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('token', t);
     setToken(t);
     setUser(u);
+    // Prefetch dashboards/lists in the background — by the time the user
+    // navigates to /products or /clients, the cache is already warm.
+    prefetchAfterLogin(queryClient);
   };
 
   const refreshUser = async () => {

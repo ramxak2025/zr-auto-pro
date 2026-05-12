@@ -7,6 +7,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import App from './App';
 import InstallPrompt from './components/InstallPrompt';
 import ErrorBoundary from './components/ErrorBoundary';
+import { setupPersistence } from './utils/persistentCache';
 import './index.css';
 
 // ─── Global error handlers ──────────────────────────────────────────────────
@@ -57,15 +58,31 @@ const queryClient = new QueryClient({
       retry: 1,
       refetchOnWindowFocus: false,
       staleTime: 2 * 60_000,
-      gcTime: 15 * 60_000,
+      // Longer gcTime so a tab switch / brief navigation doesn't drop the
+      // cache — combined with persistence below it means data is essentially
+      // never gone until staleTime expires.
+      gcTime: 30 * 60_000,
       refetchOnMount: true,
       refetchOnReconnect: false,
+      // Global stale-while-revalidate: when a queryKey changes (paging,
+      // search, filters) keep the previous result on screen until the new
+      // one arrives. Eliminates the blank-list flash on every list page.
+      placeholderData: (prev: unknown) => prev,
     },
     mutations: {
       retry: 0,
     },
   },
 });
+
+// Restore previously persisted query results from IndexedDB. Runs before the
+// first paint so screens with cached data render instantly on cold start.
+// Failures are silent — the app falls back to fetching everything fresh.
+try {
+  setupPersistence(queryClient);
+} catch (err) {
+  console.warn('Persistent cache setup failed:', err);
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
