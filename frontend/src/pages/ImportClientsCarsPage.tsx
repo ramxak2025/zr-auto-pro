@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, ChangeEvent } from 'react';
+import { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import toast from 'react-hot-toast';
@@ -158,6 +158,20 @@ export default function ImportClientsCarsPage() {
 
   // ─── Permission gate ──────────────────────────────────────────────────────
   const canImport = !!user && (user.role === 'director' || user.role === 'admin' || user.role === 'superadmin');
+
+  // ─── Desktop-only gate ────────────────────────────────────────────────────
+  // Import is a desktop workflow (file picker, big mapping table, large preview
+  // tables). On phones we surface a friendly "open on desktop" screen instead
+  // of a broken layout.
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 768;
+  });
+  useEffect(() => {
+    const onResize = () => setIsMobileViewport(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // ─── File parsing ─────────────────────────────────────────────────────────
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -354,6 +368,25 @@ export default function ImportClientsCarsPage() {
       <div className="max-w-2xl mx-auto py-12 text-center">
         <h1 className="text-2xl font-semibold text-gray-900 mb-2">Импорт клиентов и автомобилей</h1>
         <p className="text-gray-500">Импорт доступен только директору, администратору или владельцу сервиса.</p>
+      </div>
+    );
+  }
+
+  if (isMobileViewport) {
+    return (
+      <div className="max-w-md mx-auto py-12 px-4 text-center">
+        <div className="mx-auto h-16 w-16 rounded-2xl bg-primary-50 flex items-center justify-center mb-4">
+          <FileSpreadsheet className="h-8 w-8 text-primary-600" />
+        </div>
+        <h1 className="text-xl font-semibold text-gray-900 mb-2">Откройте на компьютере</h1>
+        <p className="text-sm text-gray-500 mb-6">
+          Импорт больших Excel/CSV-файлов с сопоставлением колонок неудобен на телефоне. Откройте Autexa на ноутбуке
+          или ПК — там этот раздел появится в «Клиентах».
+        </p>
+        <button onClick={() => navigate('/clients')} className="btn-primary inline-flex">
+          <ArrowLeft className="w-4 h-4" />
+          Назад к клиентам
+        </button>
       </div>
     );
   }
