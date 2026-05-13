@@ -62,9 +62,20 @@ export class ClientsService {
     let idx = 2;
 
     if (search) {
-      where += ` AND (c.full_name ILIKE $${idx} OR c.phone ILIKE $${idx} OR EXISTS(SELECT 1 FROM cars ca WHERE ca.client_id = c.id AND ca.plate_number ILIKE $${idx}))`;
-      params.push(`%${search}%`);
-      idx++;
+      // Plates and phones are stored without spaces; let the user search with
+      // or without them.
+      const compactSearch = search.replace(/\s+/g, '');
+      where += ` AND (
+        c.full_name ILIKE $${idx}
+        OR REPLACE(c.phone, ' ', '') ILIKE $${idx + 1}
+        OR EXISTS (
+          SELECT 1 FROM cars ca
+          WHERE ca.client_id = c.id
+            AND REPLACE(ca.plate_number, ' ', '') ILIKE $${idx + 1}
+        )
+      )`;
+      params.push(`%${search}%`, `%${compactSearch}%`);
+      idx += 2;
     }
 
     const countResult = await this.pool.query(
