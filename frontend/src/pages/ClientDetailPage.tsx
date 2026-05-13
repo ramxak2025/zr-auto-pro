@@ -833,9 +833,9 @@ export default function ClientDetailPage() {
             <input
               type="text"
               value={plateNumber}
-              onChange={(e) => setPlateNumber(e.target.value.toUpperCase())}
+              onChange={(e) => setPlateNumber(e.target.value.replace(/\s+/g, '').toUpperCase())}
               className="input"
-              placeholder="01 A 123 AA"
+              placeholder="А123АА77"
               required
             />
           </div>

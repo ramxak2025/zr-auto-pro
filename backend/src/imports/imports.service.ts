@@ -314,7 +314,10 @@ export class ImportsService {
           const { rows: insCar } = await dbClient.query(
             `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id)
              VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-            [car.plateDisplay || car.plateKey, car.makeModel, comment, clientId, tenantID],
+            // Store the canonical plate key without spaces / separators.
+            // Display formatting happens in the UI; the DB stores the compact
+            // form so search / dedup / API responses are uniform.
+            [car.plateKey || car.plateDisplay, car.makeModel, comment, clientId, tenantID],
           );
           createdCarIds.push(insCar[0].id);
         }

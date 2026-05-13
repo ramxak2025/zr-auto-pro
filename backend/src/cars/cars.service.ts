@@ -74,9 +74,15 @@ export class CarsService {
     let idx = 2;
 
     if (search) {
-      where += ` AND (ca.plate_number ILIKE $${idx} OR ca.make_model ILIKE $${idx})`;
-      params.push(`%${search}%`);
-      idx++;
+      // Plate numbers are stored compactly (no spaces). Let the user enter
+      // either form: REPLACE strips spaces from the column at match time.
+      const compactSearch = search.replace(/\s+/g, '');
+      where += ` AND (
+        REPLACE(ca.plate_number, ' ', '') ILIKE $${idx}
+        OR ca.make_model ILIKE $${idx + 1}
+      )`;
+      params.push(`%${compactSearch}%`, `%${search}%`);
+      idx += 2;
     }
 
     const countResult = await this.pool.query(
