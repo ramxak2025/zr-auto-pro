@@ -29,6 +29,20 @@ export class ChecksController {
     return this.checksService.getRanking(user.tenantID);
   }
 
+  /**
+   * Last visit (most recent check) for a given client and / or car. Used by
+   * the cash screen to surface "Последний визит: ..." once a client/car is
+   * selected, so the master immediately sees when the customer was here last.
+   */
+  @Get('last-visit')
+  getLastVisit(
+    @CurrentUser() user: JwtPayload,
+    @Query('clientId') clientId?: string,
+    @Query('carId') carId?: string,
+  ) {
+    return this.checksService.getLastVisit(user.tenantID, { clientId, carId });
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.checksService.getById(id, user.tenantID);

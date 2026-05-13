@@ -18,10 +18,12 @@ import { clientsApi, carsApi, checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Client, Car, Check } from '../../../shared/types';
+import { formatPhone } from '../../../shared/validation/phone';
 
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -105,6 +107,15 @@ export default function ClientDetailScreen() {
   const [makeModel, setMakeModel] = useState('');
   const [carComment, setCarComment] = useState('');
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
+  // Duplicate-by-plate dialog state.
+  const [duplicateCar, setDuplicateCar] = useState<{
+    id: string;
+    plateNumber: string;
+    makeModel: string;
+    clientId: string | null;
+    client: { id: string; fullName: string; phone: string } | null;
+  } | null>(null);
+  const [carSubmitting, setCarSubmitting] = useState(false);
 
   const { data: client, isLoading } = useQuery<Client>({
     queryKey: ['client', id],
@@ -177,12 +188,46 @@ export default function ClientDetailScreen() {
     setCarModalOpen(true);
   };
 
-  const handleCarSubmit = () => {
+  const handleCarSubmit = async () => {
     const payload = { plateNumber, makeModel, comment: carComment || undefined, clientId: id };
     if (editingCar) {
       updateCarMutation.mutate({ carId: editingCar.id, data: payload });
-    } else {
+      return;
+    }
+    // Pre-create duplicate check by plate.
+    setCarSubmitting(true);
+    try {
+      const res = await carsApi.lookupByPlate(plateNumber);
+      const existing = res.data;
+      if (existing) {
+        setDuplicateCar(existing);
+        return;
+      }
       createCarMutation.mutate(payload);
+    } catch {
+      createCarMutation.mutate(payload);
+    } finally {
+      setCarSubmitting(false);
+    }
+  };
+
+  const handleCreateCarAnyway = () => {
+    setDuplicateCar(null);
+    createCarMutation.mutate({
+      plateNumber,
+      makeModel,
+      comment: carComment || undefined,
+      clientId: id,
+    });
+  };
+
+  const handleOpenExistingCar = () => {
+    if (!duplicateCar) return;
+    const ownerId = duplicateCar.clientId;
+    setDuplicateCar(null);
+    setCarModalOpen(false);
+    if (ownerId && ownerId !== id) {
+      (navigation as any).navigate('ClientDetail', { id: ownerId });
     }
   };
 
@@ -260,7 +305,7 @@ export default function ClientDetailScreen() {
           <View style={styles.infoRow}>
             <Ionicons name="call-outline" size={15} color={colors.gray[400]} />
             <Text style={styles.infoLabel}>Телефон</Text>
-            <Text style={styles.infoValue}>{client.phone}</Text>
+            <Text style={styles.infoValue}>{formatPhone(client.phone)}</Text>
           </View>
           {client.comment && (
             <View style={styles.infoRow}>
@@ -510,6 +555,26 @@ export default function ClientDetailScreen() {
         message="Вы уверены?"
         confirmText="Удалить"
         variant="danger"
+      />
+
+      <DuplicateWarningDialog
+        visible={!!duplicateCar}
+        onClose={() => setDuplicateCar(null)}
+        onCreateAnyway={handleCreateCarAnyway}
+        onOpenExisting={handleOpenExistingCar}
+        title="Такой автомобиль уже есть"
+        description={
+          duplicateCar?.clientId === id
+            ? `Госномер ${duplicateCar?.plateNumber} уже привязан к этому клиенту. Создать дубликат?`
+            : `Госномер ${duplicateCar?.plateNumber || plateNumber} уже привязан к другому клиенту.`
+        }
+        existingLabel={duplicateCar?.makeModel || ''}
+        existingSubtitle={
+          duplicateCar?.client
+            ? `Клиент: ${duplicateCar.client.fullName}`
+            : duplicateCar?.plateNumber
+        }
+        openExistingLabel={duplicateCar?.clientId === id ? 'Закрыть' : 'Открыть владельца'}
       />
     </SafeAreaView>
   );

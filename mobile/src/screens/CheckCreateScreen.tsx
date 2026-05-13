@@ -47,6 +47,8 @@ import type {
   CheckProductLine,
   PaymentMethod,
 } from '../../../shared/types';
+import { formatPhone } from '../../../shared/validation/phone';
+import LastVisitBadge from '../components/LastVisitBadge';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -827,9 +829,9 @@ export default function CheckCreateScreen() {
                     <Text style={styles.selectedCardName} numberOfLines={1}>
                       {selectedClient.fullName}
                     </Text>
-                    {selectedClient.phone && (
+                    {!!selectedClient.phone && (
                       <Text style={styles.selectedCardPhone} numberOfLines={1}>
-                        {selectedClient.phone}
+                        {formatPhone(selectedClient.phone)}
                       </Text>
                     )}
                   </View>
@@ -867,6 +869,7 @@ export default function CheckCreateScreen() {
                     )}
                   </View>
                 )}
+                <LastVisitBadge clientId={selectedClient.id} carId={selectedCar?.id} />
               </View>
             ) : (
               <>

@@ -17,6 +17,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi } from '../api/services';
 import type { Car } from '../../../shared/types';
+import { formatPhone } from '../../../shared/validation/phone';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -25,6 +26,7 @@ import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Client, PaginatedResponse } from '../../../shared/types';
 
@@ -120,13 +122,52 @@ export default function ClientsScreen() {
     setEditingClient(null);
   };
 
-  const handleSubmit = () => {
+  // Duplicate-by-phone dialog state. Mirrors the web flow in ClientsPage:
+  // before creating a new client, ping clientsApi.lookupByPhone — if the
+  // tenant already has someone with that phone, show a warning popup with
+  // an option to open the existing card or create a duplicate anyway.
+  const [duplicateClient, setDuplicateClient] = useState<{
+    id: string;
+    fullName: string;
+    phone: string;
+    cars?: Array<{ plateNumber: string; makeModel: string }>;
+  } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
     const payload = { fullName, phone, comment: comment || undefined };
     if (editingClient) {
       updateMutation.mutate({ id: editingClient.id, data: payload });
-    } else {
-      createMutation.mutate(payload);
+      return;
     }
+    setSubmitting(true);
+    try {
+      const res = await clientsApi.lookupByPhone(phone);
+      const existing = res.data;
+      if (existing) {
+        setDuplicateClient(existing);
+        return;
+      }
+      createMutation.mutate(payload);
+    } catch {
+      // Fall back to creating if the lookup endpoint hiccups.
+      createMutation.mutate(payload);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCreateAnyway = () => {
+    setDuplicateClient(null);
+    createMutation.mutate({ fullName, phone, comment: comment || undefined });
+  };
+
+  const handleOpenExistingClient = () => {
+    if (!duplicateClient) return;
+    const id = duplicateClient.id;
+    setDuplicateClient(null);
+    setModalOpen(false);
+    (navigation as any).navigate('ClientDetail', { id });
   };
 
   const onRefresh = async () => {
@@ -200,7 +241,7 @@ export default function ClientsScreen() {
         <View style={styles.clientBottom}>
           <View style={styles.phoneRow}>
             <Ionicons name="call-outline" size={13} color={colors.gray[400]} />
-            <Text style={styles.clientPhone}>{item.phone}</Text>
+            <Text style={styles.clientPhone}>{formatPhone(item.phone)}</Text>
           </View>
           <View style={styles.carsBadge}>
             <Ionicons name="car-outline" size={12} color={colors.blue[700]} />
@@ -407,6 +448,19 @@ export default function ClientsScreen() {
         message="Вы уверены? Это действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
+      />
+
+      <DuplicateWarningDialog
+        visible={!!duplicateClient}
+        onClose={() => setDuplicateClient(null)}
+        onCreateAnyway={handleCreateAnyway}
+        onOpenExisting={handleOpenExistingClient}
+        title="Такой клиент уже есть"
+        description={`Клиент с этим телефоном уже существует. Открыть существующего или всё равно создать?`}
+        existingLabel={duplicateClient?.fullName || ''}
+        existingSubtitle={duplicateClient?.phone}
+        existingCars={duplicateClient?.cars}
+        openExistingLabel="Открыть карточку"
       />
     </View>
   );

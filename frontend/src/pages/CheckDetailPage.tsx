@@ -32,6 +32,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import type { Check, Tenant } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
 import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
+import { formatPhone } from '../../../shared/validation/phone';
 
 const paymentMethodIcons: Record<string, typeof Banknote> = {
   cash: Banknote,
@@ -210,7 +211,7 @@ export default function CheckDetailPage() {
             </div>
             <p className="text-sm font-semibold text-gray-900 truncate">{check.client?.fullName ?? '—'}</p>
             {check.client?.phone && (
-              <p className="text-xs text-gray-400 mt-0.5">{check.client.phone}</p>
+              <p className="text-xs text-gray-400 mt-0.5">{formatPhone(check.client.phone)}</p>
             )}
           </Link>
         ) : (

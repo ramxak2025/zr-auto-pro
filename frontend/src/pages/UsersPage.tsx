@@ -12,6 +12,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { roleLabels } from '../../../shared/utils/formatters';
+import { formatPhone } from '../../../shared/validation/phone';
 
 const roleBadgeMap: Record<string, string> = {
   director: 'badge-blue',
@@ -266,7 +267,7 @@ export default function UsersPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-sm text-gray-500">
-                  <span>{user.phone}</span>
+                  <span>{formatPhone(user.phone)}</span>
                   <span className="text-gray-300">|</span>
                   <span>{user.salaryPercent}%</span>
                   <span className="text-gray-300">|</span>
@@ -297,7 +298,7 @@ export default function UsersPage() {
                 {users.map((user) => (
                   <tr key={user.id}>
                     <td className="font-medium text-gray-900">{user.fullName}</td>
-                    <td>{user.phone}</td>
+                    <td>{formatPhone(user.phone)}</td>
                     <td>
                       <span className={roleBadgeMap[user.role] || 'badge-gray'}>
                         {roleLabels[user.role] || user.role}
