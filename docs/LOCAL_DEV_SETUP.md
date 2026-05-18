@@ -137,13 +137,20 @@ npm run android
 
 6. Merge через GitHub UI (squash merge — чище история).
 
-7. Push в refactor/full-audit-2026 триггерит автодеплой:
-   - .github/workflows/deploy.yml видит push в refactor/full-audit-2026
-   - webhook на VDS вызывает /deploy/deploy.sh
-   - docker compose тянет новый код и пересобирает контейнеры
+7. Push в refactor/full-audit-2026 → автодеплой на VDS:
+   - На VDS cron каждую минуту запускает /opt/zr-auto-pro/auto-pull.sh
+   - Скрипт делает `git fetch origin refactor/full-audit-2026` и сравнивает SHA
+   - При новом коммите вызывает /opt/zr-auto-pro/deploy.sh:
+       backup БД (./backup.sh) → git pull --ff-only → docker compose build --no-cache backend frontend
+       → docker compose up -d --no-deps --force-recreate backend frontend
+   - Postgres-контейнер не пересобирается, volume pgdata цел.
+   - До первого деплоя проходит до 60 секунд после push.
+   - Логи: /var/log/zr-autodeploy.log на VDS.
 
 8. Проверить прод: <prod-url>/api/health должен ответить ok.
 ```
+
+**Важно про деплой:** `.github/workflows/deploy.yml` и контейнер `zr-auto-pro-webhook-1` сейчас фактически не используются — в их конфигурации устаревшие ветки (`main`, `claude/redesign-from-scratch-5xQJz`). Единственный рабочий механизм — cron + auto-pull.sh на хосте VDS. Скрипт `scripts/deploy-vds.sh` в репо тоже устарел (тянет `main`, пересобирает все контейнеры включая postgres). Не пользоваться им, не запускать руками.
 
 ## 10. Чего НЕ делать
 
