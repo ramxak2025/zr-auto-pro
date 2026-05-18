@@ -1,10 +1,21 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Shared API Service Factories
-//  Each factory accepts an AxiosInstance and returns the API module.
+//  Each factory accepts an HTTP client (axios-shaped) and returns the API module.
 //  Platform-specific code (file upload, image compression) is NOT here.
+//
+//  HttpClient структурно совместим с этим интерфейсом — потребитель
+//  (mobile/frontend) передаёт настроенный axios. shared не зависит от axios
+//  как пакета, поэтому конфликта типов между mobile/node_modules/axios и
+//  shared/node_modules/axios больше нет — последнего просто не существует.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import type { AxiosInstance } from 'axios';
+interface HttpClient {
+  get<T = any>(url: string, config?: unknown): Promise<{ data: T }>;
+  post<T = any>(url: string, data?: unknown, config?: unknown): Promise<{ data: T }>;
+  put<T = any>(url: string, data?: unknown, config?: unknown): Promise<{ data: T }>;
+  patch<T = any>(url: string, data?: unknown, config?: unknown): Promise<{ data: T }>;
+  delete<T = any>(url: string, config?: unknown): Promise<{ data: T }>;
+}
 import type {
   User, Tenant, Plan, Client, Car, Product, Service, Check, Supplier,
   Delivery, SupplierPayment, MasterSalary, SalarySummary, SalaryPayment,
@@ -25,7 +36,7 @@ import type {
   ImportPreviewRequest, ImportPreviewResponse, ImportConfirmRequest, ImportConfirmResponse,
 } from './types';
 
-export function createAuthApi(api: AxiosInstance) {
+export function createAuthApi(api: HttpClient) {
   return {
     login: (data: LoginRequest) => api.post<LoginResponse>('/auth/login', data),
     register: (data: RegisterRequest) => api.post<LoginResponse>('/auth/register', data),
@@ -35,7 +46,7 @@ export function createAuthApi(api: AxiosInstance) {
   };
 }
 
-export function createUsersApi(api: AxiosInstance) {
+export function createUsersApi(api: HttpClient) {
   return {
     getAll: (params?: PaginationParams) => api.get<User[]>('/users', { params }),
     getMasters: (params?: PaginationParams) => api.get<User[]>('/users/masters', { params }),
@@ -50,7 +61,7 @@ export function createUsersApi(api: AxiosInstance) {
   };
 }
 
-export function createTenantsApi(api: AxiosInstance) {
+export function createTenantsApi(api: HttpClient) {
   return {
     getAll: () => api.get<Tenant[]>('/tenants'),
     getStats: () => api.get<PlatformStats>('/tenants/stats'),
@@ -61,14 +72,14 @@ export function createTenantsApi(api: AxiosInstance) {
   };
 }
 
-export function createMyCompanyApi(api: AxiosInstance) {
+export function createMyCompanyApi(api: HttpClient) {
   return {
     get: () => api.get<Tenant>('/my-company'),
     update: (data: Partial<Tenant>) => api.patch<Tenant>('/my-company', data),
   };
 }
 
-export function createPlansApi(api: AxiosInstance) {
+export function createPlansApi(api: HttpClient) {
   return {
     getAll: () => api.get<Plan[]>('/plans'),
     create: (data: CreatePlanRequest) => api.post<Plan>('/plans', data),
@@ -77,13 +88,13 @@ export function createPlansApi(api: AxiosInstance) {
   };
 }
 
-export function createSubscriptionApi(api: AxiosInstance) {
+export function createSubscriptionApi(api: HttpClient) {
   return {
     get: () => api.get<SubscriptionInfo>('/subscription'),
   };
 }
 
-export function createClientsApi(api: AxiosInstance) {
+export function createClientsApi(api: HttpClient) {
   return {
     getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Client>>('/clients', { params }),
     getById: (id: string) => api.get<Client>(`/clients/${id}`),
@@ -103,7 +114,7 @@ export function createClientsApi(api: AxiosInstance) {
   };
 }
 
-export function createCarsApi(api: AxiosInstance) {
+export function createCarsApi(api: HttpClient) {
   return {
     getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Car>>('/cars', { params }),
     getById: (id: string) => api.get<Car>(`/cars/${id}`),
@@ -123,7 +134,7 @@ export function createCarsApi(api: AxiosInstance) {
   };
 }
 
-export function createProductsApi(api: AxiosInstance) {
+export function createProductsApi(api: HttpClient) {
   return {
     getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Product>>('/products', { params }),
     getLowStock: () => api.get<Product[]>('/products/low-stock'),
@@ -150,7 +161,7 @@ export function createProductsApi(api: AxiosInstance) {
   };
 }
 
-export function createServicesApi(api: AxiosInstance) {
+export function createServicesApi(api: HttpClient) {
   return {
     getAll: (params?: PaginationParams & { category?: string }) => api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
@@ -160,7 +171,7 @@ export function createServicesApi(api: AxiosInstance) {
   };
 }
 
-export function createChecksApi(api: AxiosInstance) {
+export function createChecksApi(api: HttpClient) {
   return {
     getAll: (params?: ChecksParams) => api.get<PaginatedResponse<Check>>('/checks', { params }),
     getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
@@ -188,7 +199,7 @@ export function createChecksApi(api: AxiosInstance) {
   };
 }
 
-export function createSuppliersApi(api: AxiosInstance) {
+export function createSuppliersApi(api: HttpClient) {
   return {
     getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Supplier>>('/suppliers', { params }),
     getById: (id: string) => api.get<Supplier>(`/suppliers/${id}`),
@@ -203,7 +214,7 @@ export function createSuppliersApi(api: AxiosInstance) {
   };
 }
 
-export function createSalaryApi(api: AxiosInstance) {
+export function createSalaryApi(api: HttpClient) {
   return {
     getAll: (params?: DateRangeParams) => api.get<MasterSalary[]>('/salary', { params }),
     getMy: () => api.get<SalarySummary>('/salary/my'),
@@ -212,14 +223,14 @@ export function createSalaryApi(api: AxiosInstance) {
   };
 }
 
-export function createReportsApi(api: AxiosInstance) {
+export function createReportsApi(api: HttpClient) {
   return {
     getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
     getCashFlow: (params: CashFlowParams) => api.get<{ days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>; totals: { cash: number; card: number; warranty: number; total: number } }>('/reports/cashflow', { params }),
   };
 }
 
-export function createShiftsApi(api: AxiosInstance) {
+export function createShiftsApi(api: HttpClient) {
   return {
     getAll: (params?: PaginationParams) => api.get<Shift[]>('/shifts', { params }),
     getMy: () => api.get<Shift[]>('/shifts/my'),
@@ -228,7 +239,7 @@ export function createShiftsApi(api: AxiosInstance) {
   };
 }
 
-export function createScheduleApi(api: AxiosInstance) {
+export function createScheduleApi(api: HttpClient) {
   return {
     getAll: (params: DateRangeParams) => api.get<ScheduleEntry[]>('/schedule', { params }),
     create: (data: CreateScheduleRequest) => api.post<ScheduleEntry>('/schedule', data),
@@ -243,7 +254,7 @@ export function createScheduleApi(api: AxiosInstance) {
   };
 }
 
-export function createExpensesApi(api: AxiosInstance) {
+export function createExpensesApi(api: HttpClient) {
   return {
     getCategories: () => api.get<Array<{ id: string; name: string }>>('/expenses/categories'),
     createCategory: (data: { name: string }) => api.post('/expenses/categories', data),
@@ -254,7 +265,7 @@ export function createExpensesApi(api: AxiosInstance) {
   };
 }
 
-export function createWarehouseCategoriesApi(api: AxiosInstance) {
+export function createWarehouseCategoriesApi(api: HttpClient) {
   return {
     getAll: () => api.get<Array<{ id: string; path: string; sort_order: number }>>('/warehouse/categories'),
     create: (path: string) => api.post<{ id: string; path: string }>('/warehouse/categories', { path }),
@@ -270,7 +281,7 @@ export function createWarehouseCategoriesApi(api: AxiosInstance) {
   };
 }
 
-export function createMarketingApi(api: AxiosInstance) {
+export function createMarketingApi(api: HttpClient) {
   return {
     getDashboard: () => api.get<MarketingDashboard>('/marketing/dashboard'),
     getReviews: (params?: { employeeId?: string; minRating?: number; maxRating?: number; month?: string }) => api.get<ReviewResponse[]>('/marketing/reviews', { params }),
@@ -289,14 +300,14 @@ export function createMarketingApi(api: AxiosInstance) {
   };
 }
 
-export function createPublicReviewApi(api: AxiosInstance) {
+export function createPublicReviewApi(api: HttpClient) {
   return {
     getByToken: (token: string) => api.get<PublicReviewData>(`/marketing/review/${token}`),
     submit: (token: string, data: { rating: number; comment?: string; redirectedTo?: string }) => api.post<{ success: boolean }>(`/marketing/review/${token}`, data),
   };
 }
 
-export function createCallsApi(api: AxiosInstance) {
+export function createCallsApi(api: HttpClient) {
   return {
     getCalls: (params: { date?: string; dateFrom?: string; dateTo?: string }) =>
       api.get<{ calls: any[]; summary: { total: number; incoming: number; outgoing: number; missed: number; notCalledBack: number } }>('/calls', { params }),
@@ -311,7 +322,7 @@ export function createCallsApi(api: AxiosInstance) {
   };
 }
 
-export function createEquipmentApi(api: AxiosInstance) {
+export function createEquipmentApi(api: HttpClient) {
   return {
     // Storage room
     getCategories: () => api.get<any[]>('/equipment/categories'),
@@ -338,7 +349,7 @@ export function createEquipmentApi(api: AxiosInstance) {
   };
 }
 
-export function createImportsApi(api: AxiosInstance) {
+export function createImportsApi(api: HttpClient) {
   // Bulk imports can run for a couple of minutes server-side; default axios
   // timeout of 15s would kill the request well before preview/confirm finishes.
   // Match the nginx `proxy_read_timeout` (600s) with a small headroom.
