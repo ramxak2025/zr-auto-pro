@@ -68,7 +68,7 @@ services:
     restart: unless-stopped
     environment:
       DEPLOY_SECRET: ${DEPLOY_SECRET:?DEPLOY_SECRET must be set in .env}
-      DEPLOY_BRANCH: ${DEPLOY_BRANCH:-master}
+      DEPLOY_BRANCH: ${DEPLOY_BRANCH:-refactor/full-audit-2026}
       WEBHOOK_PORT: '9000'
     ports:
       - '127.0.0.1:9000:9000'

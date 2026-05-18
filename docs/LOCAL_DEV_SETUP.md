@@ -138,7 +138,7 @@ npm run android
 6. Merge через GitHub UI (squash merge — чище история).
 
 7. Push в refactor/full-audit-2026 → автодеплой на VDS:
-   - На VDS cron каждую минуту запускает /opt/zr-auto-pro/auto-pull.sh
+   - На VDS cron каждую минуту запускает /opt/zr-auto-pro/scripts/auto-pull.sh
    - Скрипт делает `git fetch origin refactor/full-audit-2026` и сравнивает SHA
    - При новом коммите вызывает /opt/zr-auto-pro/deploy.sh:
        backup БД (./backup.sh) → git pull --ff-only → docker compose build --no-cache backend frontend
@@ -150,7 +150,31 @@ npm run android
 8. Проверить прод: <prod-url>/api/health должен ответить ok.
 ```
 
-**Важно про деплой:** `.github/workflows/deploy.yml` и контейнер `zr-auto-pro-webhook-1` сейчас фактически не используются — в их конфигурации устаревшие ветки (`main`, `claude/redesign-from-scratch-5xQJz`). Единственный рабочий механизм — cron + auto-pull.sh на хосте VDS. Скрипт `scripts/deploy-vds.sh` в репо тоже устарел (тянет `main`, пересобирает все контейнеры включая postgres). Не пользоваться им, не запускать руками.
+**Миграция cron на новый путь** (один раз, после первого деплоя этих изменений):
+
+```bash
+# на VDS под root
+sudo crontab -e
+# заменить:
+#   * * * * * /opt/zr-auto-pro/auto-pull.sh >> /var/log/zr-autodeploy.log 2>&1
+# на:
+#   * * * * * /opt/zr-auto-pro/scripts/auto-pull.sh >> /var/log/zr-autodeploy.log 2>&1
+# сохранить, выйти
+
+# старый файл больше не нужен
+sudo rm /opt/zr-auto-pro/auto-pull.sh
+
+# если в /opt/zr-auto-pro/.env лежит устаревший DEPLOY_BRANCH — поправить или удалить
+sudo grep DEPLOY_BRANCH /opt/zr-auto-pro/.env
+# должно быть либо отсутствие строки (тогда возьмётся дефолт из docker-compose.yml = refactor/full-audit-2026),
+# либо DEPLOY_BRANCH=refactor/full-audit-2026
+
+# применить env webhook
+cd /opt/zr-auto-pro
+docker compose up -d --no-deps webhook
+```
+
+**Важно про деплой:** контейнер `zr-auto-pro-webhook-1` есть, но в конфигурации GitHub Actions (`.github/workflows/deploy.yml` — удалён в этом PR) была сломанная ветка-триггер, поэтому webhook никогда не дёргался. После миграции выше webhook становится рабочим резервом cron'а (на случай ручной задержки cron'а или если потребуется ручной триггер через HTTP). Основной механизм деплоя — всё равно cron + scripts/auto-pull.sh.
 
 ## 10. Чего НЕ делать
 
