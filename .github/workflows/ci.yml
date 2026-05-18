@@ -4,7 +4,7 @@ on:
   push:
     branches: [refactor/full-audit-2026, master, main]
   pull_request:
-    branches: [master, main]
+    branches: [refactor/full-audit-2026, master, main]
 
 concurrency:
   group: ci-${{ github.ref }}
