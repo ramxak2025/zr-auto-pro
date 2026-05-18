@@ -22,11 +22,27 @@ export class ClientsService {
       [tenantID, normalized],
     );
     if (rows.length === 0) return null;
-    return {
+    const client = {
       id: rows[0].id as string,
       fullName: rows[0].full_name as string,
       phone: rows[0].phone as string,
       createdAt: rows[0].created_at as string,
+    };
+    // Include the client's cars so the duplicate-warning dialog can show
+    // "уже привязано: А123АА77 Toyota Camry, В456ВВ99 Lada Granta".
+    const { rows: carRows } = await this.pool.query(
+      `SELECT id, plate_number, make_model
+       FROM cars WHERE client_id = $1 AND tenant_id = $2
+       ORDER BY created_at`,
+      [client.id, tenantID],
+    );
+    return {
+      ...client,
+      cars: carRows.map((r) => ({
+        id: r.id as string,
+        plateNumber: r.plate_number as string,
+        makeModel: r.make_model as string,
+      })),
     };
   }
 

@@ -32,6 +32,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { Client, Car as CarType, Check } from '../types';
+import { formatPhone } from '../../../shared/validation/phone';
 
 // ---- Car Checks Expandable Panel ----
 function CarChecksPanel({ carId }: { carId: string }) {
@@ -197,7 +198,7 @@ function ClientSearchAutocomplete({
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-gray-900">{selectedClient.fullName}</p>
-          <p className="text-xs text-gray-500">{selectedClient.phone}</p>
+          <p className="text-xs text-gray-500">{formatPhone(selectedClient.phone)}</p>
         </div>
         <button
           type="button"
@@ -256,7 +257,7 @@ function ClientSearchAutocomplete({
                   <p className="text-sm font-medium text-gray-900 truncate">
                     {client.fullName}
                   </p>
-                  <p className="text-xs text-gray-500">{client.phone}</p>
+                  <p className="text-xs text-gray-500">{formatPhone(client.phone)}</p>
                 </div>
               </button>
             ))
@@ -563,7 +564,7 @@ export default function ClientDetailPage() {
             </div>
             <div>
               <p className="text-xs text-gray-500">Телефон</p>
-              <p className="font-medium text-gray-900">{client.phone}</p>
+              <p className="font-medium text-gray-900">{formatPhone(client.phone)}</p>
             </div>
           </div>
 
@@ -925,7 +926,7 @@ export default function ClientDetailPage() {
         existingLabel={duplicateCar?.makeModel || ''}
         existingSubtitle={
           duplicateCar?.client
-            ? `Клиент: ${duplicateCar.client.fullName} · ${duplicateCar.client.phone}`
+            ? `Клиент: ${duplicateCar.client.fullName} · ${formatPhone(duplicateCar.client.phone)}`
             : duplicateCar?.plateNumber
         }
         openExistingLabel={duplicateCar?.clientId === id ? 'Закрыть' : 'Открыть владельца'}

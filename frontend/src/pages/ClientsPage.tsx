@@ -14,6 +14,7 @@ import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import PhoneInput from '../components/PhoneInput';
 import { Client, PaginatedResponse } from '../types';
+import { formatPhone } from '../../../shared/validation/phone';
 
 export default function ClientsPage() {
   const navigate = useNavigate();
@@ -39,7 +40,12 @@ export default function ClientsPage() {
   const [comment, setComment] = useState('');
 
   // Duplicate-by-phone warning
-  const [duplicateClient, setDuplicateClient] = useState<{ id: string; fullName: string; phone: string } | null>(null);
+  const [duplicateClient, setDuplicateClient] = useState<{
+    id: string;
+    fullName: string;
+    phone: string;
+    cars?: Array<{ plateNumber: string; makeModel: string }>;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Query
@@ -298,7 +304,7 @@ export default function ClientsPage() {
                 <div className="flex items-center gap-4 text-sm text-gray-500">
                   <span className="flex items-center gap-1">
                     <Phone className="w-3.5 h-3.5" />
-                    {client.phone}
+                    {formatPhone(client.phone)}
                   </span>
                   <span className="badge-info text-[11px]">{client.cars?.length || 0} авто</span>
                 </div>
@@ -336,7 +342,7 @@ export default function ClientsPage() {
                     <td>
                       <div className="flex items-center gap-2">
                         <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="text-gray-600">{client.phone}</span>
+                        <span className="text-gray-600">{formatPhone(client.phone)}</span>
                       </div>
                     </td>
                     <td>
@@ -456,9 +462,10 @@ export default function ClientsPage() {
         onCreateAnyway={handleCreateAnyway}
         onOpenExisting={handleOpenExistingClient}
         title="Такой клиент уже есть"
-        description={`Клиент с телефоном ${duplicateClient?.phone || phone} уже существует в вашей базе. Открыть существующего, чтобы дополнить данные, или всё равно создать нового?`}
+        description={`Клиент с телефоном ${duplicateClient ? formatPhone(duplicateClient.phone) : formatPhone(phone)} уже существует в вашей базе. Открыть существующего, чтобы дополнить данные, или всё равно создать нового?`}
         existingLabel={duplicateClient?.fullName || ''}
-        existingSubtitle={duplicateClient?.phone}
+        existingSubtitle={duplicateClient ? formatPhone(duplicateClient.phone) : undefined}
+        existingCars={duplicateClient?.cars}
         openExistingLabel="Открыть карточку"
       />
     </div>

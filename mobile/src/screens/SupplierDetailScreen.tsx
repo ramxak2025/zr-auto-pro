@@ -21,6 +21,7 @@ import Modal from '../components/Modal';
 import ProductPickerModal from '../components/ProductPickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Supplier, Delivery, SupplierPayment, Product } from '../../../shared/types';
+import { formatPhone } from '../../../shared/validation/phone';
 
 function formatMoney(v: number) {
   return (
@@ -250,7 +251,7 @@ export default function SupplierDetailScreen() {
             {supplier.phone && (
               <View style={styles.infoRow}>
                 <Ionicons name="call-outline" size={16} color={colors.gray[400]} />
-                <Text style={styles.infoText}>{supplier.phone}</Text>
+                <Text style={styles.infoText}>{formatPhone(supplier.phone)}</Text>
               </View>
             )}
           </View>

@@ -721,6 +721,66 @@ export class ChecksService {
     return { points, totalRevenue, totalProfit, totalChecks };
   }
 
+  /**
+   * Returns the most recent (non-deferred) check for the given client/car.
+   * Either or both filters can be set; if both are passed, the check must
+   * match both. Used by the cash screen to show "Последний визит".
+   */
+  async getLastVisit(
+    tenantID: string,
+    filters: { clientId?: string; carId?: string },
+  ): Promise<{
+    id: string;
+    date: string;
+    number: number;
+    totalRevenue: number;
+    masterName: string | null;
+    carPlate: string | null;
+    carMakeModel: string | null;
+  } | null> {
+    const conds: string[] = ['ch.tenant_id = $1'];
+    const params: unknown[] = [tenantID];
+    let idx = 2;
+    if (filters.clientId) {
+      conds.push(`ch.client_id = $${idx++}`);
+      params.push(filters.clientId);
+    }
+    if (filters.carId) {
+      conds.push(`ch.car_id = $${idx++}`);
+      params.push(filters.carId);
+    }
+    if (!filters.clientId && !filters.carId) {
+      return null;
+    }
+
+    const { rows } = await this.pool.query(
+      `SELECT
+         ch.id, ch.number, ch.date, ch.total_revenue,
+         u.full_name AS master_name,
+         ca.plate_number AS car_plate,
+         ca.make_model AS car_make_model
+       FROM checks ch
+       LEFT JOIN users u ON u.id = ch.master_id
+       LEFT JOIN cars ca ON ca.id = ch.car_id
+       WHERE ${conds.join(' AND ')}
+       ORDER BY ch.date DESC, ch.number DESC
+       LIMIT 1`,
+      params,
+    );
+
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      id: r.id as string,
+      date: r.date as string,
+      number: r.number as number,
+      totalRevenue: parseFloat(r.total_revenue) || 0,
+      masterName: (r.master_name as string) || null,
+      carPlate: (r.car_plate as string) || null,
+      carMakeModel: (r.car_make_model as string) || null,
+    };
+  }
+
   async getRanking(tenantID: string) {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();

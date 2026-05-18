@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Car as CarIcon } from 'lucide-react';
 import Modal from './Modal';
 
 interface DuplicateWarningDialogProps {
@@ -17,6 +17,8 @@ interface DuplicateWarningDialogProps {
   existingSubtitle?: string;
   /** Label for the "open existing" CTA. */
   openExistingLabel?: string;
+  /** Optional list of cars belonging to the existing client (for phone-dup). */
+  existingCars?: Array<{ plateNumber: string; makeModel: string }>;
 }
 
 /**
@@ -33,6 +35,7 @@ export default function DuplicateWarningDialog({
   existingLabel,
   existingSubtitle,
   openExistingLabel = 'Открыть существующего',
+  existingCars,
 }: DuplicateWarningDialogProps) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title} size="sm">
@@ -56,6 +59,21 @@ export default function DuplicateWarningDialog({
               </div>
               <ArrowRight className="w-4 h-4 text-gray-400 flex-shrink-0 ml-3" />
             </div>
+            {existingCars && existingCars.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-gray-200 space-y-1.5">
+                <div className="text-xs text-gray-500 font-medium">Уже привязано:</div>
+                {existingCars.slice(0, 5).map((car, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-gray-700">
+                    <CarIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                    <span className="font-mono font-semibold">{car.plateNumber}</span>
+                    <span className="text-gray-500 truncate">{car.makeModel}</span>
+                  </div>
+                ))}
+                {existingCars.length > 5 && (
+                  <div className="text-xs text-gray-400">… и ещё {existingCars.length - 5}</div>
+                )}
+              </div>
+            )}
           </button>
         </div>
       </div>

@@ -28,6 +28,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
 import type { User, UserPermissions, Product } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
+import { formatPhone } from '../../../shared/validation/phone';
 
 const roleBadgeMap: Record<string, string> = {
   director: 'purple',
@@ -463,7 +464,7 @@ export default function UsersScreen() {
                       </View>
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 4 }}>
-                      <Text style={styles.userPhone}>{user.phone}</Text>
+                      <Text style={styles.userPhone}>{formatPhone(user.phone)}</Text>
                       <Text style={styles.userDivider}>|</Text>
                       <Text style={styles.userPhone}>
                         {user.salaryPercent}%{user.productSalaryPercent ? ` / ${user.productSalaryPercent}%` : ''}

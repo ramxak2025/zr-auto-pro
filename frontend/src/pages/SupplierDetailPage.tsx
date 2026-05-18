@@ -30,6 +30,7 @@ import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { Supplier, Delivery, SupplierPayment, Product, PaginatedResponse } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
+import { formatPhone } from '../../../shared/validation/phone';
 
 type TabType = 'deliveries' | 'payments';
 
@@ -512,7 +513,7 @@ export default function SupplierDetailPage() {
               {supplier.phone && (
                 <p className="mt-1 text-gray-600 flex items-center gap-2">
                   <Phone className="w-4 h-4" />
-                  {supplier.phone}
+                  {formatPhone(supplier.phone)}
                 </p>
               )}
               {supplier.comment && <p className="mt-2 text-sm text-gray-500">{supplier.comment}</p>}

@@ -104,10 +104,13 @@ export function createClientsApi(api: HttpClient) {
     exportCsv: () => api.get('/clients/export-csv', { responseType: 'blob' }),
     /** Returns existing client with the given phone in the current tenant, or null. */
     lookupByPhone: (phone: string) =>
-      api.get<{ id: string; fullName: string; phone: string; createdAt: string } | null>(
-        '/clients/lookup-by-phone',
-        { params: { phone } },
-      ),
+      api.get<{
+        id: string;
+        fullName: string;
+        phone: string;
+        createdAt: string;
+        cars: Array<{ id: string; plateNumber: string; makeModel: string }>;
+      } | null>('/clients/lookup-by-phone', { params: { phone } }),
   };
 }
 
@@ -174,6 +177,21 @@ export function createChecksApi(api: HttpClient) {
     getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
     getDashboardChart: (period: string, offset?: number) => api.get<{ points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>; totalRevenue: number; totalProfit: number; totalChecks: number }>('/checks/dashboard/chart', { params: { period, offset: offset ?? 0 } }),
     getRanking: () => api.get<EmployeeRanking>('/checks/ranking'),
+    /**
+     * Returns the most recent (non-deferred) check for the given client and/or
+     * car within the current tenant. Used by the cash screen to show
+     * "Последний визит: …".
+     */
+    getLastVisit: (params: { clientId?: string; carId?: string }) =>
+      api.get<{
+        id: string;
+        date: string;
+        number: number;
+        totalRevenue: number;
+        masterName: string | null;
+        carPlate: string | null;
+        carMakeModel: string | null;
+      } | null>('/checks/last-visit', { params }),
     getById: (id: string) => api.get<Check>(`/checks/${id}`),
     create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),

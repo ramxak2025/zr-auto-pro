@@ -42,6 +42,8 @@ import type {
   CheckProductLine,
 } from '../types';
 import { UserRole } from '../types';
+import { formatPhone } from '../../../shared/validation/phone';
+import LastVisitBadge from '../components/LastVisitBadge';
 
 const formatCurrency = (value: number): string => {
   return value.toLocaleString('ru-RU') + ' \u20BD';
@@ -855,7 +857,7 @@ export default function CheckCreatePage() {
                       <span className="text-sm text-gray-500">{car.makeModel}</span>
                     </div>
                     <div className="text-xs text-gray-400 mt-0.5">
-                      {client.fullName} {'\u2022'} {client.phone}
+                      {client.fullName} {'\u2022'} {formatPhone(client.phone)}
                     </div>
                   </button>
                 ))}
@@ -879,7 +881,7 @@ export default function CheckCreatePage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold text-gray-900">{selectedClient.fullName}</div>
-                    <div className="text-xs text-gray-500">{selectedClient.phone}</div>
+                    <div className="text-xs text-gray-500">{formatPhone(selectedClient.phone)}</div>
                   </div>
                   <div className="text-right">
                     {selectedClient.cars?.find(c => c.id === selectedCarId) && (
@@ -909,6 +911,7 @@ export default function CheckCreatePage() {
                     </select>
                   </div>
                 )}
+                <LastVisitBadge clientId={selectedClient.id} carId={selectedCarId || undefined} />
               </div>
             )}
           </div>
