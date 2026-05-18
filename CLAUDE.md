@@ -310,6 +310,29 @@ Claude Code работает автономно от изучения до ко�
 
 ---
 
+## N. Оркестрация агентов
+
+Полный playbook — `docs/AGENTS_PLAYBOOK.md`. Локальная разработка на Mac — `docs/LOCAL_DEV_SETUP.md`.
+
+**Правило одного входа.** Владелец пишет только тим-лиду (главный Claude в чате). Тим-лид сам разбивает задачу и делегирует в соответствующие отделы. Узким агентам владелец напрямую не пишет.
+
+**Карта слой → агент:**
+
+| Слой | Агент |
+|---|---|
+| Backend / API / БД / `shared/` контракт | `backend-engineer` |
+| Web PWA (`frontend/`) | `web-engineer` |
+| iOS RN-слой (TypeScript) | `ios-engineer` |
+| iOS Swift / native (`mobile/modules/*/ios/`) | `ios-native-engineer` |
+| Android (`*.android.tsx`, `app.json android.*`) | `android-engineer` |
+| Финальный QA gate | `qa-build-engineer` |
+
+Узкие экранные агенты (`cash-plate-engineer`, `schedule-engineer`, `suppliers-engineer`, `warehouse-product-picker-engineer`, `journal-documents-engineer`, `autexa-visual-system-designer`, `ios-ux-designer`, `rn-performance-engineer`) — для конкретных экранов / зон, у каждого своя продуктовая память. Тим-лид зовёт узкого вместо `ios-engineer`, если задача укладывается в его профиль.
+
+**Разработка → релиз:** все правки на feature-branch от `refactor/full-audit-2026` → локальные проверки на Mac (раздел H) → PR → merge → push в `refactor/full-audit-2026` → автодеплой на VDS. Подробности — `docs/LOCAL_DEV_SETUP.md`.
+
+---
+
 ## Что требует уточнения у владельца
 
 Места, которые в коде не нашли, но в шаблоне правил есть — отметить как открытые вопросы:
