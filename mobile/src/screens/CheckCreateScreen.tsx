@@ -732,20 +732,20 @@ export default function CheckCreateScreen() {
 
   return (
     <View style={styles.safe}>
-      {/* Receipt-style header — paddingTop applied via insetsTop so the
-          screen background flows continuously under the status bar
-          while the title text still sits inside the safe area. */}
-      <View style={[styles.receiptHeader, { paddingTop: insetsTop + spacing[2] }]}>
+      {/* Compact receipt header — single-line "ЗАКАЗ-НАРЯД · <mode>",
+          so the actual receipt body has more breathing room. */}
+      <View style={[styles.receiptHeader, { paddingTop: insetsTop + spacing[1] }]}>
         {isStackScreen && (
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.receiptBackBtn}>
-            <Ionicons name="chevron-back" size={22} color={colors.white} />
+            <Ionicons name="chevron-back" size={18} color={colors.white} />
           </TouchableOpacity>
         )}
         <View style={styles.receiptHeaderCenter}>
-          <Text style={styles.receiptHeaderTitle}>ЗАКАЗ-НАРЯД</Text>
-          <Text style={styles.receiptHeaderSub}>{editId ? 'Редактирование' : 'Новый чек'}</Text>
+          <Text style={styles.receiptHeaderTitle} numberOfLines={1}>
+            ЗАКАЗ-НАРЯД <Text style={styles.receiptHeaderSub}>·  {editId ? 'Редактирование' : 'Новый чек'}</Text>
+          </Text>
         </View>
-        {isStackScreen && <View style={{ width: 36 }} />}
+        {isStackScreen && <View style={{ width: 28 }} />}
       </View>
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
@@ -1000,7 +1000,7 @@ export default function CheckCreateScreen() {
               onChangeText={setComment}
               style={styles.commentInput}
               multiline
-              placeholder="Заметки по чеку: рекомендации, замечания, что предупредили клиента…"
+              placeholder="Комментарий или рекомендация клиенту по чеку"
               placeholderTextColor={colors.gray[400]}
             />
           </View>
@@ -1433,21 +1433,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3],
+    paddingBottom: spacing[1.5],
     backgroundColor: colors.gray[900],
   },
   receiptBackBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   receiptHeaderCenter: { flex: 1, alignItems: 'center' },
-  receiptHeaderTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 3 },
-  receiptHeaderSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+  receiptHeaderTitle: { fontSize: 12, fontWeight: '700', color: colors.white, letterSpacing: 2 },
+  receiptHeaderSub: { fontSize: 11, fontWeight: '500', color: colors.gray[400], letterSpacing: 0 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
