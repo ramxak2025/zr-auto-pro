@@ -1880,7 +1880,8 @@ export default function DashboardScreen() {
     // stalled the JS thread with 15+ parallel refetches and a flurry of
     // SWR `placeholderData` swaps across screens that weren't even on
     // the stack. Targeting the dashboard-only keys cuts that to ~7.
-    const dashboardKeys: string[][] = [
+    const dashboardKeys: (string | (string | number)[])[][] = [
+      // Owner-side widgets:
       ['dashboard-chart'],
       ['employee-ranking'],
       ['schedule-today'],
@@ -1889,6 +1890,15 @@ export default function DashboardScreen() {
       // Master-side widgets:
       ['shifts'],
       ['salary'],
+      // MasterRecentChecks reads ['checks', 'recent-master']; restrict
+      // the invalidation to that exact suffix so we don't accidentally
+      // refetch the entire Journal infinite-scroll cache.
+      ['checks', 'recent-master'],
+      // MyAttendanceRankWidget reads ['schedule', monthStart, monthEnd]
+      // and ['users']. ['schedule'] alone matches every month-window
+      // ever cached; restrict to the explicit prefix so we don't tear
+      // down the schedule grid on a different month.
+      ['users'],
     ];
     await Promise.all(
       dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })),
