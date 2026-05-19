@@ -86,8 +86,11 @@ function formatMoney(v: number): string {
 
 // One global "currently playing" id so only one recording sounds at once.
 // Lives at the screen root and is passed down via props (no Context to keep
-// this file self-contained).
-function CallRow({
+// this file self-contained). React.memo wraps the function so a scroll-only
+// re-render of the parent ScrollView doesn't cascade into all rows — the
+// row only re-renders when `playingId` changes its match against this row,
+// or when `call` mutates. setPlayingId is stable (React's useState setter).
+const CallRow = React.memo(function CallRow({
   call,
   navigation,
   playingId,
@@ -187,7 +190,7 @@ function CallRow({
       )}
     </View>
   );
-}
+});
 
 /**
  * ExpandedRecordingPlayer — full-fidelity in-app player that slides open
@@ -458,12 +461,18 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     dateStr ===
     `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
 
-  const summaryItems = [
-    { label: 'Вх.', value: summary?.incoming ?? 0, color: colors.green[600], bg: colors.green[50] },
-    { label: 'Исх.', value: summary?.outgoing ?? 0, color: colors.blue[600], bg: colors.blue[50] },
-    { label: 'Пропущ.', value: summary?.missed ?? 0, color: colors.red[500], bg: colors.red[50] },
-    { label: 'Без отв.', value: summary?.notCalledBack ?? 0, color: colors.orange[500], bg: colors.orange[50] },
-  ];
+  // Memoised so the .map() in JSX doesn't allocate a fresh array of 4
+  // objects on every render (every keystroke, every tab switch, every
+  // 60-second background refetch when focused).
+  const summaryItems = useMemo(
+    () => [
+      { label: 'Вх.', value: summary?.incoming ?? 0, color: colors.green[600], bg: colors.green[50] },
+      { label: 'Исх.', value: summary?.outgoing ?? 0, color: colors.blue[600], bg: colors.blue[50] },
+      { label: 'Пропущ.', value: summary?.missed ?? 0, color: colors.red[500], bg: colors.red[50] },
+      { label: 'Без отв.', value: summary?.notCalledBack ?? 0, color: colors.orange[500], bg: colors.orange[50] },
+    ],
+    [summary?.incoming, summary?.outgoing, summary?.missed, summary?.notCalledBack],
+  );
 
   return (
     <View style={styles.container}>
