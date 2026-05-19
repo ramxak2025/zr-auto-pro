@@ -67,6 +67,7 @@
     "plugins": [
       "expo-updates",
       "./plugins/withDisableUserScriptSandboxing.js",
+      "./plugins/withAndroidPredictiveBack.js",
       [
         "expo-build-properties",
         {
