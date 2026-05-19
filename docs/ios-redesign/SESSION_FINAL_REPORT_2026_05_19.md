@@ -88,19 +88,27 @@ Team → Ramazan Shamsudinov → iPhone → ⌘+R Release.
 
 ## Сборка Android
 
+**APK уже собран ✅** (BUILD SUCCESSFUL за 30 мин):
+
+```
+mobile/android/app/build/outputs/apk/debug/app-debug.apk   (226 MB, all-ABI debug)
+```
+
+Чтобы поставить на физическое Android-устройство:
+1. Скопировать `app-debug.apk` на устройство (USB / AirDrop через Files / Telegram себе).
+2. На Android: Settings → Apps → Install unknown apps → разрешить для File Manager.
+3. Тапнуть на APK → Install.
+
+Чтобы пересобрать (после правок в JS):
 ```bash
-cd ~/projects/zr-auto-pro
-git pull
-cd mobile
-npx expo prebuild --platform android --clean
-cd android
+cd ~/projects/zr-auto-pro/mobile/android
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 ANDROID_HOME="$HOME/Library/Android/sdk" \
 ./gradlew :app:assembleDebug -PndkVersion=28.2.13676358
 ```
-APK будет в `android/app/build/outputs/apk/debug/app-debug.apk`. Перетянуть на Android-устройство, разрешить установку «из неизвестных источников», поставить.
+(второй и далее билды ≈30-60 секунд через инкрементальную сборку Gradle daemon).
 
-**Известное ограничение Android-билда:** NDK 27.1 install в SDK был прерван и оставлен пустой каталог; собирается с NDK 28.2 через `-PndkVersion`. Чтобы починить 27.1 — открыть Android Studio → SDK Manager → NDK (Side by side) → отметить 27.1.12297006 → Install (≈1.5 GB). После этого флаг `-PndkVersion` не нужен.
+**Чтобы избавиться от `-PndkVersion` флага:** Android Studio → SDK Manager → SDK Tools tab → NDK (Side by side) → отметить 27.1.12297006 → Apply (≈1.5 GB download). После этого `./gradlew :app:assembleDebug` без флага.
 
 ## Чек-лист на устройстве (главное)
 
