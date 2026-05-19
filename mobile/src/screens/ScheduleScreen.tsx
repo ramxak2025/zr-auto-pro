@@ -336,6 +336,65 @@ function GridSkeleton() {
   );
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// GridDayHeaderRow — sticky day-number / day-of-week header above the grid.
+// Memoised because the cells (~30 per month) were being rebuilt on every
+// parent render (every QuickPopup open/close, every pending change). With
+// stable primitive props (`days`, `today`, `CELL_W`, `ROW_H`) the row
+// re-renders only when the month or row geometry actually changes.
+// ──────────────────────────────────────────────────────────────────────
+interface GridDayHeaderRowProps {
+  days: Date[];
+  today: string;
+  CELL_W: number;
+  ROW_H: number;
+  reduceMotion: boolean;
+}
+const GridDayHeaderRow = memo(function GridDayHeaderRow({
+  days,
+  today,
+  CELL_W,
+  ROW_H,
+  reduceMotion,
+}: GridDayHeaderRowProps) {
+  return (
+    <View style={{ flexDirection: 'row' }}>
+      {days.map((d) => {
+        const ds = formatDate(d);
+        const dow = (d.getDay() + 6) % 7;
+        const isWeekend = dow >= 5;
+        const isToday = ds === today;
+        return (
+          <View
+            key={ds}
+            style={[
+              styles.gridHeaderCell,
+              { width: CELL_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
+              isWeekend && { backgroundColor: colors.red[50] },
+              isToday && styles.gridHeaderToday,
+            ]}
+          >
+            <Text
+              style={[
+                styles.gridHeaderDow,
+                isWeekend && { color: colors.red[400] },
+                isToday && { color: colors.primary[600] },
+              ]}
+            >
+              {DAY_ABBR[dow]}
+            </Text>
+            {isToday ? (
+              <TodayPill day={d.getDate()} reduceMotion={reduceMotion} />
+            ) : (
+              <Text style={[styles.gridHeaderDay, isWeekend && { color: colors.red[400] }]}>{d.getDate()}</Text>
+            )}
+          </View>
+        );
+      })}
+    </View>
+  );
+});
+
 // Memoized grid row to avoid re-rendering all cells on unrelated state changes.
 interface GridDayRowProps {
   userId: string;
@@ -1064,43 +1123,16 @@ function GridTab() {
             contentContainerStyle={{ flexGrow: 1 }}
           >
             <View style={{ flex: 1 }}>
-              {/* Day headers */}
-              <View style={{ flexDirection: 'row' }}>
-                {days.map((d) => {
-                  const ds = formatDate(d);
-                  const dow = (d.getDay() + 6) % 7;
-                  const isWeekend = dow >= 5;
-                  const isToday = ds === today;
-                  return (
-                    <View
-                      key={ds}
-                      style={[
-                        styles.gridHeaderCell,
-                        { width: CELL_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
-                        isWeekend && { backgroundColor: colors.red[50] },
-                        isToday && styles.gridHeaderToday,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.gridHeaderDow,
-                          isWeekend && { color: colors.red[400] },
-                          isToday && { color: colors.primary[600] },
-                        ]}
-                      >
-                        {DAY_ABBR[dow]}
-                      </Text>
-                      {isToday ? (
-                        <TodayPill day={d.getDate()} reduceMotion={reduceMotion} />
-                      ) : (
-                        <Text style={[styles.gridHeaderDay, isWeekend && { color: colors.red[400] }]}>
-                          {d.getDate()}
-                        </Text>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
+              {/* Day headers — memoised so the 28-31 day cells don't rebuild
+                  on every QuickPopup open/close, pending-change toggle, or
+                  background SWR refetch. */}
+              <GridDayHeaderRow
+                days={days}
+                today={today}
+                CELL_W={CELL_W}
+                ROW_H={ROW_H}
+                reduceMotion={reduceMotion}
+              />
 
               {/* Day cells — Reanimated.ScrollView so the UI-thread
                   worklet handler can mirror its offset to the names
