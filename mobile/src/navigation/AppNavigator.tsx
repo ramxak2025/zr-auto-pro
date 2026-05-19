@@ -110,10 +110,20 @@ export type TabParamList = {
   MoreTab: undefined;
 };
 
+// ProductsStackParamList — каждый "уровень папки склада" есть отдельный
+// instance ProductsScreen, в push() передаётся новый activePath. Это даёт
+// нативный iOS edge-swipe назад, потому что pop стека = подъём на уровень
+// выше в дереве категорий. Старый внутренний state `activePath` теперь
+// читается из route.params.
+export type ProductsStackParamList = {
+  ProductsHome: { activePath?: string[] } | undefined;
+};
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
 const ChecksStack = createNativeStackNavigator();
+const ProductsStack = createNativeStackNavigator<ProductsStackParamList>();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Navigation
@@ -171,6 +181,24 @@ function ChecksStackNavigator() {
   );
 }
 
+/**
+ * ProductsStackNavigator — local stack inside the Products (Склад) tab.
+ * Каждый уровень папки = новый push того же ProductsScreen с другим
+ * activePath в route.params. Это даёт нативный iOS edge-swipe назад
+ * через дерево категорий: было `[]` → `["Масла"]` → `["Масла","Моторные"]`,
+ * swipe слева возвращает на уровень выше как push-pop в стеке.
+ *
+ * Tab bar остаётся видимым на всех уровнях (как у Checks): транзакция
+ * push идёт внутри tab-stack, а не root-stack.
+ */
+function ProductsStackNavigator() {
+  return (
+    <ProductsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+      <ProductsStack.Screen name="ProductsHome" component={ProductsScreen} />
+    </ProductsStack.Navigator>
+  );
+}
+
 function TabNavigator() {
   return (
     <Tab.Navigator
@@ -193,7 +221,7 @@ function TabNavigator() {
       tabBar={(props) => <PlatformTabBar {...props} />}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
-      <Tab.Screen name="Products" component={ProductsScreen} />
+      <Tab.Screen name="Products" component={ProductsStackNavigator} />
       <Tab.Screen name="NewCheck" component={CheckCreateScreen} />
       <Tab.Screen name="Checks" component={ChecksStackNavigator} />
       <Tab.Screen name="MoreTab" component={MoreStackNavigator} />

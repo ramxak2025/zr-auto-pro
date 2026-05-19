@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Pressable } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRoute, useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { productsApi, warehouseCategoriesApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
@@ -116,6 +117,8 @@ export default function ProductsScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const insetsTop = useSafeAreaInsets().top;
+  const route = useRoute<any>();
+  const navigation = useNavigation<any>();
   const { hasPermission, user } = useAuth();
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageWarehouse = hasPermission('warehouse_access');
@@ -125,7 +128,11 @@ export default function ProductsScreen() {
   const [search, setSearch] = useState('');
   const limit = 500;
   const [refreshing, setRefreshing] = useState(false);
-  const [activePath, setActivePath] = useState<string[]>([]);
+  // activePath теперь живёт в route.params, чтобы каждый уровень папки был
+  // отдельным push в native stack. iOS edge-swipe слева делает pop —
+  // возврат на уровень выше без необходимости целиться в кнопку.
+  // Корневой вход в таб не имеет params → activePath = [].
+  const activePath: string[] = route.params?.activePath ?? [];
 
   // Product create/edit modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -551,8 +558,24 @@ export default function ProductsScreen() {
     return map;
   }, [lastInventoryMap, sortedFolders, allProducts, activePath]);
 
-  const enterFolder = (name: string) => setActivePath((prev) => [...prev, name]);
-  const goToLevel = (level: number) => setActivePath((prev) => prev.slice(0, level));
+  // Спуститься на уровень глубже: push нового instance ProductsScreen с
+  // обновлённым activePath. push (а не navigate) гарантирует именно новый
+  // фрейм в стеке — без него navigate с теми же params upsert-ит текущий
+  // экран и swipe-back перестаёт работать.
+  const enterFolder = (name: string) => {
+    navigation.push('ProductsHome', { activePath: [...activePath, name] });
+  };
+  // Возврат на уровень `level` через breadcrumb: popToTop при level=0,
+  // в остальных случаях pop'аем разницу. popToTop безопасен на корне.
+  const goToLevel = (level: number) => {
+    if (level >= activePath.length) return;
+    const popCount = activePath.length - level;
+    if (level === 0) {
+      navigation.popToTop();
+    } else {
+      navigation.pop(popCount);
+    }
+  };
 
   // --- Image picking ---
   const pickImage = async () => {
@@ -928,7 +951,9 @@ export default function ProductsScreen() {
           value={search}
           onChange={(v) => {
             setSearch(v);
-            if (v) setActivePath([]);
+            // \u0412\u0432\u0435\u0434\u0451\u043D \u043F\u043E\u0438\u0441\u043A \u2192 \u0441\u0445\u043B\u043E\u043F\u044B\u0432\u0430\u0435\u043C \u0441\u0442\u0435\u043A \u0434\u043E \u043A\u043E\u0440\u043D\u044F, \u0447\u0442\u043E\u0431\u044B \u0440\u0435\u0437\u0443\u043B\u044C\u0442\u0430\u0442\u044B
+            // \u0438\u0441\u043A\u0430\u043B\u0438\u0441\u044C \u043F\u043E \u0432\u0441\u0435\u043C\u0443 \u0441\u043A\u043B\u0430\u0434\u0443, \u0430 \u043D\u0435 \u0432\u043D\u0443\u0442\u0440\u0438 \u0442\u0435\u043A\u0443\u0449\u0435\u0439 \u043F\u043E\u0434\u043F\u0430\u043F\u043A\u0438.
+            if (v && activePath.length > 0) navigation.popToTop();
           }}
           placeholder={'\u041F\u043E\u0438\u0441\u043A \u0442\u043E\u0432\u0430\u0440\u0430...'}
         />
