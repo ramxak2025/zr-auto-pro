@@ -3,12 +3,12 @@
  * web EmployeeDetailPage. Sections: hero / today / earnings / ranking /
  * quick links / contact.
  */
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, RefreshControl } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { usersApi, scheduleApi, salaryApi, checksApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
@@ -114,6 +114,15 @@ export default function EmployeeDetailScreen() {
     staleTime: 60_000,
   });
 
+  // Pause poll when screen unfocused — see EmployeesScreen rationale.
+  const [pollEnabled, setPollEnabled] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setPollEnabled(true);
+      return () => setPollEnabled(false);
+    }, []),
+  );
+
   const { data: todayList } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
     queryFn: async () => {
@@ -121,7 +130,7 @@ export default function EmployeeDetailScreen() {
       return res.data;
     },
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: pollEnabled ? 60_000 : false,
   });
   const today = (todayList ?? []).find((t) => t.userId === id);
 

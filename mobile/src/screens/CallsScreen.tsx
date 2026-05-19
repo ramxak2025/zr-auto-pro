@@ -13,6 +13,7 @@ import {
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, AudioModule } from 'expo-audio';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useQuery } from '@tanstack/react-query';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { callsApi } from '../api/services';
@@ -405,6 +406,18 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     return selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
   }, [dateStr, selectedDate]);
 
+  // Pause the 60-second poll when this screen is not focused. CallsScreen
+  // sits inside MoreStack — when the user is on another tab/screen the
+  // poll would still spend a JS-thread tick + network roundtrip on data
+  // they're not looking at.
+  const [pollEnabled, setPollEnabled] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setPollEnabled(true);
+      return () => setPollEnabled(false);
+    }, []),
+  );
+
   const { data, isLoading } = useQuery({
     queryKey: ['calls', dateStr],
     queryFn: async () => {
@@ -412,7 +425,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
       return res.data;
     },
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: pollEnabled ? 60_000 : false,
   });
 
   const calls: Call[] = data?.calls ?? [];

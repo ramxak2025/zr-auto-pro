@@ -16,14 +16,14 @@
  * permission-логике в backend (`reports/profit_view`) и просто плохая
  * управленческая практика.
  */
-import React, { useMemo, useCallback } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, RefreshControl } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { usersApi, scheduleApi, checksApi } from '../api/services';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
@@ -191,6 +191,18 @@ export default function EmployeesScreen() {
     placeholderData: (prev) => prev,
   });
 
+  // Pause the 60-second poll when the screen isn't focused. With a tab
+  // navigator the screen stays MOUNTED behind the active tab — TanStack
+  // would otherwise keep firing background fetches that compete for the
+  // JS thread with whatever the user is actually looking at.
+  const [pollEnabled, setPollEnabled] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setPollEnabled(true);
+      return () => setPollEnabled(false);
+    }, []),
+  );
+
   const { data: today } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
     queryFn: async () => {
@@ -198,7 +210,7 @@ export default function EmployeesScreen() {
       return res.data;
     },
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    refetchInterval: pollEnabled ? 60_000 : false,
     placeholderData: (prev) => prev,
   });
 
