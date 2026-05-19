@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,12 +10,21 @@ import {
   Animated,
   Dimensions,
   PanResponder,
+  Pressable,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line, Circle } from 'react-native-svg';
+import Svg, {
+  Path,
+  Defs,
+  LinearGradient as SvgGrad,
+  Stop,
+  Line,
+  Circle,
+  RadialGradient,
+} from 'react-native-svg';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,16 +33,15 @@ import {
   salaryApi,
   shiftsApi,
   scheduleApi,
-  reportsApi,
   marketingApi,
-  usersApi,
-  productsApi,
   callsApi,
+  usersApi,
 } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import AnimatedCard from '../components/AnimatedCard';
+import { Skeleton } from '../components/Skeleton';
 import type {
   SalarySummary,
   EmployeeRanking,
@@ -41,8 +49,6 @@ import type {
   Shift,
   ScheduleEntry,
   User,
-  DashboardStats,
-  Product,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
@@ -51,7 +57,16 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 
 function formatMoney(value: number): string {
   const rounded = Math.round(value);
-  return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD';
+  return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+}
+
+/** Compact money for KPI tiles — "124k" / "1.2m" instead of "124 360 ₽". */
+function formatMoneyCompact(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace('.0', '')}M ₽`;
+  if (abs >= 100_000) return `${Math.round(value / 1000)}k ₽`;
+  if (abs >= 10_000) return `${(value / 1000).toFixed(1).replace('.0', '')}k ₽`;
+  return `${Math.round(value)} ₽`;
 }
 
 function getGreeting(): string {
@@ -60,6 +75,35 @@ function getGreeting(): string {
   if (hour >= 12 && hour < 17) return 'Добрый день';
   if (hour >= 17 && hour < 22) return 'Добрый вечер';
   return 'Доброй ночи';
+}
+
+const WEEKDAYS_RU = [
+  'воскресенье',
+  'понедельник',
+  'вторник',
+  'среда',
+  'четверг',
+  'пятница',
+  'суббота',
+];
+const MONTHS_RU_GEN = [
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
+];
+
+function getTodayLongRu(): string {
+  const d = new Date();
+  return `${WEEKDAYS_RU[d.getDay()]}, ${d.getDate()} ${MONTHS_RU_GEN[d.getMonth()]}`;
 }
 
 // ── Period helpers ──
@@ -73,20 +117,7 @@ const periodLabels: Record<ChartPeriod, string> = {
 
 function getOffsetLabel(period: ChartPeriod, offset: number): string {
   const now = new Date();
-  const months = [
-    'января',
-    'февраля',
-    'марта',
-    'апреля',
-    'мая',
-    'июня',
-    'июля',
-    'августа',
-    'сентября',
-    'октября',
-    'ноября',
-    'декабря',
-  ];
+  const months = MONTHS_RU_GEN;
   const monthsFull = [
     'Январь',
     'Февраль',
@@ -129,44 +160,425 @@ function getOffsetLabel(period: ChartPeriod, offset: number): string {
   }
 }
 
-// ── Revenue Chart ──
-function RevenueChart() {
+function formatDeltaPct(curr: number, prev: number): { text: string; tone: 'up' | 'down' | 'flat' } {
+  if (!isFinite(curr) || !isFinite(prev)) return { text: '—', tone: 'flat' };
+  if (prev === 0 && curr === 0) return { text: '—', tone: 'flat' };
+  if (prev === 0) return { text: curr > 0 ? '+∞' : '—', tone: curr > 0 ? 'up' : 'flat' };
+  const diff = curr - prev;
+  const pct = (diff / Math.max(Math.abs(prev), 1)) * 100;
+  const rounded = Math.round(pct);
+  if (rounded === 0) return { text: '0%', tone: 'flat' };
+  return { text: `${rounded > 0 ? '+' : ''}${rounded}%`, tone: rounded > 0 ? 'up' : 'down' };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  OWNER DASHBOARD — kardинально новый layout (iter#13, 2026-05-19)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Премиальный 2026-SaaS owner dashboard. Стек hero-блоков сверху вниз:
+//   1. Hero card (deep gradient + персональное приветствие + сегодня
+//      заработано + дельта vs вчера).
+//   2. KPI strip — 4 горизонтально-скроллируемых тайла со sparkline.
+//   3. Аналитика — большая интерактивная диаграмма (scrub + segmented).
+//   4. Сегодня — 2 horizontal-card snapshot row (На смене / Звонки).
+//   5. Quick actions — 2×2 grid.
+//   6. Топ-мастера месяца — last block.
+//
+// Все данные через существующие API-эндпоинты, без правок shared/.
+
+// ── 1. HERO ─────────────────────────────────────────────────────────────────
+// Глубокий primary 700→900 градиент с radial-glow в правом верхнем углу.
+// Большое имя владельца, контекст-дата, hero-число выручки за сегодня и
+// дельта vs вчерашнего значения.
+//
+// Данные:
+//   • dashboard-chart('today', 0) — totalRevenue за сегодня.
+//   • dashboard-chart('today', -1) — totalRevenue за вчера для дельты.
+// Кеш-ключи совпадают с теми, что использует график ниже — переключение
+// «сегодня» в графике сразу горячий.
+function OwnerHero({ name }: { name: string }) {
+  const today = useQuery({
+    queryKey: ['dashboard-chart', 'today', 0],
+    queryFn: async () => (await checksApi.getDashboardChart('today', 0)).data,
+    staleTime: 30_000,
+  });
+  const yday = useQuery({
+    queryKey: ['dashboard-chart', 'today', -1],
+    queryFn: async () => (await checksApi.getDashboardChart('today', -1)).data,
+    staleTime: 60_000,
+  });
+
+  const todayRevenue = today.data?.totalRevenue ?? 0;
+  const ydayRevenue = yday.data?.totalRevenue ?? 0;
+  const delta = useMemo(() => formatDeltaPct(todayRevenue, ydayRevenue), [todayRevenue, ydayRevenue]);
+  const isLoading = today.data === undefined && today.isLoading;
+
+  return (
+    <AnimatedCard index={0} style={styles.heroCard}>
+      <LinearGradient
+        colors={[colors.primary[700], colors.primary[800], colors.primary[900]]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.heroGradient}
+      >
+        {/* Decorative radial sparkle — SVG so we get true radial gradient
+            (RN can't do radial backgrounds). Very faint, doesn't compete
+            with the typography. */}
+        <Svg width={220} height={220} style={styles.heroSparkle} pointerEvents="none">
+          <Defs>
+            <RadialGradient id="heroGlow" cx="50%" cy="50%" r="50%">
+              <Stop offset="0%" stopColor="#ffffff" stopOpacity={0.18} />
+              <Stop offset="60%" stopColor="#ffffff" stopOpacity={0.04} />
+              <Stop offset="100%" stopColor="#ffffff" stopOpacity={0} />
+            </RadialGradient>
+          </Defs>
+          <Circle cx={110} cy={110} r={110} fill="url(#heroGlow)" />
+        </Svg>
+
+        <View style={styles.heroTopRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroGreeting}>
+              {getGreeting()}, {name || 'Владелец'}
+            </Text>
+            <Text style={styles.heroDate}>{getTodayLongRu()}</Text>
+          </View>
+          <View style={styles.heroAvatarDot} />
+        </View>
+
+        <View style={styles.heroValueBlock}>
+          <Text style={styles.heroValueLabel}>Сегодня заработано</Text>
+          {isLoading ? (
+            <Skeleton
+              width={220}
+              height={36}
+              radius={10}
+              style={{ backgroundColor: 'rgba(255,255,255,0.10)' }}
+            />
+          ) : (
+            <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
+              {formatMoney(todayRevenue)}
+            </Text>
+          )}
+          <View style={styles.heroDeltaRow}>
+            <View
+              style={[
+                styles.heroDeltaPill,
+                delta.tone === 'up' && { backgroundColor: 'rgba(74,222,128,0.18)' },
+                delta.tone === 'down' && { backgroundColor: 'rgba(248,113,113,0.20)' },
+              ]}
+            >
+              <Ionicons
+                name={delta.tone === 'up' ? 'arrow-up' : delta.tone === 'down' ? 'arrow-down' : 'remove'}
+                size={11}
+                color={
+                  delta.tone === 'up' ? '#bbf7d0' : delta.tone === 'down' ? '#fecaca' : 'rgba(255,255,255,0.7)'
+                }
+              />
+              <Text
+                style={[
+                  styles.heroDeltaText,
+                  delta.tone === 'up' && { color: '#bbf7d0' },
+                  delta.tone === 'down' && { color: '#fecaca' },
+                ]}
+              >
+                {delta.text}
+              </Text>
+            </View>
+            <Text style={styles.heroDeltaCaption}>vs вчера</Text>
+          </View>
+        </View>
+      </LinearGradient>
+    </AnimatedCard>
+  );
+}
+
+// ── 2. KPI STRIP ────────────────────────────────────────────────────────────
+// 4 горизонтально-скроллируемых квадратных тайла 144×144pt:
+//   tiny title (Оборот / Прибыль / Чеков / Средний чек)
+//   hero number 22pt 800
+//   mini sparkline 7 точек (SVG)
+//   delta chip ↑/↓ %
+// Все 4 кликабельны → переход в соответствующий экран.
+//
+// Данные: shared query `dashboard-chart('week', 0)` (тот же ключ что и в
+// диаграмме ниже — один сетевой вызов). + `('week', -1)` для дельты.
+
+interface KpiTileSpec {
+  key: 'revenue' | 'profit' | 'checks' | 'avg';
+  title: string;
+  format: 'money' | 'count';
+  pickValue: (p: { revenue: number; profit: number; checkCount: number }) => number;
+  total: (
+    data: { totalRevenue: number; totalProfit: number; totalChecks: number },
+    avgValue: number,
+  ) => number;
+  navTo: () => { stack: string; screen?: string } | null;
+}
+
+function KpiStrip() {
+  const navigation = useNavigation<any>();
+  const week = useQuery({
+    queryKey: ['dashboard-chart', 'week', 0],
+    queryFn: async () => (await checksApi.getDashboardChart('week', 0)).data,
+    staleTime: 60_000,
+  });
+  const prevWeek = useQuery({
+    queryKey: ['dashboard-chart', 'week', -1],
+    queryFn: async () => (await checksApi.getDashboardChart('week', -1)).data,
+    staleTime: 60_000,
+  });
+
+  const c = week.data;
+  const p = prevWeek.data;
+  const avg = c && c.totalChecks > 0 ? c.totalRevenue / c.totalChecks : 0;
+  const prevAvg = p && p.totalChecks > 0 ? p.totalRevenue / p.totalChecks : 0;
+  const isLoading = c === undefined && week.isLoading;
+
+  const tiles: KpiTileSpec[] = useMemo(
+    () => [
+      {
+        key: 'revenue',
+        title: 'Оборот',
+        format: 'money',
+        pickValue: (pt) => pt.revenue || 0,
+        total: (d) => d.totalRevenue,
+        navTo: () => ({ stack: 'MoreTab', screen: 'Reports' }),
+      },
+      {
+        key: 'profit',
+        title: 'Прибыль',
+        format: 'money',
+        pickValue: (pt) => pt.profit || 0,
+        total: (d) => d.totalProfit,
+        navTo: () => ({ stack: 'MoreTab', screen: 'CashFlow' }),
+      },
+      {
+        key: 'checks',
+        title: 'Чеков',
+        format: 'count',
+        pickValue: (pt) => pt.checkCount || 0,
+        total: (d) => d.totalChecks,
+        navTo: () => ({ stack: 'Checks' }),
+      },
+      {
+        key: 'avg',
+        title: 'Средний чек',
+        format: 'money',
+        pickValue: (pt) => (pt.checkCount > 0 ? pt.revenue / pt.checkCount : 0),
+        total: (_d, avgValue) => avgValue,
+        navTo: () => ({ stack: 'MoreTab', screen: 'Reports' }),
+      },
+    ],
+    [],
+  );
+
+  const points = c?.points ?? [];
+
+  return (
+    <View>
+      <Text style={styles.sectionLabel}>ЗА 7 ДНЕЙ</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.kpiScrollContent}
+        decelerationRate="fast"
+        snapToInterval={144 + spacing[3]}
+        snapToAlignment="start"
+      >
+        {tiles.map((spec, idx) => {
+          const totalCurr = c ? spec.total(c, avg) : 0;
+          const totalPrev = p ? spec.total(p, prevAvg) : 0;
+          const delta = formatDeltaPct(totalCurr, totalPrev);
+          const series = points.map(spec.pickValue);
+
+          const handlePress = () => {
+            const target = spec.navTo();
+            if (!target) return;
+            if (target.stack === 'Checks') {
+              navigation.navigate('Main', { screen: 'Checks' });
+            } else if (target.screen) {
+              navigation.navigate('Main', {
+                screen: target.stack,
+                params: { screen: target.screen },
+              });
+            }
+          };
+
+          return (
+            <KpiTile
+              key={spec.key}
+              index={idx}
+              title={spec.title}
+              value={
+                isLoading
+                  ? '…'
+                  : spec.format === 'money'
+                    ? formatMoneyCompact(totalCurr)
+                    : String(Math.round(totalCurr))
+              }
+              series={series}
+              delta={delta}
+              onPress={handlePress}
+              tone={
+                spec.key === 'profit'
+                  ? 'emerald'
+                  : spec.key === 'checks'
+                    ? 'sky'
+                    : spec.key === 'avg'
+                      ? 'violet'
+                      : 'primary'
+              }
+            />
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+interface KpiTileProps {
+  index: number;
+  title: string;
+  value: string;
+  series: number[];
+  delta: { text: string; tone: 'up' | 'down' | 'flat' };
+  onPress: () => void;
+  tone: 'primary' | 'emerald' | 'sky' | 'violet';
+}
+
+const KpiTile = React.memo(function KpiTile({
+  index,
+  title,
+  value,
+  series,
+  delta,
+  onPress,
+  tone,
+}: KpiTileProps) {
+  const palette = {
+    primary: { line: colors.primary[600], glow: colors.primary[200] },
+    emerald: { line: colors.green[600], glow: colors.green[200] },
+    sky: { line: colors.cyan[600], glow: colors.cyan[400] },
+    violet: { line: colors.purple[600], glow: colors.purple[200] },
+  }[tone];
+
+  const W = 144 - spacing[3] * 2;
+  const H = 28;
+  const path = useMemo(() => buildSparkPath(series, W, H), [series, W, H]);
+  const areaPath = useMemo(() => buildSparkAreaPath(series, W, H), [series, W, H]);
+
+  return (
+    <AnimatedCard index={index} style={styles.kpiTile} onPress={onPress}>
+      <Text style={styles.kpiTileTitle}>{title}</Text>
+      <Text style={styles.kpiTileValue} numberOfLines={1} adjustsFontSizeToFit>
+        {value}
+      </Text>
+      <View style={styles.kpiTileSparkWrap}>
+        {series.length > 1 ? (
+          <Svg width={W} height={H}>
+            <Defs>
+              <SvgGrad id={`sparkGrad-${tone}`} x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%" stopColor={palette.glow} stopOpacity={0.55} />
+                <Stop offset="100%" stopColor={palette.glow} stopOpacity={0} />
+              </SvgGrad>
+            </Defs>
+            <Path d={areaPath} fill={`url(#sparkGrad-${tone})`} />
+            <Path d={path} stroke={palette.line} strokeWidth={1.8} fill="none" strokeLinecap="round" />
+          </Svg>
+        ) : (
+          <View style={{ width: W, height: H }} />
+        )}
+      </View>
+      <View
+        style={[
+          styles.kpiDeltaPill,
+          delta.tone === 'up' && { backgroundColor: colors.green[50] },
+          delta.tone === 'down' && { backgroundColor: colors.red[50] },
+        ]}
+      >
+        <Ionicons
+          name={delta.tone === 'up' ? 'arrow-up' : delta.tone === 'down' ? 'arrow-down' : 'remove'}
+          size={10}
+          color={
+            delta.tone === 'up'
+              ? colors.green[700]
+              : delta.tone === 'down'
+                ? colors.red[700]
+                : colors.gray[500]
+          }
+        />
+        <Text
+          style={[
+            styles.kpiDeltaText,
+            {
+              color:
+                delta.tone === 'up'
+                  ? colors.green[700]
+                  : delta.tone === 'down'
+                    ? colors.red[700]
+                    : colors.gray[500],
+            },
+          ]}
+        >
+          {delta.text}
+        </Text>
+      </View>
+    </AnimatedCard>
+  );
+});
+
+function buildSparkPath(values: number[], w: number, h: number): string {
+  if (values.length < 2) return '';
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = Math.max(max - min, 1);
+  const pts = values.map((v, i) => ({
+    x: (i / (values.length - 1)) * w,
+    y: h - 3 - ((v - min) / range) * (h - 6),
+  }));
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length; i++) {
+    const prev = pts[i - 1];
+    const curr = pts[i];
+    const cpx = (prev.x + curr.x) / 2;
+    d += ` C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`;
+  }
+  return d;
+}
+
+function buildSparkAreaPath(values: number[], w: number, h: number): string {
+  const line = buildSparkPath(values, w, h);
+  if (!line) return '';
+  return `${line} L ${w} ${h} L 0 ${h} Z`;
+}
+
+// ── 3. OWNER ANALYTICS CHART ────────────────────────────────────────────────
+// Бывший RevenueChart — СОХРАНЯЕМ scrub/tooltip/period-bar логику
+// (commit f4017f4) и только визуально прокачиваем: больше высота (200pt),
+// насыщенный blue→cyan blend на revenue, deeper shadow, iOS-segmented pills.
+function OwnerAnalyticsChart() {
   const [period, setPeriod] = useState<ChartPeriod>('week');
   const [offset, setOffset] = useState(0);
   const animWidth = useRef(new Animated.Value(0)).current;
-  // selectedIdx: which point on the chart is currently being inspected by
-  // the user (touch / drag / tap on day card). null = no selection,
-  // bottom stats show period totals. number = stats + tooltip update
-  // to that point.
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-chart', period, offset],
-    queryFn: async () => {
-      const res = await checksApi.getDashboardChart(period, offset);
-      return res.data;
-    },
+    queryFn: async () => (await checksApi.getDashboardChart(period, offset)).data,
     staleTime: 30_000,
   });
 
-  // Run the entrance tween ONCE per "new series" — keyed by points-length
-  // rather than the `data` reference. With our global SWR
-  // (`placeholderData: prev => prev`) every background refetch hands back
-  // a fresh `data` object even when the values are identical; depending
-  // on `data` re-fired the JS-thread `Animated.timing` on every poll,
-  // which is wasted work and a known source of stutter on iPhone.
+  // Entrance tween — keyed on points-LENGTH not data, per hardening in
+  // commit 2c6e4da. `data` is a fresh reference on every SWR refetch even
+  // when values are identical, so depending on it would re-fire the
+  // Animated.timing on every poll (wasted work + a known source of jank
+  // and update-depth crashes).
   const pointsLen = data?.points?.length ?? 0;
   useEffect(() => {
     Animated.timing(animWidth, { toValue: 1, duration: 800, useNativeDriver: false }).start();
-    // animWidth is a useRef-wrapped Animated.Value — stable; omitting it
-    // intentionally to avoid the eslint-deps-noise / effect re-fires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pointsLen]);
 
-  // Whenever the visible series changes (period change, offset change, new
-  // points count) drop the selection — the index would point at the wrong
-  // day otherwise. Functional-update guard makes a same-state set a no-op
-  // so we don't add re-render pressure during scrub.
   useEffect(() => {
     setSelectedIdx((prev) => (prev === null ? prev : null));
   }, [period, offset, pointsLen]);
@@ -185,9 +597,8 @@ function RevenueChart() {
     return Math.max(...points.map((p: any) => p.revenue), 1);
   }, [points]);
   const chartWidth = SCREEN_WIDTH - spacing[4] * 2 - spacing[5] * 2;
-  const barWidth = points.length > 0 ? Math.max(chartWidth / points.length - 4, 6) : 10;
 
-  const formatLabel = (dateStr: string, idx: number, total: number): string => {
+  const formatLabel = (dateStr: string): string => {
     if (period === 'today') return '';
     if (period === 'year') {
       const monthsShort = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
@@ -199,13 +610,9 @@ function RevenueChart() {
       const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
       return days[d.getDay()];
     }
-    if (period === 'month') {
-      return `${d.getDate()}`;
-    }
     return `${d.getDate()}`;
   };
 
-  /** Build smooth bezier curve path */
   const buildWavePath = (vals: number[], w: number, h: number, maxV: number): string => {
     if (vals.length < 2) return '';
     const pts = vals.map((v, i) => ({
@@ -229,13 +636,14 @@ function RevenueChart() {
   };
 
   const svgW = chartWidth;
-  const svgH = 160;
+  // iter#13: 200pt height (was 160) — chart reads as a primary surface,
+  // not a thumbnail.
+  const svgH = 200;
   const revVals = points.map((p: any) => p.revenue || 0);
   const profVals = points.map((p: any) => p.profit || 0);
   const maxProfit = Math.max(...profVals, 1);
   const overallMax = Math.max(maxValue, maxProfit, 1);
 
-  // ── Interactive scrub: convert touch X to point index. ──
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -257,31 +665,38 @@ function RevenueChart() {
     [points.length, svgW],
   );
 
-  // Selected point — for marker + tooltip + bottom stats override.
   const selPoint = selectedIdx !== null ? points[selectedIdx] : null;
-  const selX =
-    selectedIdx !== null && points.length > 1 ? (selectedIdx / (points.length - 1)) * svgW : 0;
-  const selRevY =
-    selPoint !== null ? svgH - ((selPoint.revenue || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
-  const selProfY =
-    selPoint !== null ? svgH - ((selPoint.profit || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
+  const selX = selectedIdx !== null && points.length > 1 ? (selectedIdx / (points.length - 1)) * svgW : 0;
+  const selRevY = selPoint !== null ? svgH - ((selPoint.revenue || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
+  const selProfY = selPoint !== null ? svgH - ((selPoint.profit || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
 
   const displayRevenue = selPoint ? selPoint.revenue || 0 : totalRevenue;
   const displayProfit = selPoint ? selPoint.profit || 0 : totalProfit;
   const displayChecks = selPoint ? selPoint.checkCount || 0 : totalChecks;
   const displayAvg = selPoint && selPoint.checkCount > 0 ? selPoint.revenue / selPoint.checkCount : null;
 
-  // labels for month: show 1,2,3... in order
   const labelStep = period === 'month' ? (points.length > 15 ? 5 : 3) : 1;
 
-  // Tooltip horizontal placement — clamp so it doesn't go off-card edges.
   const TOOLTIP_W = 132;
   const tooltipLeft = Math.max(0, Math.min(svgW - TOOLTIP_W, selX - TOOLTIP_W / 2));
 
   const formatPointDate = (iso: string): string => {
     if (period === 'year') {
       const [y, m] = iso.split('-');
-      const months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+      const months = [
+        'Январь',
+        'Февраль',
+        'Март',
+        'Апрель',
+        'Май',
+        'Июнь',
+        'Июль',
+        'Август',
+        'Сентябрь',
+        'Октябрь',
+        'Ноябрь',
+        'Декабрь',
+      ];
       return `${months[parseInt(m) - 1] ?? ''} ${y}`;
     }
     const d = new Date(iso);
@@ -289,232 +704,585 @@ function RevenueChart() {
   };
 
   return (
-    <AnimatedCard index={0} style={styles.chartCard}>
-      <LinearGradient colors={['#0f172a', '#1e293b']} style={styles.chartGradient}>
-        <Text style={styles.chartSubLabel}>АНАЛИТИКА</Text>
-
-        {/* Period tabs */}
-        <View style={styles.periodTabs}>
-          {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => (
-            <TouchableOpacity
-              key={p}
-              style={[styles.periodTab, period === p && styles.periodTabActive]}
-              onPress={() => handlePeriodChange(p)}
-            >
-              <Text style={[styles.periodTabText, period === p && styles.periodTabTextActive]}>{periodLabels[p]}</Text>
-            </TouchableOpacity>
-          ))}
+    <AnimatedCard index={2} style={styles.chartCardLight}>
+      <View style={styles.chartHeaderRow}>
+        <View>
+          <Text style={styles.chartHeaderTitle}>Аналитика</Text>
+          <Text style={styles.chartHeaderSub}>{getOffsetLabel(period, offset)}</Text>
         </View>
-
-        {/* Period navigation */}
-        <View style={styles.navRow}>
-          <TouchableOpacity style={styles.navBtn} onPress={() => setOffset((o) => o - 1)}>
-            <Ionicons name="chevron-back" size={16} color={colors.slate[400]} />
+        <View style={styles.chartNavRow}>
+          <TouchableOpacity style={styles.chartNavBtn} onPress={() => setOffset((o) => o - 1)} hitSlop={6}>
+            <Ionicons name="chevron-back" size={16} color={colors.gray[600]} />
           </TouchableOpacity>
-          <Text style={styles.navLabel}>{getOffsetLabel(period, offset)}</Text>
           <TouchableOpacity
-            style={[styles.navBtn, offset >= 0 && styles.navBtnDisabled]}
+            style={[styles.chartNavBtn, offset >= 0 && styles.chartNavBtnDisabled]}
             onPress={() => setOffset((o) => (o < 0 ? o + 1 : 0))}
             disabled={offset >= 0}
+            hitSlop={6}
           >
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color={offset >= 0 ? 'rgba(148,163,184,0.2)' : colors.slate[400]}
-            />
+            <Ionicons name="chevron-forward" size={16} color={offset >= 0 ? colors.gray[300] : colors.gray[600]} />
           </TouchableOpacity>
         </View>
+      </View>
 
-        {isLoading ? (
-          <ActivityIndicator color={colors.primary[400]} style={{ paddingVertical: spacing[8] }} />
-        ) : points.length > 1 ? (
-          <View style={styles.chartBody}>
-            {/* SVG Wave Chart — drag/tap anywhere on it to scrub through points. */}
-            <View style={{ height: svgH, width: svgW, position: 'relative' }} {...panResponder.panHandlers}>
-              <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
-                <Defs>
-                  <SvgGrad id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <Stop offset="0%" stopColor="rgb(37,99,235)" stopOpacity="0.55" />
-                    <Stop offset="100%" stopColor="rgb(37,99,235)" stopOpacity="0" />
-                  </SvgGrad>
-                  <SvgGrad id="profGrad" x1="0" y1="0" x2="0" y2="1">
-                    <Stop offset="0%" stopColor="rgb(6,182,212)" stopOpacity="0.4" />
-                    <Stop offset="100%" stopColor="rgb(6,182,212)" stopOpacity="0" />
-                  </SvgGrad>
-                </Defs>
-                {/* Grid lines */}
-                {[0.25, 0.5, 0.75].map((pct) => (
+      {/* iOS-segmented pill control */}
+      <View style={styles.segCtl}>
+        {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => {
+          const active = period === p;
+          return (
+            <TouchableOpacity
+              key={p}
+              style={[styles.segCtlBtn, active && styles.segCtlBtnActive]}
+              onPress={() => handlePeriodChange(p)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.segCtlText, active && styles.segCtlTextActive]}>{periodLabels[p]}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {isLoading ? (
+        <View style={{ height: svgH, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator color={colors.primary[500]} />
+        </View>
+      ) : points.length > 1 ? (
+        <View style={styles.chartBody}>
+          <View style={{ height: svgH, width: svgW, position: 'relative' }} {...panResponder.panHandlers}>
+            <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
+              <Defs>
+                <SvgGrad id="revGradLight" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0%" stopColor={colors.primary[500]} stopOpacity={0.34} />
+                  <Stop offset="100%" stopColor={colors.primary[500]} stopOpacity={0} />
+                </SvgGrad>
+                <SvgGrad id="profGradLight" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0%" stopColor={colors.cyan[400]} stopOpacity={0.2} />
+                  <Stop offset="100%" stopColor={colors.cyan[400]} stopOpacity={0} />
+                </SvgGrad>
+              </Defs>
+              {[0.25, 0.5, 0.75].map((pct) => (
+                <Line
+                  key={pct}
+                  x1={0}
+                  y1={svgH * (1 - pct)}
+                  x2={svgW}
+                  y2={svgH * (1 - pct)}
+                  stroke={colors.gray[100]}
+                  strokeWidth={1}
+                />
+              ))}
+              <Path d={buildAreaPath(revVals, svgW, svgH, overallMax)} fill="url(#revGradLight)" />
+              <Path
+                d={buildWavePath(revVals, svgW, svgH, overallMax)}
+                stroke={colors.primary[600]}
+                strokeWidth={3}
+                strokeLinecap="round"
+                fill="none"
+              />
+              <Path d={buildAreaPath(profVals, svgW, svgH, overallMax)} fill="url(#profGradLight)" />
+              <Path
+                d={buildWavePath(profVals, svgW, svgH, overallMax)}
+                stroke={colors.cyan[600]}
+                strokeWidth={2}
+                strokeLinecap="round"
+                fill="none"
+                strokeDasharray="4,4"
+              />
+              {selPoint !== null && (
+                <>
                   <Line
-                    key={pct}
-                    x1={0}
-                    y1={svgH * (1 - pct)}
-                    x2={svgW}
-                    y2={svgH * (1 - pct)}
-                    stroke="rgba(255,255,255,0.05)"
+                    x1={selX}
+                    y1={0}
+                    x2={selX}
+                    y2={svgH}
+                    stroke={colors.primary[400]}
                     strokeWidth={1}
+                    strokeDasharray="3,3"
                   />
-                ))}
-                {/* Revenue area + line */}
-                <Path d={buildAreaPath(revVals, svgW, svgH, overallMax)} fill="url(#revGrad)" />
-                <Path
-                  d={buildWavePath(revVals, svgW, svgH, overallMax)}
-                  stroke="rgb(59,130,246)"
-                  strokeWidth={3}
-                  strokeLinecap="round"
-                  fill="none"
-                />
-                {/* Profit area + line */}
-                <Path d={buildAreaPath(profVals, svgW, svgH, overallMax)} fill="url(#profGrad)" />
-                <Path
-                  d={buildWavePath(profVals, svgW, svgH, overallMax)}
-                  stroke="rgb(6,182,212)"
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                  fill="none"
-                  strokeDasharray="4,4"
-                />
-                {/* Scrub marker — vertical line + two dots at the selected x. */}
-                {selPoint !== null && (
-                  <>
-                    <Line
-                      x1={selX}
-                      y1={0}
-                      x2={selX}
-                      y2={svgH}
-                      stroke="rgba(255,255,255,0.45)"
-                      strokeWidth={1}
-                    />
-                    {/* Revenue dot */}
-                    <Circle cx={selX} cy={selRevY} r={5.5} fill="rgb(59,130,246)" stroke="white" strokeWidth={2} />
-                    {/* Profit dot */}
-                    <Circle cx={selX} cy={selProfY} r={4} fill="rgb(6,182,212)" stroke="white" strokeWidth={1.5} />
-                  </>
-                )}
-              </Svg>
-
-              {/* Floating tooltip above the selected point. */}
-              {selPoint !== null && (
-                <View
-                  style={[
-                    styles.scrubTooltip,
-                    {
-                      left: tooltipLeft,
-                      width: TOOLTIP_W,
-                    },
-                  ]}
-                  pointerEvents="none"
-                >
-                  <Text style={styles.scrubTooltipDate}>{formatPointDate(selPoint.date)}</Text>
-                  <View style={styles.scrubTooltipRow}>
-                    <View style={[styles.scrubDot, { backgroundColor: 'rgb(59,130,246)' }]} />
-                    <Text style={styles.scrubTooltipValue}>{formatMoney(selPoint.revenue || 0)}</Text>
-                  </View>
-                  <View style={styles.scrubTooltipRow}>
-                    <View style={[styles.scrubDot, { backgroundColor: 'rgb(6,182,212)' }]} />
-                    <Text style={styles.scrubTooltipValueSm}>{formatMoney(selPoint.profit || 0)}</Text>
-                  </View>
-                </View>
+                  <Circle cx={selX} cy={selRevY} r={5.5} fill={colors.primary[600]} stroke="white" strokeWidth={2} />
+                  <Circle cx={selX} cy={selProfY} r={4} fill={colors.cyan[600]} stroke="white" strokeWidth={1.5} />
+                </>
               )}
-            </View>
+            </Svg>
 
-            {/* X-axis labels */}
-            {period !== 'today' && (
-              <View style={styles.xAxisLabels}>
-                {points.map((point: any, idx: number) => {
-                  const label = formatLabel(point.date, idx, points.length);
-                  const show =
-                    period === 'week' || period === 'year' || idx % labelStep === 0 || idx === points.length - 1;
-                  return (
-                    <Text key={idx} style={styles.xAxisLabel}>
-                      {show ? label : ''}
-                    </Text>
-                  );
-                })}
-              </View>
-            )}
-
-            {/* Hint when nothing selected */}
-            {selPoint === null && (
-              <Text style={styles.scrubHint}>Проведите по графику для деталей</Text>
-            )}
-          </View>
-        ) : points.length === 1 ? (
-          <View style={styles.todayStat}>
-            <Text style={styles.todayStatValue}>{formatMoney(totalRevenue)}</Text>
-            <Text style={styles.todayStatSub}>Выручка за период</Text>
-          </View>
-        ) : (
-          <Text style={styles.chartEmpty}>Нет данных за период</Text>
-        )}
-
-        {/* Bottom stats — switch between period totals and the selected point's
-            values; small "за день" / "за период" pill makes the mode obvious. */}
-        {data && (
-          <>
-            <View style={styles.scopeBar}>
-              <Text style={styles.scopeBarLabel}>
-                {selPoint ? formatPointDate(selPoint.date).toUpperCase() : 'ИТОГО ЗА ПЕРИОД'}
-              </Text>
-              {selPoint !== null && (
-                <TouchableOpacity onPress={() => setSelectedIdx(null)} hitSlop={8}>
-                  <Text style={styles.scopeBarClear}>сбросить</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-            <View style={styles.chartStats}>
-              <View style={styles.chartStatItem}>
-                <Text style={styles.chartStatLabel}>Оборот</Text>
-                <Text style={styles.chartStatValue}>{formatMoney(displayRevenue)}</Text>
-              </View>
-              <View style={[styles.chartStatItem, styles.chartStatBorder]}>
-                <Text style={styles.chartStatLabel}>Прибыль</Text>
-                <Text style={[styles.chartStatValue, { color: colors.cyan[400] }]}>{formatMoney(displayProfit)}</Text>
-              </View>
-              <View style={[styles.chartStatItem, styles.chartStatBorder]}>
-                <Text style={styles.chartStatLabel}>Чеков</Text>
-                <Text style={styles.chartStatValue}>{displayChecks || '—'}</Text>
-              </View>
-            </View>
-            {/* Selected-day extras — only when scrubbing. */}
             {selPoint !== null && (
-              <View style={styles.chartStatsExtra}>
-                <View style={styles.chartStatExtraItem}>
-                  <Text style={styles.chartStatLabel}>Средний чек</Text>
-                  <Text style={styles.chartStatValueSm}>{displayAvg !== null ? formatMoney(displayAvg) : '—'}</Text>
+              <View
+                style={[styles.scrubTooltipLight, { left: tooltipLeft, width: TOOLTIP_W }]}
+                pointerEvents="none"
+              >
+                <Text style={styles.scrubTooltipDateLight}>{formatPointDate(selPoint.date)}</Text>
+                <View style={styles.scrubTooltipRow}>
+                  <View style={[styles.scrubDot, { backgroundColor: colors.primary[600] }]} />
+                  <Text style={styles.scrubTooltipValueLight}>{formatMoney(selPoint.revenue || 0)}</Text>
+                </View>
+                <View style={styles.scrubTooltipRow}>
+                  <View style={[styles.scrubDot, { backgroundColor: colors.cyan[600] }]} />
+                  <Text style={styles.scrubTooltipValueLightSm}>{formatMoney(selPoint.profit || 0)}</Text>
                 </View>
               </View>
             )}
-          </>
-        )}
+          </View>
 
-        {/* Scrollable day strip — tap to select / scrub a specific point. */}
-        {points.length > 1 && period !== 'today' && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chartDetailsScroll}>
-            {points.map((point: any, idx: number) => {
-              const active = idx === selectedIdx;
-              return (
-                <TouchableOpacity
-                  key={idx}
-                  activeOpacity={0.7}
-                  onPress={() => setSelectedIdx(active ? null : idx)}
-                  style={[styles.chartDetailCard, active && styles.chartDetailCardActive]}
-                >
-                  <Text style={[styles.chartDetailDate, active && styles.chartDetailDateActive]}>
-                    {formatLabel(point.date, idx, points.length)}
+          {period !== 'today' && (
+            <View style={styles.xAxisLabels}>
+              {points.map((point: any, idx: number) => {
+                const label = formatLabel(point.date);
+                const show =
+                  period === 'week' || period === 'year' || idx % labelStep === 0 || idx === points.length - 1;
+                return (
+                  <Text key={idx} style={styles.xAxisLabelLight}>
+                    {show ? label : ''}
                   </Text>
-                  <Text style={styles.chartDetailRevenue}>{formatMoney(point.revenue)}</Text>
-                  <Text style={styles.chartDetailProfit}>{formatMoney(point.profit)}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        )}
-      </LinearGradient>
+                );
+              })}
+            </View>
+          )}
+
+          {selPoint === null && <Text style={styles.scrubHintLight}>Проведите по графику для деталей</Text>}
+        </View>
+      ) : points.length === 1 ? (
+        <View style={styles.todayStatLight}>
+          <Text style={styles.todayStatValueLight}>{formatMoney(totalRevenue)}</Text>
+          <Text style={styles.todayStatSubLight}>Выручка за период</Text>
+        </View>
+      ) : (
+        <Text style={styles.chartEmptyLight}>Нет данных за период</Text>
+      )}
+
+      {data && (
+        <>
+          <View style={styles.scopeBarLight}>
+            <Text style={styles.scopeBarLabelLight}>
+              {selPoint ? formatPointDate(selPoint.date).toUpperCase() : 'ИТОГО ЗА ПЕРИОД'}
+            </Text>
+            {selPoint !== null && (
+              <TouchableOpacity onPress={() => setSelectedIdx(null)} hitSlop={8}>
+                <Text style={styles.scopeBarClearLight}>сбросить</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <View style={styles.chartStatsLight}>
+            <View style={styles.chartStatItemLight}>
+              <Text style={styles.chartStatLabelLight}>Оборот</Text>
+              <Text style={styles.chartStatValueLight}>{formatMoney(displayRevenue)}</Text>
+            </View>
+            <View style={[styles.chartStatItemLight, styles.chartStatBorderLight]}>
+              <Text style={styles.chartStatLabelLight}>Прибыль</Text>
+              <Text style={[styles.chartStatValueLight, { color: colors.cyan[600] }]}>
+                {formatMoney(displayProfit)}
+              </Text>
+            </View>
+            <View style={[styles.chartStatItemLight, styles.chartStatBorderLight]}>
+              <Text style={styles.chartStatLabelLight}>Чеков</Text>
+              <Text style={styles.chartStatValueLight}>{displayChecks || '—'}</Text>
+            </View>
+          </View>
+          {selPoint !== null && displayAvg !== null && (
+            <View style={styles.chartStatsExtraLight}>
+              <View style={styles.chartStatExtraItemLight}>
+                <Text style={styles.chartStatLabelLight}>Средний чек</Text>
+                <Text style={styles.chartStatValueLightSm}>{formatMoney(displayAvg)}</Text>
+              </View>
+            </View>
+          )}
+        </>
+      )}
     </AnimatedCard>
   );
 }
 
-// ── Shift Control ──
+// ── 4. TODAY'S SNAPSHOT ROW ─────────────────────────────────────────────────
+// 2 равных карточки в одной строке:
+//   • Сейчас на смене — count + первые 5 mini-аватарок + (+N more)
+//   • Звонки сегодня — incoming/missed + тонкий sparkline
+// Тапы → Schedule / Calls.
+function TodaySnapshotRow() {
+  return (
+    <View style={styles.snapshotRow}>
+      <OnShiftSnapshot />
+      <CallsSnapshot />
+    </View>
+  );
+}
+
+function OnShiftSnapshot() {
+  const navigation = useNavigation<any>();
+  const { data: todayData, isLoading } = useQuery<TodayEmployeeStatus[]>({
+    queryKey: ['schedule-today'],
+    queryFn: async () => (await scheduleApi.getToday()).data,
+    staleTime: 30_000,
+  });
+
+  const statuses = todayData ?? [];
+  const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
+  const isAbsent = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('прогул');
+  const isOnShift = (s: TodayEmployeeStatus) => s.isWorking || !!s.actualArrival || s.lateStatus === 'on_time';
+
+  const onShift = statuses.filter(
+    (s) =>
+      (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') &&
+      !s.isDayOff &&
+      !isSick(s) &&
+      !isAbsent(s),
+  );
+
+  const visible = onShift.slice(0, 5);
+  const more = Math.max(onShift.length - 5, 0);
+
+  return (
+    <AnimatedCard
+      index={3}
+      style={[styles.snapshotCard]}
+      onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } })}
+    >
+      <View style={styles.snapshotHeaderRow}>
+        <View style={[styles.snapshotIconBox, { backgroundColor: colors.green[50] }]}>
+          <Ionicons name="people-outline" size={14} color={colors.green[600]} />
+        </View>
+        <Text style={styles.snapshotLabel}>На смене</Text>
+      </View>
+      {isLoading ? (
+        <Skeleton width={36} height={28} radius={6} />
+      ) : (
+        <Text style={styles.snapshotValue}>{onShift.length}</Text>
+      )}
+      <View style={styles.avatarsRow}>
+        {visible.map((s, idx) => (
+          <View
+            key={s.userId}
+            style={[
+              styles.miniAvatar,
+              { backgroundColor: colors.primary[100], marginLeft: idx === 0 ? 0 : -6, zIndex: 10 - idx },
+            ]}
+          >
+            <Text style={styles.miniAvatarText}>
+              {s.fullName
+                .split(' ')
+                .map((w) => w[0])
+                .join('')
+                .slice(0, 2)
+                .toUpperCase()}
+            </Text>
+          </View>
+        ))}
+        {more > 0 && (
+          <View
+            style={[
+              styles.miniAvatar,
+              styles.miniAvatarMore,
+              { marginLeft: visible.length === 0 ? 0 : -6 },
+            ]}
+          >
+            <Text style={styles.miniAvatarMoreText}>+{more}</Text>
+          </View>
+        )}
+        {visible.length === 0 && !isLoading && <Text style={styles.snapshotEmpty}>—</Text>}
+      </View>
+    </AnimatedCard>
+  );
+}
+
+function CallsSnapshot() {
+  const navigation = useNavigation<any>();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, isLoading } = useQuery({
+    queryKey: ['calls-summary', today],
+    queryFn: async () => (await callsApi.getCalls({ date: today })).data.summary,
+    staleTime: 60_000,
+  });
+
+  const incoming = data?.incoming ?? 0;
+  const missed = data?.missed ?? 0;
+  const total = data?.total ?? 0;
+
+  const W = 70;
+  const H = 28;
+  const ratioIn = total > 0 ? incoming / total : 0;
+  const ratioMissed = total > 0 ? missed / total : 0;
+
+  return (
+    <AnimatedCard
+      index={4}
+      style={[styles.snapshotCard]}
+      onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Calls' } })}
+    >
+      <View style={styles.snapshotHeaderRow}>
+        <View style={[styles.snapshotIconBox, { backgroundColor: colors.purple[50] }]}>
+          <Ionicons name="call-outline" size={14} color={colors.purple[600]} />
+        </View>
+        <Text style={styles.snapshotLabel}>Звонки сегодня</Text>
+      </View>
+      {isLoading ? (
+        <Skeleton width={36} height={28} radius={6} />
+      ) : (
+        <Text style={styles.snapshotValue}>{total}</Text>
+      )}
+      <View style={styles.callsMiniRow}>
+        <Svg width={W} height={H}>
+          {ratioIn > 0 && (
+            <Path
+              d={`M 0 ${H - 4} L ${W * ratioIn} ${H - 4}`}
+              stroke={colors.green[500]}
+              strokeWidth={4}
+              strokeLinecap="round"
+            />
+          )}
+          {ratioMissed > 0 && (
+            <Path
+              d={`M 0 ${H - 14} L ${W * ratioMissed} ${H - 14}`}
+              stroke={colors.red[500]}
+              strokeWidth={4}
+              strokeLinecap="round"
+            />
+          )}
+        </Svg>
+        <View style={{ marginLeft: spacing[2] }}>
+          <Text style={styles.callsMiniText}>
+            <Text style={{ color: colors.green[600], fontWeight: '700' }}>{incoming}</Text> входящих
+          </Text>
+          <Text style={styles.callsMiniText}>
+            <Text style={{ color: colors.red[600], fontWeight: '700' }}>{missed}</Text> пропущ.
+          </Text>
+        </View>
+      </View>
+    </AnimatedCard>
+  );
+}
+
+// ── 5. QUICK ACTIONS 2×2 ────────────────────────────────────────────────────
+interface QuickAction {
+  key: string;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  tint: string;
+  tintBg: string;
+  perm?: string;
+  navigate: (navigation: any) => void;
+}
+
+function OwnerQuickActions() {
+  const navigation = useNavigation<any>();
+  const { hasPermission } = useAuth();
+
+  const actions: QuickAction[] = useMemo(
+    () => [
+      {
+        key: 'new-check',
+        label: 'Новый заказ-наряд',
+        icon: 'receipt-outline',
+        tint: colors.primary[600],
+        tintBg: colors.primary[50],
+        perm: 'checks_create',
+        navigate: (nav) => nav.navigate('CheckCreate'),
+      },
+      {
+        key: 'find-client',
+        label: 'Найти клиента',
+        icon: 'search-outline',
+        tint: colors.blue[600],
+        tintBg: colors.blue[50],
+        perm: 'clients_view',
+        navigate: (nav) => nav.navigate('Main', { screen: 'MoreTab', params: { screen: 'Clients' } }),
+      },
+      {
+        key: 'journal',
+        label: 'Журнал',
+        icon: 'clipboard-outline',
+        tint: colors.teal[600],
+        tintBg: colors.teal[50],
+        perm: 'checks_view',
+        navigate: (nav) => nav.navigate('Main', { screen: 'Checks' }),
+      },
+      {
+        key: 'reports',
+        label: 'Отчёты',
+        icon: 'bar-chart-outline',
+        tint: colors.purple[700],
+        tintBg: colors.purple[50],
+        perm: 'financial_reports',
+        navigate: (nav) => nav.navigate('Main', { screen: 'MoreTab', params: { screen: 'Reports' } }),
+      },
+    ],
+    [],
+  );
+
+  const allowed = actions.filter((a) => !a.perm || hasPermission(a.perm as any));
+  if (allowed.length === 0) return null;
+
+  return (
+    <View>
+      <Text style={styles.sectionLabel}>БЫСТРЫЕ ДЕЙСТВИЯ</Text>
+      <View style={styles.quickGrid2x2}>
+        {allowed.map((a, idx) => (
+          <QuickActionTile key={a.key} action={a} index={idx} onPress={() => a.navigate(navigation)} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const QuickActionTile = React.memo(function QuickActionTile({
+  action,
+  index,
+  onPress,
+}: {
+  action: QuickAction;
+  index: number;
+  onPress: () => void;
+}) {
+  return (
+    <AnimatedCard index={index} style={styles.quickActionTile} onPress={onPress}>
+      <View style={[styles.quickActionIconBox, { backgroundColor: action.tintBg }]}>
+        <Ionicons name={action.icon} size={22} color={action.tint} />
+      </View>
+      <Text style={styles.quickActionLabel} numberOfLines={2}>
+        {action.label}
+      </Text>
+    </AnimatedCard>
+  );
+});
+
+// ── 6. TOP PERFORMERS ───────────────────────────────────────────────────────
+// Top 3 masters by month revenue. Skeleton while loading. Tap → EmployeeDetail.
+function TopPerformers() {
+  const navigation = useNavigation<any>();
+  const { data: ranking, isLoading } = useQuery<EmployeeRanking>({
+    queryKey: ['employee-ranking'],
+    queryFn: async () => (await checksApi.getRanking()).data,
+    staleTime: 60_000,
+  });
+
+  const top3 = useMemo(() => (ranking?.month ?? []).slice(0, 3), [ranking?.month]);
+
+  const handleOpenEmployee = useCallback(
+    (id: string) => {
+      navigation.navigate('Main', {
+        screen: 'MoreTab',
+        params: { screen: 'EmployeeDetail', params: { id } },
+      });
+    },
+    [navigation],
+  );
+
+  return (
+    <View>
+      <View style={styles.sectionHeaderRow}>
+        <Text style={styles.sectionLabel}>ТОП МАСТЕРОВ МЕСЯЦА</Text>
+      </View>
+      <View style={styles.topPerformersCard}>
+        {isLoading && !ranking ? (
+          <View style={{ gap: spacing[3] }}>
+            {[0, 1, 2].map((i) => (
+              <View key={i} style={styles.topPerfRowSkeleton}>
+                <Skeleton width={40} height={40} radius={20} />
+                <View style={{ flex: 1, gap: 6, marginLeft: spacing[3] }}>
+                  <Skeleton width={'60%'} height={14} radius={4} />
+                  <Skeleton width={'30%'} height={11} radius={4} />
+                </View>
+                <Skeleton width={80} height={14} radius={4} />
+              </View>
+            ))}
+          </View>
+        ) : top3.length === 0 ? (
+          <View style={styles.topPerfEmpty}>
+            <Ionicons name="trophy-outline" size={28} color={colors.gray[300]} />
+            <Text style={styles.topPerfEmptyText}>Пока нет данных за месяц</Text>
+          </View>
+        ) : (
+          top3.map((emp, idx) => (
+            <TopPerformerRow
+              key={emp.masterId}
+              rank={idx + 1}
+              name={emp.masterName}
+              revenue={emp.revenue}
+              checkCount={emp.checkCount}
+              onPress={() => handleOpenEmployee(emp.masterId)}
+              showDivider={idx < top3.length - 1}
+            />
+          ))
+        )}
+      </View>
+    </View>
+  );
+}
+
+const TopPerformerRow = React.memo(function TopPerformerRow({
+  rank,
+  name,
+  revenue,
+  checkCount,
+  onPress,
+  showDivider,
+}: {
+  rank: number;
+  name: string;
+  revenue: number;
+  checkCount: number;
+  onPress: () => void;
+  showDivider: boolean;
+}) {
+  const medals: Record<number, { bg: string; fg: string; ring: string }> = {
+    1: { bg: '#FEF3C7', fg: '#92400E', ring: '#FCD34D' },
+    2: { bg: '#E5E7EB', fg: '#374151', ring: '#9CA3AF' },
+    3: { bg: '#FED7AA', fg: '#9A3412', ring: '#FB923C' },
+  };
+  const m = medals[rank] || { bg: colors.gray[100], fg: colors.gray[500], ring: colors.gray[300] };
+  const initials = name
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  return (
+    <Pressable onPress={onPress} android_ripple={{ color: colors.gray[100] }}>
+      {({ pressed }) => (
+        <>
+          <View style={[styles.topPerfRow, pressed && { opacity: 0.7 }]}>
+            <View style={[styles.topPerfAvatar, { backgroundColor: m.bg, borderColor: m.ring }]}>
+              <Text style={[styles.topPerfRank, { color: m.fg }]}>{rank}</Text>
+            </View>
+            <View style={{ flex: 1, minWidth: 0, marginLeft: spacing[3] }}>
+              <Text style={styles.topPerfName} numberOfLines={1}>
+                {name}
+              </Text>
+              <Text style={styles.topPerfSub}>
+                {initials} · {checkCount} {checkCount === 1 ? 'заказ' : 'заказов'}
+              </Text>
+            </View>
+            <Text style={styles.topPerfRevenue}>{formatMoney(revenue)}</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: spacing[2] }} />
+          </View>
+          {showDivider && <View style={styles.topPerfDivider} />}
+        </>
+      )}
+    </Pressable>
+  );
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ADMIN / OWNER DASHBOARD orchestrator
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Combines the 6 hero blocks. Не показывает ShiftControl — это фича мастера.
+function AdminDashboard({ name }: { name: string }) {
+  return (
+    <View style={{ gap: spacing[5] }}>
+      <OwnerHero name={name} />
+      <KpiStrip />
+      <OwnerAnalyticsChart />
+      <TodaySnapshotRow />
+      <OwnerQuickActions />
+      <TopPerformers />
+    </View>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  MASTER DASHBOARD — kept INTACT from previous iteration.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Shift Control (master only) ──
 function ShiftControl() {
   const queryClient = useQueryClient();
   const { data: myShifts } = useQuery<Shift[]>({
@@ -560,7 +1328,8 @@ function ShiftControl() {
             <Text style={styles.shiftTitle}>{currentShift ? 'Смена открыта' : 'Смена закрыта'}</Text>
             {currentShift && (
               <Text style={styles.shiftSince}>
-                с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                с{' '}
+                {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
               </Text>
             )}
           </View>
@@ -591,219 +1360,6 @@ function ShiftControl() {
   );
 }
 
-// ── Staff Status ──
-function StaffStatus() {
-  const { data: todayData } = useQuery<TodayEmployeeStatus[]>({
-    queryKey: ['schedule-today'],
-    queryFn: async () => {
-      const res = await scheduleApi.getToday();
-      return res.data;
-    },
-    staleTime: 30_000,
-  });
-
-  const statuses = todayData ?? [];
-  if (statuses.length === 0) return null;
-
-  const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
-  const isAbsent = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('прогул');
-  // Manual "Shift" or actualArrival counts as on shift
-  const isOnShift = (s: TodayEmployeeStatus) => s.isWorking || !!s.actualArrival || s.lateStatus === 'on_time';
-
-  const getColor = (s: TodayEmployeeStatus) => {
-    if (isSick(s)) return colors.rose[400];
-    if (s.isDayOff) return colors.gray[400];
-    if (s.lateStatus === 'late_major') return colors.orange[500];
-    if (s.lateStatus === 'late_minor') return colors.yellow[300];
-    if (isOnShift(s)) return colors.green[500];
-    if (isAbsent(s)) return colors.red[500];
-    return colors.gray[300];
-  };
-
-  // Groups: on-shift sorted by lateness (on-time first), not arrived, absent, sick, dayOff
-  const sortByLate = (a: TodayEmployeeStatus, b: TodayEmployeeStatus) => {
-    const rank = (s: TodayEmployeeStatus) =>
-      s.lateStatus === 'late_major' ? 3 : s.lateStatus === 'late_minor' ? 2 : 1;
-    return rank(a) - rank(b);
-  };
-  const onShiftAll = statuses
-    .filter(
-      (s) =>
-        (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') &&
-        !s.isDayOff &&
-        !isSick(s) &&
-        !isAbsent(s),
-    )
-    .sort(sortByLate);
-  const notArrivedGroup = statuses.filter(
-    (s) => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s) && !s.lateStatus,
-  );
-  const absentGroup = statuses.filter((s) => isAbsent(s));
-  const dayOffGroup = statuses.filter((s) => s.isDayOff && !isSick(s));
-  const sickGroup = statuses.filter((s) => isSick(s));
-
-  const renderGroup = (title: string, items: TodayEmployeeStatus[]) => {
-    if (items.length === 0) return null;
-    return (
-      <View style={{ marginBottom: spacing[3] }}>
-        <Text
-          style={{
-            fontSize: 10,
-            fontWeight: '700',
-            color: colors.gray[400],
-            marginBottom: 6,
-            letterSpacing: 0.5,
-            textTransform: 'uppercase' as const,
-          }}
-        >
-          {title} · {items.length}
-        </Text>
-        <View style={styles.staffGrid}>
-          {items.map((s) => (
-            <View key={s.userId} style={styles.staffItem}>
-              <View style={[styles.staffCircle, { backgroundColor: getColor(s) }]}>
-                <Text style={styles.staffInitials}>
-                  {s.fullName
-                    .split(' ')
-                    .map((w) => w[0])
-                    .join('')
-                    .slice(0, 2)}
-                </Text>
-              </View>
-              <Text style={styles.staffName} numberOfLines={1}>
-                {s.fullName.split(' ')[0]}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </View>
-    );
-  };
-
-  return (
-    <AnimatedCard index={2} style={styles.card}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[3] }}>
-        <Ionicons name="people-outline" size={16} color={colors.gray[900]} />
-        <Text style={styles.sectionTitle}>Сотрудники сегодня</Text>
-      </View>
-      {renderGroup('На смене', onShiftAll)}
-      {renderGroup('Ещё не пришёл', notArrivedGroup)}
-      {renderGroup('Прогул', absentGroup)}
-      {renderGroup('Выходной', dayOffGroup)}
-      {renderGroup('Больничный', sickGroup)}
-    </AnimatedCard>
-  );
-}
-
-// ── Employee Ranking ──
-function EmployeeRankingSection() {
-  const [tab, setTab] = useState<'today' | 'month'>('today');
-  const { data: ranking } = useQuery<EmployeeRanking>({
-    queryKey: ['employee-ranking'],
-    queryFn: async () => {
-      const res = await checksApi.getRanking();
-      return res.data;
-    },
-    staleTime: 30_000,
-  });
-
-  if (!ranking) return null;
-  const data = tab === 'today' ? ranking.today || [] : ranking.month || [];
-
-  // Split into top 3 and the rest
-  const top3 = data.slice(0, 3);
-  const rest = data.slice(3);
-
-  // Reorder top3 for podium: [2nd, 1st, 3rd]
-  const podiumOrder = top3.length >= 3 ? [top3[1], top3[0], top3[2]] : top3.length === 2 ? [top3[1], top3[0]] : top3;
-  const podiumPositions = top3.length >= 3 ? [2, 1, 3] : top3.length === 2 ? [2, 1] : [1];
-
-  const podiumColors: Record<number, string> = { 1: '#FFD700', 2: '#E8E8E8', 3: '#F4A460' };
-
-  return (
-    <AnimatedCard index={3} style={styles.card}>
-      {/* Card header */}
-      <View style={styles.rankingHeader}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <Ionicons name="flame-outline" size={18} color={colors.amber[600]} />
-          <Text style={styles.sectionTitle}>Рейтинг мастеров</Text>
-        </View>
-        <View style={styles.tabRow}>
-          <TouchableOpacity
-            style={[styles.tabBtn, tab === 'today' && styles.tabBtnActive]}
-            onPress={() => setTab('today')}
-          >
-            <Text style={[styles.tabBtnText, tab === 'today' && styles.tabBtnTextActive]}>Сегодня</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tabBtn, tab === 'month' && styles.tabBtnActive]}
-            onPress={() => setTab('month')}
-          >
-            <Text style={[styles.tabBtnText, tab === 'month' && styles.tabBtnTextActive]}>За месяц</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {data.length === 0 ? (
-        <View style={styles.rankingEmpty}>
-          <Ionicons name="bar-chart-outline" size={32} color={colors.gray[300]} />
-          <Text style={styles.rankingEmptyText}>Нет данных</Text>
-        </View>
-      ) : (
-        <>
-          {/* Top 3 podium */}
-          <View style={styles.podiumContainer}>
-            {podiumOrder.map((emp, idx) => {
-              const pos = podiumPositions[idx];
-              const isFirst = pos === 1;
-              const bgColor = podiumColors[pos] || colors.gray[200];
-              return (
-                <View key={emp.masterId} style={[styles.podiumItem, isFirst && styles.podiumItemFirst]}>
-                  <View
-                    style={[styles.podiumCircle, isFirst && styles.podiumCircleFirst, { backgroundColor: bgColor }]}
-                  >
-                    <Text style={[styles.podiumPosition, isFirst && styles.podiumPositionFirst]}>{pos}</Text>
-                  </View>
-                  <Text style={[styles.podiumName, isFirst && styles.podiumNameFirst]} numberOfLines={1}>
-                    {emp.masterName.split(' ')[0]}
-                  </Text>
-                  <Text style={[styles.podiumRevenue, isFirst && styles.podiumRevenueFirst]}>
-                    {formatMoney(emp.revenue)}
-                  </Text>
-                </View>
-              );
-            })}
-          </View>
-
-          {/* Remaining employees */}
-          {rest.length > 0 && (
-            <View style={styles.rankingList}>
-              {rest.map((emp, idx) => (
-                <View
-                  key={emp.masterId}
-                  style={[styles.rankingListRow, idx < rest.length - 1 && styles.rankingListRowBorder]}
-                >
-                  <View style={styles.rankingListNum}>
-                    <Text style={styles.rankingListNumText}>{idx + 4}</Text>
-                  </View>
-                  <View style={styles.rankInfo}>
-                    <Text style={styles.rankName} numberOfLines={1}>
-                      {emp.masterName}
-                    </Text>
-                    <Text style={styles.rankSub}>{emp.checkCount} заказов</Text>
-                  </View>
-                  <Text style={styles.rankRevenue}>{formatMoney(emp.revenue)}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </>
-      )}
-    </AnimatedCard>
-  );
-}
-
-// ── Master Dashboard ──
 function MasterRatingCard({ userId }: { userId?: string }) {
   const { data } = useQuery({
     queryKey: ['marketing-dashboard'],
@@ -1010,7 +1566,6 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
 
   const masters = useMemo(() => (usersData || []).filter((u) => u.isActive && u.role === 'master'), [usersData]);
 
-  // SHARED attendance utility — identical to schedule RatingTab
   const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
   const ranked = useMemo(
     () =>
@@ -1121,7 +1676,6 @@ function MasterDashboard() {
 
   return (
     <View style={{ gap: spacing[4] }}>
-      {/* Profile card */}
       <AnimatedCard index={0}>
         <LinearGradient colors={[colors.primary[600], colors.primary[700]]} style={styles.profileCard}>
           <View style={styles.profileRow}>
@@ -1134,14 +1688,14 @@ function MasterDashboard() {
                 {user?.fullName || 'Мастер'}
               </Text>
               <Text style={styles.profilePercent}>
-                Услуги {data.salaryPercent}%{data.productSalaryPercent ? ` · Товары ${data.productSalaryPercent}%` : ''}
+                Услуги {data.salaryPercent}%
+                {data.productSalaryPercent ? ` · Товары ${data.productSalaryPercent}%` : ''}
               </Text>
             </View>
           </View>
         </LinearGradient>
       </AnimatedCard>
 
-      {/* Today stats */}
       <View style={styles.statsRow}>
         <AnimatedCard index={1} style={styles.statCard}>
           <Ionicons
@@ -1162,7 +1716,6 @@ function MasterDashboard() {
         </AnimatedCard>
       </View>
 
-      {/* Cash register */}
       <AnimatedCard index={3} style={styles.cashSection}>
         <Text style={styles.cashTitle}>КАССА СЕГОДНЯ</Text>
         <View style={styles.cashGrid}>
@@ -1200,7 +1753,6 @@ function MasterDashboard() {
         </View>
       </AnimatedCard>
 
-      {/* Earning structure */}
       {data.todayService || data.todayProduct ? (
         <AnimatedCard index={4} style={styles.card}>
           <Text style={styles.cashTitle}>СТРУКТУРА ЗАРАБОТКА СЕГОДНЯ</Text>
@@ -1219,13 +1771,9 @@ function MasterDashboard() {
         </AnimatedCard>
       ) : null}
 
-      {/* My rating from reviews */}
       <MasterRatingCard userId={user?.id} />
-
-      {/* Recent checks */}
       <MasterRecentChecks />
 
-      {/* Product promotions — enhanced with photos */}
       {data.productPromotions &&
         data.productPromotions.length > 0 &&
         data.productPromotions.some((p) => p.percent > 0) && (
@@ -1283,489 +1831,9 @@ function MasterDashboard() {
   );
 }
 
-// ── Today Quick Stats (owner) ──
-// Three-stat ribbon: today revenue / profit / checks. Backed by
-// checksApi.getDashboard which already aggregates server-side, so
-// nothing here costs more than one HTTP call.
-function TodayQuickStats() {
-  const { data } = useQuery<DashboardStats>({
-    queryKey: ['checks-dashboard'],
-    queryFn: async () => {
-      const res = await checksApi.getDashboard();
-      return res.data;
-    },
-    staleTime: 30_000,
-  });
-
-  // While the (cache-first / SWR) data is undefined on cold start, render
-  // a slim placeholder so the layout doesn't jump.
-  const revenue = data?.todayRevenue ?? 0;
-  const profit = data?.todayProfit ?? 0;
-  const checks = data?.todayChecks ?? 0;
-
-  return (
-    <AnimatedCard index={0} style={styles.qsCard}>
-      <View style={styles.qsHeaderRow}>
-        <Ionicons name="sparkles-outline" size={14} color={colors.gray[500]} />
-        <Text style={styles.qsHeaderText}>Сегодня</Text>
-      </View>
-      <View style={styles.qsStatsRow}>
-        <View style={styles.qsStatItem}>
-          <Text style={styles.qsStatLabel}>Выручка</Text>
-          <Text style={styles.qsStatValue}>{formatMoney(revenue)}</Text>
-        </View>
-        <View style={styles.qsStatDivider} />
-        <View style={styles.qsStatItem}>
-          <Text style={styles.qsStatLabel}>Прибыль</Text>
-          <Text style={[styles.qsStatValue, { color: colors.green[600] }]}>{formatMoney(profit)}</Text>
-        </View>
-        <View style={styles.qsStatDivider} />
-        <View style={styles.qsStatItem}>
-          <Text style={styles.qsStatLabel}>Чеков</Text>
-          <Text style={[styles.qsStatValue, { color: colors.primary[600] }]}>{checks}</Text>
-        </View>
-      </View>
-    </AnimatedCard>
-  );
-}
-
-// ── Low Stock Widget (owner) ──
-// Top 5 products at or below their minStock threshold. Tap → Warehouse tab.
-// Hidden when nothing is low — empty state would be visual noise.
-function LowStockWidget() {
-  const navigation = useNavigation<any>();
-  const { data } = useQuery<Product[]>({
-    queryKey: ['low-stock'],
-    queryFn: async () => {
-      const res = await productsApi.getLowStock();
-      return res.data;
-    },
-    staleTime: 60_000,
-  });
-
-  const items = (data ?? []).slice(0, 5);
-  if (items.length === 0) return null;
-
-  return (
-    <AnimatedCard index={3} style={styles.card} onPress={() => navigation.navigate('Main', { screen: 'Products' })}>
-      <View style={styles.widgetHeaderRow}>
-        <View style={[styles.widgetIconBox, { backgroundColor: colors.amber[50] }]}>
-          <Ionicons name="alert-circle-outline" size={16} color={colors.amber[600]} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.sectionTitle}>Низкий остаток</Text>
-          <Text style={styles.widgetSubtitle}>
-            {data && data.length > 5
-              ? `Показано 5 из ${data.length}`
-              : `${items.length} ${items.length === 1 ? 'товар' : 'товаров'}`}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-      </View>
-      <View style={{ marginTop: spacing[3], gap: spacing[2] }}>
-        {items.map((p) => (
-          <View key={p.id} style={styles.lowStockRow}>
-            <Text style={styles.lowStockName} numberOfLines={1}>
-              {p.name}
-            </Text>
-            <View style={styles.lowStockStockPill}>
-              <Text style={styles.lowStockStockText}>
-                {p.stock} / {p.minStock} шт
-              </Text>
-            </View>
-          </View>
-        ))}
-      </View>
-    </AnimatedCard>
-  );
-}
-
-// ── Missed Calls Widget (owner) ──
-// Today's missed + not-called-back. Hidden when both are zero.
-function MissedCallsWidget() {
-  const navigation = useNavigation<any>();
-  const today = new Date().toISOString().slice(0, 10);
-  const { data } = useQuery({
-    queryKey: ['calls-summary', today],
-    queryFn: async () => {
-      const res = await callsApi.getCalls({ date: today });
-      return res.data.summary;
-    },
-    staleTime: 60_000,
-  });
-
-  const missed = data?.missed ?? 0;
-  const notCalledBack = data?.notCalledBack ?? 0;
-  if (missed === 0 && notCalledBack === 0) return null;
-
-  return (
-    <AnimatedCard index={4} style={styles.card} onPress={() => navigation.navigate('MoreTab', { screen: 'Calls' })}>
-      <View style={styles.widgetHeaderRow}>
-        <View style={[styles.widgetIconBox, { backgroundColor: colors.red[50] }]}>
-          <Ionicons name="call-outline" size={16} color={colors.red[600]} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.sectionTitle}>Звонки сегодня</Text>
-          <Text style={styles.widgetSubtitle}>Требуют внимания</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-      </View>
-      <View style={styles.callsStatsRow}>
-        <View style={styles.callsStatItem}>
-          <Text style={[styles.callsStatValue, { color: colors.red[600] }]}>{missed}</Text>
-          <Text style={styles.callsStatLabel}>Пропущено</Text>
-        </View>
-        <View style={styles.qsStatDivider} />
-        <View style={styles.callsStatItem}>
-          <Text style={[styles.callsStatValue, { color: colors.amber[600] }]}>{notCalledBack}</Text>
-          <Text style={styles.callsStatLabel}>Не перезвонили</Text>
-        </View>
-      </View>
-    </AnimatedCard>
-  );
-}
-
-// ── Owner Command Center (iter#12 redesign) ─────────────────────────
-//
-// Премиальный single-card command center владельца. Один цельный блок,
-// без россыпи мелких карточек, без слабой плашки «Бизнес сегодня» из
-// предыдущей итерации.
-//
-// Архитектура:
-//   • Один большой контейнер со светлым фоном и тонкой границей
-//     (или Liquid Glass поверх gray-50 — на выбор стиля). На iOS hero
-//     сидит на BlurView (`GlassSurface`) — это даёт настоящий iOS 16+
-//     frosted look и автоматически апгрейдится до UIGlassEffect на
-//     iOS 26 через runtime class lookup в нашем native module.
-//   • Сегментированный pill-control «Сегодня / Вчера / 7 дней / 30 дней»
-//     с плавным сдвигом thumb (Animated.timing на translateX).
-//   • Hero-тайл: огромное число выручки (SF Rounded look — bold + tight
-//     letter-spacing) + дельта vs прошлого периода в виде pill.
-//   • Hairline divider под hero.
-//   • Triplet вторичных метрик: Прибыль, Чеков, Средний чек — каждый со
-//     своей дельтой. Тап по «Чеков» → Журнал.
-//
-// Данные:
-//   • `checksApi.getDashboardChart(period, offset)` — уже агрегирует на
-//     бэке (`{ totalRevenue, totalProfit, totalChecks }`).
-//   • Параллельный запрос (period, offset-1) для дельт.
-//   • Средний чек = revenue / checks (guard вокруг деления на 0).
-//   • Никаких выдуманных метрик. Нули = показываем нули; «—» в дельте,
-//     если сравнивать не с чем (предыдущий период тоже пуст).
-//
-// Перенос на Android/Web:
-//   • Android — `GlassSurface` сам делает fallback на translucent panel
-//     (без BlurView). Cегмент-control работает как есть.
-//   • Web — frontend/ может зеркально использовать ту же визуальную
-//     иерархию: pill-tabs, big hero number, triplet under hairline. Но
-//     на web лучше использовать CSS `backdrop-filter: blur(20px)` для
-//     hero, а не RN BlurView.
-const PERIOD_TABS = [
-  { key: 'today', label: 'Сегодня', period: 'today' as const, offset: 0 },
-  { key: 'yday', label: 'Вчера', period: 'today' as const, offset: -1 },
-  { key: 'w', label: '7 дней', period: 'week' as const, offset: 0 },
-  { key: 'm', label: '30 дней', period: 'month' as const, offset: 0 },
-] as const;
-
-type PeriodTabKey = (typeof PERIOD_TABS)[number]['key'];
-
-interface PeriodTotals {
-  totalRevenue: number;
-  totalProfit: number;
-  totalChecks: number;
-}
-
-function usePeriodChart(period: 'today' | 'week' | 'month' | 'year', offset: number, enabled: boolean) {
-  return useQuery<PeriodTotals>({
-    queryKey: ['dashboard-chart', period, offset],
-    queryFn: async () => {
-      const res = await checksApi.getDashboardChart(period, offset);
-      return {
-        totalRevenue: res.data.totalRevenue || 0,
-        totalProfit: res.data.totalProfit || 0,
-        totalChecks: res.data.totalChecks || 0,
-      };
-    },
-    staleTime: 60_000,
-    enabled,
-    placeholderData: (prev) => prev,
-  });
-}
-
-function formatDelta(curr: number, prev: number): { text: string; tone: 'up' | 'down' | 'flat' } {
-  if (!isFinite(curr) || !isFinite(prev)) return { text: '—', tone: 'flat' };
-  if (prev === 0 && curr === 0) return { text: '—', tone: 'flat' };
-  if (prev === 0) return { text: '∙', tone: curr > 0 ? 'up' : 'flat' };
-  const diff = curr - prev;
-  const pct = (diff / Math.max(Math.abs(prev), 1)) * 100;
-  const rounded = Math.round(pct);
-  if (rounded === 0) return { text: '0%', tone: 'flat' };
-  return { text: `${rounded > 0 ? '+' : ''}${rounded}%`, tone: rounded > 0 ? 'up' : 'down' };
-}
-
-function OwnerCommandCenter() {
-  const navigation = useNavigation<any>();
-  const [tabKey, setTabKey] = useState<PeriodTabKey>('today');
-  const tab = PERIOD_TABS.find((t) => t.key === tabKey) ?? PERIOD_TABS[0];
-  const segWidth = useRef(new Animated.Value(0)).current;
-  const [segContainerWidth, setSegContainerWidth] = useState(0);
-
-  // Текущий и предыдущий периоды — параллельные запросы, оба с одним и
-  // тем же queryFn-сигнатурой (period, offset). Стандартный SWR кеш
-  // означает, что при переключении вкладок данные подгружаются один раз.
-  const curr = usePeriodChart(tab.period, tab.offset, true);
-  const prev = usePeriodChart(tab.period, tab.offset - 1, true);
-
-  const c: PeriodTotals = curr.data ?? { totalRevenue: 0, totalProfit: 0, totalChecks: 0 };
-  const p: PeriodTotals = prev.data ?? { totalRevenue: 0, totalProfit: 0, totalChecks: 0 };
-  const avg = c.totalChecks > 0 ? c.totalRevenue / c.totalChecks : 0;
-  const prevAvg = p.totalChecks > 0 ? p.totalRevenue / p.totalChecks : 0;
-
-  const dRev = formatDelta(c.totalRevenue, p.totalRevenue);
-  const dProf = formatDelta(c.totalProfit, p.totalProfit);
-  const dChk = formatDelta(c.totalChecks, p.totalChecks);
-  const dAvg = formatDelta(avg, prevAvg);
-
-  const isLoadingFirst = curr.data === undefined && curr.isLoading;
-  const activeIndex = PERIOD_TABS.findIndex((t) => t.key === tabKey);
-
-  // Smooth thumb slide. Width делим на N равных сегментов.
-  React.useEffect(() => {
-    if (segContainerWidth <= 0) return;
-    const target = (segContainerWidth / PERIOD_TABS.length) * activeIndex;
-    Animated.timing(segWidth, {
-      toValue: target,
-      duration: 220,
-      useNativeDriver: true,
-    }).start();
-  }, [activeIndex, segContainerWidth, segWidth]);
-
-  // Метка периода под hero — даёт контекст к большому числу выручки.
-  const periodLabel: Record<PeriodTabKey, string> = {
-    today: 'за сегодня',
-    yday: 'за вчера',
-    w: 'за 7 дней',
-    m: 'за 30 дней',
-  };
-
-  return (
-    <View style={styles.occShell}>
-      <AnimatedCard index={0} style={styles.occCard}>
-        {/* Сегментированный pill-control с анимированным thumb-ом.
-            На iOS читается как iOS-native segmented с лёгким frost-feel
-            благодаря тонкой границе и off-white фону. */}
-        <View style={styles.occSegment} onLayout={(e) => setSegContainerWidth(e.nativeEvent.layout.width - 6)}>
-          {segContainerWidth > 0 && (
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.occSegmentThumb,
-                {
-                  width: segContainerWidth / PERIOD_TABS.length,
-                  transform: [{ translateX: segWidth }],
-                },
-              ]}
-            />
-          )}
-          {PERIOD_TABS.map((t) => {
-            const active = t.key === tabKey;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                activeOpacity={0.7}
-                onPress={() => setTabKey(t.key)}
-                style={styles.occSegmentBtn}
-              >
-                <Text style={[styles.occSegmentText, active && styles.occSegmentTextActive]}>{t.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* HERO: огромная выручка + delta-pill. Заголовок и контекст
-            периода — на уровне eyebrow, чтобы не отвлекать от числа. */}
-        <View style={styles.occHero}>
-          <View style={styles.occHeroHeaderRow}>
-            <Text style={styles.occHeroEyebrow}>Выручка {periodLabel[tabKey]}</Text>
-            <DeltaPill delta={dRev} />
-          </View>
-          <Text style={styles.occHeroValue} numberOfLines={1}>
-            {isLoadingFirst ? '…' : formatMoney(c.totalRevenue)}
-          </Text>
-        </View>
-
-        {/* Hairline divider — чёткое визуальное отделение hero от триплета. */}
-        <View style={styles.occDivider} />
-
-        {/* Триплет вторичных метрик. Прибыль / Чеков / Средний чек.
-            Каждый — со своей дельтой. Чеков — кликабельный shortcut в
-            журнал, чтобы за один тап перейти к деталям. */}
-        <View style={styles.occGrid}>
-          <OccTile
-            label="Прибыль"
-            value={isLoadingFirst ? '…' : formatMoney(c.totalProfit)}
-            delta={dProf}
-            tone="green"
-          />
-          <View style={styles.occGridDivider} />
-          <OccTile
-            label="Чеков"
-            value={isLoadingFirst ? '…' : String(c.totalChecks)}
-            delta={dChk}
-            tone="blue"
-            onPress={() => navigation.navigate('Checks', { screen: 'ChecksHome' })}
-          />
-          <View style={styles.occGridDivider} />
-          <OccTile label="Средний чек" value={isLoadingFirst ? '…' : formatMoney(avg)} delta={dAvg} tone="purple" />
-        </View>
-      </AnimatedCard>
-    </View>
-  );
-}
-
-interface OccTileProps {
-  label: string;
-  value: string;
-  delta: { text: string; tone: 'up' | 'down' | 'flat' };
-  tone: 'green' | 'blue' | 'purple';
-  onPress?: () => void;
-}
-function OccTile({ label, value, delta, onPress }: OccTileProps) {
-  const Wrap = onPress ? TouchableOpacity : View;
-  return (
-    <Wrap activeOpacity={0.7} onPress={onPress as any} style={styles.occTile}>
-      <Text style={styles.occTileLabel}>{label}</Text>
-      <Text style={styles.occTileValue} numberOfLines={1}>
-        {value}
-      </Text>
-      <DeltaPill delta={delta} small />
-    </Wrap>
-  );
-}
-
-function DeltaPill({ delta, small }: { delta: { text: string; tone: 'up' | 'down' | 'flat' }; small?: boolean }) {
-  const palette =
-    delta.tone === 'up'
-      ? { bg: colors.green[50], fg: colors.green[700], icon: 'arrow-up' as const }
-      : delta.tone === 'down'
-        ? { bg: colors.red[50], fg: colors.red[700], icon: 'arrow-down' as const }
-        : { bg: colors.gray[100], fg: colors.gray[500], icon: 'remove' as const };
-
-  return (
-    <View style={[styles.deltaPill, { backgroundColor: palette.bg }, small && styles.deltaPillSmall]}>
-      <Ionicons name={palette.icon} size={small ? 9 : 11} color={palette.fg} />
-      <Text style={[styles.deltaPillText, { color: palette.fg, fontSize: small ? 10 : 11 }]}>{delta.text}</Text>
-    </View>
-  );
-}
-
-// ── Admin Dashboard ──
-//
-// Глубокая аналитика (тяжёлый chart Сегодня/Неделя/Месяц/Год) умышленно
-// удалена с главной владельца — он не нужен на every-day экране и
-// делает Dashboard визуально перегруженным "веб-style". Графики и
-// исторические периоды живут в разделе «Отчёты» (ReportsScreen).
-//
-// Что остаётся на главной — только то, что владелец смотрит каждый день:
-//   • OwnerCommandCenter — большой premium-виджет с периодами (Сегодня /
-//     Вчера / 7 дней / 30 дней) и дельтой vs прошлого периода;
-//   • StaffStatus — кто на смене;
-//   • LowStockWidget — товары на исходе;
-//   • MissedCallsWidget — пропущенные звонки.
-//
-// Что удалено по запросу владельца после iPhone-теста:
-//   • TodayQuickStats — слабая трёхстатная плашка;
-//   • EmployeeRankingSection — рейтинг сотрудников на главной не нужен,
-//     эта аналитика живёт в карточке сотрудника / разделе «Сотрудники».
-function AdminDashboard() {
-  const { user } = useAuth();
-  const isOwner = user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN;
-
-  return (
-    <View style={{ gap: spacing[4] }}>
-      {isOwner && <OwnerCommandCenter />}
-      <StaffStatus />
-      {isOwner && <LowStockWidget />}
-      {isOwner && <MissedCallsWidget />}
-    </View>
-  );
-}
-
-// ── Quick Actions ──
-function QuickActions() {
-  const navigation = useNavigation<any>();
-  const { hasPermission } = useAuth();
-
-  const actions = [
-    {
-      label: 'Новый чек',
-      screen: 'CheckCreate',
-      perm: 'checks_create',
-      icon: 'add-circle-outline' as const,
-      color: colors.primary[600],
-      bg: colors.primary[50],
-    },
-    {
-      label: 'Клиенты',
-      screen: 'Clients',
-      perm: 'clients_view',
-      icon: 'people-outline' as const,
-      color: colors.blue[600],
-      bg: colors.blue[50],
-    },
-    {
-      label: 'Журнал',
-      tab: 'Checks',
-      perm: 'checks_view',
-      icon: 'receipt-outline' as const,
-      color: colors.teal[600],
-      bg: colors.teal[50],
-    },
-    {
-      label: 'Отчёты',
-      screen: 'Reports',
-      perm: 'financial_reports',
-      icon: 'bar-chart-outline' as const,
-      color: colors.purple[700],
-      bg: colors.purple[50],
-    },
-  ].filter((a) => !a.perm || hasPermission(a.perm as any));
-
-  if (actions.length === 0) return null;
-
-  const btnWidth = (SCREEN_WIDTH - spacing[4] * 2 - spacing[3]) / 2;
-
-  return (
-    <View>
-      <Text style={[styles.sectionTitle, { marginBottom: spacing[3] }]}>Быстрые действия</Text>
-      <View style={styles.quickGrid}>
-        {actions.map((action, idx) => (
-          <AnimatedCard
-            key={action.label}
-            index={idx}
-            style={[styles.quickItem, { width: btnWidth }]}
-            onPress={() => {
-              if (action.tab) {
-                navigation.navigate('Main', { screen: action.tab });
-              } else if (action.screen) {
-                navigation.navigate(action.screen);
-              }
-            }}
-          >
-            <View style={[styles.quickIconBox, { backgroundColor: action.bg }]}>
-              <Ionicons name={action.icon} size={22} color={action.color} />
-            </View>
-            <Text style={styles.quickLabel} numberOfLines={1}>
-              {action.label}
-            </Text>
-          </AnimatedCard>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-// ── Main Dashboard ──
+// ════════════════════════════════════════════════════════════════════════════
+//  ROOT
+// ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -1781,28 +1849,16 @@ export default function DashboardScreen() {
     setRefreshing(false);
   };
 
-  const greeting = getGreeting();
   const displayName = user?.fullName?.split(' ')[0] || '';
+  const greeting = getGreeting();
 
   return (
-    /* Edge-to-edge wrapper: plain View, no SafeAreaView. The screen
-       background fills the WHOLE viewport including the status bar zone
-       and the area behind the floating tab bar. Safe-area top is
-       applied to the scroll content, NOT to an outer frame, so the
-       app reads as one continuous canvas instead of "content in a
-       window with a separate status-bar strip above it". */
+    /* Edge-to-edge wrapper — gray-50 canvas flows under the glass tab bar.
+       No SafeAreaView frame; insetsTop is applied inline to scroll content. */
     <View style={styles.safe}>
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent2, { paddingTop: insetsTop + spacing[2] }]}
-        // iOS: contentInset.bottom lets scroll content flow UNDER the
-        // floating glass tab bar instead of stopping above it. The
-        // tab-bar-height-sized inset means the user can still scroll
-        // the last item above the bar; in between the last item and
-        // the inset edge nothing is drawn — but the visible region
-        // BEHIND the glass is the scroll content itself, which is
-        // exactly the "screen continues under the bar" feel iOS uses
-        // in Mail / Settings / Music.
+        contentContainerStyle={[styles.scrollContent, { paddingTop: insetsTop + spacing[2] }]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
@@ -1810,39 +1866,40 @@ export default function DashboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
-        {/* Header for non-masters */}
-        {!isMaster && (
-          <View style={styles.headerSection}>
-            <Text style={styles.headerTitle}>
-              {greeting}, {displayName}!
-            </Text>
-            <Text style={styles.headerSub}>Обзор показателей автосервиса</Text>
-          </View>
-        )}
-
-        {/* Shift control (not for owner) */}
-        {!isOwner && <ShiftControl />}
-
-        {/* Dashboard content */}
-        {isMaster ? <MasterDashboard /> : <AdminDashboard />}
-
-        {/* Quick actions */}
-        <QuickActions />
+        {/* Owner = new 6-block layout. Master = unchanged previous experience. */}
+        {isMaster ? (
+          <>
+            <View style={styles.headerSection}>
+              <Text style={styles.headerTitle}>
+                {greeting}, {displayName}!
+              </Text>
+              <Text style={styles.headerSub}>Обзор показателей автосервиса</Text>
+            </View>
+            <ShiftControl />
+            <MasterDashboard />
+          </>
+        ) : isOwner || user?.role === UserRole.ADMIN ? (
+          <AdminDashboard name={displayName} />
+        ) : null}
       </ScrollView>
     </View>
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  STYLES
+// ════════════════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scroll: { flex: 1 },
-  // paddingBottom 120 reserves space for the floating iOS tab bar (60+8+34+18)
-  // No paddingBottom here — contentInset on the ScrollView (iOS) handles
-  // it natively so content flows visibly under the glass tab bar.
-  scrollContent2: { padding: spacing[4], gap: spacing[4] },
+  scrollContent: { padding: spacing[4], gap: spacing[4] },
+
+  // Master-only header
   headerSection: { marginBottom: spacing[1] },
   headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   headerSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+
+  // Legacy card (master path)
   card: {
     backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
@@ -1857,263 +1914,556 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
 
-  // Today Quick Stats — compact 3-stat ribbon at the top of the owner
-  // dashboard. Prefixed `qs*` to avoid collision with the `todayStat*`
-  // styles RevenueChart already uses for its empty-state.
-  qsCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[4],
-    shadowColor: colors.black,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 1,
+  // ── 1. OWNER HERO ────────────────────────────────────────────────────────
+  heroCard: {
+    borderRadius: borderRadius['3xl'],
+    overflow: 'hidden',
+    shadowColor: colors.primary[900],
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.22,
+    shadowRadius: 28,
+    elevation: 8,
   },
-  qsHeaderRow: {
+  heroGradient: {
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[5],
+    paddingBottom: spacing[6],
+    borderRadius: borderRadius['3xl'],
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  heroSparkle: {
+    position: 'absolute',
+    top: -40,
+    right: -40,
+  },
+  heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: spacing[2],
   },
-  qsHeaderText: {
+  heroGreeting: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.white,
+    letterSpacing: -0.4,
+  },
+  heroDate: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.72)',
+    marginTop: 2,
+    textTransform: 'capitalize',
+  },
+  heroAvatarDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#bbf7d0',
+    shadowColor: '#86efac',
+    shadowOpacity: 0.6,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  heroValueBlock: { marginTop: spacing[5] },
+  heroValueLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.66)',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  heroValue: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: colors.white,
+    letterSpacing: -1.4,
+    fontVariant: ['tabular-nums'],
+  },
+  heroDeltaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginTop: spacing[2],
+  },
+  heroDeltaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+  },
+  heroDeltaText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.white,
+    letterSpacing: -0.1,
+  },
+  heroDeltaCaption: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.55)',
+  },
+
+  // ── 2. KPI STRIP ─────────────────────────────────────────────────────────
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.gray[500],
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: spacing[2.5],
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  kpiScrollContent: {
+    gap: spacing[3],
+    paddingRight: spacing[4],
+  },
+  kpiTile: {
+    width: 144,
+    height: 144,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3],
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+    justifyContent: 'space-between',
+  },
+  kpiTileTitle: {
     fontSize: 11,
     fontWeight: '700',
     color: colors.gray[500],
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
-  qsStatsRow: {
+  kpiTileValue: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.gray[900],
+    letterSpacing: -0.6,
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
+  },
+  kpiTileSparkWrap: { marginTop: 4 },
+  kpiDeltaPill: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.gray[100],
   },
-  qsStatItem: {
-    flex: 1,
-    alignItems: 'flex-start',
-  },
-  qsStatLabel: {
-    fontSize: 11,
-    color: colors.gray[400],
-    fontWeight: '500',
-  },
-  qsStatValue: {
-    fontSize: fontSize.lg,
+  kpiDeltaText: {
+    fontSize: 10,
     fontWeight: '700',
-    color: colors.gray[900],
-    marginTop: 2,
-    letterSpacing: -0.3,
-  },
-  qsStatDivider: {
-    width: StyleSheet.hairlineWidth,
-    height: 28,
-    backgroundColor: colors.gray[200],
-    marginHorizontal: spacing[3],
+    letterSpacing: -0.1,
   },
 
-  // Widget header (icon + title + chevron)
-  widgetHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
+  // ── 3. OWNER ANALYTICS CHART ─────────────────────────────────────────────
+  chartCardLight: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['3xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    padding: spacing[5],
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.06,
+    shadowRadius: 24,
+    elevation: 3,
   },
-  widgetIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  chartHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing[3],
+  },
+  chartHeaderTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.gray[900],
+    letterSpacing: -0.3,
+  },
+  chartHeaderSub: {
+    fontSize: 12,
+    color: colors.gray[500],
+    marginTop: 2,
+    textTransform: 'capitalize',
+  },
+  chartNavRow: {
+    flexDirection: 'row',
+    gap: spacing[1.5],
+  },
+  chartNavBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.gray[100],
     alignItems: 'center',
     justifyContent: 'center',
   },
-  widgetSubtitle: {
-    fontSize: 11,
-    color: colors.gray[400],
-    marginTop: 1,
-  },
+  chartNavBtnDisabled: { opacity: 0.4 },
 
-  // Low stock rows
-  lowStockRow: {
+  segCtl: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-  },
-  lowStockName: {
-    flex: 1,
-    fontSize: fontSize.sm,
-    color: colors.gray[900],
-    fontWeight: '500',
-  },
-  lowStockStockPill: {
-    paddingHorizontal: spacing[2],
-    paddingVertical: 2,
+    backgroundColor: colors.gray[100],
     borderRadius: borderRadius.full,
-    backgroundColor: colors.amber[50],
-  },
-  lowStockStockText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.amber[600],
-  },
-
-  // Calls widget
-  callsStatsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: spacing[3],
-  },
-  callsStatItem: {
-    flex: 1,
-    alignItems: 'flex-start',
-  },
-  callsStatValue: {
-    fontSize: fontSize['2xl'],
-    fontWeight: '700',
-    letterSpacing: -0.5,
-  },
-  callsStatLabel: {
-    fontSize: 11,
-    color: colors.gray[400],
-    marginTop: 2,
-    fontWeight: '500',
-  },
-
-  // Chart
-  chartCard: {
-    borderRadius: borderRadius['3xl'],
-    overflow: 'hidden',
-    shadowColor: colors.black,
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  chartGradient: { padding: spacing[5], borderRadius: borderRadius['3xl'] },
-  chartSubLabel: {
-    fontSize: 10,
-    fontWeight: fontWeight.semibold,
-    color: colors.slate[400],
-    letterSpacing: 2,
-    marginBottom: spacing[2],
-  },
-  periodTabs: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: borderRadius.xl,
     padding: 3,
-    marginBottom: spacing[2],
+    marginBottom: spacing[4],
   },
-  periodTab: { flex: 1, paddingVertical: spacing[2], borderRadius: borderRadius.lg, alignItems: 'center' },
-  periodTabActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
-  periodTabText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.slate[400] },
-  periodTabTextActive: { color: colors.white },
-  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[3] },
-  navBtn: { padding: spacing[1.5], borderRadius: borderRadius.lg, backgroundColor: 'rgba(255,255,255,0.05)' },
-  navBtnDisabled: { opacity: 0.2 },
-  navLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.slate[300] },
+  segCtlBtn: {
+    flex: 1,
+    paddingVertical: 7,
+    borderRadius: borderRadius.full,
+    alignItems: 'center',
+  },
+  segCtlBtnActive: {
+    backgroundColor: colors.white,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  segCtlText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: colors.gray[500],
+    letterSpacing: -0.1,
+  },
+  segCtlTextActive: { color: colors.gray[900], fontWeight: '700' },
+
   chartBody: { gap: spacing[1] },
   xAxisLabels: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: spacing[1] },
-  xAxisLabel: { fontSize: 9, color: colors.slate[500], textAlign: 'center', flex: 1 },
-  todayStat: { alignItems: 'center', paddingVertical: spacing[6] },
-  todayStatValue: { fontSize: fontSize['3xl'], fontWeight: fontWeight.bold, color: colors.white },
-  todayStatSub: { fontSize: fontSize.xs, color: colors.slate[400], marginTop: 4 },
-  chartEmpty: { fontSize: fontSize.sm, color: colors.slate[500], textAlign: 'center', paddingVertical: spacing[8] },
-  chartStats: {
+  xAxisLabelLight: { fontSize: 10, color: colors.gray[400], textAlign: 'center', flex: 1 },
+  todayStatLight: { alignItems: 'center', paddingVertical: spacing[6] },
+  todayStatValueLight: { fontSize: fontSize['3xl'], fontWeight: '800', color: colors.gray[900], letterSpacing: -0.8 },
+  todayStatSubLight: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 4 },
+  chartEmptyLight: { fontSize: fontSize.sm, color: colors.gray[400], textAlign: 'center', paddingVertical: spacing[8] },
+
+  chartStatsLight: {
     flexDirection: 'row',
     marginTop: spacing[4],
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: colors.gray[50],
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
   },
-  chartStatItem: { flex: 1, paddingVertical: spacing[3], alignItems: 'center' },
-  chartStatBorder: { borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.05)' },
-  chartStatLabel: {
+  chartStatItemLight: { flex: 1, paddingVertical: spacing[3], alignItems: 'center' },
+  chartStatBorderLight: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.gray[200] },
+  chartStatLabelLight: {
     fontSize: 10,
-    fontWeight: fontWeight.medium,
-    color: colors.slate[500],
+    fontWeight: '600',
+    color: colors.gray[500],
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  chartStatValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.white, marginTop: 2 },
-  chartStatValueSm: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white, marginTop: 2 },
-  // Scope bar — shows whether stats below are for the period or a specific point.
-  scopeBar: {
+  chartStatValueLight: {
+    fontSize: fontSize.base,
+    fontWeight: '700',
+    color: colors.gray[900],
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  chartStatValueLightSm: {
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+    color: colors.gray[900],
+    marginTop: 2,
+    fontVariant: ['tabular-nums'],
+  },
+  scopeBarLight: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: spacing[3],
     paddingHorizontal: spacing[1],
   },
-  scopeBarLabel: {
+  scopeBarLabelLight: {
     fontSize: 10,
     fontWeight: '700',
-    color: colors.slate[400],
+    color: colors.gray[500],
     letterSpacing: 1.2,
   },
-  scopeBarClear: {
+  scopeBarClearLight: {
     fontSize: 11,
     fontWeight: '600',
-    color: colors.blue[300],
+    color: colors.primary[600],
     letterSpacing: 0.2,
   },
-  chartStatsExtra: {
+  chartStatsExtraLight: {
     flexDirection: 'row',
     marginTop: spacing[2],
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: colors.gray[50],
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
   },
-  chartStatExtraItem: { flex: 1, paddingVertical: spacing[2.5], alignItems: 'center' },
-  // Scrub tooltip — appears above the SVG when the user drags the chart.
-  scrubTooltip: {
+  chartStatExtraItemLight: { flex: 1, paddingVertical: spacing[2.5], alignItems: 'center' },
+
+  scrubTooltipLight: {
     position: 'absolute',
     top: -2,
-    backgroundColor: 'rgba(15,23,42,0.95)',
+    backgroundColor: colors.white,
     borderRadius: 10,
     paddingHorizontal: spacing[2.5],
     paddingVertical: spacing[1.5],
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.10)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
-  scrubTooltipDate: {
+  scrubTooltipDateLight: {
     fontSize: 10,
     fontWeight: '700',
-    color: colors.slate[300],
+    color: colors.gray[500],
     letterSpacing: 0.2,
     textTransform: 'capitalize',
     marginBottom: 2,
   },
   scrubTooltipRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   scrubDot: { width: 7, height: 7, borderRadius: 4 },
-  scrubTooltipValue: { fontSize: 12, fontWeight: '700', color: colors.white },
-  scrubTooltipValueSm: { fontSize: 11, fontWeight: '500', color: colors.cyan[400] },
-  scrubHint: {
-    fontSize: 10,
-    color: colors.slate[500],
+  scrubTooltipValueLight: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.gray[900],
+    fontVariant: ['tabular-nums'],
+  },
+  scrubTooltipValueLightSm: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.cyan[600],
+    fontVariant: ['tabular-nums'],
+  },
+  scrubHintLight: {
+    fontSize: 11,
+    color: colors.gray[400],
     textAlign: 'center',
-    marginTop: spacing[1],
-    letterSpacing: 0.3,
-    fontStyle: 'italic',
+    marginTop: spacing[1.5],
+    letterSpacing: 0.2,
   },
-  chartDetailsScroll: { marginTop: spacing[3] },
-  chartDetailCard: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: borderRadius.xl,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    marginRight: spacing[2],
-    minWidth: 64,
+
+  // ── 4. TODAY SNAPSHOT ROW ────────────────────────────────────────────────
+  snapshotRow: {
+    flexDirection: 'row',
+    gap: spacing[3],
+  },
+  snapshotCard: {
+    flex: 1,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    padding: spacing[4],
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  snapshotHeaderRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing[2],
+    marginBottom: spacing[2.5],
   },
-  chartDetailCardActive: {
-    backgroundColor: 'rgba(59,130,246,0.20)',
-    borderWidth: 1,
-    borderColor: 'rgba(59,130,246,0.50)',
+  snapshotIconBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  chartDetailDate: { fontSize: 9, color: colors.slate[500], fontWeight: fontWeight.medium },
-  chartDetailDateActive: { color: colors.white },
-  chartDetailRevenue: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.blue[300] },
-  chartDetailProfit: { fontSize: 9, color: colors.cyan[400] },
-  // Shift
+  snapshotLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.gray[600],
+    letterSpacing: -0.1,
+  },
+  snapshotValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: colors.gray[900],
+    letterSpacing: -0.8,
+    fontVariant: ['tabular-nums'],
+  },
+  snapshotEmpty: {
+    fontSize: 12,
+    color: colors.gray[400],
+  },
+  avatarsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing[2],
+    minHeight: 24,
+  },
+  miniAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.white,
+  },
+  miniAvatarText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.primary[700],
+  },
+  miniAvatarMore: {
+    backgroundColor: colors.gray[100],
+    borderColor: colors.white,
+  },
+  miniAvatarMoreText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.gray[600],
+  },
+  callsMiniRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing[2],
+  },
+  callsMiniText: {
+    fontSize: 11,
+    color: colors.gray[600],
+    lineHeight: 14,
+  },
+
+  // ── 5. QUICK ACTIONS 2×2 ─────────────────────────────────────────────────
+  quickGrid2x2: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[3],
+  },
+  quickActionTile: {
+    width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3]) / 2,
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    paddingVertical: spacing[4],
+    paddingHorizontal: spacing[3.5],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  quickActionIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickActionLabel: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.gray[900],
+    letterSpacing: -0.1,
+    lineHeight: 16,
+  },
+
+  // ── 6. TOP PERFORMERS ────────────────────────────────────────────────────
+  topPerformersCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    padding: spacing[2],
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  topPerfRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[2],
+  },
+  topPerfRowSkeleton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[2],
+  },
+  topPerfAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+  },
+  topPerfRank: {
+    fontSize: fontSize.base,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  topPerfName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.gray[900],
+    letterSpacing: -0.2,
+  },
+  topPerfSub: {
+    fontSize: 12,
+    color: colors.gray[500],
+    marginTop: 1,
+  },
+  topPerfRevenue: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.gray[900],
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.2,
+  },
+  topPerfDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.gray[100],
+    marginHorizontal: spacing[2],
+  },
+  topPerfEmpty: {
+    alignItems: 'center',
+    paddingVertical: spacing[6],
+    gap: spacing[2],
+  },
+  topPerfEmptyText: {
+    fontSize: 13,
+    color: colors.gray[400],
+  },
+
+  // ── LEGACY (master path) ─────────────────────────────────────────────────
+  errorBanner: {
+    backgroundColor: colors.red[50],
+    borderRadius: borderRadius.xl,
+    padding: spacing[4],
+    fontSize: fontSize.sm,
+    color: colors.red[700],
+    textAlign: 'center',
+    margin: spacing[4],
+  },
   shiftRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   shiftLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   shiftIcon: { width: 40, height: 40, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
@@ -2135,82 +2485,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
   },
   shiftOpenBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.green[600] },
-  // Staff
-  staffGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-  staffItem: { width: '20%', alignItems: 'center', gap: spacing[1], marginBottom: spacing[3] },
-  staffCircle: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  staffInitials: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.white },
-  staffName: { fontSize: 10, color: colors.gray[500], maxWidth: 60, textAlign: 'center' },
-  // Ranking
-  rankingHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: spacing[3],
-  },
-  tabRow: { flexDirection: 'row', backgroundColor: colors.gray[100], borderRadius: borderRadius.lg, padding: 2 },
-  tabBtn: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.md },
-  tabBtnActive: {
-    backgroundColor: colors.white,
-    shadowColor: colors.black,
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  tabBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
-  tabBtnTextActive: { color: colors.gray[900] },
-  rankingEmpty: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[8], gap: spacing[2] },
-  rankingEmptyText: { fontSize: fontSize.sm, color: colors.gray[400] },
-  // Podium
-  podiumContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'flex-end',
-    gap: spacing[3],
-    marginBottom: spacing[4],
-    paddingTop: spacing[2],
-  },
-  podiumItem: { alignItems: 'center', flex: 1, maxWidth: 100 },
-  podiumItemFirst: { marginBottom: spacing[2] },
-  podiumCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing[1.5],
-    shadowColor: colors.black,
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  podiumCircleFirst: { width: 60, height: 60, borderRadius: 30 },
-  podiumPosition: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[700] },
-  podiumPositionFirst: { fontSize: fontSize.xl },
-  podiumName: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[700], textAlign: 'center' },
-  podiumNameFirst: { fontSize: fontSize.xs, color: colors.gray[900] },
-  podiumRevenue: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.gray[500], marginTop: 2 },
-  podiumRevenueFirst: { fontSize: 11, color: colors.gray[900] },
-  // Ranking list (below podium)
-  rankingList: { borderTopWidth: 1, borderTopColor: colors.gray[100], paddingTop: spacing[2] },
-  rankingListRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[2.5] },
-  rankingListRowBorder: { borderBottomWidth: 1, borderBottomColor: colors.gray[50] },
-  rankingListNum: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.gray[50],
-    marginRight: spacing[3],
-  },
-  rankingListNumText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.gray[400] },
-  rankInfo: { flex: 1, minWidth: 0 },
-  rankName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  rankSub: { fontSize: 11, color: colors.gray[400] },
-  rankRevenue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  emptyText: { textAlign: 'center', padding: spacing[8], fontSize: fontSize.sm, color: colors.gray[400] },
-  // Profile
+
   profileCard: { borderRadius: borderRadius['2xl'], padding: spacing[5] },
   profileRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
   profileAvatar: {
@@ -2225,7 +2500,6 @@ const styles = StyleSheet.create({
   profileGreeting: { fontSize: fontSize.xs, color: 'rgba(255,255,255,0.6)' },
   profileName: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.white },
   profilePercent: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.7)' },
-  // Stats
   statsRow: { flexDirection: 'row', gap: spacing[3] },
   statCard: {
     flex: 1,
@@ -2242,7 +2516,6 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: fontSize.xs, color: colors.gray[400], fontWeight: fontWeight.medium },
   statValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: spacing[1] },
   statSub: { fontSize: 11, color: colors.gray[400], marginTop: 2 },
-  // Cash
   cashSection: {
     backgroundColor: colors.slate[50],
     borderRadius: borderRadius['2xl'],
@@ -2279,12 +2552,10 @@ const styles = StyleSheet.create({
   },
   cashAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   cashType: { fontSize: 10, color: colors.gray[400], marginTop: 2 },
-  // Earnings
   earningsRow: { flexDirection: 'row', gap: spacing[3] },
   earningBox: { flex: 1, borderRadius: borderRadius.lg, padding: spacing[3], gap: spacing[1] },
   earningLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   earningValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: 4 },
-  // Promo
   promoCard: {
     backgroundColor: colors.emerald[50],
     borderRadius: borderRadius['2xl'],
@@ -2335,170 +2606,4 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(236,253,245,0.5)',
   },
   promoFooterText: { fontSize: fontSize.xs, color: colors.green[700] },
-  // Error
-  errorBanner: {
-    backgroundColor: colors.red[50],
-    borderRadius: borderRadius.xl,
-    padding: spacing[4],
-    fontSize: fontSize.sm,
-    color: colors.red[700],
-    textAlign: 'center',
-    margin: spacing[4],
-  },
-  // Quick actions
-  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
-  quickItem: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    paddingVertical: spacing[4],
-    paddingHorizontal: spacing[3],
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    shadowColor: colors.black,
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  quickIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700], flexShrink: 1 },
-
-  // ── Owner Command Center (iter#12) ─────────────────────────────────
-  occShell: { paddingHorizontal: 0 },
-  occCard: {
-    backgroundColor: colors.white,
-    borderRadius: 28,
-    paddingHorizontal: spacing[5],
-    paddingTop: spacing[4],
-    paddingBottom: spacing[5],
-    borderWidth: 1,
-    borderColor: 'rgba(15, 23, 42, 0.06)',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.07,
-    shadowRadius: 24,
-    elevation: 3,
-  },
-
-  // Сегмент-control: «капсула» с тонкой границей и животным thumb-ом.
-  // Thumb рисуется как absolute-белая плашка под текстом, plain text сверху.
-  occSegment: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(15, 23, 42, 0.05)',
-    borderRadius: borderRadius.full,
-    padding: 3,
-    height: 36,
-    position: 'relative',
-  },
-  occSegmentThumb: {
-    position: 'absolute',
-    top: 3,
-    left: 3,
-    bottom: 3,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.full,
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  occSegmentBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  occSegmentText: {
-    fontSize: 13,
-    fontWeight: fontWeight.medium,
-    color: colors.gray[500],
-    letterSpacing: -0.1,
-  },
-  occSegmentTextActive: { color: colors.gray[900], fontWeight: '700' },
-
-  // Hero — eyebrow слева, delta справа на одной линии. Огромное число
-  // выручки внизу. SF San Francisco system font + tight tracking + tabular
-  // numerals дают «дорогой» iOS Wallet/Apple Card вид.
-  occHero: {
-    paddingTop: spacing[4],
-    paddingBottom: spacing[4],
-  },
-  occHeroHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing[2],
-  },
-  occHeroEyebrow: {
-    fontSize: 12,
-    fontWeight: fontWeight.semibold,
-    color: colors.gray[500],
-    letterSpacing: -0.1,
-  },
-  occHeroValue: {
-    fontSize: 40,
-    fontWeight: '800',
-    color: colors.gray[900],
-    letterSpacing: -1.6,
-    fontVariant: ['tabular-nums'],
-  },
-
-  occDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(15, 23, 42, 0.08)',
-    marginHorizontal: -spacing[5],
-  },
-
-  // Триплет — три тайла на одной горизонтали, разделены вертикальными
-  // hairline-чертами. Чисто iOS Stocks / Health-style "metric row".
-  occGrid: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingTop: spacing[4],
-  },
-  occGridDivider: {
-    width: StyleSheet.hairlineWidth,
-    alignSelf: 'stretch',
-    backgroundColor: 'rgba(15, 23, 42, 0.08)',
-    marginHorizontal: spacing[1],
-  },
-  occTile: {
-    flex: 1,
-    minWidth: 0,
-  },
-  occTileLabel: {
-    fontSize: 11,
-    fontWeight: fontWeight.semibold,
-    color: colors.gray[500],
-    letterSpacing: -0.1,
-    marginBottom: 4,
-  },
-  occTileValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.gray[900],
-    letterSpacing: -0.4,
-    fontVariant: ['tabular-nums'],
-  },
-
-  deltaPill: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-    marginTop: 6,
-  },
-  deltaPillSmall: { paddingHorizontal: 6, paddingVertical: 2, marginTop: 4 },
-  deltaPillText: { fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
 });
