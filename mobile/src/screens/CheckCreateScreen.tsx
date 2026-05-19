@@ -732,26 +732,28 @@ export default function CheckCreateScreen() {
 
   return (
     <View style={styles.safe}>
-      {/* Compact receipt header — single-line "ЗАКАЗ-НАРЯД · <mode>",
-          so the actual receipt body has more breathing room. */}
-      <View style={[styles.receiptHeader, { paddingTop: insetsTop + spacing[1] }]}>
-        {isStackScreen && (
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.receiptBackBtn}>
-            <Ionicons name="chevron-back" size={18} color={colors.white} />
-          </TouchableOpacity>
-        )}
-        <View style={styles.receiptHeaderCenter}>
-          <Text style={styles.receiptHeaderTitle} numberOfLines={1}>
-            ЗАКАЗ-НАРЯД <Text style={styles.receiptHeaderSub}>·  {editId ? 'Редактирование' : 'Новый чек'}</Text>
-          </Text>
-        </View>
-        {isStackScreen && <View style={{ width: 28 }} />}
-      </View>
+      {/* Floating back chevron — only when this screen is pushed onto a
+          stack (edit-mode from Журнал). When opened from the central tab
+          it's the Касса itself and needs no header. Native edge-swipe
+          handles back as well. */}
+      {isStackScreen && (
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={[styles.floatingBack, { top: insetsTop + spacing[1] }]}
+          hitSlop={10}
+        >
+          <Ionicons name="chevron-back" size={22} color={colors.gray[800]} />
+        </TouchableOpacity>
+      )}
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={[styles.scrollContent, openedFromTab && { paddingBottom: tabBarHeight + spacing[4] }]}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingTop: insetsTop + spacing[2] },
+            openedFromTab && { paddingBottom: tabBarHeight + spacing[4] },
+          ]}
           keyboardShouldPersistTaps="handled"
         >
           {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
@@ -1000,7 +1002,7 @@ export default function CheckCreateScreen() {
               onChangeText={setComment}
               style={styles.commentInput}
               multiline
-              placeholder="Комментарий или рекомендация клиенту по чеку"
+              placeholder="Комментарий"
               placeholderTextColor={colors.gray[400]}
             />
           </View>
@@ -1429,25 +1431,24 @@ export default function CheckCreateScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[100] },
-  receiptHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[3],
-    paddingBottom: spacing[1.5],
-    backgroundColor: colors.gray[900],
-  },
-  receiptBackBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+  // Floating back chevron — shown only when CheckCreate is pushed onto
+  // the stack (edit-mode from Журнал). Sits in the top-left safe area.
+  floatingBack: {
+    position: 'absolute',
+    left: spacing[3],
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+    zIndex: 10,
   },
-  receiptHeaderCenter: { flex: 1, alignItems: 'center' },
-  receiptHeaderTitle: { fontSize: 12, fontWeight: '700', color: colors.white, letterSpacing: 2 },
-  receiptHeaderSub: { fontSize: 11, fontWeight: '500', color: colors.gray[400], letterSpacing: 0 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
