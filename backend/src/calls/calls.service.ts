@@ -255,13 +255,26 @@ export class CallsService {
       throw new BadRequestException({ message: 'URL записи не указан' });
     }
 
-    // Only allow URLs from the configured MoiZvonki domain
+    // Only allow URLs from the configured MoiZvonki domain.
+    // Earlier we used `.includes(allowedDomain)` here, which a crafted URL
+    // like https://attacker.com/?fake=tenant.moizvonki.ru could pass — the
+    // recording then opens an attacker-controlled origin in the mobile/web
+    // app's WebView. Parse the URL and compare the actual hostname instead.
     if (recordUrl.startsWith('http://') || recordUrl.startsWith('https://')) {
-      const allowedDomain = `${config.domain}.moizvonki.ru`;
-      if (!recordUrl.includes(allowedDomain)) {
+      const allowedHost = `${config.domain}.moizvonki.ru`;
+      let parsed: URL;
+      try {
+        parsed = new URL(recordUrl);
+      } catch {
         throw new BadRequestException({ message: 'Недопустимый URL записи' });
       }
-      return { url: recordUrl };
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+        throw new BadRequestException({ message: 'Недопустимый URL записи' });
+      }
+      if (parsed.hostname !== allowedHost) {
+        throw new BadRequestException({ message: 'Недопустимый URL записи' });
+      }
+      return { url: parsed.toString() };
     }
 
     const apiUrl = `https://${config.domain}.moizvonki.ru/api/v1`;
