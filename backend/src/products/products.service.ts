@@ -168,6 +168,10 @@ export class ProductsService {
   }
 
   async create(tenantID: string, dto: any) {
+    // If a supplier is referenced, it must belong to the caller's tenant.
+    if (dto.supplierId) {
+      await this.assertSupplierInTenant(dto.supplierId, tenantID);
+    }
     const { rows } = await this.pool.query(
       `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
@@ -179,7 +183,21 @@ export class ProductsService {
     return this.mapProduct(rows[0]);
   }
 
+  private async assertSupplierInTenant(supplierId: string, tenantID: string): Promise<void> {
+    const { rows } = await this.pool.query(
+      'SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+      [supplierId, tenantID],
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException({ message: 'Поставщик не найден' });
+    }
+  }
+
   async update(id: string, tenantID: string, dto: any, userID?: string) {
+    if (dto.supplierId !== undefined && dto.supplierId !== null) {
+      await this.assertSupplierInTenant(dto.supplierId, tenantID);
+    }
+
     // Get current prices before update for price history
     const { rows: current } = await this.pool.query(
       'SELECT cost_price, sell_price FROM products WHERE id=$1 AND tenant_id=$2',

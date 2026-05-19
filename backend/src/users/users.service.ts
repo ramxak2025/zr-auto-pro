@@ -334,6 +334,24 @@ export class UsersService {
     );
     if (userRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
 
+    // Verify every referenced product belongs to the caller's tenant before
+    // we open a transaction — refuses a forged item.productId that points
+    // to a product in another tenant.
+    if (dto.items && dto.items.length > 0) {
+      const productIds = Array.from(
+        new Set(dto.items.map(i => i.productId).filter((x): x is string => !!x)),
+      );
+      if (productIds.length > 0) {
+        const { rows: prodRows } = await this.pool.query(
+          'SELECT id FROM products WHERE id = ANY($1) AND tenant_id = $2',
+          [productIds, tenantID],
+        );
+        if (prodRows.length !== productIds.length) {
+          throw new BadRequestException({ message: 'Товар не найден или принадлежит другому автосервису' });
+        }
+      }
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');

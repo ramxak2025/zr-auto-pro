@@ -1,4 +1,4 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { normalizePlate } from '../imports/normalize-plate';
@@ -6,6 +6,16 @@ import { normalizePlate } from '../imports/normalize-plate';
 @Injectable()
 export class CarsService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  private async assertClientInTenant(clientId: string, tenantID: string): Promise<void> {
+    const { rows } = await this.pool.query(
+      'SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+      [clientId, tenantID],
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException({ message: 'Клиент не найден' });
+    }
+  }
 
   /**
    * Find an existing car by plate within the current tenant.
@@ -114,6 +124,11 @@ export class CarsService {
   }
 
   async create(tenantID: string, dto: any) {
+    // If linked to a client, the client must live in the same tenant.
+    // Without this a director could attach a car to another tenant's client.
+    if (dto.clientId) {
+      await this.assertClientInTenant(dto.clientId, tenantID);
+    }
     const { rows } = await this.pool.query(
       `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -123,6 +138,10 @@ export class CarsService {
   }
 
   async update(id: string, tenantID: string, dto: any) {
+    if (dto.clientId !== undefined && dto.clientId !== null) {
+      await this.assertClientInTenant(dto.clientId, tenantID);
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
