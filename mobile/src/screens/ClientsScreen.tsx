@@ -552,6 +552,7 @@ export default function ClientsScreen() {
               );
             }}
             contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+            removeClippedSubviews
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
@@ -574,6 +575,9 @@ export default function ClientsScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderClient}
           contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+          // Android can grow this list to hundreds of clients — keep
+          // off-screen rows clipped while flinging.
+          removeClippedSubviews
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }

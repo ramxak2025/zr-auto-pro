@@ -264,6 +264,7 @@ export default function SuppliersScreen() {
           renderItem={renderSupplier}
           contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
+          removeClippedSubviews
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
