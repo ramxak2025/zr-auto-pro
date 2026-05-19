@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
+import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -239,14 +240,14 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
   };
 
   return (
-    <RNModal visible animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+    <RNModal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <SafeAreaView style={{ flex: 1, backgroundColor: colors.gray[50] }} edges={['top', 'bottom']}>
         <View style={styles.modalHeader}>
-          <TouchableOpacity onPress={onClose}>
+          <TouchableOpacity onPress={onClose} hitSlop={10}>
             <Ionicons name="close" size={24} color={colors.gray[500]} />
           </TouchableOpacity>
           <Text style={styles.modalTitle}>Выдать имущество</Text>
-          <TouchableOpacity onPress={handleSubmit} disabled={issueMut.isPending}>
+          <TouchableOpacity onPress={handleSubmit} disabled={issueMut.isPending} hitSlop={10}>
             <Text style={{ color: colors.primary[600], fontWeight: fontWeight.bold }}>
               {issueMut.isPending ? '...' : 'Выдать'}
             </Text>
@@ -410,42 +411,64 @@ export default function EquipmentScreen() {
 
       <ScrollView contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
         {tab === 'employees' && (
-          <View style={{ gap: spacing[2] }}>
-            {summary.map((emp: any) => (
-              <TouchableOpacity key={emp.userId} onPress={() => setSelectedEmp(emp)} style={styles.empCard}>
-                {emp.avatar ? (
-                  <CachedImage source={{ uri: emp.avatar }} style={styles.empAvatarSmall} />
-                ) : (
-                  <View
-                    style={[
-                      styles.empAvatarSmall,
-                      { backgroundColor: colors.primary[100], alignItems: 'center', justifyContent: 'center' },
-                    ]}
-                  >
-                    <Text style={{ color: colors.primary[700], fontWeight: fontWeight.bold }}>
-                      {emp.fullName?.charAt(0)}
+          <View style={styles.empGrid}>
+            {summary.map((emp: any) => {
+              const initials = (emp.fullName || '?')
+                .trim()
+                .split(/\s+/)
+                .slice(0, 2)
+                .map((w: string) => w[0]?.toUpperCase())
+                .join('');
+              return (
+                <TouchableOpacity
+                  key={emp.userId}
+                  onPress={() => setSelectedEmp(emp)}
+                  activeOpacity={0.85}
+                  style={styles.empGridCard}
+                >
+                  {/* Background — photo if available, else brand gradient with initials. */}
+                  {emp.avatar ? (
+                    <CachedImage source={{ uri: emp.avatar }} style={StyleSheet.absoluteFillObject as any} />
+                  ) : (
+                    <LinearGradient
+                      colors={[colors.primary[500], colors.primary[700]] as [string, string]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={StyleSheet.absoluteFillObject}
+                    >
+                      <View style={styles.empGridInitialsWrap}>
+                        <Text style={styles.empGridInitials}>{initials}</Text>
+                      </View>
+                    </LinearGradient>
+                  )}
+                  {/* Dark gradient overlay — readability for white text at the bottom. */}
+                  <LinearGradient
+                    colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.65)', 'rgba(0,0,0,0.85)'] as [string, string, string]}
+                    locations={[0.35, 0.75, 1] as [number, number, number]}
+                    style={StyleSheet.absoluteFillObject}
+                  />
+                  {/* Top-right warning badge if any items expired */}
+                  {emp.expiredCount > 0 && (
+                    <View style={styles.empGridWarn}>
+                      <Ionicons name="warning" size={11} color={colors.white} />
+                      <Text style={styles.empGridWarnText}>{emp.expiredCount}</Text>
+                    </View>
+                  )}
+                  {/* Bottom content */}
+                  <View style={styles.empGridContent}>
+                    <Text style={styles.empGridName} numberOfLines={1}>
+                      {emp.fullName}
                     </Text>
+                    <Text style={styles.empGridCost}>{formatMoney(emp.totalCost)}</Text>
+                    <View style={styles.empGridMetaRow}>
+                      <Text style={styles.empGridMeta}>{emp.activeCount} предм.</Text>
+                      {emp.toolsCount > 0 && <Text style={styles.empGridMeta}>🔧 {emp.toolsCount}</Text>}
+                      {emp.uniformCount > 0 && <Text style={styles.empGridMeta}>👕 {emp.uniformCount}</Text>}
+                    </View>
                   </View>
-                )}
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.empCardName}>{emp.fullName}</Text>
-                  <View style={{ flexDirection: 'row', gap: spacing[2], marginTop: 2 }}>
-                    {emp.toolsCount > 0 && <Text style={styles.empBadge}>🔧 {emp.toolsCount}</Text>}
-                    {emp.uniformCount > 0 && <Text style={styles.empBadge}>👕 {emp.uniformCount}</Text>}
-                    {emp.expiredCount > 0 && (
-                      <Text style={[styles.empBadge, { color: colors.orange[600] }]}>⚠ {emp.expiredCount}</Text>
-                    )}
-                  </View>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[600] }}>
-                    {formatMoney(emp.totalCost)}
-                  </Text>
-                  <Text style={{ fontSize: 10, color: colors.gray[400] }}>{emp.activeCount} предм.</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-              </TouchableOpacity>
-            ))}
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
         {tab === 'storage' && <StorageTab />}
@@ -619,6 +642,84 @@ const styles = StyleSheet.create({
   empAvatarSmall: { width: 40, height: 40, borderRadius: 20 },
   empCardName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   empBadge: { fontSize: 10, color: colors.gray[500] },
+
+  // ── Premium 2-column employee grid (with photo bg + dark gradient overlay) ──
+  empGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[3],
+  },
+  empGridCard: {
+    flexBasis: '47.5%',
+    aspectRatio: 0.82,
+    borderRadius: borderRadius['2xl'],
+    overflow: 'hidden',
+    backgroundColor: colors.gray[200],
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  empGridInitialsWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  empGridInitials: {
+    color: colors.white,
+    fontSize: 42,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    opacity: 0.85,
+  },
+  empGridContent: {
+    position: 'absolute',
+    left: spacing[3],
+    right: spacing[3],
+    bottom: spacing[3],
+  },
+  empGridName: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.1,
+  },
+  empGridCost: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    marginTop: 2,
+  },
+  empGridMetaRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  empGridMeta: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  empGridWarn: {
+    position: 'absolute',
+    top: spacing[2],
+    right: spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: colors.orange[600],
+  },
+  empGridWarnText: {
+    color: colors.white,
+    fontSize: 10,
+    fontWeight: '700',
+  },
 
   empHeader: {
     flexDirection: 'row',
