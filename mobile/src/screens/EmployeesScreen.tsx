@@ -273,31 +273,45 @@ export default function EmployeesScreen() {
 
   const onOpen = useCallback((id: string) => navigation.navigate('EmployeeDetail', { id }), [navigation]);
 
-  const onSmena = sortedUsers.filter((u) => {
-    const s = todayMap.get(u.id);
-    return (
-      s?.isWorking ||
-      s?.actualArrival ||
-      s?.lateStatus === 'on_time' ||
-      s?.lateStatus === 'late_minor' ||
-      s?.lateStatus === 'late_major'
-    );
-  }).length;
+  // Memoised "on smena" counter — running filter+length on every render
+  // was negligible, but the result feeds the header subtitle and we get
+  // a tidier deps graph for free.
+  const onSmena = useMemo(
+    () =>
+      sortedUsers.filter((u) => {
+        const s = todayMap.get(u.id);
+        return (
+          s?.isWorking ||
+          s?.actualArrival ||
+          s?.lateStatus === 'on_time' ||
+          s?.lateStatus === 'late_minor' ||
+          s?.lateStatus === 'late_major'
+        );
+      }).length,
+    [sortedUsers, todayMap],
+  );
 
-  const renderItem = ({ item, index }: { item: User; index: number }) => {
-    const r = rankingMap.get(item.id);
-    return (
-      <EmployeeRow
-        user={item}
-        index={index}
-        status={todayMap.get(item.id)}
-        todayChecks={r?.checkCount}
-        todayRevenue={r?.revenue}
-        showFinancials={showFinancials}
-        onPress={onOpen}
-      />
-    );
-  };
+  // Stable renderItem — without useCallback the FlashList received a new
+  // function identity on every parent render (eg. refresh-state toggle,
+  // background SWR refetch) and re-rendered every EmployeeRow even though
+  // EmployeeRow is React.memo'd. Stable identity restores recycling.
+  const renderItem = useCallback(
+    ({ item, index }: { item: User; index: number }) => {
+      const r = rankingMap.get(item.id);
+      return (
+        <EmployeeRow
+          user={item}
+          index={index}
+          status={todayMap.get(item.id)}
+          todayChecks={r?.checkCount}
+          todayRevenue={r?.revenue}
+          showFinancials={showFinancials}
+          onPress={onOpen}
+        />
+      );
+    },
+    [rankingMap, todayMap, showFinancials, onOpen],
+  );
 
   return (
     <View style={styles.safe}>
