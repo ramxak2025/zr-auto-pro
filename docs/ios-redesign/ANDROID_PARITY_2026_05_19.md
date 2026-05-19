@@ -99,11 +99,15 @@ The resulting APK is at `mobile/android/app/build/outputs/apk/debug/app-debug.ap
 
 ### What this pass verified on the developer's machine
 
-- `npx expo prebuild --platform android --clean` — completed (warnings noted below, all non-fatal).
+- `npm run typecheck` — green (no errors).
+- `npm run lint` — green (no warnings).
+- `npx jest` — 38 / 38 tests passing.
+- `npx expo prebuild --platform android --clean` — completed; warnings noted below are all non-fatal.
 - Generated `AndroidManifest.xml` includes `android:enableOnBackInvokedCallback="true"` (Predictive Back).
 - Generated `styles.xml` includes `windowLightStatusBar=true`, `statusBarColor=transparent`, `windowLightNavigationBar=true`, `navigationBarColor=#f9fafb`.
 - Generated `colors.xml` includes `splashscreen_background=#f9fafb` and `iconBackground=#2563eb`.
-- `gradle :app:assembleDebug` was kicked off but went into a long NDK 27.1 install (~1.5 GB). The Gradle build itself reached the autolinking + Kotlin gradle-plugin compilation phase without errors. Whether the full APK assembled in the time allotted depended on network throughput. Owner should re-run on his Mac if the APK isn't already at `mobile/android/app/build/outputs/apk/debug/app-debug.apk` — after the one-time NDK install, builds will be fast.
+- `gradle :app:assembleDebug` was kicked off. Gradle successfully resolved + applied every Expo / RN plugin, accepted the NDK 27.1 licence, and began downloading the NDK package (~1.5 GB). At ~550 MB of NDK downloaded the developer's harness time budget ran out and the daemon was force-killed; this is an environment limit, not a code failure — no source / config errors were reported by Gradle before that point.
+- **The Owner must run** `cd mobile && npx expo prebuild --platform android --clean && cd android && ./gradlew :app:assembleDebug --no-daemon` once on his Mac to finish the NDK install and produce the actual APK at `mobile/android/app/build/outputs/apk/debug/app-debug.apk`. After the one-time NDK install (~1.5 GB), subsequent builds are fast.
 
 ## Owner acceptance checklist on Android device
 
