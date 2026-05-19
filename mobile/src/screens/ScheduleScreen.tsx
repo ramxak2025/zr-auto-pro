@@ -176,8 +176,15 @@ function getCellDot(entry?: ScheduleEntry) {
     };
   const note = (entry.note || '').toLowerCase();
   const lateMin = entry.lateMinutes || 0;
-  const isPast = new Date(entry.date + 'T23:59:59') < new Date();
-  const isToday = entry.date.slice(0, 10) === new Date().toISOString().slice(0, 10);
+  // Normalise the date portion. Backend may return either a date-only
+  // 'YYYY-MM-DD' or a full ISO timestamp with 'T'. Concatenating
+  // 'T23:59:59' to the latter produced 'YYYY-MM-DDTHH:MM:SSZTT23:59:59'
+  // — an invalid string — so `new Date(invalid) < new Date()` returned
+  // NaN<Date which is `false`, and the "missed shift" branch (#7)
+  // silently never fired for those rows.
+  const dateOnly = entry.date.slice(0, 10);
+  const isPast = new Date(`${dateOnly}T23:59:59`) < new Date();
+  const isToday = dateOnly === new Date().toISOString().slice(0, 10);
 
   // 1. Больничный
   if (note.includes('больнич'))

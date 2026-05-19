@@ -972,9 +972,13 @@ function OnShiftSnapshot() {
             ]}
           >
             <Text style={styles.miniAvatarText}>
-              {s.fullName
+              {/* `fullName` is typed as required `string`, but the API
+                  has been seen returning null for legacy records. Guard
+                  with `|| ''` so a single bad row doesn't crash the
+                  whole hero card with a TypeError on .split. */}
+              {(s.fullName || '')
                 .split(' ')
-                .map((w) => w[0])
+                .map((w) => w[0] || '')
                 .join('')
                 .slice(0, 2)
                 .toUpperCase()}
@@ -1243,9 +1247,12 @@ const TopPerformerRow = React.memo(function TopPerformerRow({
     3: { bg: '#FED7AA', fg: '#9A3412', ring: '#FB923C' },
   };
   const m = medals[rank] || { bg: colors.gray[100], fg: colors.gray[500], ring: colors.gray[300] };
-  const initials = name
+  // Defensive: `masterName` is typed as required string but legacy
+  // records can return null; guard so a single bad row doesn't crash
+  // the whole TopPerformers card.
+  const initials = (name || '')
     .split(' ')
-    .map((w) => w[0])
+    .map((w) => w[0] || '')
     .join('')
     .slice(0, 2)
     .toUpperCase();
