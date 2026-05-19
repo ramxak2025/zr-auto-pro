@@ -1002,7 +1002,7 @@ export default function CheckCreateScreen() {
               onChangeText={setComment}
               style={styles.commentInput}
               multiline
-              placeholder="Комментарий"
+              placeholder="Введите сюда ваш коментарий..."
               placeholderTextColor={colors.gray[400]}
             />
           </View>
