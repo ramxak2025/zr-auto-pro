@@ -1,3 +1,21 @@
+/**
+ * EquipmentScreen — has three tabs ("Сотрудники / Подсобка / Корзина").
+ *
+ * Employees tab uses a premium 2-column "game-card" grid:
+ *   • full-bleed employee photo or a primary-tinted gradient with initials;
+ *   • a two-stop tinted gradient overlay (primary-900 → black) for readable text;
+ *   • cost is the hero (large bold ₽ number) with the name beneath it;
+ *   • frosted-glass pills at the bottom-left show per-category counters
+ *     (tools / uniform / other); on iOS each pill is a BlurView tinted dark,
+ *     on Android a translucent black surface;
+ *   • expired-items warning sits as a top-right amber pill;
+ *   • press uses PressableScale (iOS spring scale + light haptic), Android ripple.
+ *
+ * Issue modal is a real iOS pageSheet — never full-screen. SafeAreaView with
+ * `top` and `bottom` edges keeps the close button clear of the Dynamic Island
+ * and the primary action clear of the home indicator. Storage chips, photo
+ * picker and the photo viewer modal all keep their original behaviour.
+ */
 import React, { useState } from 'react';
 import {
   View,
@@ -6,25 +24,36 @@ import {
   TouchableOpacity,
   TextInput,
   StyleSheet,
-  RefreshControl,
   Modal as RNModal,
   Alert,
-  ActivityIndicator,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
-import CachedImage from '../components/CachedImage';
 import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
+
+import CachedImage from '../components/CachedImage';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { equipmentApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { PressableScale } from '../platform/PressableScale';
+import { haptic } from '../platform/haptics';
 
 type Tab = 'employees' | 'storage' | 'trash';
+type CategoryType = 'tools' | 'uniform' | 'other';
+
+// Card geometry — premium 2-column grid, computed at runtime so it fits any iPhone.
+const SCREEN_PADDING = spacing[4]; // 16pt
+const CARD_GUTTER = spacing[3];    // 12pt
+const CARD_RADIUS = 22;            // squircle-like, between borderRadius['2xl'] and ['3xl']
+const CARD_ASPECT = 1.18;          // 4:5-ish — premium portrait card
 
 function formatMoney(v: number) {
   return (
@@ -34,7 +63,17 @@ function formatMoney(v: number) {
   );
 }
 
-// ── Photo viewer modal ──
+function getInitials(fullName?: string | null): string {
+  if (!fullName) return '?';
+  return fullName
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() || '')
+    .join('') || '?';
+}
+
+// ─── Photo viewer (fullscreen lightbox — NOT a pageSheet) ──────────────────
 function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
   return (
     <RNModal visible transparent animationType="fade" onRequestClose={onClose}>
@@ -48,8 +87,132 @@ function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
   );
 }
 
-// ── Employee detail screen (within Equipment) ──
-function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdit: boolean }) {
+// ─── Per-card frosted pill (counters at bottom of game card) ───────────────
+function FrostedPill({ icon, label }: { icon: string; label: string | number }) {
+  // iOS — BlurView dark material; Android — translucent black surface.
+  if (Platform.OS === 'ios') {
+    return (
+      <View style={styles.pillWrap}>
+        <BlurView intensity={28} tint="dark" style={StyleSheet.absoluteFill} />
+        <View style={styles.pillTint} />
+        <Text style={styles.pillIcon}>{icon}</Text>
+        <Text style={styles.pillLabel}>{label}</Text>
+      </View>
+    );
+  }
+  return (
+    <View style={[styles.pillWrap, styles.pillAndroid]}>
+      <Text style={styles.pillIcon}>{icon}</Text>
+      <Text style={styles.pillLabel}>{label}</Text>
+    </View>
+  );
+}
+
+// ─── Premium employee card (2-col grid) ────────────────────────────────────
+function EmployeeCard({
+  emp,
+  cardWidth,
+  onPress,
+}: {
+  emp: any;
+  cardWidth: number;
+  onPress: () => void;
+}) {
+  const initials = getInitials(emp.fullName);
+  const otherCount = Math.max(
+    0,
+    (emp.activeCount || 0) - (emp.toolsCount || 0) - (emp.uniformCount || 0),
+  );
+
+  return (
+    <PressableScale
+      onPress={onPress}
+      scaleTo={0.965}
+      hapticIntent="tap"
+      style={[
+        styles.gridCard,
+        {
+          width: cardWidth,
+          height: cardWidth * CARD_ASPECT,
+        },
+      ]}
+    >
+      {/* Layer 1 — backdrop: photo if available, else brand gradient with initials. */}
+      {emp.avatar ? (
+        <CachedImage
+          source={{ uri: emp.avatar }}
+          style={StyleSheet.absoluteFillObject as any}
+          resizeMode="cover"
+        />
+      ) : (
+        <LinearGradient
+          colors={[colors.primary[500], colors.primary[700]] as [string, string]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+        >
+          <View style={styles.initialsWrap}>
+            <Text style={styles.initialsText}>{initials}</Text>
+          </View>
+        </LinearGradient>
+      )}
+
+      {/* Layer 2 — primary-tinted overlay at the top (subtle brand wash). */}
+      <LinearGradient
+        colors={[
+          'rgba(29,78,216,0.30)', // primary-700 alpha 0.30
+          'rgba(0,0,0,0.00)',
+        ]}
+        locations={[0, 0.45]}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
+
+      {/* Layer 3 — darken at the bottom for hero text readability. */}
+      <LinearGradient
+        colors={[
+          'rgba(0,0,0,0.00)',
+          'rgba(0,0,0,0.55)',
+          'rgba(0,0,0,0.86)',
+        ]}
+        locations={[0.40, 0.72, 1]}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
+
+      {/* Top-right — expired warning pill (kept in the new visual language). */}
+      {emp.expiredCount > 0 && (
+        <View style={styles.warnPill}>
+          <Ionicons name="warning" size={11} color={colors.white} />
+          <Text style={styles.warnPillText}>{emp.expiredCount}</Text>
+        </View>
+      )}
+
+      {/* Bottom — counters row (frosted pills). */}
+      <View style={styles.countersRow}>
+        {emp.toolsCount > 0 && <FrostedPill icon="🔧" label={emp.toolsCount} />}
+        {emp.uniformCount > 0 && <FrostedPill icon="👕" label={emp.uniformCount} />}
+        {otherCount > 0 && <FrostedPill icon="📦" label={otherCount} />}
+      </View>
+
+      {/* Bottom — hero block (cost + name). */}
+      <View style={styles.heroBlock}>
+        <Text style={styles.heroCost} numberOfLines={1}>
+          {formatMoney(emp.totalCost || 0)}
+        </Text>
+        <Text style={styles.heroName} numberOfLines={1}>
+          {emp.fullName || '—'}
+        </Text>
+        <Text style={styles.heroMeta} numberOfLines={1}>
+          {emp.activeCount || 0} {(emp.activeCount === 1 ? 'предмет' : 'предметов')}
+        </Text>
+      </View>
+    </PressableScale>
+  );
+}
+
+// ─── Employee detail (inside Equipment, with IssueModal access) ────────────
+function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
   const qc = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const [showIssue, setShowIssue] = useState(false);
@@ -85,9 +248,18 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdi
     if (list.length === 0) return null;
     return (
       <View style={{ marginBottom: spacing[4] }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[2] }}>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: spacing[2],
+            marginBottom: spacing[2],
+          }}
+        >
           <Ionicons name={iconName} size={14} color={color} />
-          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}>{title}</Text>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}>
+            {title}
+          </Text>
           <Text style={{ fontSize: fontSize.xs, color: colors.gray[400] }}>{list.length}</Text>
         </View>
         {list.map((item: any) => (
@@ -111,7 +283,9 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdi
                 {item.name}
               </Text>
               <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
-              {item.serviceLifeMonths && <Text style={styles.equipMeta}>Срок: {item.serviceLifeMonths} мес.</Text>}
+              {item.serviceLifeMonths && (
+                <Text style={styles.equipMeta}>Срок: {item.serviceLifeMonths} мес.</Text>
+              )}
             </View>
             {canEdit && (
               <View style={{ flexDirection: 'row', gap: spacing[1] }}>
@@ -130,7 +304,13 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdi
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.gray[50] }} contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: colors.gray[50] }}
+      contentContainerStyle={{
+        padding: spacing[4],
+        paddingBottom: tabBarHeight + spacing[4],
+      }}
+    >
       <View style={styles.empHeader}>
         {emp.avatar ? (
           <CachedImage source={{ uri: emp.avatar }} style={styles.empAvatar} />
@@ -142,22 +322,24 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdi
             ]}
           >
             <Text style={{ fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[700] }}>
-              {emp.fullName
-                ?.split(' ')
-                .map((w: string) => w[0])
-                .join('')
-                .slice(0, 2)}
+              {getInitials(emp.fullName)}
             </Text>
           </View>
         )}
         <View style={{ flex: 1 }}>
           <Text style={styles.empName}>{emp.fullName}</Text>
           <Text style={styles.empStats}>
-            {active.length} предметов • {formatMoney(total)}
+            {active.length} предметов · {formatMoney(total)}
           </Text>
         </View>
         {canEdit && (
-          <TouchableOpacity onPress={() => setShowIssue(true)} style={styles.addBtn}>
+          <TouchableOpacity
+            onPress={() => {
+              haptic('tap');
+              setShowIssue(true);
+            }}
+            style={styles.addBtn}
+          >
             <Ionicons name="add" size={20} color={colors.white} />
           </TouchableOpacity>
         )}
@@ -179,16 +361,18 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdi
       )}
 
       {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
-      {showIssue && <IssueModal userId={emp.userId} onClose={() => setShowIssue(false)} qc={qc} />}
+      {showIssue && (
+        <IssueModal userId={emp.userId} onClose={() => setShowIssue(false)} qc={qc} />
+      )}
     </ScrollView>
   );
 }
 
-// ── Issue modal ──
+// ─── Issue modal (compact pageSheet — NOT fullscreen) ──────────────────────
 function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => void; qc: any }) {
   const [name, setName] = useState('');
   const [cost, setCost] = useState('');
-  const [categoryType, setCategoryType] = useState<'tools' | 'uniform' | 'other'>('tools');
+  const [categoryType, setCategoryType] = useState<CategoryType>('tools');
   const [serviceLife, setServiceLife] = useState('');
   const [photo, setPhoto] = useState('');
 
@@ -200,10 +384,12 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
   const issueMut = useMutation({
     mutationFn: (data: any) => equipmentApi.issue(data),
     onSuccess: () => {
+      haptic('success');
       qc.invalidateQueries({ queryKey: ['eq-user', userId] });
       qc.invalidateQueries({ queryKey: ['eq-summary'] });
       onClose();
     },
+    onError: () => haptic('error'),
   });
 
   const pickFromStorage = (item: any) => {
@@ -211,6 +397,7 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
     setCost(String(item.purchasePrice));
     if (item.photo) setPhoto(item.photo);
     if (item.serviceLifeMonths) setServiceLife(String(item.serviceLifeMonths));
+    haptic('select');
   };
 
   const pickPhoto = async () => {
@@ -234,37 +421,69 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
       name: name.trim(),
       cost: parseFloat(cost) || 0,
       categoryType,
-      serviceLifeMonths: parseInt(serviceLife) || undefined,
+      serviceLifeMonths: parseInt(serviceLife, 10) || undefined,
       photo: photo || undefined,
     });
   };
 
   return (
-    <RNModal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.gray[50] }} edges={['top', 'bottom']}>
-        <View style={styles.modalHeader}>
-          <TouchableOpacity onPress={onClose} hitSlop={10}>
-            <Ionicons name="close" size={24} color={colors.gray[500]} />
+    <RNModal
+      visible
+      animationType="slide"
+      presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'formSheet'}
+      onRequestClose={onClose}
+    >
+      <SafeAreaView style={styles.sheetRoot} edges={['top', 'bottom']}>
+        {/* Header — close (X) left, title centered, primary action right.
+            All three sit BELOW the system status area inside the sheet itself,
+            so nothing slides under the Dynamic Island. */}
+        <View style={styles.sheetHeader}>
+          <TouchableOpacity
+            onPress={onClose}
+            hitSlop={12}
+            style={styles.sheetIconBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть"
+          >
+            <Ionicons name="close" size={20} color={colors.gray[700]} />
           </TouchableOpacity>
-          <Text style={styles.modalTitle}>Выдать имущество</Text>
-          <TouchableOpacity onPress={handleSubmit} disabled={issueMut.isPending} hitSlop={10}>
-            <Text style={{ color: colors.primary[600], fontWeight: fontWeight.bold }}>
-              {issueMut.isPending ? '...' : 'Выдать'}
-            </Text>
+          <Text style={styles.sheetTitle}>Выдать имущество</Text>
+          <TouchableOpacity
+            onPress={handleSubmit}
+            disabled={issueMut.isPending}
+            hitSlop={12}
+            style={styles.sheetPrimaryBtn}
+          >
+            <Text style={styles.sheetPrimaryText}>{issueMut.isPending ? '...' : 'Выдать'}</Text>
           </TouchableOpacity>
         </View>
-        <ScrollView contentContainerStyle={{ padding: spacing[4] }}>
+
+        <ScrollView
+          contentContainerStyle={styles.sheetBody}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
           {storageItems.length > 0 && (
-            <View style={{ marginBottom: spacing[4] }}>
+            <View style={{ marginBottom: spacing[3] }}>
               <Text style={styles.fieldLabel}>Со склада (подсобки)</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing[2] }}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: spacing[2], paddingRight: spacing[2] }}
+              >
                 {storageItems
                   .filter((s: any) => s.quantity > 0)
                   .map((s: any) => (
-                    <TouchableOpacity key={s.id} onPress={() => pickFromStorage(s)} style={styles.storageChip}>
-                      <Text style={styles.storageChipName}>{s.name}</Text>
+                    <TouchableOpacity
+                      key={s.id}
+                      onPress={() => pickFromStorage(s)}
+                      style={styles.storageChip}
+                    >
+                      <Text style={styles.storageChipName} numberOfLines={1}>
+                        {s.name}
+                      </Text>
                       <Text style={styles.storageChipMeta}>
-                        {formatMoney(s.purchasePrice)} • {s.quantity} шт
+                        {formatMoney(s.purchasePrice)} · {s.quantity} шт
                       </Text>
                     </TouchableOpacity>
                   ))}
@@ -273,45 +492,76 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
           )}
 
           <Text style={styles.fieldLabel}>Название</Text>
-          <TextInput value={name} onChangeText={setName} style={styles.input} placeholder="Набор ключей" />
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            style={styles.input}
+            placeholder="Набор ключей"
+            placeholderTextColor={colors.gray[400]}
+          />
 
-          <Text style={styles.fieldLabel}>Стоимость, ₽</Text>
-          <TextInput value={cost} onChangeText={setCost} style={styles.input} placeholder="0" keyboardType="numeric" />
+          <View style={styles.row2}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Стоимость, ₽</Text>
+              <TextInput
+                value={cost}
+                onChangeText={setCost}
+                style={styles.input}
+                placeholder="0"
+                placeholderTextColor={colors.gray[400]}
+                keyboardType="numeric"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fieldLabel}>Срок, мес.</Text>
+              <TextInput
+                value={serviceLife}
+                onChangeText={setServiceLife}
+                style={styles.input}
+                placeholder="12"
+                placeholderTextColor={colors.gray[400]}
+                keyboardType="numeric"
+              />
+            </View>
+          </View>
 
           <Text style={styles.fieldLabel}>Категория</Text>
-          <View style={{ flexDirection: 'row', gap: spacing[2], marginBottom: spacing[3] }}>
-            {[
-              { k: 'tools', l: 'Инструменты' },
-              { k: 'uniform', l: 'Форма' },
-              { k: 'other', l: 'Прочее' },
-            ].map((ct) => (
+          <View style={styles.catRow}>
+            {(
+              [
+                { k: 'tools', l: 'Инструменты' },
+                { k: 'uniform', l: 'Форма' },
+                { k: 'other', l: 'Прочее' },
+              ] as { k: CategoryType; l: string }[]
+            ).map((ct) => (
               <TouchableOpacity
                 key={ct.k}
-                onPress={() => setCategoryType(ct.k as any)}
+                onPress={() => {
+                  haptic('select');
+                  setCategoryType(ct.k);
+                }}
                 style={[styles.catBtn, categoryType === ct.k && styles.catBtnActive]}
               >
-                <Text style={[styles.catBtnText, categoryType === ct.k && { color: colors.primary[700] }]}>{ct.l}</Text>
+                <Text
+                  style={[
+                    styles.catBtnText,
+                    categoryType === ct.k && { color: colors.primary[700] },
+                  ]}
+                >
+                  {ct.l}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
 
-          <Text style={styles.fieldLabel}>Срок службы (мес.)</Text>
-          <TextInput
-            value={serviceLife}
-            onChangeText={setServiceLife}
-            style={styles.input}
-            placeholder="12"
-            keyboardType="numeric"
-          />
-
           <Text style={styles.fieldLabel}>Фото</Text>
-          <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn}>
+          <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn} activeOpacity={0.85}>
             {photo ? (
-              <CachedImage source={{ uri: photo }} style={{ width: 80, height: 80, borderRadius: 12 }} />
+              <CachedImage source={{ uri: photo }} style={styles.photoPickImg} />
             ) : (
               <>
-                <Ionicons name="camera-outline" size={24} color={colors.gray[400]} />
-                <Text style={{ color: colors.gray[400], fontSize: fontSize.xs, marginTop: 4 }}>Выбрать</Text>
+                <Ionicons name="camera-outline" size={22} color={colors.gray[400]} />
+                <Text style={styles.photoPickHint}>Выбрать</Text>
               </>
             )}
           </TouchableOpacity>
@@ -321,166 +571,8 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
   );
 }
 
-// ── Main Equipment screen ──
-export default function EquipmentScreen() {
-  const navigation = useNavigation<any>();
-  const { user } = useAuth();
-  const qc = useQueryClient();
-  const tabBarHeight = useTabBarHeight();
-  const [tab, setTab] = useState<Tab>('employees');
-  const [selectedEmp, setSelectedEmp] = useState<any>(null);
-  const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
-  const isMaster = user?.role === 'master';
-
-  const { data: summary = [], refetch: refetchSummary } = useQuery({
-    queryKey: ['eq-summary'],
-    queryFn: async () => (await equipmentApi.getSummary()).data,
-    enabled: !isMaster,
-  });
-
-  const { data: myEquipment = [] } = useQuery({
-    queryKey: ['eq-my'],
-    queryFn: async () => (await equipmentApi.getMyEquipment()).data,
-    enabled: isMaster,
-  });
-
-  // Master view
-  if (isMaster) {
-    const total = myEquipment.reduce((s: number, i: any) => s + i.cost, 0);
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
-        <IosScreenHeader title="Моё имущество" onBack={() => navigation.goBack()} />
-        <ScrollView contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
-          <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginBottom: spacing[3] }}>
-            {myEquipment.length} предметов на {formatMoney(total)}
-          </Text>
-          {myEquipment.map((item: any) => (
-            <View key={item.id} style={styles.equipItem}>
-              {item.photo ? (
-                <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
-              ) : (
-                <View
-                  style={[
-                    styles.equipPhoto,
-                    { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
-                  ]}
-                >
-                  <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
-                </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.equipName}>{item.name}</Text>
-                <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
-              </View>
-            </View>
-          ))}
-        </ScrollView>
-      </View>
-    );
-  }
-
-  if (selectedEmp) {
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
-        <IosScreenHeader title={selectedEmp.fullName || 'Сотрудник'} onBack={() => setSelectedEmp(null)} />
-        <EmployeeDetail emp={selectedEmp} onBack={() => setSelectedEmp(null)} canEdit={canEdit} />
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
-      <IosScreenHeader title="Имущество" onBack={() => navigation.goBack()} />
-
-      <View style={styles.tabs}>
-        {[
-          { k: 'employees' as const, l: 'Сотрудники', i: 'people' as const },
-          { k: 'storage' as const, l: 'Подсобка', i: 'cube' as const },
-          { k: 'trash' as const, l: 'Корзина', i: 'trash' as const },
-        ].map((t) => (
-          <TouchableOpacity
-            key={t.k}
-            onPress={() => setTab(t.k)}
-            style={[styles.tabBtn, tab === t.k && styles.tabBtnActive]}
-          >
-            <Ionicons name={t.i} size={14} color={tab === t.k ? colors.primary[600] : colors.gray[400]} />
-            <Text style={[styles.tabText, tab === t.k && { color: colors.primary[600] }]}>{t.l}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <ScrollView contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
-        {tab === 'employees' && (
-          <View style={styles.empGrid}>
-            {summary.map((emp: any) => {
-              const initials = (emp.fullName || '?')
-                .trim()
-                .split(/\s+/)
-                .slice(0, 2)
-                .map((w: string) => w[0]?.toUpperCase())
-                .join('');
-              return (
-                <TouchableOpacity
-                  key={emp.userId}
-                  onPress={() => setSelectedEmp(emp)}
-                  activeOpacity={0.85}
-                  style={styles.empGridCard}
-                >
-                  {/* Background — photo if available, else brand gradient with initials. */}
-                  {emp.avatar ? (
-                    <CachedImage source={{ uri: emp.avatar }} style={StyleSheet.absoluteFillObject as any} />
-                  ) : (
-                    <LinearGradient
-                      colors={[colors.primary[500], colors.primary[700]] as [string, string]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={StyleSheet.absoluteFillObject}
-                    >
-                      <View style={styles.empGridInitialsWrap}>
-                        <Text style={styles.empGridInitials}>{initials}</Text>
-                      </View>
-                    </LinearGradient>
-                  )}
-                  {/* Dark gradient overlay — readability for white text at the bottom. */}
-                  <LinearGradient
-                    colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.65)', 'rgba(0,0,0,0.85)'] as [string, string, string]}
-                    locations={[0.35, 0.75, 1] as [number, number, number]}
-                    style={StyleSheet.absoluteFillObject}
-                  />
-                  {/* Top-right warning badge if any items expired */}
-                  {emp.expiredCount > 0 && (
-                    <View style={styles.empGridWarn}>
-                      <Ionicons name="warning" size={11} color={colors.white} />
-                      <Text style={styles.empGridWarnText}>{emp.expiredCount}</Text>
-                    </View>
-                  )}
-                  {/* Bottom content */}
-                  <View style={styles.empGridContent}>
-                    <Text style={styles.empGridName} numberOfLines={1}>
-                      {emp.fullName}
-                    </Text>
-                    <Text style={styles.empGridCost}>{formatMoney(emp.totalCost)}</Text>
-                    <View style={styles.empGridMetaRow}>
-                      <Text style={styles.empGridMeta}>{emp.activeCount} предм.</Text>
-                      {emp.toolsCount > 0 && <Text style={styles.empGridMeta}>🔧 {emp.toolsCount}</Text>}
-                      {emp.uniformCount > 0 && <Text style={styles.empGridMeta}>👕 {emp.uniformCount}</Text>}
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-        {tab === 'storage' && <StorageTab />}
-        {tab === 'trash' && <TrashTab />}
-      </ScrollView>
-    </View>
-  );
-}
-
-// ── Storage tab ──
+// ─── Storage tab ───────────────────────────────────────────────────────────
 function StorageTab() {
-  const qc = useQueryClient();
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
 
@@ -490,7 +582,8 @@ function StorageTab() {
   });
   const { data: items = [] } = useQuery({
     queryKey: ['eq-storage', selectedCat],
-    queryFn: async () => (await equipmentApi.getStorageItems(selectedCat ? { categoryId: selectedCat } : {})).data,
+    queryFn: async () =>
+      (await equipmentApi.getStorageItems(selectedCat ? { categoryId: selectedCat } : {})).data,
   });
 
   const catCounts: Record<string, number> = {};
@@ -502,10 +595,14 @@ function StorageTab() {
     return (
       <View style={{ gap: spacing[2] }}>
         {categories.length === 0 ? (
-          <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[8] }}>Нет папок</Text>
+          <Text style={styles.emptyText}>Нет папок</Text>
         ) : (
           categories.map((c: any) => (
-            <TouchableOpacity key={c.id} onPress={() => setSelectedCat(c.id)} style={styles.folderCard}>
+            <TouchableOpacity
+              key={c.id}
+              onPress={() => setSelectedCat(c.id)}
+              style={styles.folderCard}
+            >
               <View style={styles.folderIcon}>
                 <Ionicons name="folder" size={20} color={colors.amber[600]} />
               </View>
@@ -531,7 +628,7 @@ function StorageTab() {
         <Text style={{ fontSize: fontSize.xs, color: colors.gray[500] }}>Назад к папкам</Text>
       </TouchableOpacity>
       {items.length === 0 ? (
-        <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[8] }}>Пусто</Text>
+        <Text style={styles.emptyText}>Пусто</Text>
       ) : (
         items.map((item: any) => (
           <View key={item.id} style={styles.equipItem}>
@@ -564,7 +661,7 @@ function StorageTab() {
   );
 }
 
-// ── Trash tab ──
+// ─── Trash tab ─────────────────────────────────────────────────────────────
 function TrashTab() {
   const qc = useQueryClient();
   const { data: items = [] } = useQuery({
@@ -580,9 +677,11 @@ function TrashTab() {
     },
   });
 
-  return items.length === 0 ? (
-    <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[8] }}>Корзина пуста</Text>
-  ) : (
+  if (items.length === 0) {
+    return <Text style={styles.emptyText}>Корзина пуста</Text>;
+  }
+
+  return (
     <View style={{ gap: spacing[2] }}>
       {items.map((item: any) => {
         const daysLeft = item.trashExpiresAt
@@ -593,7 +692,7 @@ function TrashTab() {
             <View style={{ flex: 1 }}>
               <Text style={styles.equipName}>{item.name}</Text>
               <Text style={styles.equipMeta}>
-                {item.userName} • {formatMoney(item.cost)} • {daysLeft}д
+                {item.userName} · {formatMoney(item.cost)} · {daysLeft}д
               </Text>
             </View>
             <TouchableOpacity onPress={() => restoreMut.mutate(item.id)} style={styles.equipBtn}>
@@ -606,6 +705,141 @@ function TrashTab() {
   );
 }
 
+// ─── Main Equipment screen ─────────────────────────────────────────────────
+export default function EquipmentScreen() {
+  const navigation = useNavigation<any>();
+  const { user } = useAuth();
+  const tabBarHeight = useTabBarHeight();
+  const { width: screenWidth } = useWindowDimensions();
+  const [tab, setTab] = useState<Tab>('employees');
+  const [selectedEmp, setSelectedEmp] = useState<any>(null);
+
+  const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  const isMaster = user?.role === 'master';
+
+  // 2-column card width: (screen - left/right padding - gutter) / 2
+  const cardWidth = Math.floor((screenWidth - SCREEN_PADDING * 2 - CARD_GUTTER) / 2);
+
+  const { data: summary = [] } = useQuery({
+    queryKey: ['eq-summary'],
+    queryFn: async () => (await equipmentApi.getSummary()).data,
+    enabled: !isMaster,
+  });
+
+  const { data: myEquipment = [] } = useQuery({
+    queryKey: ['eq-my'],
+    queryFn: async () => (await equipmentApi.getMyEquipment()).data,
+    enabled: isMaster,
+  });
+
+  // ── Master view ──
+  if (isMaster) {
+    const total = myEquipment.reduce((s: number, i: any) => s + i.cost, 0);
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+        <IosScreenHeader title="Моё имущество" onBack={() => navigation.goBack()} />
+        <ScrollView
+          contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}
+        >
+          <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginBottom: spacing[3] }}>
+            {myEquipment.length} предметов на {formatMoney(total)}
+          </Text>
+          {myEquipment.map((item: any) => (
+            <View key={item.id} style={styles.equipItem}>
+              {item.photo ? (
+                <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
+              ) : (
+                <View
+                  style={[
+                    styles.equipPhoto,
+                    { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
+                  ]}
+                >
+                  <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.equipName}>{item.name}</Text>
+                <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── Employee detail (nested view) ──
+  if (selectedEmp) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+        <IosScreenHeader
+          title={selectedEmp.fullName || 'Сотрудник'}
+          onBack={() => setSelectedEmp(null)}
+        />
+        <EmployeeDetail emp={selectedEmp} canEdit={canEdit} />
+      </View>
+    );
+  }
+
+  // ── Main: tabs + grid ──
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+      <IosScreenHeader title="Имущество" onBack={() => navigation.goBack()} />
+
+      <View style={styles.tabs}>
+        {(
+          [
+            { k: 'employees', l: 'Сотрудники', i: 'people' },
+            { k: 'storage', l: 'Подсобка', i: 'cube' },
+            { k: 'trash', l: 'Корзина', i: 'trash' },
+          ] as { k: Tab; l: string; i: any }[]
+        ).map((t) => (
+          <TouchableOpacity
+            key={t.k}
+            onPress={() => {
+              haptic('select');
+              setTab(t.k);
+            }}
+            style={[styles.tabBtn, tab === t.k && styles.tabBtnActive]}
+          >
+            <Ionicons name={t.i} size={14} color={tab === t.k ? colors.primary[600] : colors.gray[400]} />
+            <Text style={[styles.tabText, tab === t.k && { color: colors.primary[600] }]}>{t.l}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <ScrollView
+        contentContainerStyle={{
+          padding: SCREEN_PADDING,
+          paddingBottom: tabBarHeight + spacing[4],
+        }}
+        showsVerticalScrollIndicator={false}
+      >
+        {tab === 'employees' && (
+          <View style={styles.grid}>
+            {summary.length === 0 ? (
+              <Text style={[styles.emptyText, { width: '100%' }]}>Нет сотрудников</Text>
+            ) : (
+              summary.map((emp: any) => (
+                <EmployeeCard
+                  key={emp.userId}
+                  emp={emp}
+                  cardWidth={cardWidth}
+                  onPress={() => setSelectedEmp(emp)}
+                />
+              ))
+            )}
+          </View>
+        )}
+        {tab === 'storage' && <StorageTab />}
+        {tab === 'trash' && <TrashTab />}
+      </ScrollView>
+    </View>
+  );
+}
+
+// ─── Styles ────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   tabs: {
     flexDirection: 'row',
@@ -629,98 +863,117 @@ const styles = StyleSheet.create({
   tabBtnActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
   tabText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[400] },
 
-  empCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    backgroundColor: colors.white,
-    padding: spacing[3],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-  },
-  empAvatarSmall: { width: 40, height: 40, borderRadius: 20 },
-  empCardName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  empBadge: { fontSize: 10, color: colors.gray[500] },
-
-  // ── Premium 2-column employee grid (with photo bg + dark gradient overlay) ──
-  empGrid: {
+  // ── Premium 2-col employee grid ──
+  grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing[3],
+    gap: CARD_GUTTER,
   },
-  empGridCard: {
-    flexBasis: '47.5%',
-    aspectRatio: 0.82,
-    borderRadius: borderRadius['2xl'],
+  gridCard: {
+    borderRadius: CARD_RADIUS,
     overflow: 'hidden',
     backgroundColor: colors.gray[200],
+    // Soft shadow — readable elevation without being heavy.
     shadowColor: colors.black,
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
   },
-  empGridInitialsWrap: {
+  initialsWrap: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  empGridInitials: {
+  initialsText: {
     color: colors.white,
-    fontSize: 42,
+    fontSize: 48,
     fontWeight: '800',
-    letterSpacing: -0.5,
-    opacity: 0.85,
+    letterSpacing: -1,
+    opacity: 0.92,
   },
-  empGridContent: {
+  // Top-right amber pill — expired-items warning, kept in the new visual language.
+  warnPill: {
     position: 'absolute',
-    left: spacing[3],
-    right: spacing[3],
-    bottom: spacing[3],
-  },
-  empGridName: {
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: -0.1,
-  },
-  empGridCost: {
-    color: colors.white,
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-    marginTop: 2,
-  },
-  empGridMetaRow: {
-    flexDirection: 'row',
-    gap: spacing[2],
-    marginTop: 4,
-    flexWrap: 'wrap',
-  },
-  empGridMeta: {
-    color: 'rgba(255,255,255,0.85)',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  empGridWarn: {
-    position: 'absolute',
-    top: spacing[2],
-    right: spacing[2],
+    top: 10,
+    right: 10,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
     borderRadius: 999,
-    backgroundColor: colors.orange[600],
+    backgroundColor: colors.orange[500],
+    shadowColor: colors.orange[700],
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
   },
-  empGridWarnText: {
+  warnPillText: {
     color: colors.white,
     fontSize: 10,
     fontWeight: '700',
   },
+  // Frosted counter pills sit at the bottom-left, above the hero block.
+  countersRow: {
+    position: 'absolute',
+    left: 10,
+    bottom: 78, // sits ABOVE the hero block (~hero height + gutter)
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
+    maxWidth: '85%',
+  },
+  pillWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  pillTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.18)', // tone the iOS dark blur a touch
+  },
+  pillAndroid: {
+    backgroundColor: 'rgba(0,0,0,0.42)', // translucent black on Android
+  },
+  pillIcon: { fontSize: 11 },
+  pillLabel: {
+    color: colors.white,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  // Hero text block.
+  heroBlock: {
+    position: 'absolute',
+    left: 12,
+    right: 12,
+    bottom: 12,
+  },
+  heroCost: {
+    color: colors.white,
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: -0.7,
+  },
+  heroName: {
+    color: 'rgba(255,255,255,0.95)',
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: -0.1,
+    marginTop: 2,
+  },
+  heroMeta: {
+    color: 'rgba(255,255,255,0.72)',
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 2,
+  },
 
+  // ── Employee detail header ──
   empHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -744,6 +997,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  // ── Per-item row (issued, storage, trash) ──
   equipItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -768,6 +1022,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  // ── Storage folders ──
   folderCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -789,19 +1044,57 @@ const styles = StyleSheet.create({
   folderName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   folderCount: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
 
-  modalHeader: {
+  // ── Modal (pageSheet) ──
+  sheetRoot: {
+    flex: 1,
+    backgroundColor: colors.gray[50],
+  },
+  sheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: spacing[4],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    backgroundColor: colors.white,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
   },
-  modalTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  sheetIconBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetTitle: {
+    fontSize: 16,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[900],
+    letterSpacing: -0.2,
+  },
+  sheetPrimaryBtn: {
+    paddingHorizontal: spacing[3],
+    paddingVertical: 6,
+    borderRadius: 14,
+    backgroundColor: colors.primary[600],
+  },
+  sheetPrimaryText: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: fontWeight.bold,
+    letterSpacing: -0.1,
+  },
+  sheetBody: {
+    padding: spacing[4],
+    paddingBottom: spacing[6],
+  },
+
+  // ── Modal form fields ──
   fieldLabel: {
     fontSize: fontSize.xs,
     fontWeight: fontWeight.semibold,
-    color: colors.gray[500],
+    color: colors.gray[600],
     marginBottom: spacing[1],
     marginTop: spacing[2],
   },
@@ -814,28 +1107,58 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
     fontSize: fontSize.sm,
     color: colors.gray[900],
+    marginBottom: spacing[1],
+  },
+  row2: {
+    flexDirection: 'row',
+    gap: spacing[3],
+  },
+  catRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
     marginBottom: spacing[2],
   },
   catBtn: {
     flex: 1,
-    paddingVertical: spacing[2],
+    paddingVertical: spacing[2.5],
     borderRadius: borderRadius.lg,
     backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: 'transparent',
     alignItems: 'center',
   },
-  catBtnActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
-  catBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
+  catBtnActive: {
+    backgroundColor: colors.primary[50],
+    borderColor: colors.primary[200],
+  },
+  catBtnText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[600],
+  },
   photoPickBtn: {
-    width: 80,
-    height: 80,
-    borderRadius: 12,
-    backgroundColor: colors.gray[50],
+    width: 88,
+    height: 88,
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: colors.gray[200],
     borderStyle: 'dashed' as const,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
+  photoPickImg: {
+    width: '100%',
+    height: '100%',
+  },
+  photoPickHint: {
+    color: colors.gray[400],
+    fontSize: fontSize.xs,
+    marginTop: 4,
+  },
+
+  // ── Storage chips (horizontal scroll inside modal) ──
   storageChip: {
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -843,11 +1166,34 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
     padding: spacing[2.5],
     minWidth: 140,
+    maxWidth: 180,
   },
-  storageChipName: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  storageChipMeta: { fontSize: 10, color: colors.gray[400], marginTop: 2 },
+  storageChipName: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+  },
+  storageChipMeta: {
+    fontSize: 10,
+    color: colors.gray[400],
+    marginTop: 2,
+  },
 
-  photoViewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', alignItems: 'center', justifyContent: 'center' },
+  // ── Empty state ──
+  emptyText: {
+    textAlign: 'center',
+    color: colors.gray[400],
+    paddingVertical: spacing[8],
+    fontSize: fontSize.sm,
+  },
+
+  // ── Photo viewer (fullscreen lightbox) ──
+  photoViewer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   photoClose: {
     position: 'absolute',
     top: 44,
