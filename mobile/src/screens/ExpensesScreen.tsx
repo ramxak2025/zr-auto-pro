@@ -14,7 +14,6 @@ import { Ionicons } from '@expo/vector-icons';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { expensesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -24,6 +23,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 
 function formatMoney(v: number) {
@@ -330,28 +330,25 @@ export default function ExpensesScreen() {
         )}
       </View>
 
-      {/* Total card with gradient */}
+      {/* Total — clean iosCard hero (32pt 800-weight number on white).
+          Dropped the loud red LinearGradient banner — expenses are an
+          everyday number, not a warning. The trending-down icon + rose
+          accent on the label communicates the negative direction
+          without flooding the screen with red. */}
       <View style={styles.totalCardWrapper}>
-        <LinearGradient
-          colors={['#dc2626', '#ef4444']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.totalCard}
-        >
-          <View style={styles.totalCardInner}>
-            <View style={styles.totalLabelRow}>
-              <Ionicons name="trending-down-outline" size={16} color="rgba(255,255,255,0.7)" />
-              <Text style={styles.totalLabel}>Итого расходов</Text>
-            </View>
-            <Text style={styles.totalValue}>{formatMoney(totalExpenses)}</Text>
+        <View style={styles.totalCard}>
+          <View style={styles.totalLabelRow}>
+            <Ionicons name="trending-down-outline" size={14} color={colors.rose[500]} />
+            <Text style={[iosSectionLabel, { marginBottom: 0, color: colors.rose[500] }]}>Итого расходов</Text>
           </View>
-        </LinearGradient>
+          <Text style={styles.totalValue}>{formatMoney(totalExpenses)}</Text>
+        </View>
       </View>
 
       {/* Category breakdown with progress bars */}
       {categoryBreakdown.length > 0 && (
         <View style={styles.breakdownCard}>
-          <Text style={styles.breakdownTitle}>По категориям</Text>
+          <Text style={[iosSectionLabel, styles.breakdownTitle]}>По категориям</Text>
           {categoryBreakdown.map((cat, idx) => {
             const percentage = totalExpenses > 0 ? (cat.total / totalExpenses) * 100 : 0;
             const catColor = getCategoryColor(idx);
@@ -644,22 +641,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
   },
 
-  // Total card
+  // Total card — clean iosCard hero, no LinearGradient.
   totalCardWrapper: {
     paddingHorizontal: spacing[4],
     marginBottom: spacing[3],
   },
   totalCard: {
-    borderRadius: borderRadius['2xl'],
-    padding: spacing[5],
-    shadowColor: '#dc2626',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  totalCardInner: {
-    // empty — just a wrapper for layout
+    ...iosCard,
+    paddingVertical: spacing[4],
+    paddingHorizontal: spacing[4],
   },
   totalLabelRow: {
     flexDirection: 'row',
@@ -667,36 +657,23 @@ const styles = StyleSheet.create({
     gap: spacing[1.5],
     marginBottom: spacing[1],
   },
-  totalLabel: {
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.semibold,
-    color: 'rgba(255,255,255,0.75)',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
   totalValue: {
     fontSize: 32,
-    fontWeight: fontWeight.bold,
-    color: colors.white,
+    fontWeight: '800',
+    color: colors.gray[900],
+    letterSpacing: -0.6,
     marginTop: 2,
   },
 
   // Category breakdown
   breakdownCard: {
+    ...iosCard,
     marginHorizontal: spacing[4],
     marginBottom: spacing[3],
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[4],
+    paddingVertical: spacing[4],
+    paddingHorizontal: spacing[4],
   },
   breakdownTitle: {
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.bold,
-    color: colors.gray[400],
-    textTransform: 'uppercase',
-    letterSpacing: 1,
     marginBottom: spacing[3],
   },
   breakdownRow: {
