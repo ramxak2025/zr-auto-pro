@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import './common/sentry';
 import 'reflect-metadata';
 import { json, urlencoded } from 'express';

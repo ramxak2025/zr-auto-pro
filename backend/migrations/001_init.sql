@@ -35,19 +35,19 @@ CREATE TABLE IF NOT EXISTS tenants (
 -- Add new columns to existing tenants table (safe migration)
 DO $$ BEGIN
     ALTER TABLE tenants ADD COLUMN plan_id UUID REFERENCES plans(id) ON DELETE SET NULL;
-EXCEPTION WHEN duplicate_column THEN NULL;
+EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL;
 END $$;
 DO $$ BEGIN
     ALTER TABLE tenants ADD COLUMN monthly_price NUMERIC(10,2) DEFAULT 0;
-EXCEPTION WHEN duplicate_column THEN NULL;
+EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL;
 END $$;
 DO $$ BEGIN
     ALTER TABLE tenants ADD COLUMN subscription_end TIMESTAMPTZ;
-EXCEPTION WHEN duplicate_column THEN NULL;
+EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL;
 END $$;
 DO $$ BEGIN
     ALTER TABLE tenants ADD COLUMN subscription_note TEXT;
-EXCEPTION WHEN duplicate_column THEN NULL;
+EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL;
 END $$;
 
 -- Unique index on slug (safe — wrapped in exception handler)
@@ -73,16 +73,16 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- Add new columns to existing users table (safe migration for pre-existing DB)
-DO $$ BEGIN ALTER TABLE users ADD COLUMN permissions JSONB DEFAULT '{}'; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE users ADD COLUMN salary_percent NUMERIC(5,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE users ADD COLUMN username TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE users ADD COLUMN updated_at TIMESTAMPTZ DEFAULT now(); EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE users ADD COLUMN avatar TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE users ADD COLUMN permissions JSONB DEFAULT '{}'; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE users ADD COLUMN salary_percent NUMERIC(5,2) DEFAULT 0; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE users ADD COLUMN username TEXT; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE users ADD COLUMN updated_at TIMESTAMPTZ DEFAULT now(); EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE users ADD COLUMN avatar TEXT; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
 
 -- Products: unit type and bundles
-DO $$ BEGIN ALTER TABLE products ADD COLUMN unit TEXT DEFAULT 'pcs'; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE products ADD COLUMN is_bundle BOOLEAN DEFAULT false; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE products ADD COLUMN bundle_items JSONB DEFAULT '[]'; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE products ADD COLUMN unit TEXT DEFAULT 'pcs'; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE products ADD COLUMN is_bundle BOOLEAN DEFAULT false; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE products ADD COLUMN bundle_items JSONB DEFAULT '[]'; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
 
 CREATE TABLE IF NOT EXISTS clients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -269,11 +269,11 @@ CREATE TABLE IF NOT EXISTS work_modes (
 );
 
 -- Per-user regular days off (array of weekday numbers: 0=Sun, 1=Mon, ..., 6=Sat)
-DO $$ BEGIN ALTER TABLE users ADD COLUMN days_off JSONB DEFAULT '[]'; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE users ADD COLUMN days_off JSONB DEFAULT '[]'; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
 
 -- Add cash_amount and card_amount to checks for mixed payments
-DO $$ BEGIN ALTER TABLE checks ADD COLUMN cash_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
-DO $$ BEGIN ALTER TABLE checks ADD COLUMN card_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE checks ADD COLUMN cash_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE checks ADD COLUMN card_amount NUMERIC(12,2) DEFAULT 0; EXCEPTION WHEN duplicate_column OR undefined_table THEN NULL; END $$;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
