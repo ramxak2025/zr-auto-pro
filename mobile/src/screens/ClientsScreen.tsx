@@ -90,6 +90,14 @@ export default function ClientsScreen() {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [comment, setComment] = useState('');
+  // Inline car block — visible only when creating a new client.
+  // Allows attaching one vehicle without leaving the form. Cleared on
+  // open/close. Plate is normalized through plateMask so the same RU
+  // cyrillic rules apply (latin auto-converted, uppercase, single string
+  // shape A123АА77).
+  const [carPlate, setCarPlate] = useState('');
+  const [carMakeModel, setCarMakeModel] = useState('');
+  const [carVin, setCarVin] = useState('');
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -107,10 +115,37 @@ export default function ClientsScreen() {
     placeholderData: (prev) => prev,
   });
 
+  // Client+optional-car create. The inline car block in the "Новый клиент"
+  // modal is fed into this mutation: after the client is created, if a
+  // plate is filled we POST the car too, so the user doesn't have to
+  // navigate into the detail screen just to attach the first vehicle.
+  // The plate-duplicate-warning dialog (carsApi.lookupByPlate) gates the
+  // create — same UX as the standalone car add inside ClientDetail.
   const createMutation = useMutation({
-    mutationFn: (d: { fullName: string; phone: string; comment?: string }) => clientsApi.create(d),
+    mutationFn: async (d: {
+      fullName: string;
+      phone: string;
+      comment?: string;
+      car?: { plateNumber: string; makeModel: string; comment?: string };
+    }) => {
+      const clientRes = await clientsApi.create({
+        fullName: d.fullName,
+        phone: d.phone,
+        comment: d.comment,
+      });
+      if (d.car && d.car.plateNumber) {
+        await carsApi.create({
+          plateNumber: d.car.plateNumber,
+          makeModel: d.car.makeModel || '',
+          comment: d.car.comment,
+          clientId: clientRes.data.id,
+        });
+      }
+      return clientRes.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
       closeModal();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании клиента'),
@@ -136,6 +171,9 @@ export default function ClientsScreen() {
     setFullName('');
     setPhone('');
     setComment('');
+    setCarPlate('');
+    setCarMakeModel('');
+    setCarVin('');
     setModalOpen(true);
   };
 
@@ -144,6 +182,11 @@ export default function ClientsScreen() {
     setFullName(client.fullName);
     setPhone(client.phone);
     setComment(client.comment || '');
+    // Edit modal hides the inline car block; cars are managed from
+    // ClientDetailScreen. Clear so nothing leaks across reopen.
+    setCarPlate('');
+    setCarMakeModel('');
+    setCarVin('');
     setModalOpen(true);
   };
 
@@ -162,34 +205,80 @@ export default function ClientsScreen() {
     phone: string;
     cars?: Array<{ plateNumber: string; makeModel: string }>;
   } | null>(null);
+  // Duplicate-by-plate dialog state — fires only when the inline car
+  // block is filled and carsApi.lookupByPlate returns a hit. Same UX
+  // contract as the per-client car add: open owner OR create anyway.
+  const [duplicateCar, setDuplicateCar] = useState<{
+    id: string;
+    plateNumber: string;
+    makeModel: string;
+    clientId: string | null;
+    client: { id: string; fullName: string; phone: string } | null;
+  } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Normalized plate string for backend / lookup. The plateMask util
+  // strips spaces, uppercases, swaps latin → cyrillic, etc. Sharing the
+  // same normalization makes the lookup match a previously-typed plate
+  // regardless of casing/diacritics differences.
+  const normalizedCarPlate = processPlateMainInput(carPlate.replace(/\s/g, ''));
+  const hasInlineCar = !editingClient && normalizedCarPlate.length > 0;
+
+  const submitFlow = async (opts?: { forceClient?: boolean; forceCar?: boolean }) => {
+    // 1) If we have an inline car, optionally check for plate duplicate.
+    if (hasInlineCar && !opts?.forceCar) {
+      try {
+        const res = await carsApi.lookupByPlate(normalizedCarPlate);
+        if (res.data) {
+          setDuplicateCar(res.data);
+          return;
+        }
+      } catch {
+        // Lookup is best-effort; on failure, proceed to create.
+      }
+    }
+    const carComment = carVin ? `VIN: ${carVin}` : undefined;
+    createMutation.mutate({
+      fullName,
+      phone,
+      comment: comment || undefined,
+      car: hasInlineCar
+        ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, comment: carComment }
+        : undefined,
+    });
+  };
+
   const handleSubmit = async () => {
-    const payload = { fullName, phone, comment: comment || undefined };
     if (editingClient) {
-      updateMutation.mutate({ id: editingClient.id, data: payload });
+      updateMutation.mutate({
+        id: editingClient.id,
+        data: { fullName, phone, comment: comment || undefined },
+      });
       return;
     }
     setSubmitting(true);
     try {
+      // Phone-dupe pre-check. Fires only for new client (edit keeps the
+      // existing record). On lookup failure, fall through to create.
       const res = await clientsApi.lookupByPhone(phone);
       const existing = res.data;
       if (existing) {
         setDuplicateClient(existing);
         return;
       }
-      createMutation.mutate(payload);
+      await submitFlow();
     } catch {
-      // Fall back to creating if the lookup endpoint hiccups.
-      createMutation.mutate(payload);
+      await submitFlow();
     } finally {
       setSubmitting(false);
     }
   };
 
+  // "Всё равно создать" on the phone-dupe dialog → bypass the phone
+  // check but still run the plate-dupe check on the inline car.
   const handleCreateAnyway = () => {
     setDuplicateClient(null);
-    createMutation.mutate({ fullName, phone, comment: comment || undefined });
+    void submitFlow();
   };
 
   const handleOpenExistingClient = () => {
@@ -198,6 +287,20 @@ export default function ClientsScreen() {
     setDuplicateClient(null);
     setModalOpen(false);
     (navigation as any).navigate('ClientDetail', { id });
+  };
+
+  // Plate-dupe dialog handlers.
+  const handleCreateCarAnyway = () => {
+    setDuplicateCar(null);
+    void submitFlow({ forceCar: true });
+  };
+
+  const handleOpenCarOwner = () => {
+    if (!duplicateCar) return;
+    const ownerId = duplicateCar.clientId;
+    setDuplicateCar(null);
+    setModalOpen(false);
+    if (ownerId) (navigation as any).navigate('ClientDetail', { id: ownerId });
   };
 
   const onRefresh = async () => {
@@ -497,10 +600,11 @@ export default function ClientsScreen() {
           <Text style={styles.formLabel}>Телефон</Text>
           <TextInput
             value={phone}
-            onChangeText={setPhone}
+            onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}
             style={styles.formInput}
             placeholder="+7 (___) ___-__-__"
             keyboardType="phone-pad"
+            autoComplete="tel"
             placeholderTextColor={colors.gray[400]}
           />
         </View>
@@ -515,6 +619,55 @@ export default function ClientsScreen() {
             placeholderTextColor={colors.gray[400]}
           />
         </View>
+
+        {/* Inline car block — only when creating a new client.
+            All three car fields are optional; submit creates the car
+            only if a госномер is typed. Plate dupes go through the
+            same DuplicateWarningDialog as the standalone car add. */}
+        {!editingClient && (
+          <View style={cnStyles.inlineCarBlock}>
+            <View style={cnStyles.inlineCarHeader}>
+              <Ionicons name="car-sport-outline" size={14} color={colors.primary[600]} />
+              <Text style={cnStyles.inlineCarHeaderText}>Автомобиль (необязательно)</Text>
+            </View>
+            <View style={styles.formField}>
+              <Text style={styles.formLabel}>Марка и модель</Text>
+              <TextInput
+                value={carMakeModel}
+                onChangeText={setCarMakeModel}
+                style={styles.formInput}
+                placeholder="Toyota Camry"
+                placeholderTextColor={colors.gray[400]}
+              />
+            </View>
+            <View style={styles.formField}>
+              <Text style={styles.formLabel}>Госномер</Text>
+              <TextInput
+                value={carPlate}
+                onChangeText={(t) => setCarPlate(processPlateMainInput(t.replace(/\s/g, '')))}
+                style={styles.formInput}
+                placeholder="А000АА00"
+                autoCapitalize="characters"
+                autoCorrect={false}
+                placeholderTextColor={colors.gray[400]}
+              />
+            </View>
+            <View style={styles.formField}>
+              <Text style={styles.formLabel}>VIN (необязательно)</Text>
+              <TextInput
+                value={carVin}
+                onChangeText={(t) => setCarVin(t.toUpperCase())}
+                style={styles.formInput}
+                placeholder="1HGCM82633A123456"
+                autoCapitalize="characters"
+                autoCorrect={false}
+                maxLength={17}
+                placeholderTextColor={colors.gray[400]}
+              />
+            </View>
+          </View>
+        )}
+
         <View style={styles.formActions}>
           <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
             <Text style={styles.cancelBtnText}>Отмена</Text>
@@ -522,9 +675,9 @@ export default function ClientsScreen() {
           <TouchableOpacity
             style={styles.submitBtn}
             onPress={handleSubmit}
-            disabled={createMutation.isPending || updateMutation.isPending}
+            disabled={createMutation.isPending || updateMutation.isPending || submitting}
           >
-            {createMutation.isPending || updateMutation.isPending ? (
+            {createMutation.isPending || updateMutation.isPending || submitting ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
               <Text style={styles.submitBtnText}>{editingClient ? 'Сохранить' : 'Создать'}</Text>
@@ -555,9 +708,33 @@ export default function ClientsScreen() {
         title="Такой клиент уже есть"
         description={`Клиент с этим телефоном уже существует. Открыть существующего или всё равно создать?`}
         existingLabel={duplicateClient?.fullName || ''}
-        existingSubtitle={duplicateClient?.phone}
+        existingSubtitle={duplicateClient?.phone ? formatPhone(duplicateClient.phone) : undefined}
         existingCars={duplicateClient?.cars}
         openExistingLabel="Открыть карточку"
+      />
+
+      {/* Plate-duplicate dialog for the inline car block. Mirrors the
+          car-add flow inside ClientDetailScreen. Shows the existing
+          car's owner; "Открыть владельца" navigates to that client's
+          detail, "Всё равно создать" proceeds with the create chain. */}
+      <DuplicateWarningDialog
+        visible={!!duplicateCar}
+        onClose={() => setDuplicateCar(null)}
+        onCreateAnyway={handleCreateCarAnyway}
+        onOpenExisting={handleOpenCarOwner}
+        title="Такой автомобиль уже есть"
+        description={
+          duplicateCar?.client
+            ? `Госномер ${duplicateCar.plateNumber} уже привязан к другому клиенту.`
+            : `Госномер ${duplicateCar?.plateNumber || ''} уже существует.`
+        }
+        existingLabel={duplicateCar?.makeModel || duplicateCar?.plateNumber || ''}
+        existingSubtitle={
+          duplicateCar?.client
+            ? `Клиент: ${duplicateCar.client.fullName}`
+            : duplicateCar?.plateNumber
+        }
+        openExistingLabel={duplicateCar?.client ? 'Открыть владельца' : 'Закрыть'}
       />
     </View>
   );
@@ -711,6 +888,29 @@ const cnStyles = StyleSheet.create({
   },
   segmentLabelActive: { fontSize: 13, fontWeight: '700', color: colors.primary[700] },
   segmentLabelInactive: { fontSize: 13, fontWeight: '500', color: colors.gray[600] },
+
+  // Inline car block inside the "Новый клиент" modal. Visually separated
+  // from the client fields with a top hairline + small "Автомобиль"
+  // header so the form reads as two sections instead of one long list.
+  inlineCarBlock: {
+    marginTop: spacing[2],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.gray[200],
+  },
+  inlineCarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: spacing[2],
+  },
+  inlineCarHeaderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary[700],
+    letterSpacing: 0.2,
+  },
+
   // Car list rows used inside ClientsScreen when mode === 'cars'
   carRow: {
     flexDirection: 'row',

@@ -77,10 +77,231 @@ const movementTypeIcons: Record<string, { name: keyof typeof Ionicons.glyphMap; 
 
 type ActiveTab = 'checks' | 'warehouse';
 
+// Stable separator — module-level so FlashList doesn't get a new
+// component identity each parent render (would force unnecessary
+// separator unmounts/remounts between rows).
+const ListGap = () => <View style={{ height: spacing[2] }} />;
+
+// ── CheckRow ───────────────────────────────────────────────────────────
+// Memoised journal row. Extracted to module scope so FlashList can
+// recycle the React element without prop identity changing every parent
+// render. Only re-renders when ITS row's props (check, showDateHeader,
+// permissions) shift — the previous version rebuilt every visible row
+// whenever any of `dateHeaderByIndex / canDelete / canViewProfit /
+// handleDelete / navigation / queryClient` recreated, which happened
+// on every Journal-screen re-render (typing in search, refetching,
+// SWR data swap). Net: 30+ rows worth of TouchableOpacity / 6 nested
+// Views / 4 Ionicons per row would re-render on each parent tick. With
+// React.memo + stable props we keep cells static across SWR refetches.
+interface CheckRowProps {
+  check: Check;
+  showDateHeader: boolean;
+  dateGroupLabel: string;
+  canDelete: boolean;
+  canViewProfit: boolean;
+  onOpen: (checkId: string) => void;
+  onDelete: (checkId: string, checkNumber: number) => void;
+}
+const CheckRow = React.memo(function CheckRow({
+  check,
+  showDateHeader,
+  dateGroupLabel,
+  canDelete,
+  canViewProfit,
+  onOpen,
+  onDelete,
+}: CheckRowProps) {
+  const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
+  const badge = badgeColors[badgeKey];
+  // Time string — computed once per row mount; row is memoised, so the
+  // `new Date(...).toLocaleTimeString(...)` no longer runs on every
+  // parent re-render of the screen.
+  const timeLabel = new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <View>
+      {showDateHeader && (
+        <View style={styles.dateGroupHeader}>
+          <View style={styles.dateGroupLine} />
+          <Text style={styles.dateGroupText}>{dateGroupLabel}</Text>
+          <View style={styles.dateGroupLine} />
+        </View>
+      )}
+      <TouchableOpacity
+        style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
+        onPress={() => onOpen(check.id)}
+        activeOpacity={0.7}
+      >
+        <View
+          style={[
+            styles.accentBar,
+            check.isDeferred ? { backgroundColor: colors.red[400] } : { backgroundColor: colors.primary[400] },
+          ]}
+        />
+        <View style={styles.checkContent}>
+          <View style={styles.checkHeader}>
+            <View style={styles.checkHeaderLeft}>
+              <Text style={styles.checkNumber}>#{check.number}</Text>
+              {check.isDeferred && (
+                <View style={styles.deferredBadge}>
+                  <Text style={styles.deferredText}>Отложен</Text>
+                </View>
+              )}
+              <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
+                <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
+                  {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+                </Text>
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+              <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
+              {canDelete && (
+                <TouchableOpacity
+                  onPress={() => onDelete(check.id, check.number)}
+                  style={styles.deleteBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close" size={14} color={colors.gray[300]} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.checkInfoRow}>
+            {check.client?.fullName ? (
+              <View style={styles.infoChip}>
+                <Ionicons name="person-outline" size={11} color={colors.gray[400]} />
+                <Text style={styles.infoChipText} numberOfLines={1}>
+                  {check.client.fullName}
+                </Text>
+              </View>
+            ) : null}
+            {check.car && (
+              <View style={styles.infoChip}>
+                <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
+                <Text style={styles.infoChipText} numberOfLines={1}>
+                  {check.car.makeModel}
+                </Text>
+                {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
+              </View>
+            )}
+          </View>
+
+          {check.comment && (
+            <Text style={styles.commentText} numberOfLines={1}>
+              {check.comment}
+            </Text>
+          )}
+
+          <View style={styles.checkFooter}>
+            <Text style={styles.footerTime}>{timeLabel}</Text>
+            {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
+            {canViewProfit && (
+              <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
+                {check.profit >= 0 ? '+' : ''}
+                {formatMoney(check.profit)}
+              </Text>
+            )}
+          </View>
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+});
+
 // Unified warehouse document item for the list
 type WarehouseDoc =
   | { kind: 'movement'; data: StockMovement; sortDate: string }
   | { kind: 'delivery'; data: Delivery; sortDate: string };
+
+// ── WarehouseDocRow ────────────────────────────────────────────────────
+// Memoised row for the warehouse-documents tab. Module-scope so React
+// can `React.memo` it correctly without per-render closure recreation.
+// Renders either a stock-movement card or a delivery card — picked by
+// `item.kind`. The only prop that ever changes is `item`; the `onSelect`
+// setter from `useState` is stable across renders.
+interface WarehouseDocRowProps {
+  item: WarehouseDoc;
+  onSelect: (doc: WarehouseDoc) => void;
+}
+const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect }: WarehouseDocRowProps) {
+  if (item.kind === 'movement') {
+    const m = item.data;
+    const typeInfo = movementTypeIcons[m.type] || movementTypeIcons.income;
+    return (
+      <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => onSelect(item)}>
+        <View style={[styles.warehouseAccent, { backgroundColor: typeInfo.accentColor }]} />
+        <View style={styles.warehouseCardContent}>
+          <View style={styles.warehouseCardHeader}>
+            <View style={[styles.warehouseIconWrap, { backgroundColor: typeInfo.accentColor + '18' }]}>
+              <Ionicons name={typeInfo.name as any} size={18} color={typeInfo.color} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.warehouseCardTitle} numberOfLines={1}>
+                {m.product?.name || 'Товар'}
+              </Text>
+              <Text style={styles.warehouseCardSubtitle}>{movementTypeLabels[m.type]}</Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text
+                style={[
+                  styles.warehouseQty,
+                  { color: m.type === 'writeoff' || m.type === 'expense' ? colors.red[600] : colors.green[600] },
+                ]}
+              >
+                {m.type === 'writeoff' || m.type === 'expense' ? '-' : '+'}
+                {m.quantity} шт
+              </Text>
+              <Text style={styles.warehouseDate}>{formatDate(m.createdAt)}</Text>
+            </View>
+          </View>
+          {(m.reason || m.user) && (
+            <View style={styles.warehouseCardFooter}>
+              {m.reason ? (
+                <Text style={styles.warehouseReason} numberOfLines={1}>
+                  {m.reason}
+                </Text>
+              ) : null}
+              {m.user ? <Text style={styles.warehouseUser}>{m.user.fullName}</Text> : null}
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  }
+  // Delivery — payment-status badges intentionally absent here per
+  // product policy (debt tracking lives in the Suppliers screen).
+  const d = item.data;
+  return (
+    <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => onSelect(item)}>
+      <View style={[styles.warehouseAccent, { backgroundColor: colors.green[500] }]} />
+      <View style={styles.warehouseCardContent}>
+        <View style={styles.warehouseCardHeader}>
+          <View style={[styles.warehouseIconWrap, { backgroundColor: colors.green[500] + '18' }]}>
+            <Ionicons name="bus-outline" size={18} color={colors.green[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.warehouseCardTitle} numberOfLines={1}>
+              {d.supplier?.name || 'Поставщик'}
+            </Text>
+            <Text style={styles.warehouseCardSubtitle}>Поставка {d.items?.length || 0} поз.</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.warehouseQty, { color: colors.gray[900] }]}>{formatMoney(d.totalAmount)}</Text>
+            <Text style={styles.warehouseDate}>{formatDate(d.date)}</Text>
+          </View>
+        </View>
+        {d.comment ? (
+          <View style={styles.warehouseCardFooter}>
+            <Text style={styles.warehouseReason} numberOfLines={1}>
+              {d.comment}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    </TouchableOpacity>
+  );
+});
 
 export default function ChecksScreen() {
   const navigation = useNavigation<any>();
@@ -274,212 +495,42 @@ export default function ChecksScreen() {
     return flags;
   }, [checks]);
 
-  const renderCheck = useCallback(
-    ({ item: check, index }: { item: Check; index: number }) => {
-      const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-      const badge = badgeColors[badgeKey];
-      const currentDateGroup = formatDateGroup(check.date);
-      const showDateHeader = dateHeaderByIndex[index] === true;
-
-      return (
-        <View>
-          {showDateHeader && (
-            <View style={styles.dateGroupHeader}>
-              <View style={styles.dateGroupLine} />
-              <Text style={styles.dateGroupText}>{currentDateGroup}</Text>
-              <View style={styles.dateGroupLine} />
-            </View>
-          )}
-          <TouchableOpacity
-            style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
-            onPress={() => {
-              // ВАЖНО: НЕ прайми кеш `['check', id]` row-данными из журнала.
-              // Прошлая итерация делала setQueryData с row payload, в котором
-              // `services` / `products` могут быть undefined (list endpoint
-              // не отдаёт их детально), и CheckDetailScreen потом крэшил на
-              // `check.services.length` / `(check.products || []).map(...)`.
-              // CheckDetailScreen теперь сам делает безопасный placeholderData
-              // lookup через queryClient.getQueriesData(['checks-infinite']),
-              // и при этом guard'ит .length / .map от undefined. См. iter#12.
-              navigation.navigate('CheckDetail', { id: check.id });
-            }}
-            activeOpacity={0.7}
-          >
-            {/* Left accent bar */}
-            <View
-              style={[
-                styles.accentBar,
-                check.isDeferred ? { backgroundColor: colors.red[400] } : { backgroundColor: colors.primary[400] },
-              ]}
-            />
-
-            <View style={styles.checkContent}>
-              {/* Top row: number + badges + delete */}
-              <View style={styles.checkHeader}>
-                <View style={styles.checkHeaderLeft}>
-                  <Text style={styles.checkNumber}>#{check.number}</Text>
-                  {check.isDeferred && (
-                    <View style={styles.deferredBadge}>
-                      <Text style={styles.deferredText}>Отложен</Text>
-                    </View>
-                  )}
-                  <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
-                    <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                      {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
-                    </Text>
-                  </View>
-                </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
-                  {canDelete && (
-                    <TouchableOpacity
-                      onPress={() => handleDelete(check.id, check.number)}
-                      style={styles.deleteBtn}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="close" size={14} color={colors.gray[300]} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
-
-              {/* Client & car — статичные chip'ы. Раньше были TouchableOpacity
-                с openClient / openCarOwner внутри; на iPhone это перехватывало
-                основной тап по карточке и иногда вместо чека открывалась
-                карточка клиента/авто. Переходы по сущностям остаются доступны
-                из самой деталки чека (CheckDetailScreen.infoCard) — там это
-                целевые ряды с chevron, без конфликта с тапом-родителем. */}
-              <View style={styles.checkInfoRow}>
-                {check.client?.fullName ? (
-                  <View style={styles.infoChip}>
-                    <Ionicons name="person-outline" size={11} color={colors.gray[400]} />
-                    <Text style={styles.infoChipText} numberOfLines={1}>
-                      {check.client.fullName}
-                    </Text>
-                  </View>
-                ) : null}
-                {check.car && (
-                  <View style={styles.infoChip}>
-                    <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
-                    <Text style={styles.infoChipText} numberOfLines={1}>
-                      {check.car.makeModel}
-                    </Text>
-                    {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
-                  </View>
-                )}
-              </View>
-
-              {/* Comment preview */}
-              {check.comment && (
-                <Text style={styles.commentText} numberOfLines={1}>
-                  {check.comment}
-                </Text>
-              )}
-
-              {/* Footer: time + master + profit */}
-              <View style={styles.checkFooter}>
-                <Text style={styles.footerTime}>
-                  {new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-                </Text>
-                {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
-                {canViewProfit && (
-                  <Text
-                    style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}
-                  >
-                    {check.profit >= 0 ? '+' : ''}
-                    {formatMoney(check.profit)}
-                  </Text>
-                )}
-              </View>
-            </View>
-          </TouchableOpacity>
-        </View>
-      );
+  // Stable navigation handler — `useCallback` so the prop passed to
+  // CheckRow doesn't change across screen renders (would bust React.memo).
+  const openCheckDetail = useCallback(
+    (checkId: string) => {
+      // ВАЖНО: НЕ прайми кеш `['check', id]` row-данными из журнала.
+      // Прошлая итерация делала setQueryData с row payload, в котором
+      // `services` / `products` могут быть undefined (list endpoint
+      // не отдаёт их детально), и CheckDetailScreen потом крэшил на
+      // `check.services.length` / `(check.products || []).map(...)`.
+      // CheckDetailScreen теперь сам делает безопасный placeholderData
+      // lookup через queryClient.getQueriesData(['checks-infinite']),
+      // и при этом guard'ит .length / .map от undefined. См. iter#12.
+      navigation.navigate('CheckDetail', { id: checkId });
     },
-    [dateHeaderByIndex, canDelete, canViewProfit, handleDelete, navigation, queryClient],
+    [navigation],
   );
 
-  const renderWarehouseDoc = ({ item }: { item: WarehouseDoc }) => {
-    if (item.kind === 'movement') {
-      const m = item.data;
-      const typeInfo = movementTypeIcons[m.type] || movementTypeIcons.income;
-      return (
-        <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => setSelectedDoc(item)}>
-          <View style={[styles.warehouseAccent, { backgroundColor: typeInfo.accentColor }]} />
-          <View style={styles.warehouseCardContent}>
-            <View style={styles.warehouseCardHeader}>
-              <View style={[styles.warehouseIconWrap, { backgroundColor: typeInfo.accentColor + '18' }]}>
-                <Ionicons name={typeInfo.name as any} size={18} color={typeInfo.color} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.warehouseCardTitle} numberOfLines={1}>
-                  {m.product?.name || 'Товар'}
-                </Text>
-                <Text style={styles.warehouseCardSubtitle}>{movementTypeLabels[m.type]}</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text
-                  style={[
-                    styles.warehouseQty,
-                    { color: m.type === 'writeoff' || m.type === 'expense' ? colors.red[600] : colors.green[600] },
-                  ]}
-                >
-                  {m.type === 'writeoff' || m.type === 'expense' ? '-' : '+'}
-                  {m.quantity} шт
-                </Text>
-                <Text style={styles.warehouseDate}>{formatDate(m.createdAt)}</Text>
-              </View>
-            </View>
-            {(m.reason || m.user) && (
-              <View style={styles.warehouseCardFooter}>
-                {m.reason ? (
-                  <Text style={styles.warehouseReason} numberOfLines={1}>
-                    {m.reason}
-                  </Text>
-                ) : null}
-                {m.user ? <Text style={styles.warehouseUser}>{m.user.fullName}</Text> : null}
-              </View>
-            )}
-          </View>
-        </TouchableOpacity>
-      );
-    }
+  const renderCheck = useCallback(
+    ({ item: check, index }: { item: Check; index: number }) => (
+      <CheckRow
+        check={check}
+        showDateHeader={dateHeaderByIndex[index] === true}
+        dateGroupLabel={formatDateGroup(check.date)}
+        canDelete={canDelete}
+        canViewProfit={canViewProfit}
+        onOpen={openCheckDetail}
+        onDelete={handleDelete}
+      />
+    ),
+    [dateHeaderByIndex, canDelete, canViewProfit, openCheckDetail, handleDelete],
+  );
 
-    // Delivery — warehouse-document row. Per product policy "оплачено /
-    // не оплачено" badges do NOT belong on warehouse documents (those
-    // are debt-tracking concepts that live in the Suppliers screen).
-    // Footer here only shows the optional comment.
-    const d = item.data;
-    return (
-      <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => setSelectedDoc(item)}>
-        <View style={[styles.warehouseAccent, { backgroundColor: colors.green[500] }]} />
-        <View style={styles.warehouseCardContent}>
-          <View style={styles.warehouseCardHeader}>
-            <View style={[styles.warehouseIconWrap, { backgroundColor: colors.green[500] + '18' }]}>
-              <Ionicons name="bus-outline" size={18} color={colors.green[600]} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.warehouseCardTitle} numberOfLines={1}>
-                {d.supplier?.name || 'Поставщик'}
-              </Text>
-              <Text style={styles.warehouseCardSubtitle}>Поставка {d.items?.length || 0} поз.</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={[styles.warehouseQty, { color: colors.gray[900] }]}>{formatMoney(d.totalAmount)}</Text>
-              <Text style={styles.warehouseDate}>{formatDate(d.date)}</Text>
-            </View>
-          </View>
-          {d.comment ? (
-            <View style={styles.warehouseCardFooter}>
-              <Text style={styles.warehouseReason} numberOfLines={1}>
-                {d.comment}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-      </TouchableOpacity>
-    );
-  };
+  const renderWarehouseDoc = useCallback(
+    ({ item }: { item: WarehouseDoc }) => <WarehouseDocRow item={item} onSelect={setSelectedDoc} />,
+    [],
+  );
 
   const isWarehouseLoading = movementsLoading || deliveriesLoading;
 
@@ -693,7 +744,7 @@ export default function ChecksScreen() {
                 if (hasNextPage && !isFetchingNextPage) fetchNextPage();
               }}
               onEndReachedThreshold={0.6}
-              ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
+              ItemSeparatorComponent={ListGap}
               ListFooterComponent={
                 isFetchingNextPage ? (
                   <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
@@ -729,7 +780,7 @@ export default function ChecksScreen() {
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
-              ItemSeparatorComponent={() => <View style={{ height: spacing[2] }} />}
+              ItemSeparatorComponent={ListGap}
             />
           )}
         </>
