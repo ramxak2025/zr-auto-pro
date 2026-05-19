@@ -2,6 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } f
 import { MarketingService } from './marketing.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { SubmitReviewDto } from './dto/submit-review.dto';
 
 @Controller('marketing')
 export class MarketingController {
@@ -86,13 +87,19 @@ export class MarketingController {
   }
 
   // ─── Public Review Endpoints (no auth) ────────────────────────────
+  // No JWT guard here on purpose — the customer follows a one-shot
+  // tokenised link from SMS/WhatsApp. Tokens carry their own server-side
+  // expiry + used_at marker (see marketing.service). The brute-force
+  // surface is still covered by the global RateLimitGuard write bucket
+  // (~150 req/min per IP); we additionally rely on class-validator via
+  // SubmitReviewDto + ValidationPipe to bound input size.
   @Get('review/:token')
   getReviewByToken(@Param('token') token: string) {
     return this.marketingService.getReviewByToken(token);
   }
 
   @Post('review/:token')
-  submitReview(@Param('token') token: string, @Body() dto: { rating: number; comment?: string; redirectedTo?: string }) {
+  submitReview(@Param('token') token: string, @Body() dto: SubmitReviewDto) {
     return this.marketingService.submitReview(token, dto);
   }
 }
