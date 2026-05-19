@@ -97,6 +97,11 @@ export default function ClientDetailScreen() {
   const { hasPermission } = useAuth();
   const canViewProfit = hasPermission('profit_view');
   const { id } = route.params;
+  // Virtual retail buyer sentinel — when navigated to with id === '__retail__',
+  // we don't fetch a real client record; we render the retail-buyer entity
+  // (all checks with client_id IS NULL) using the existing `retail=true`
+  // backend filter. No new endpoints, no API contract changes.
+  const isRetail = id === '__retail__';
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCarId, setSelectedCarId] = useState<string | null>(null);
 
@@ -123,12 +128,16 @@ export default function ClientDetailScreen() {
       const res = await clientsApi.getById(id);
       return res.data;
     },
+    // Retail buyer is virtual — never fetch a real client row.
+    enabled: !isRetail,
   });
 
   const { data: checks } = useQuery<Check[]>({
-    queryKey: ['client-checks', id],
+    queryKey: isRetail ? ['retail-checks'] : ['client-checks', id],
     queryFn: async () => {
-      const res = await checksApi.getAll({ clientId: id, limit: 50 });
+      const res = isRetail
+        ? await checksApi.getAll({ retail: 'true', limit: 50 })
+        : await checksApi.getAll({ clientId: id, limit: 50 });
       return res.data.data || res.data;
     },
   });
@@ -237,6 +246,171 @@ export default function ClientDetailScreen() {
     await queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
     setRefreshing(false);
   };
+
+  // Retail buyer view — virtual entity, no edit/delete, no cars section.
+  // We reuse the same "checks grouped by date" layout as a real client.
+  if (isRetail) {
+    const retailTotal = (checks || []).reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
+    const retailGrouped: { label: string; checks: Check[] }[] = [];
+    let retailLast = '';
+    for (const check of checks || []) {
+      const group = formatDateGroup(check.date);
+      if (group !== retailLast) {
+        retailGrouped.push({ label: group, checks: [check] });
+        retailLast = group;
+      } else {
+        retailGrouped[retailGrouped.length - 1].checks.push(check);
+      }
+    }
+    return (
+      <View style={styles.safe}>
+        <IosScreenHeader title="Розничный покупатель" onBack={() => navigation.goBack()} centerTitle />
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true);
+                await queryClient.invalidateQueries({ queryKey: ['retail-checks'] });
+                setRefreshing(false);
+              }}
+              tintColor={colors.primary[600]}
+            />
+          }
+        >
+          <AnimatedCard style={styles.card} index={0}>
+            <View style={styles.avatarSection}>
+              <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
+                <Ionicons name="storefront-outline" size={26} color={colors.primary[600]} />
+              </View>
+              <Text style={styles.clientName}>Розничный покупатель</Text>
+            </View>
+            <View style={styles.statsRow}>
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{checks?.length || 0}</Text>
+                <Text style={styles.statLabel}>чеков</Text>
+              </View>
+              <View style={styles.statDivider} />
+              <View style={styles.statItem}>
+                <Text style={styles.statValue}>{formatMoney(retailTotal)}</Text>
+                <Text style={styles.statLabel}>выручка</Text>
+              </View>
+            </View>
+            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+              <Ionicons name="information-circle-outline" size={15} color={colors.gray[400]} />
+              <Text style={styles.infoLabel}>Тип</Text>
+              <Text style={styles.infoValue}>Все чеки без клиента</Text>
+            </View>
+          </AnimatedCard>
+
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Чеки ({checks?.length || 0})</Text>
+          </View>
+
+          {(!checks || checks.length === 0) ? (
+            <View style={styles.emptyChecks}>
+              <Ionicons name="receipt-outline" size={32} color={colors.gray[300]} />
+              <Text style={styles.emptyChecksText}>Нет чеков</Text>
+            </View>
+          ) : (
+            retailGrouped.map((group, gi) => (
+              <View key={group.label + gi}>
+                <View style={styles.dateGroupHeader}>
+                  <View style={styles.dateGroupLine} />
+                  <Text style={styles.dateGroupText}>{group.label}</Text>
+                  <View style={styles.dateGroupLine} />
+                </View>
+                {group.checks.map((check) => {
+                  const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
+                  const badge = badgeColors[badgeKey];
+                  return (
+                    <TouchableOpacity
+                      key={check.id}
+                      style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
+                      onPress={() =>
+                        navigation.navigate('Main', {
+                          screen: 'Checks',
+                          params: { screen: 'CheckDetail', params: { id: check.id } },
+                        })
+                      }
+                      activeOpacity={0.7}
+                    >
+                      <View
+                        style={[
+                          styles.accentBar,
+                          check.isDeferred
+                            ? { backgroundColor: colors.red[400] }
+                            : { backgroundColor: colors.primary[400] },
+                        ]}
+                      />
+                      <View style={styles.checkContent}>
+                        <View style={styles.checkHeader}>
+                          <View style={styles.checkHeaderLeft}>
+                            <Text style={styles.checkNumber}>#{check.number}</Text>
+                            {check.isDeferred && (
+                              <View style={styles.deferredBadge}>
+                                <Text style={styles.deferredText}>Отложен</Text>
+                              </View>
+                            )}
+                            <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
+                              <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
+                                {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
+                        </View>
+                        {check.car && (
+                          <View style={styles.checkInfoRow}>
+                            <View style={styles.infoChip}>
+                              <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
+                              <Text style={styles.infoChipText} numberOfLines={1}>
+                                {check.car.makeModel}
+                              </Text>
+                              {check.car.plateNumber && (
+                                <Text style={styles.plateTag}>{check.car.plateNumber}</Text>
+                              )}
+                            </View>
+                          </View>
+                        )}
+                        {check.comment && (
+                          <Text style={styles.commentText} numberOfLines={1}>
+                            {check.comment}
+                          </Text>
+                        )}
+                        <View style={styles.checkFooter}>
+                          <Text style={styles.footerTime}>
+                            {new Date(check.date).toLocaleTimeString('ru-RU', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </Text>
+                          {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
+                          {canViewProfit && check.profit !== undefined && (
+                            <Text
+                              style={[
+                                styles.footerProfit,
+                                check.profit >= 0 ? styles.profitPositive : styles.profitNegative,
+                              ]}
+                            >
+                              {check.profit >= 0 ? '+' : ''}
+                              {formatMoney(check.profit)}
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))
+          )}
+        </ScrollView>
+      </View>
+    );
+  }
 
   if (isLoading) return <LoadingSpinner />;
   if (!client) return <Text style={{ padding: 20, textAlign: 'center' }}>Клиент не найден</Text>;

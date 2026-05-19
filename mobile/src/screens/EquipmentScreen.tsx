@@ -1,22 +1,40 @@
 /**
- * EquipmentScreen — has three tabs ("Сотрудники / Подсобка / Корзина").
+ * EquipmentScreen — refined iOS look.
  *
- * Employees tab uses a premium 2-column "game-card" grid:
+ * Top of screen:
+ *   • Two-segment iOS-style segmented control: «Сотрудники / Подсобка».
+ *     Pill-shaped gray-200 track + white pill for the active segment with a
+ *     soft shadow. ~28pt segment height. Mirrors UISegmentedControl.
+ *   • Trash bin lives as a top-right trailing icon button inside
+ *     IosScreenHeader (no longer a tab). Opens a centered dialog that
+ *     shows the deleted-equipment list with one-tap restore. Visual style
+ *     of rows matches the storage / employee-detail item rows.
+ *
+ * Employees tab: premium 2-column "game-card" grid (unchanged).
  *   • full-bleed employee photo or a primary-tinted gradient with initials;
- *   • a two-stop tinted gradient overlay (primary-900 → black) for readable text;
- *   • cost is the hero (large bold ₽ number) with the name beneath it;
- *   • frosted-glass pills at the bottom-left show per-category counters
- *     (tools / uniform / other); on iOS each pill is a BlurView tinted dark,
- *     on Android a translucent black surface;
+ *   • a two-stop tinted gradient overlay (primary-900 → black);
+ *   • cost is hero, name beneath, frosted glass counter pills bottom-left;
  *   • expired-items warning sits as a top-right amber pill;
- *   • press uses PressableScale (iOS spring scale + light haptic), Android ripple.
+ *   • press uses PressableScale (iOS spring scale + light haptic).
+ *   Tap → navigation.push('EquipmentEmployee', { emp }) — slide-in stack.
  *
- * Issue modal is a real iOS pageSheet — never full-screen. SafeAreaView with
- * `top` and `bottom` edges keeps the close button clear of the Dynamic Island
- * and the primary action clear of the home indicator. Storage chips, photo
- * picker and the photo viewer modal all keep their original behaviour.
+ * Storage tab: folder list at root, items inside a folder.
+ *   • Root view shows a FAB (bottom-right, 56pt primary-600 circle, soft
+ *     shadow) that opens a centered dialog "Новая папка" with one text
+ *     field → equipmentApi.createCategory().
+ *   • Inside a folder, the same-positioned FAB opens a centered dialog
+ *     "Новый предмет на склад" → equipmentApi.createStorageItem().
+ *
+ * Issue modal (выдать имущество): centered iOS dialog with dark scrim,
+ * NOT a pageSheet. White rounded card, ~88% width, max ~520pt tall,
+ * vertically centered. Header inside the card (title 17pt 700 centered,
+ * × top-right). Body scrolls if it overflows the card. Primary "Выдать"
+ * button is full-width at the bottom of the card.
+ *
+ * canEdit role gating preserved: only director / admin / superadmin
+ * see the issue button, the FABs and the trash icon.
  */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -28,10 +46,10 @@ import {
   Alert,
   Platform,
   useWindowDimensions,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -46,7 +64,7 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { PressableScale } from '../platform/PressableScale';
 import { haptic } from '../platform/haptics';
 
-type Tab = 'employees' | 'storage' | 'trash';
+type Tab = 'employees' | 'storage';
 type CategoryType = 'tools' | 'uniform' | 'other';
 
 // Card geometry — premium 2-column grid, computed at runtime so it fits any iPhone.
@@ -73,6 +91,210 @@ function getInitials(fullName?: string | null): string {
     .join('') || '?';
 }
 
+// ─── Centered iOS dialog primitive (used by Issue / Trash / FAB dialogs) ───
+// A reusable container: dark scrim + centered white card with rounded corners,
+// header strip (title centered + close ×), scrollable body, primary action
+// pinned at the bottom. The card is capped at 88% width and ~520pt tall so it
+// stays a "dialog" — not a full screen — on every iPhone.
+interface CenteredDialogProps {
+  visible: boolean;
+  title: string;
+  onClose: () => void;
+  /** Primary footer button text. If undefined no footer is rendered. */
+  primaryText?: string;
+  /** Disable primary while a mutation is running etc. */
+  primaryDisabled?: boolean;
+  /** Render a secondary "Отменить" button next to the primary. */
+  showCancel?: boolean;
+  onPrimaryPress?: () => void;
+  /** Tone the primary CTA red instead of brand blue (used for danger flows). */
+  danger?: boolean;
+  children: React.ReactNode;
+}
+
+function CenteredDialog({
+  visible,
+  title,
+  onClose,
+  primaryText,
+  primaryDisabled,
+  showCancel,
+  onPrimaryPress,
+  danger,
+  children,
+}: CenteredDialogProps) {
+  return (
+    <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      {/* The scrim is itself pressable: tap-outside-to-close. The inner card
+          stops propagation so taps on it never close the dialog. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={dialogStyles.kavRoot}
+      >
+        <TouchableOpacity activeOpacity={1} style={dialogStyles.scrim} onPress={onClose}>
+          <TouchableOpacity activeOpacity={1} style={dialogStyles.card} onPress={() => {}}>
+            <View style={dialogStyles.header}>
+              <View style={dialogStyles.headerSpacer} />
+              <Text style={dialogStyles.headerTitle} numberOfLines={1}>
+                {title}
+              </Text>
+              <TouchableOpacity
+                onPress={onClose}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Закрыть"
+                style={dialogStyles.closeBtn}
+              >
+                <Ionicons name="close" size={20} color={colors.gray[600]} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={dialogStyles.bodyScroll}
+              contentContainerStyle={dialogStyles.bodyContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {children}
+            </ScrollView>
+
+            {primaryText && (
+              <View style={dialogStyles.footer}>
+                {showCancel && (
+                  <TouchableOpacity
+                    onPress={onClose}
+                    style={[dialogStyles.btn, dialogStyles.btnSecondary]}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={dialogStyles.btnSecondaryText}>Отменить</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  onPress={onPrimaryPress}
+                  disabled={primaryDisabled}
+                  style={[
+                    dialogStyles.btn,
+                    dialogStyles.btnPrimary,
+                    danger && dialogStyles.btnDanger,
+                    primaryDisabled && dialogStyles.btnDisabled,
+                  ]}
+                  activeOpacity={0.85}
+                >
+                  <Text style={dialogStyles.btnPrimaryText}>{primaryText}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </KeyboardAvoidingView>
+    </RNModal>
+  );
+}
+
+const dialogStyles = StyleSheet.create({
+  kavRoot: {
+    flex: 1,
+  },
+  scrim: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[4],
+  },
+  card: {
+    width: '88%',
+    maxWidth: 460,
+    maxHeight: 520,
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    overflow: 'hidden',
+    // Soft elevation so the card feels lifted off the scrim.
+    shadowColor: colors.black,
+    shadowOpacity: 0.25,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 12,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing[3],
+    paddingTop: spacing[3.5],
+    paddingBottom: spacing[2],
+  },
+  headerSpacer: {
+    width: 32,
+    height: 32,
+  },
+  headerTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.gray[900],
+    letterSpacing: -0.2,
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bodyScroll: {
+    // Keep the card a dialog — ScrollView fills only as much vertical room
+    // as it needs, but never overruns the maxHeight set on .card.
+    flexGrow: 0,
+  },
+  bodyContent: {
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[2],
+    paddingBottom: spacing[3],
+  },
+  footer: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[4],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.gray[200],
+  },
+  btn: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnPrimary: {
+    backgroundColor: colors.primary[600],
+  },
+  btnSecondary: {
+    backgroundColor: colors.gray[100],
+  },
+  btnDanger: {
+    backgroundColor: colors.red[600],
+  },
+  btnDisabled: {
+    opacity: 0.5,
+  },
+  btnPrimaryText: {
+    color: colors.white,
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: -0.1,
+  },
+  btnSecondaryText: {
+    color: colors.gray[800],
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: -0.1,
+  },
+});
+
 // ─── Photo viewer (fullscreen lightbox — NOT a pageSheet) ──────────────────
 function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
   return (
@@ -89,7 +311,6 @@ function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
 
 // ─── Per-card frosted pill (counters at bottom of game card) ───────────────
 function FrostedPill({ icon, label }: { icon: string; label: string | number }) {
-  // iOS — BlurView dark material; Android — translucent black surface.
   if (Platform.OS === 'ios') {
     return (
       <View style={styles.pillWrap}>
@@ -104,6 +325,50 @@ function FrostedPill({ icon, label }: { icon: string; label: string | number }) 
     <View style={[styles.pillWrap, styles.pillAndroid]}>
       <Text style={styles.pillIcon}>{icon}</Text>
       <Text style={styles.pillLabel}>{label}</Text>
+    </View>
+  );
+}
+
+// ─── iOS segmented control (2 segments) ────────────────────────────────────
+// Pill-shaped gray track + a white pill for the active segment with a soft
+// shadow. Mirrors UISegmentedControl from iOS 13+. ~28pt segment height.
+function SegmentedTabs({
+  value,
+  onChange,
+}: {
+  value: Tab;
+  onChange: (v: Tab) => void;
+}) {
+  const items: { k: Tab; l: string }[] = [
+    { k: 'employees', l: 'Сотрудники' },
+    { k: 'storage', l: 'Подсобка' },
+  ];
+  return (
+    <View style={styles.segmentTrack}>
+      {items.map((it) => {
+        const active = value === it.k;
+        return (
+          <TouchableOpacity
+            key={it.k}
+            onPress={() => {
+              haptic('select');
+              onChange(it.k);
+            }}
+            activeOpacity={0.85}
+            style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+          >
+            <Text
+              style={[
+                styles.segmentText,
+                active && styles.segmentTextActive,
+              ]}
+              numberOfLines={1}
+            >
+              {it.l}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 }
@@ -137,7 +402,6 @@ function EmployeeCard({
         },
       ]}
     >
-      {/* Layer 1 — backdrop: photo if available, else brand gradient with initials. */}
       {emp.avatar ? (
         <CachedImage
           source={{ uri: emp.avatar }}
@@ -157,10 +421,9 @@ function EmployeeCard({
         </LinearGradient>
       )}
 
-      {/* Layer 2 — primary-tinted overlay at the top (subtle brand wash). */}
       <LinearGradient
         colors={[
-          'rgba(29,78,216,0.30)', // primary-700 alpha 0.30
+          'rgba(29,78,216,0.30)',
           'rgba(0,0,0,0.00)',
         ]}
         locations={[0, 0.45]}
@@ -168,7 +431,6 @@ function EmployeeCard({
         pointerEvents="none"
       />
 
-      {/* Layer 3 — darken at the bottom for hero text readability. */}
       <LinearGradient
         colors={[
           'rgba(0,0,0,0.00)',
@@ -180,7 +442,6 @@ function EmployeeCard({
         pointerEvents="none"
       />
 
-      {/* Top-right — expired warning pill (kept in the new visual language). */}
       {emp.expiredCount > 0 && (
         <View style={styles.warnPill}>
           <Ionicons name="warning" size={11} color={colors.white} />
@@ -188,14 +449,12 @@ function EmployeeCard({
         </View>
       )}
 
-      {/* Bottom — counters row (frosted pills). */}
       <View style={styles.countersRow}>
         {emp.toolsCount > 0 && <FrostedPill icon="🔧" label={emp.toolsCount} />}
         {emp.uniformCount > 0 && <FrostedPill icon="👕" label={emp.uniformCount} />}
         {otherCount > 0 && <FrostedPill icon="📦" label={otherCount} />}
       </View>
 
-      {/* Bottom — hero block (cost + name). */}
       <View style={styles.heroBlock}>
         <Text style={styles.heroCost} numberOfLines={1}>
           {formatMoney(emp.totalCost || 0)}
@@ -228,6 +487,7 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['eq-user', emp.userId] });
       qc.invalidateQueries({ queryKey: ['eq-summary'] });
+      qc.invalidateQueries({ queryKey: ['eq-trash'] });
     },
   });
   const returnMut = useMutation({
@@ -361,15 +621,28 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
       )}
 
       {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
-      {showIssue && (
-        <IssueModal userId={emp.userId} onClose={() => setShowIssue(false)} qc={qc} />
-      )}
+      <IssueModal
+        visible={showIssue}
+        userId={emp.userId}
+        onClose={() => setShowIssue(false)}
+        qc={qc}
+      />
     </ScrollView>
   );
 }
 
-// ─── Issue modal (compact pageSheet — NOT fullscreen) ──────────────────────
-function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => void; qc: any }) {
+// ─── Issue modal — CENTERED iOS dialog (white card, dark scrim) ────────────
+function IssueModal({
+  visible,
+  userId,
+  onClose,
+  qc,
+}: {
+  visible: boolean;
+  userId: string;
+  onClose: () => void;
+  qc: any;
+}) {
   const [name, setName] = useState('');
   const [cost, setCost] = useState('');
   const [categoryType, setCategoryType] = useState<CategoryType>('tools');
@@ -379,6 +652,7 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
   const { data: storageItems = [] } = useQuery({
     queryKey: ['eq-storage-list'],
     queryFn: async () => (await equipmentApi.getStorageItems()).data,
+    enabled: visible,
   });
 
   const issueMut = useMutation({
@@ -387,6 +661,12 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
       haptic('success');
       qc.invalidateQueries({ queryKey: ['eq-user', userId] });
       qc.invalidateQueries({ queryKey: ['eq-summary'] });
+      // Reset for next open.
+      setName('');
+      setCost('');
+      setServiceLife('');
+      setPhoto('');
+      setCategoryType('tools');
       onClose();
     },
     onError: () => haptic('error'),
@@ -427,154 +707,398 @@ function IssueModal({ userId, onClose, qc }: { userId: string; onClose: () => vo
   };
 
   return (
-    <RNModal
-      visible
-      animationType="slide"
-      presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'formSheet'}
-      onRequestClose={onClose}
+    <CenteredDialog
+      visible={visible}
+      title="Выдать имущество"
+      onClose={onClose}
+      primaryText={issueMut.isPending ? 'Выдача…' : 'Выдать'}
+      primaryDisabled={issueMut.isPending}
+      onPrimaryPress={handleSubmit}
+      showCancel
     >
-      <SafeAreaView style={styles.sheetRoot} edges={['top', 'bottom']}>
-        {/* Header — close (X) left, title centered, primary action right.
-            All three sit BELOW the system status area inside the sheet itself,
-            so nothing slides under the Dynamic Island. */}
-        <View style={styles.sheetHeader}>
-          <TouchableOpacity
-            onPress={onClose}
-            hitSlop={12}
-            style={styles.sheetIconBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Закрыть"
+      {storageItems.length > 0 && (
+        <View style={{ marginBottom: spacing[3] }}>
+          <Text style={styles.fieldLabel}>Со склада (подсобки)</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: spacing[2], paddingRight: spacing[2] }}
           >
-            <Ionicons name="close" size={20} color={colors.gray[700]} />
-          </TouchableOpacity>
-          <Text style={styles.sheetTitle}>Выдать имущество</Text>
-          <TouchableOpacity
-            onPress={handleSubmit}
-            disabled={issueMut.isPending}
-            hitSlop={12}
-            style={styles.sheetPrimaryBtn}
-          >
-            <Text style={styles.sheetPrimaryText}>{issueMut.isPending ? '...' : 'Выдать'}</Text>
-          </TouchableOpacity>
+            {storageItems
+              .filter((s: any) => s.quantity > 0)
+              .map((s: any) => (
+                <TouchableOpacity
+                  key={s.id}
+                  onPress={() => pickFromStorage(s)}
+                  style={styles.storageChip}
+                >
+                  <Text style={styles.storageChipName} numberOfLines={1}>
+                    {s.name}
+                  </Text>
+                  <Text style={styles.storageChipMeta}>
+                    {formatMoney(s.purchasePrice)} · {s.quantity} шт
+                  </Text>
+                </TouchableOpacity>
+              ))}
+          </ScrollView>
         </View>
+      )}
 
-        <ScrollView
-          contentContainerStyle={styles.sheetBody}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {storageItems.length > 0 && (
-            <View style={{ marginBottom: spacing[3] }}>
-              <Text style={styles.fieldLabel}>Со склада (подсобки)</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: spacing[2], paddingRight: spacing[2] }}
-              >
-                {storageItems
-                  .filter((s: any) => s.quantity > 0)
-                  .map((s: any) => (
-                    <TouchableOpacity
-                      key={s.id}
-                      onPress={() => pickFromStorage(s)}
-                      style={styles.storageChip}
-                    >
-                      <Text style={styles.storageChipName} numberOfLines={1}>
-                        {s.name}
-                      </Text>
-                      <Text style={styles.storageChipMeta}>
-                        {formatMoney(s.purchasePrice)} · {s.quantity} шт
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-              </ScrollView>
-            </View>
-          )}
+      <Text style={styles.fieldLabel}>Название</Text>
+      <TextInput
+        value={name}
+        onChangeText={setName}
+        style={styles.input}
+        placeholder="Набор ключей"
+        placeholderTextColor={colors.gray[400]}
+      />
 
-          <Text style={styles.fieldLabel}>Название</Text>
+      <View style={styles.row2}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.fieldLabel}>Стоимость, ₽</Text>
           <TextInput
-            value={name}
-            onChangeText={setName}
+            value={cost}
+            onChangeText={setCost}
             style={styles.input}
-            placeholder="Набор ключей"
+            placeholder="0"
+            placeholderTextColor={colors.gray[400]}
+            keyboardType="numeric"
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.fieldLabel}>Срок, мес.</Text>
+          <TextInput
+            value={serviceLife}
+            onChangeText={setServiceLife}
+            style={styles.input}
+            placeholder="12"
+            placeholderTextColor={colors.gray[400]}
+            keyboardType="numeric"
+          />
+        </View>
+      </View>
+
+      <Text style={styles.fieldLabel}>Категория</Text>
+      <View style={styles.catRow}>
+        {(
+          [
+            { k: 'tools', l: 'Инструменты' },
+            { k: 'uniform', l: 'Форма' },
+            { k: 'other', l: 'Прочее' },
+          ] as { k: CategoryType; l: string }[]
+        ).map((ct) => (
+          <TouchableOpacity
+            key={ct.k}
+            onPress={() => {
+              haptic('select');
+              setCategoryType(ct.k);
+            }}
+            style={[styles.catBtn, categoryType === ct.k && styles.catBtnActive]}
+          >
+            <Text
+              style={[
+                styles.catBtnText,
+                categoryType === ct.k && { color: colors.primary[700] },
+              ]}
+            >
+              {ct.l}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.fieldLabel}>Фото</Text>
+      <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn} activeOpacity={0.85}>
+        {photo ? (
+          <CachedImage source={{ uri: photo }} style={styles.photoPickImg} />
+        ) : (
+          <>
+            <Ionicons name="camera-outline" size={22} color={colors.gray[400]} />
+            <Text style={styles.photoPickHint}>Выбрать</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </CenteredDialog>
+  );
+}
+
+// ─── Create-folder dialog (Storage root FAB) ───────────────────────────────
+function CreateFolderDialog({
+  visible,
+  onClose,
+}: {
+  visible: boolean;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+
+  const createMut = useMutation({
+    mutationFn: (n: string) => equipmentApi.createCategory({ name: n }),
+    onSuccess: () => {
+      haptic('success');
+      qc.invalidateQueries({ queryKey: ['eq-cats'] });
+      setName('');
+      onClose();
+    },
+    onError: () => haptic('error'),
+  });
+
+  const submit = () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      Alert.alert('Ошибка', 'Введите название папки');
+      return;
+    }
+    createMut.mutate(trimmed);
+  };
+
+  return (
+    <CenteredDialog
+      visible={visible}
+      title="Новая папка"
+      onClose={() => {
+        setName('');
+        onClose();
+      }}
+      primaryText={createMut.isPending ? 'Создание…' : 'Создать'}
+      primaryDisabled={createMut.isPending}
+      onPrimaryPress={submit}
+      showCancel
+    >
+      <Text style={styles.fieldLabel}>Название</Text>
+      <TextInput
+        value={name}
+        onChangeText={setName}
+        style={styles.input}
+        placeholder="Инструменты"
+        placeholderTextColor={colors.gray[400]}
+        autoFocus
+        returnKeyType="done"
+        onSubmitEditing={submit}
+      />
+    </CenteredDialog>
+  );
+}
+
+// ─── Create-storage-item dialog (Storage folder FAB) ───────────────────────
+function CreateStorageItemDialog({
+  visible,
+  categoryId,
+  onClose,
+}: {
+  visible: boolean;
+  categoryId: string | null;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [purchasePrice, setPurchasePrice] = useState('');
+  const [quantity, setQuantity] = useState('1');
+  const [unit, setUnit] = useState('шт');
+  const [serviceLife, setServiceLife] = useState('');
+  const [photo, setPhoto] = useState('');
+
+  const createMut = useMutation({
+    mutationFn: (data: any) => equipmentApi.createStorageItem(data),
+    onSuccess: () => {
+      haptic('success');
+      qc.invalidateQueries({ queryKey: ['eq-storage'] });
+      qc.invalidateQueries({ queryKey: ['eq-storage-list'] });
+      setName('');
+      setPurchasePrice('');
+      setQuantity('1');
+      setUnit('шт');
+      setServiceLife('');
+      setPhoto('');
+      onClose();
+    },
+    onError: () => haptic('error'),
+  });
+
+  const pickPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const uploaded = await uploadsApi.upload(result.assets[0].uri, 'equipment.jpg');
+      setPhoto(uploaded.data.url);
+    }
+  };
+
+  const submit = () => {
+    if (!name.trim()) {
+      Alert.alert('Ошибка', 'Введите название');
+      return;
+    }
+    createMut.mutate({
+      name: name.trim(),
+      categoryId: categoryId || undefined,
+      purchasePrice: parseFloat(purchasePrice) || 0,
+      quantity: parseFloat(quantity) || 0,
+      unit: unit.trim() || 'шт',
+      serviceLifeMonths: parseInt(serviceLife, 10) || undefined,
+      photo: photo || undefined,
+    });
+  };
+
+  return (
+    <CenteredDialog
+      visible={visible}
+      title="Новый предмет"
+      onClose={() => {
+        setName('');
+        setPurchasePrice('');
+        setQuantity('1');
+        setUnit('шт');
+        setServiceLife('');
+        setPhoto('');
+        onClose();
+      }}
+      primaryText={createMut.isPending ? 'Создание…' : 'Создать'}
+      primaryDisabled={createMut.isPending}
+      onPrimaryPress={submit}
+      showCancel
+    >
+      <Text style={styles.fieldLabel}>Название</Text>
+      <TextInput
+        value={name}
+        onChangeText={setName}
+        style={styles.input}
+        placeholder="Набор ключей"
+        placeholderTextColor={colors.gray[400]}
+      />
+
+      <View style={styles.row2}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.fieldLabel}>Цена, ₽</Text>
+          <TextInput
+            value={purchasePrice}
+            onChangeText={setPurchasePrice}
+            style={styles.input}
+            placeholder="0"
+            placeholderTextColor={colors.gray[400]}
+            keyboardType="numeric"
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.fieldLabel}>Срок, мес.</Text>
+          <TextInput
+            value={serviceLife}
+            onChangeText={setServiceLife}
+            style={styles.input}
+            placeholder="12"
+            placeholderTextColor={colors.gray[400]}
+            keyboardType="numeric"
+          />
+        </View>
+      </View>
+
+      <View style={styles.row2}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.fieldLabel}>Количество</Text>
+          <TextInput
+            value={quantity}
+            onChangeText={setQuantity}
+            style={styles.input}
+            placeholder="1"
+            placeholderTextColor={colors.gray[400]}
+            keyboardType="numeric"
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.fieldLabel}>Единица</Text>
+          <TextInput
+            value={unit}
+            onChangeText={setUnit}
+            style={styles.input}
+            placeholder="шт"
             placeholderTextColor={colors.gray[400]}
           />
+        </View>
+      </View>
 
-          <View style={styles.row2}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Стоимость, ₽</Text>
-              <TextInput
-                value={cost}
-                onChangeText={setCost}
-                style={styles.input}
-                placeholder="0"
-                placeholderTextColor={colors.gray[400]}
-                keyboardType="numeric"
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fieldLabel}>Срок, мес.</Text>
-              <TextInput
-                value={serviceLife}
-                onChangeText={setServiceLife}
-                style={styles.input}
-                placeholder="12"
-                placeholderTextColor={colors.gray[400]}
-                keyboardType="numeric"
-              />
-            </View>
-          </View>
+      <Text style={styles.fieldLabel}>Фото</Text>
+      <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn} activeOpacity={0.85}>
+        {photo ? (
+          <CachedImage source={{ uri: photo }} style={styles.photoPickImg} />
+        ) : (
+          <>
+            <Ionicons name="camera-outline" size={22} color={colors.gray[400]} />
+            <Text style={styles.photoPickHint}>Выбрать</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </CenteredDialog>
+  );
+}
 
-          <Text style={styles.fieldLabel}>Категория</Text>
-          <View style={styles.catRow}>
-            {(
-              [
-                { k: 'tools', l: 'Инструменты' },
-                { k: 'uniform', l: 'Форма' },
-                { k: 'other', l: 'Прочее' },
-              ] as { k: CategoryType; l: string }[]
-            ).map((ct) => (
-              <TouchableOpacity
-                key={ct.k}
-                onPress={() => {
-                  haptic('select');
-                  setCategoryType(ct.k);
-                }}
-                style={[styles.catBtn, categoryType === ct.k && styles.catBtnActive]}
-              >
-                <Text
-                  style={[
-                    styles.catBtnText,
-                    categoryType === ct.k && { color: colors.primary[700] },
-                  ]}
+// ─── Trash dialog (opened from header trailing icon) ───────────────────────
+function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data: items = [] } = useQuery({
+    queryKey: ['eq-trash'],
+    queryFn: async () => (await equipmentApi.getTrash()).data,
+    enabled: visible,
+  });
+
+  const restoreMut = useMutation({
+    mutationFn: (id: string) => equipmentApi.restore(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['eq-trash'] });
+      qc.invalidateQueries({ queryKey: ['eq-summary'] });
+    },
+  });
+
+  return (
+    <CenteredDialog visible={visible} title="Корзина" onClose={onClose}>
+      {items.length === 0 ? (
+        <Text style={styles.emptyText}>Корзина пуста</Text>
+      ) : (
+        <View style={{ gap: spacing[2] }}>
+          {items.map((item: any) => {
+            const daysLeft = item.trashExpiresAt
+              ? Math.max(0, Math.ceil((new Date(item.trashExpiresAt).getTime() - Date.now()) / 86400000))
+              : '?';
+            return (
+              <View key={item.id} style={[styles.equipItem, { opacity: 0.85 }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.equipName}>{item.name}</Text>
+                  <Text style={styles.equipMeta}>
+                    {item.userName} · {formatMoney(item.cost)} · {daysLeft}д
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    haptic('tap');
+                    restoreMut.mutate(item.id);
+                  }}
+                  style={styles.equipBtn}
                 >
-                  {ct.l}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <Text style={styles.fieldLabel}>Фото</Text>
-          <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn} activeOpacity={0.85}>
-            {photo ? (
-              <CachedImage source={{ uri: photo }} style={styles.photoPickImg} />
-            ) : (
-              <>
-                <Ionicons name="camera-outline" size={22} color={colors.gray[400]} />
-                <Text style={styles.photoPickHint}>Выбрать</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </ScrollView>
-      </SafeAreaView>
-    </RNModal>
+                  <Ionicons name="arrow-undo" size={14} color={colors.green[500]} />
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </CenteredDialog>
   );
 }
 
 // ─── Storage tab ───────────────────────────────────────────────────────────
-function StorageTab() {
+function StorageTab({
+  canEdit,
+  fabOffsetBottom,
+}: {
+  canEdit: boolean;
+  fabOffsetBottom: number;
+}) {
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [showCreateFolder, setShowCreateFolder] = useState(false);
+  const [showCreateItem, setShowCreateItem] = useState(false);
 
   const { data: categories = [] } = useQuery({
     queryKey: ['eq-cats'],
@@ -591,117 +1115,139 @@ function StorageTab() {
     if (i.categoryId) catCounts[i.categoryId] = (catCounts[i.categoryId] || 0) + 1;
   });
 
+  // Both views share a single FAB. Its onPress depends on whether we're
+  // looking at the root folder list or have a folder open.
+  const renderFab = () => {
+    if (!canEdit) return null;
+    return (
+      <View
+        style={[
+          styles.fabWrap,
+          { bottom: fabOffsetBottom },
+        ]}
+        pointerEvents="box-none"
+      >
+        <PressableScale
+          onPress={() => {
+            haptic('impact');
+            if (selectedCat) setShowCreateItem(true);
+            else setShowCreateFolder(true);
+          }}
+          scaleTo={0.92}
+          hapticIntent={null}
+          style={styles.fab}
+        >
+          <Ionicons name="add" size={28} color={colors.white} />
+        </PressableScale>
+      </View>
+    );
+  };
+
   if (!selectedCat) {
     return (
-      <View style={{ gap: spacing[2] }}>
-        {categories.length === 0 ? (
-          <Text style={styles.emptyText}>Нет папок</Text>
-        ) : (
-          categories.map((c: any) => (
-            <TouchableOpacity
-              key={c.id}
-              onPress={() => setSelectedCat(c.id)}
-              style={styles.folderCard}
-            >
-              <View style={styles.folderIcon}>
-                <Ionicons name="folder" size={20} color={colors.amber[600]} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.folderName}>{c.name}</Text>
-                <Text style={styles.folderCount}>{catCounts[c.id] || 0} предметов</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
-            </TouchableOpacity>
-          ))
-        )}
-      </View>
+      <>
+        <View style={{ gap: spacing[2] }}>
+          {categories.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingVertical: spacing[10] }}>
+              <Ionicons name="folder-open-outline" size={40} color={colors.gray[200]} />
+              <Text style={{ fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] }}>
+                Нет папок
+              </Text>
+              {canEdit && (
+                <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginTop: 4 }}>
+                  Нажмите «+» внизу, чтобы создать первую
+                </Text>
+              )}
+            </View>
+          ) : (
+            categories.map((c: any) => (
+              <TouchableOpacity
+                key={c.id}
+                onPress={() => {
+                  haptic('tap');
+                  setSelectedCat(c.id);
+                }}
+                style={styles.folderCard}
+              >
+                <View style={styles.folderIcon}>
+                  <Ionicons name="folder" size={20} color={colors.amber[600]} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.folderName}>{c.name}</Text>
+                  <Text style={styles.folderCount}>{catCounts[c.id] || 0} предметов</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+        {renderFab()}
+        <CreateFolderDialog
+          visible={showCreateFolder}
+          onClose={() => setShowCreateFolder(false)}
+        />
+      </>
     );
   }
 
   return (
-    <View>
-      <TouchableOpacity
-        onPress={() => setSelectedCat(null)}
-        style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginBottom: spacing[3] }}
-      >
-        <Ionicons name="chevron-back" size={16} color={colors.gray[500]} />
-        <Text style={{ fontSize: fontSize.xs, color: colors.gray[500] }}>Назад к папкам</Text>
-      </TouchableOpacity>
-      {items.length === 0 ? (
-        <Text style={styles.emptyText}>Пусто</Text>
-      ) : (
-        items.map((item: any) => (
-          <View key={item.id} style={styles.equipItem}>
-            {item.photo ? (
-              <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
-                <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
-              </TouchableOpacity>
-            ) : (
-              <View
-                style={[
-                  styles.equipPhoto,
-                  { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
-                ]}
-              >
-                <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
-              </View>
+    <>
+      <View>
+        <TouchableOpacity
+          onPress={() => setSelectedCat(null)}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginBottom: spacing[3] }}
+        >
+          <Ionicons name="chevron-back" size={16} color={colors.gray[500]} />
+          <Text style={{ fontSize: fontSize.xs, color: colors.gray[500] }}>Назад к папкам</Text>
+        </TouchableOpacity>
+        {items.length === 0 ? (
+          <View style={{ alignItems: 'center', paddingVertical: spacing[10] }}>
+            <Ionicons name="cube-outline" size={40} color={colors.gray[200]} />
+            <Text style={{ fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] }}>
+              Пусто
+            </Text>
+            {canEdit && (
+              <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginTop: 4 }}>
+                Нажмите «+» внизу, чтобы добавить предмет
+              </Text>
             )}
-            <View style={{ flex: 1 }}>
-              <Text style={styles.equipName}>{item.name}</Text>
-              <Text style={styles.equipCost}>{formatMoney(item.purchasePrice)}</Text>
-              <Text style={styles.equipMeta}>
-                В наличии: {item.quantity} {item.unit}
-              </Text>
-            </View>
           </View>
-        ))
-      )}
-      {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
-    </View>
-  );
-}
-
-// ─── Trash tab ─────────────────────────────────────────────────────────────
-function TrashTab() {
-  const qc = useQueryClient();
-  const { data: items = [] } = useQuery({
-    queryKey: ['eq-trash'],
-    queryFn: async () => (await equipmentApi.getTrash()).data,
-  });
-
-  const restoreMut = useMutation({
-    mutationFn: (id: string) => equipmentApi.restore(id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['eq-trash'] });
-      qc.invalidateQueries({ queryKey: ['eq-summary'] });
-    },
-  });
-
-  if (items.length === 0) {
-    return <Text style={styles.emptyText}>Корзина пуста</Text>;
-  }
-
-  return (
-    <View style={{ gap: spacing[2] }}>
-      {items.map((item: any) => {
-        const daysLeft = item.trashExpiresAt
-          ? Math.max(0, Math.ceil((new Date(item.trashExpiresAt).getTime() - Date.now()) / 86400000))
-          : '?';
-        return (
-          <View key={item.id} style={[styles.equipItem, { opacity: 0.7 }]}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.equipName}>{item.name}</Text>
-              <Text style={styles.equipMeta}>
-                {item.userName} · {formatMoney(item.cost)} · {daysLeft}д
-              </Text>
+        ) : (
+          items.map((item: any) => (
+            <View key={item.id} style={styles.equipItem}>
+              {item.photo ? (
+                <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
+                  <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
+                </TouchableOpacity>
+              ) : (
+                <View
+                  style={[
+                    styles.equipPhoto,
+                    { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
+                  ]}
+                >
+                  <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.equipName}>{item.name}</Text>
+                <Text style={styles.equipCost}>{formatMoney(item.purchasePrice)}</Text>
+                <Text style={styles.equipMeta}>
+                  В наличии: {item.quantity} {item.unit}
+                </Text>
+              </View>
             </View>
-            <TouchableOpacity onPress={() => restoreMut.mutate(item.id)} style={styles.equipBtn}>
-              <Ionicons name="arrow-undo" size={14} color={colors.green[500]} />
-            </TouchableOpacity>
-          </View>
-        );
-      })}
-    </View>
+          ))
+        )}
+        {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
+      </View>
+      {renderFab()}
+      <CreateStorageItemDialog
+        visible={showCreateItem}
+        categoryId={selectedCat}
+        onClose={() => setShowCreateItem(false)}
+      />
+    </>
   );
 }
 
@@ -712,12 +1258,16 @@ export default function EquipmentScreen() {
   const tabBarHeight = useTabBarHeight();
   const { width: screenWidth } = useWindowDimensions();
   const [tab, setTab] = useState<Tab>('employees');
+  const [showTrash, setShowTrash] = useState(false);
 
   const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
   const isMaster = user?.role === 'master';
 
   // 2-column card width: (screen - left/right padding - gutter) / 2
   const cardWidth = Math.floor((screenWidth - SCREEN_PADDING * 2 - CARD_GUTTER) / 2);
+
+  // The storage-tab FAB needs to sit 16pt above the floating tab bar.
+  const fabOffsetBottom = tabBarHeight + spacing[4];
 
   const { data: summary = [] } = useQuery({
     queryKey: ['eq-summary'],
@@ -730,6 +1280,24 @@ export default function EquipmentScreen() {
     queryFn: async () => (await equipmentApi.getMyEquipment()).data,
     enabled: isMaster,
   });
+
+  const headerTrailing = useMemo(() => {
+    if (!canEdit) return undefined;
+    return (
+      <TouchableOpacity
+        onPress={() => {
+          haptic('tap');
+          setShowTrash(true);
+        }}
+        hitSlop={10}
+        style={styles.headerTrailingBtn}
+        accessibilityRole="button"
+        accessibilityLabel="Корзина"
+      >
+        <Ionicons name="trash-outline" size={22} color={colors.gray[700]} />
+      </TouchableOpacity>
+    );
+  }, [canEdit]);
 
   // ── Master view ──
   if (isMaster) {
@@ -768,42 +1336,25 @@ export default function EquipmentScreen() {
     );
   }
 
-  // ── Main: tabs + grid ──
-  // Сотрудник-детали раньше открывались через локальный `selectedEmp`
-  // state и рендерились inline. Теперь это отдельный экран в
-  // EquipmentStack (см. EquipmentEmployeeScreen ниже + AppNavigator),
-  // что даёт iOS edge-swipe slide-back назад к сетке. push() вместо
-  // navigate() чтобы каждое открытие создавало новый кадр стека.
+  // ── Main: segments + grid ──
+  // Employee deтail lives in a separate stack screen (EquipmentEmployeeScreen
+  // below + AppNavigator entry) — iOS edge-swipe slides back to the grid.
   return (
     <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
-      <IosScreenHeader title="Имущество" onBack={() => navigation.goBack()} />
+      <IosScreenHeader
+        title="Имущество"
+        onBack={() => navigation.goBack()}
+        trailing={headerTrailing}
+      />
 
-      <View style={styles.tabs}>
-        {(
-          [
-            { k: 'employees', l: 'Сотрудники', i: 'people' },
-            { k: 'storage', l: 'Подсобка', i: 'cube' },
-            { k: 'trash', l: 'Корзина', i: 'trash' },
-          ] as { k: Tab; l: string; i: any }[]
-        ).map((t) => (
-          <TouchableOpacity
-            key={t.k}
-            onPress={() => {
-              haptic('select');
-              setTab(t.k);
-            }}
-            style={[styles.tabBtn, tab === t.k && styles.tabBtnActive]}
-          >
-            <Ionicons name={t.i} size={14} color={tab === t.k ? colors.primary[600] : colors.gray[400]} />
-            <Text style={[styles.tabText, tab === t.k && { color: colors.primary[600] }]}>{t.l}</Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.segmentWrap}>
+        <SegmentedTabs value={tab} onChange={setTab} />
       </View>
 
       <ScrollView
         contentContainerStyle={{
           padding: SCREEN_PADDING,
-          paddingBottom: tabBarHeight + spacing[4],
+          paddingBottom: tabBarHeight + spacing[10], // give FAB room to sit above the last row
         }}
         showsVerticalScrollIndicator={false}
       >
@@ -823,19 +1374,17 @@ export default function EquipmentScreen() {
             )}
           </View>
         )}
-        {tab === 'storage' && <StorageTab />}
-        {tab === 'trash' && <TrashTab />}
+        {tab === 'storage' && (
+          <StorageTab canEdit={canEdit} fabOffsetBottom={fabOffsetBottom} />
+        )}
       </ScrollView>
+
+      <TrashDialog visible={showTrash} onClose={() => setShowTrash(false)} />
     </View>
   );
 }
 
 // ─── Employee detail screen (отдельный экран в EquipmentStack) ─────────────
-// Раньше эта детальная карточка рендерилась inline внутри EquipmentScreen
-// при наличии selectedEmp. Перенесли в отдельный экран навигатора —
-// теперь iOS edge-swipe слева возвращает к сетке сотрудников, как
-// привычно в любом нативном iOS-приложении. emp читается из route.params,
-// header кнопкой "Назад" зовёт navigation.goBack().
 export function EquipmentEmployeeScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
@@ -844,8 +1393,6 @@ export function EquipmentEmployeeScreen() {
   const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
 
   if (!emp) {
-    // Защита от случая, когда экран получили без params (deep-link и т.п.).
-    // На корне стека `goBack()` всё равно не пустой — выкинет на grid.
     return (
       <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
         <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
@@ -863,27 +1410,56 @@ export function EquipmentEmployeeScreen() {
 
 // ─── Styles ────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  tabs: {
-    flexDirection: 'row',
-    backgroundColor: colors.white,
-    paddingHorizontal: spacing[3],
-    paddingBottom: spacing[2],
-    gap: spacing[1.5],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
+  // ── Segmented control ──
+  segmentWrap: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[3],
+    paddingTop: spacing[1],
+    backgroundColor: 'transparent',
   },
-  tabBtn: {
-    flex: 1,
+  segmentTrack: {
     flexDirection: 'row',
+    backgroundColor: colors.gray[200],
+    borderRadius: 10,
+    padding: 2,
+    height: 32,
+  },
+  segmentBtn: {
+    flex: 1,
+    height: 28,
+    borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
-    paddingVertical: spacing[2],
-    borderRadius: borderRadius.lg,
-    backgroundColor: colors.gray[50],
+    paddingHorizontal: spacing[2],
   },
-  tabBtnActive: { backgroundColor: colors.primary[50], borderWidth: 1, borderColor: colors.primary[200] },
-  tabText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[400] },
+  segmentBtnActive: {
+    backgroundColor: colors.white,
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: colors.gray[600],
+    letterSpacing: -0.1,
+  },
+  segmentTextActive: {
+    color: colors.gray[900],
+    fontWeight: '600',
+  },
+
+  // ── Header trailing button (trash icon) ──
+  headerTrailingBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // ── Premium 2-col employee grid ──
   grid: {
@@ -895,7 +1471,6 @@ const styles = StyleSheet.create({
     borderRadius: CARD_RADIUS,
     overflow: 'hidden',
     backgroundColor: colors.gray[200],
-    // Soft shadow — readable elevation without being heavy.
     shadowColor: colors.black,
     shadowOpacity: 0.18,
     shadowRadius: 14,
@@ -914,7 +1489,6 @@ const styles = StyleSheet.create({
     letterSpacing: -1,
     opacity: 0.92,
   },
-  // Top-right amber pill — expired-items warning, kept in the new visual language.
   warnPill: {
     position: 'absolute',
     top: 10,
@@ -936,11 +1510,10 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
   },
-  // Frosted counter pills sit at the bottom-left, above the hero block.
   countersRow: {
     position: 'absolute',
     left: 10,
-    bottom: 78, // sits ABOVE the hero block (~hero height + gutter)
+    bottom: 78,
     flexDirection: 'row',
     gap: 6,
     flexWrap: 'wrap',
@@ -957,10 +1530,10 @@ const styles = StyleSheet.create({
   },
   pillTint: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.18)', // tone the iOS dark blur a touch
+    backgroundColor: 'rgba(0,0,0,0.18)',
   },
   pillAndroid: {
-    backgroundColor: 'rgba(0,0,0,0.42)', // translucent black on Android
+    backgroundColor: 'rgba(0,0,0,0.42)',
   },
   pillIcon: { fontSize: 11 },
   pillLabel: {
@@ -968,7 +1541,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
   },
-  // Hero text block.
   heroBlock: {
     position: 'absolute',
     left: 12,
@@ -1066,53 +1638,28 @@ const styles = StyleSheet.create({
   folderName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   folderCount: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
 
-  // ── Modal (pageSheet) ──
-  sheetRoot: {
-    flex: 1,
-    backgroundColor: colors.gray[50],
+  // ── FAB (bottom-right) ──
+  fabWrap: {
+    position: 'absolute',
+    right: spacing[4],
+    // bottom set inline (depends on tabBarHeight from the parent)
+    zIndex: 5,
   },
-  sheetHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
-    backgroundColor: colors.white,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.gray[200],
-  },
-  sheetIconBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.gray[100],
+  fab: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  sheetTitle: {
-    fontSize: 16,
-    fontWeight: fontWeight.bold,
-    color: colors.gray[900],
-    letterSpacing: -0.2,
-  },
-  sheetPrimaryBtn: {
-    paddingHorizontal: spacing[3],
-    paddingVertical: 6,
-    borderRadius: 14,
-    backgroundColor: colors.primary[600],
-  },
-  sheetPrimaryText: {
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: fontWeight.bold,
-    letterSpacing: -0.1,
-  },
-  sheetBody: {
-    padding: spacing[4],
-    paddingBottom: spacing[6],
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
   },
 
-  // ── Modal form fields ──
+  // ── Form fields (used in centered dialogs) ──
   fieldLabel: {
     fontSize: fontSize.xs,
     fontWeight: fontWeight.semibold,
@@ -1180,7 +1727,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
-  // ── Storage chips (horizontal scroll inside modal) ──
+  // ── Storage chips (horizontal scroll inside issue dialog) ──
   storageChip: {
     backgroundColor: colors.white,
     borderWidth: 1,
@@ -1230,3 +1777,4 @@ const styles = StyleSheet.create({
   },
   photoImage: { width: '90%', height: '85%' },
 });
+

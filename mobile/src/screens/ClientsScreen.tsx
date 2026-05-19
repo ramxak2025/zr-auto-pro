@@ -18,6 +18,7 @@ import { useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi } from '../api/services';
 import type { Car } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { processPlateMainInput } from '../utils/plateMask';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../../../shared/types';
 import SearchInput from '../components/SearchInput';
@@ -63,8 +64,11 @@ export default function ClientsScreen() {
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  // 'clients' = list of clients,  'cars' = same screen but car list below
-  const [mode, setMode] = useState<'clients' | 'cars'>('clients');
+  // 'clients' = list of clients, 'cars' = same screen but car list below.
+  // Default = 'cars' per product owner: when this screen opens the user is
+  // most often looking for a vehicle (e.g. госномер of a car about to be
+  // serviced), not a person — surface cars first.
+  const [mode, setMode] = useState<'cars' | 'clients'>('cars');
 
   // Cars query — only fires while mode === 'cars' so we don't waste bandwidth
   const carsQuery = useQuery<{ data: Car[]; total: number } | Car[]>({
@@ -220,10 +224,16 @@ export default function ClientsScreen() {
 
   const renderClient = ({ item }: { item: Client; index: number }) => {
     // Pinned retail buyer — same row geometry, branded icon instead of
-    // initials so it reads as a "system" entry above the alphabet.
+    // initials so it reads as a "system" entry above the alphabet. Tap
+    // opens the virtual retail-buyer view (ClientDetail with id
+    // '__retail__') — list of all checks paid by walk-in retail.
     if (item.id === '__retail__') {
       return (
-        <View style={styles.row}>
+        <TouchableOpacity
+          style={styles.row}
+          activeOpacity={0.6}
+          onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
+        >
           <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
             <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
           </View>
@@ -232,10 +242,11 @@ export default function ClientsScreen() {
               {item.fullName}
             </Text>
             <Text style={styles.cardSub} numberOfLines={1}>
-              По умолчанию
+              Все чеки без клиента
             </Text>
           </View>
-        </View>
+          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: 4 }} />
+        </TouchableOpacity>
       );
     }
 
@@ -300,6 +311,7 @@ export default function ClientsScreen() {
     <View style={styles.safe}>
       <IosScreenHeader
         title="Клиенты"
+        onBack={() => navigation.goBack()}
         trailing={
           <TouchableOpacity style={styles.addBtn} onPress={openCreateModal}>
             <Text style={styles.addBtnText}>+ Новый</Text>
@@ -307,12 +319,26 @@ export default function ClientsScreen() {
         }
       />
 
-      {/* Clients ⇄ Cars — single screen with an in-place segmented control.
+      {/* Авто ⇄ Клиенты — single screen with an in-place segmented control.
           Tapping a tab swaps which list is rendered below; no navigation,
           no full-screen transition, no animation. The search bar is shared
-          (its placeholder updates per mode). */}
+          (its placeholder updates per mode). Order: Авто first, Клиенты
+          second — opening this screen, the user is usually scanning for a
+          car (госномер) rather than a person. */}
       <View style={cnStyles.segmentWrap}>
         <View style={cnStyles.segment}>
+          <TouchableOpacity
+            style={[cnStyles.segmentItem, mode === 'cars' && cnStyles.segmentActive]}
+            onPress={() => {
+              setMode('cars');
+              setSearch('');
+              setPage(1);
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+          >
+            <Ionicons name="car-sport" size={14} color={mode === 'cars' ? colors.primary[700] : colors.gray[500]} />
+            <Text style={mode === 'cars' ? cnStyles.segmentLabelActive : cnStyles.segmentLabelInactive}>Авто</Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={[cnStyles.segmentItem, mode === 'clients' && cnStyles.segmentActive]}
             onPress={() => {
@@ -326,18 +352,6 @@ export default function ClientsScreen() {
             <Text style={mode === 'clients' ? cnStyles.segmentLabelActive : cnStyles.segmentLabelInactive}>
               Клиенты
             </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[cnStyles.segmentItem, mode === 'cars' && cnStyles.segmentActive]}
-            onPress={() => {
-              setMode('cars');
-              setSearch('');
-              setPage(1);
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-          >
-            <Ionicons name="car-sport" size={14} color={mode === 'cars' ? colors.primary[700] : colors.gray[500]} />
-            <Text style={mode === 'cars' ? cnStyles.segmentLabelActive : cnStyles.segmentLabelInactive}>Авто</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -361,40 +375,79 @@ export default function ClientsScreen() {
         // SWR keeps it visible across filter changes — no flash.
         carsQuery.data === undefined ? (
           <ListSkeleton count={8} />
-        ) : carsList.length === 0 && !carsQuery.isLoading ? (
-          <EmptyState
-            title="Нет автомобилей"
-            description={search ? 'Ничего не найдено' : 'Добавьте машину к клиенту'}
-          />
+        ) : carsList.length === 0 && !carsQuery.isLoading && !!search ? (
+          <EmptyState title="Нет автомобилей" description="Ничего не найдено" />
         ) : (
           <FlashList
-            data={carsList}
+            // Pin "Розничный покупатель" at the top of the cars list when
+            // not searching. It's the new default landing tab; the retail
+            // buyer is the most common "client" by check volume in most
+            // тенантах, so it should be one tap away. A sentinel object
+            // with id === '__retail__' is rendered with a branded row
+            // (storefront icon) and routes to ClientDetail/__retail__,
+            // which the detail screen treats as a virtual retail buyer
+            // entity (all checks paid by walk-in retail).
+            data={
+              !search
+                ? ([{ id: '__retail__' } as unknown as Car, ...carsList])
+                : carsList
+            }
             keyExtractor={(item: Car) => item.id}
-            renderItem={({ item }: { item: Car }) => (
-              <View style={cnStyles.carRow}>
-                <View style={cnStyles.carIconBox}>
-                  <Ionicons name="car-sport-outline" size={18} color={colors.primary[600]} />
-                </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={cnStyles.carName} numberOfLines={1}>
-                    {item.makeModel || '—'}
-                  </Text>
-                  {item.plateNumber && (
-                    <View style={cnStyles.platePill}>
-                      <Text style={cnStyles.platePillText}>{item.plateNumber}</Text>
+            renderItem={({ item }: { item: Car }) => {
+              if (item.id === '__retail__') {
+                return (
+                  <TouchableOpacity
+                    style={cnStyles.carRow}
+                    activeOpacity={0.6}
+                    onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
+                  >
+                    <View style={[cnStyles.carIconBox, { backgroundColor: colors.primary[50] }]}>
+                      <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
                     </View>
-                  )}
-                </View>
-                {item.client?.fullName && (
-                  <TouchableOpacity onPress={() => navigation.navigate('ClientDetail', { id: item.client!.id })}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={cnStyles.carName} numberOfLines={1}>
+                        Розничный покупатель
+                      </Text>
+                      <Text style={cnStyles.carClient} numberOfLines={1}>
+                        Все чеки без клиента
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                  </TouchableOpacity>
+                );
+              }
+              return (
+                <TouchableOpacity
+                  style={cnStyles.carRow}
+                  activeOpacity={0.6}
+                  onPress={() => {
+                    if (item.client?.id) {
+                      navigation.navigate('ClientDetail', { id: item.client.id });
+                    }
+                  }}
+                >
+                  <View style={cnStyles.carIconBox}>
+                    <Ionicons name="car-sport-outline" size={18} color={colors.primary[600]} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={cnStyles.carName} numberOfLines={1}>
+                      {item.makeModel || '—'}
+                    </Text>
+                    {item.plateNumber && (
+                      <View style={cnStyles.platePill}>
+                        <Text style={cnStyles.platePillText}>{item.plateNumber}</Text>
+                      </View>
+                    )}
+                  </View>
+                  {item.client?.fullName && (
                     <Text style={cnStyles.carClient} numberOfLines={1}>
                       {item.client.fullName}
                     </Text>
-                  </TouchableOpacity>
-                )}
-                <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
-              </View>
-            )}
+                  )}
+                  <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                </TouchableOpacity>
+              );
+            }}
             contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
