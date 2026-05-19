@@ -1240,57 +1240,57 @@ function TodayTab() {
     if (note.includes('больнич'))
       return {
         label: 'Больничный',
-        color: colors.rose[500],
-        icon: 'medkit-outline' as const,
+        emoji: '🤒',
+        color: colors.rose[700],
         bgColor: colors.rose[50],
-        accentColor: colors.rose[400],
+        borderColor: colors.rose[400],
       };
     if (s.isDayOff)
       return {
         label: 'Выходной',
-        color: colors.gray[500],
-        icon: 'moon-outline' as const,
+        emoji: '😴',
+        color: colors.gray[600],
         bgColor: colors.gray[100],
-        accentColor: colors.gray[400],
+        borderColor: colors.gray[300],
       };
     if (s.lateStatus === 'late_major')
       return {
-        label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. >1ч',
-        color: colors.orange[500],
-        icon: 'warning' as const,
+        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание >1ч',
+        emoji: '🚨',
+        color: colors.orange[700],
         bgColor: colors.orange[50],
-        accentColor: colors.orange[500],
+        borderColor: colors.orange[400],
       };
     if (s.lateStatus === 'late_minor')
       return {
-        label: s.lateMinutes ? `Опозд. ${s.lateMinutes} мин` : 'Опозд. <1ч',
-        color: colors.yellow[600],
-        icon: 'alarm' as const,
+        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание <1ч',
+        emoji: '⏰',
+        color: colors.yellow[700],
         bgColor: colors.yellow[50],
-        accentColor: colors.yellow[500],
+        borderColor: colors.yellow[400],
       };
     if (s.isWorking)
       return {
         label: 'На смене',
-        color: colors.green[600],
-        icon: 'checkmark-circle' as const,
+        emoji: '✅',
+        color: colors.green[700],
         bgColor: colors.green[50],
-        accentColor: colors.green[500],
+        borderColor: colors.green[300],
       };
     if (s.hasSchedule && !s.isDayOff)
       return {
         label: 'Прогул',
-        color: colors.red[500],
-        icon: 'close-circle' as const,
+        emoji: '❌',
+        color: colors.red[700],
         bgColor: colors.red[50],
-        accentColor: colors.red[500],
+        borderColor: colors.red[300],
       };
     return {
-      label: '—',
-      color: colors.gray[400],
-      icon: 'remove-outline' as const,
+      label: 'Нет смены',
+      emoji: '➖',
+      color: colors.gray[500],
       bgColor: colors.gray[50],
-      accentColor: colors.gray[300],
+      borderColor: colors.gray[200],
     };
   };
 
@@ -1368,39 +1368,37 @@ function TodayTab() {
           const info = getStatusInfo(s);
           return (
             <AnimatedCard key={s.userId} index={idx + 2} onPress={() => openEmployee(navigation, s.userId)}>
-              <View style={styles.todayCard}>
-                <View style={[styles.todayCardAccent, { backgroundColor: info.accentColor }]} />
+              <View
+                style={[
+                  styles.todayCard,
+                  {
+                    backgroundColor: info.bgColor,
+                    borderColor: info.borderColor,
+                  },
+                ]}
+              >
                 <View style={styles.todayCardContent}>
-                  <View style={[styles.todayStatusIcon, { backgroundColor: info.bgColor }]}>
-                    <Ionicons name={info.icon} size={20} color={info.color} />
-                  </View>
+                  <Text style={styles.todayEmoji}>{info.emoji}</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.todayName}>{s.fullName}</Text>
+                    <Text style={[styles.todayName, { color: info.color }]}>{s.fullName}</Text>
+                    <Text style={[styles.todayStatusLabel, { color: info.color }]}>{info.label}</Text>
                     <View style={styles.todayInfoRow}>
                       {s.shiftStart && s.shiftEnd && (
-                        <View style={styles.todayShiftPill}>
-                          <Ionicons name="time-outline" size={10} color={colors.gray[500]} />
-                          <Text style={styles.todayShift}>
-                            {s.shiftStart} — {s.shiftEnd}
-                          </Text>
-                        </View>
+                        <Text style={[styles.todayShift, { color: info.color }]}>
+                          {s.shiftStart} — {s.shiftEnd}
+                        </Text>
                       )}
                       {s.actualArrival && (
-                        <View style={[styles.todayShiftPill, { backgroundColor: colors.primary[50] }]}>
-                          <Ionicons name="enter-outline" size={10} color={colors.primary[600]} />
-                          <Text style={[styles.todayShift, { color: colors.primary[600] }]}>
-                            {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </Text>
-                        </View>
+                        <Text style={[styles.todayShift, { color: info.color }]}>
+                          {'  ·  '}пришёл{' '}
+                          {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </Text>
                       )}
                     </View>
-                    {s.note && <Text style={styles.todayNote}>{s.note}</Text>}
-                  </View>
-                  <View style={[styles.todayStatusBadge, { backgroundColor: info.bgColor }]}>
-                    <Text style={[styles.todayStatusText, { color: info.color }]}>{info.label}</Text>
+                    {s.note ? <Text style={[styles.todayNote, { color: info.color }]}>{s.note}</Text> : null}
                   </View>
                 </View>
               </View>
@@ -2796,71 +2794,49 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
   },
   todayCard: {
-    backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
     overflow: 'hidden',
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  todayCardAccent: {
-    height: 3,
-    width: '100%',
   },
   todayCardContent: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    padding: spacing[3.5],
+    paddingVertical: spacing[3.5],
+    paddingHorizontal: spacing[4],
   },
-  todayStatusIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
+  todayEmoji: {
+    fontSize: 32,
+    lineHeight: 38,
   },
   todayName: {
-    fontSize: fontSize.sm,
+    fontSize: 16,
     fontWeight: fontWeight.semibold,
-    color: colors.gray[900],
+    letterSpacing: -0.2,
+  },
+  todayStatusLabel: {
+    fontSize: 15,
+    fontWeight: fontWeight.bold,
+    marginTop: 2,
+    letterSpacing: -0.1,
+    opacity: 0.95,
   },
   todayInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1.5],
-    marginTop: spacing[1],
-  },
-  todayShiftPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: colors.gray[50],
-    paddingHorizontal: spacing[1.5],
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
+    marginTop: 4,
+    flexWrap: 'wrap',
   },
   todayShift: {
-    fontSize: 10,
-    color: colors.gray[500],
+    fontSize: 13,
     fontWeight: fontWeight.medium,
+    opacity: 0.75,
   },
   todayNote: {
-    fontSize: fontSize.xs,
-    color: colors.gray[500],
+    fontSize: 13,
     fontStyle: 'italic',
-    marginTop: spacing[1],
-  },
-  todayStatusBadge: {
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: spacing[1],
-    borderRadius: borderRadius.full,
-  },
-  todayStatusText: {
-    fontSize: 10,
-    fontWeight: fontWeight.bold,
+    marginTop: 4,
+    opacity: 0.75,
   },
 
   // ── Shifts Stats ──
