@@ -10,7 +10,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import { colors } from '../theme';
 
 const KASSA_SIZE = 62;
@@ -101,7 +101,13 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     width: KASSA_SIZE + 4,
     height: KASSA_SIZE + 4,
-    marginTop: -28,
+    // iOS: pop the button up out of the slim 60pt floating bar so it
+    // reads as a central FAB-style CTA.
+    // Android: M3 NavigationBar is 80pt tall — keep the button inside
+    // the bar so the surface remains a clean 80pt rectangle (no FAB
+    // cut-out), which is the M3-compatible way to render a strongly
+    // branded center action.
+    marginTop: Platform.OS === 'ios' ? -28 : 0,
   },
   body: {
     width: KASSA_SIZE,
