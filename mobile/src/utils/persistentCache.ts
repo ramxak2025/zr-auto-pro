@@ -89,6 +89,14 @@ const PERSISTED_KEYS = [
   // CashFlowScreen + ReportsScreen finance reads.
   'cashflow',
   'financial-report',
+  // ExpensesScreen — list + categories. Categories are user-defined but
+  // change rarely (hours to days), so caching them eliminates the
+  // expense-modal flash where the picker was empty for a moment after
+  // tapping "+ Новый". `expenses` itself is keyed by (dateFrom, dateTo)
+  // and most users land on the same default period, so caching the
+  // "month" snapshot keeps the screen instant on cold start.
+  'expenses',
+  'expense-categories',
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];
