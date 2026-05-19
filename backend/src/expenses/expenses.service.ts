@@ -67,6 +67,20 @@ export class ExpensesService {
   }
 
   async create(tenantID: string, userID: string, dto: any) {
+    // If a category is referenced, confirm it lives in the caller's tenant.
+    // Without this, a director could store an expense under a foreign
+    // tenant's category and have it surface in their own listing JOIN'd
+    // with that foreign name.
+    if (dto.categoryId) {
+      const { rows: catRows } = await this.pool.query(
+        'SELECT 1 FROM expense_categories WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [dto.categoryId, tenantID],
+      );
+      if (catRows.length === 0) {
+        throw new NotFoundException({ message: 'Категория расходов не найдена' });
+      }
+    }
+
     const { rows } = await this.pool.query(
       `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,

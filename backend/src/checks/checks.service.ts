@@ -1,12 +1,66 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+
+// Only tables we explicitly want to allow as targets of cross-tenant
+// assertions. Keeping this as an allow-list (not a string the caller
+// passes through) means even if a future refactor mistakenly forwards
+// user input as the table name, the helper rejects it.
+const TENANT_OWNED_TABLES = new Set(['users', 'clients', 'cars', 'services', 'products']);
 
 @Injectable()
 export class ChecksService {
   private readonly logger = new Logger('ChecksService');
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * Throw NotFoundException unless `id` exists in `table` AND belongs to the
+   * caller's `tenantID`. Used at the top of write operations to prevent a
+   * privileged caller from referencing rows from a foreign tenant.
+   *
+   * `table` is checked against TENANT_OWNED_TABLES — never interpolate user
+   * input here. The column is always `id` + `tenant_id` by convention.
+   */
+  private async assertOwnsByTenant(
+    client: PoolClient,
+    tenantID: string,
+    table: string,
+    id: string,
+    label: string,
+  ): Promise<void> {
+    if (!TENANT_OWNED_TABLES.has(table)) {
+      throw new InternalServerErrorException({ message: 'Internal assertion error' });
+    }
+    const { rows } = await client.query(
+      `SELECT 1 FROM ${table} WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+      [id, tenantID],
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException({ message: `${label} не найден` });
+    }
+  }
+
+  private async assertManyOwnedByTenant(
+    client: PoolClient,
+    tenantID: string,
+    table: string,
+    ids: string[],
+    label: string,
+  ): Promise<void> {
+    if (!TENANT_OWNED_TABLES.has(table)) {
+      throw new InternalServerErrorException({ message: 'Internal assertion error' });
+    }
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueIds.length === 0) return;
+    const { rows } = await client.query(
+      `SELECT id FROM ${table} WHERE id = ANY($1) AND tenant_id = $2`,
+      [uniqueIds, tenantID],
+    );
+    if (rows.length !== uniqueIds.length) {
+      throw new BadRequestException({ message: `${label} не найден или принадлежит другому автосервису` });
+    }
+  }
 
   private mapCheck(row: any) {
     return {
@@ -173,6 +227,41 @@ export class ChecksService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+
+      // ── Cross-tenant integrity guard ─────────────────────────────────
+      // Every referenced ID (master, client, car, services, products) MUST
+      // belong to the caller's tenant. Without this, a director from
+      // tenant A who knows a UUID from tenant B could persist a check
+      // with foreign references — the check would land in A's listing
+      // (because we set tenant_id from JWT) but JOINs would surface B's
+      // client name / car plate / product name to A's masters, and
+      // mutate B's product stock via the post-insert UPDATE.
+      await this.assertOwnsByTenant(client, tenantID, 'users', dto.masterId, 'Мастер');
+      if (dto.clientId) {
+        await this.assertOwnsByTenant(client, tenantID, 'clients', dto.clientId, 'Клиент');
+      }
+      if (dto.carId) {
+        await this.assertOwnsByTenant(client, tenantID, 'cars', dto.carId, 'Машина');
+      }
+      const referencedServiceIds: string[] = services
+        .map((s: any) => s.serviceId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (referencedServiceIds.length > 0) {
+        await this.assertManyOwnedByTenant(client, tenantID, 'services', referencedServiceIds, 'Услуга');
+      }
+      const referencedProductIds: string[] = products
+        .map((p: any) => p.productId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (referencedProductIds.length > 0) {
+        await this.assertManyOwnedByTenant(client, tenantID, 'products', referencedProductIds, 'Товар');
+      }
+      // Per-line master overrides too — masters live in users with tenant_id
+      const lineMasterIds: string[] = services
+        .map((s: any) => s.masterId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (lineMasterIds.length > 0) {
+        await this.assertManyOwnedByTenant(client, tenantID, 'users', lineMasterIds, 'Мастер');
+      }
 
       // Calculate service totals and salary
       let serviceTotal = 0;

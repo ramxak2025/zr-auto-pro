@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 
@@ -147,6 +147,19 @@ export class SalaryService {
   }
 
   async createPayment(tenantID: string, createdBy: string, dto: any) {
+    // Verify the target user belongs to the caller's tenant. Without this
+    // a director from tenant A could mint a "salary payment" against a
+    // user in tenant B — corrupting B's salary history with a foreign
+    // expense and creating an expense row in A under B's user_id.
+    const { rows: userTenantRows } = await this.pool.query(
+      'SELECT full_name FROM users WHERE id = $1 AND tenant_id = $2',
+      [dto.userId, tenantID],
+    );
+    if (userTenantRows.length === 0) {
+      throw new BadRequestException({ message: 'Сотрудник не найден' });
+    }
+    const userName = userTenantRows[0].full_name || 'Сотрудник';
+
     // 1. Insert salary payment
     const { rows: paymentRows } = await this.pool.query(
       `INSERT INTO salary_payments (tenant_id, user_id, amount, month_year, type, comment, created_by, date)
@@ -171,13 +184,6 @@ export class SalaryService {
       );
       categoryId = newCatRows[0].id;
     }
-
-    // 3. Get user name for expense description
-    const { rows: userRows } = await this.pool.query(
-      'SELECT full_name FROM users WHERE id = $1',
-      [dto.userId],
-    );
-    const userName = userRows[0]?.full_name || 'Сотрудник';
 
     // Format month_year for description (e.g., "2026-02" -> "Февраль 2026")
     const monthNames = [

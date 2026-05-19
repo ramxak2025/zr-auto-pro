@@ -201,6 +201,18 @@ export class SuppliersService {
     try {
       await client.query('BEGIN');
 
+      // Verify the supplier belongs to the caller's tenant BEFORE anything
+      // else. Without this, a director could craft a request with a
+      // supplierId from another tenant and corrupt that supplier's totals
+      // (the post-insert UPDATE suppliers used to omit tenant_id).
+      const { rows: supRows } = await client.query(
+        'SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [dto.supplierId, tenantID],
+      );
+      if (supRows.length === 0) {
+        throw new BadRequestException({ message: 'Поставщик не найден' });
+      }
+
       let totalAmount = 0;
       for (const item of dto.items) {
         totalAmount += (item.price || 0) * (item.quantity || 0);
@@ -234,11 +246,13 @@ export class SuppliersService {
         }
       }
 
-      // Update supplier totals
+      // Update supplier totals — tenant_id filter mirrors the upfront check
+      // above. Belt and suspenders so a future refactor can't drop the
+      // assertion without also losing the WHERE clause.
       await client.query(
         `UPDATE suppliers SET total_purchases = total_purchases + $1, current_debt = current_debt + $1
-         WHERE id = $2`,
-        [totalAmount, dto.supplierId],
+         WHERE id = $2 AND tenant_id = $3`,
+        [totalAmount, dto.supplierId, tenantID],
       );
 
       await client.query('COMMIT');
@@ -288,6 +302,16 @@ export class SuppliersService {
     try {
       await client.query('BEGIN');
 
+      // Same cross-tenant guard as createDelivery — verify the supplier
+      // lives in the caller's tenant before recording a payment against it.
+      const { rows: supRows } = await client.query(
+        'SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        [dto.supplierId, tenantID],
+      );
+      if (supRows.length === 0) {
+        throw new BadRequestException({ message: 'Поставщик не найден' });
+      }
+
       const { rows } = await client.query(
         `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id)
          VALUES ($1, $2, $3, $4, $5) RETURNING id`,
@@ -296,14 +320,15 @@ export class SuppliersService {
 
       await client.query(
         `UPDATE suppliers SET total_paid = total_paid + $1, current_debt = current_debt - $1
-         WHERE id = $2`,
-        [dto.amount, dto.supplierId],
+         WHERE id = $2 AND tenant_id = $3`,
+        [dto.amount, dto.supplierId, tenantID],
       );
 
       await client.query('COMMIT');
       return { id: rows[0].id };
     } catch (err) {
       await client.query('ROLLBACK');
+      if (err instanceof BadRequestException) throw err;
       this.logger.error(`Payment create error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
