@@ -1079,7 +1079,12 @@ export default function ProductsScreen() {
           // ProductRow short-circuits re-renders when those props are
           // stable, which they are across SWR refetches.
           renderItem={renderProductItem}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[
+            styles.list,
+            // iOS uses contentInset; Android needs explicit
+            // paddingBottom or the last row sits under the M3 bar.
+            Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
+          ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView, Platform } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -733,7 +733,10 @@ export default function ChecksScreen() {
               data={checks}
               keyExtractor={(item) => item.id}
               renderItem={renderCheck}
-              contentContainerStyle={styles.list}
+              contentContainerStyle={[
+                styles.list,
+                Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
+              ]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
@@ -778,7 +781,10 @@ export default function ChecksScreen() {
               data={warehouseDocs}
               keyExtractor={(item) => (item.kind === 'movement' ? `m-${item.data.id}` : `d-${item.data.id}`)}
               renderItem={renderWarehouseDoc}
-              contentContainerStyle={styles.list}
+              contentContainerStyle={[
+                styles.list,
+                Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
+              ]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
@@ -1082,8 +1088,12 @@ const styles = StyleSheet.create({
   clearFiltersBtnText: { fontSize: fontSize.xs, color: colors.red[500], fontWeight: fontWeight.medium },
 
   // ── List ────────────────────────────────────────────────────────
-  // No paddingBottom — handled by contentInset on the FlashList so
-  // content visibly flows under the floating glass tab bar.
+  // iOS: bottom space reserved via FlashList's contentInset prop so
+  // the floating Liquid Glass bar shows live content scrolling under
+  // it. Android: contentInset is silently ignored by the platform, so
+  // we add an explicit paddingBottom equal to the M3 NavigationBar
+  // height (added inline at the FlashList consumers below to avoid
+  // hard-coding the bar height here).
   list: { paddingHorizontal: spacing[4] },
 
   // Date group headers

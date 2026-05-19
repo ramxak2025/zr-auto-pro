@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator, Platform } from 'react-native';
 import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -300,7 +300,14 @@ export default function MoreScreen() {
   return (
     <View style={styles.safe}>
       <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingTop: insetsTop + spacing[3] }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingTop: insetsTop + spacing[3],
+            // Android: contentInset is ignored; reserve bar space here.
+            paddingBottom: Platform.OS === 'ios' ? undefined : tabBarHeight,
+          },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}

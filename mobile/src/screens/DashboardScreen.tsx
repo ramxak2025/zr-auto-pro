@@ -10,6 +10,7 @@ import {
   Animated,
   Dimensions,
   PanResponder,
+  Platform,
   Pressable,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
@@ -1858,7 +1859,17 @@ export default function DashboardScreen() {
     <View style={styles.safe}>
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingTop: insetsTop + spacing[2] }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          {
+            paddingTop: insetsTop + spacing[2],
+            // iOS reserves bottom space via contentInset (lifts scroll
+            // indicator with content). Android ignores contentInset, so
+            // we add explicit padding so the last block doesn't sit
+            // under the M3 NavigationBar.
+            paddingBottom: Platform.OS === 'ios' ? undefined : tabBarHeight,
+          },
+        ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}

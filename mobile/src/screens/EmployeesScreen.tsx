@@ -17,7 +17,7 @@
  * управленческая практика.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, RefreshControl, Platform } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
@@ -316,7 +316,12 @@ export default function EmployeesScreen() {
           data={sortedUsers}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[
+            styles.list,
+            // Android: contentInset ignored; ensure the list clears
+            // the M3 NavigationBar (~80pt + system inset).
+            Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
+          ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
