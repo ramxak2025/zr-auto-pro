@@ -135,16 +135,36 @@ export class EquipmentService {
   }
 
   async issueToEmployee(tenantId: string, dto: any) {
+    // Refuse to issue equipment to a user that doesn't belong to this tenant.
+    // Otherwise a director could pin equipment records to a foreign user_id
+    // and have it appear in their tenant's listing tied to a name fetched
+    // via JOIN from another tenant's users row.
+    if (!dto.userId) {
+      throw new BadRequestException({ message: 'Сотрудник обязателен' });
+    }
+    const { rows: userRows } = await this.pool.query(
+      'SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+      [dto.userId, tenantId],
+    );
+    if (userRows.length === 0) {
+      throw new BadRequestException({ message: 'Сотрудник не найден' });
+    }
+
     const expiresAt = dto.serviceLifeMonths
       ? new Date(Date.now() + dto.serviceLifeMonths * 30 * 24 * 3600000).toISOString()
       : null;
 
     // Deduct from storage if linked
     if (dto.storageItemId) {
-      await this.pool.query(
+      const upd = await this.pool.query(
         `UPDATE storage_items SET quantity = GREATEST(quantity - 1, 0) WHERE id = $1 AND tenant_id = $2`,
         [dto.storageItemId, tenantId],
       );
+      if (upd.rowCount === 0) {
+        // Storage item is missing OR belongs to another tenant — refuse
+        // rather than silently issuing equipment without deducting stock.
+        throw new BadRequestException({ message: 'Склад: позиция не найдена' });
+      }
     }
 
     const { rows } = await this.pool.query(
@@ -164,22 +184,28 @@ export class EquipmentService {
     if (oldRows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
     const old = oldRows[0];
 
-    // Move old to chosen destination
+    // Move old to chosen destination. Every UPDATE here doubles up the
+    // tenant_id filter even though `old` is already verified to belong to
+    // the caller's tenant — belt and suspenders so a future refactor can't
+    // drop the upfront check without also losing the WHERE clause.
     if (dto.oldDestination === 'storage' && old.storage_item_id) {
       // Return to storage
       await this.pool.query(
-        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1', [old.storage_item_id],
+        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1 AND tenant_id = $2',
+        [old.storage_item_id, tenantId],
       );
       await this.pool.query(
-        `UPDATE equipment_issued SET status = 'returned', return_reason = $2, trashed_at = now() WHERE id = $1`,
-        [id, dto.reason || 'Возврат на склад'],
+        `UPDATE equipment_issued SET status = 'returned', return_reason = $3, trashed_at = now()
+         WHERE id = $1 AND tenant_id = $2`,
+        [id, tenantId, dto.reason || 'Возврат на склад'],
       );
     } else {
       // Trash old
       const trashExpires = new Date(Date.now() + 7 * 24 * 3600000).toISOString();
       await this.pool.query(
-        `UPDATE equipment_issued SET status = 'trashed', return_reason = $2, trashed_at = now(), trash_expires_at = $3 WHERE id = $1`,
-        [id, dto.reason || 'Замена', trashExpires],
+        `UPDATE equipment_issued SET status = 'trashed', return_reason = $3, trashed_at = now(), trash_expires_at = $4
+         WHERE id = $1 AND tenant_id = $2`,
+        [id, tenantId, dto.reason || 'Замена', trashExpires],
       );
     }
 
@@ -238,12 +264,14 @@ export class EquipmentService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
     if (rows[0].storage_item_id) {
       await this.pool.query(
-        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1', [rows[0].storage_item_id],
+        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1 AND tenant_id = $2',
+        [rows[0].storage_item_id, tenantId],
       );
     }
     await this.pool.query(
-      `UPDATE equipment_issued SET status = 'returned', return_reason = 'Возврат на склад', trashed_at = now() WHERE id = $1`,
-      [id],
+      `UPDATE equipment_issued SET status = 'returned', return_reason = 'Возврат на склад', trashed_at = now()
+       WHERE id = $1 AND tenant_id = $2`,
+      [id, tenantId],
     );
     return { message: 'Возвращено на склад' };
   }

@@ -1,10 +1,23 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 
 @Injectable()
 export class ScheduleService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  private async assertUserInTenant(userID: string, tenantID: string): Promise<void> {
+    if (!userID) {
+      throw new BadRequestException({ message: 'Сотрудник обязателен' });
+    }
+    const { rows } = await this.pool.query(
+      'SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+      [userID, tenantID],
+    );
+    if (rows.length === 0) {
+      throw new BadRequestException({ message: 'Сотрудник не найден' });
+    }
+  }
 
   private mapEntry(row: any) {
     const entry: any = {
@@ -153,6 +166,12 @@ export class ScheduleService {
   }
 
   async create(tenantID: string, dto: any) {
+    // Verify the schedule entry references a user inside the caller's tenant.
+    // Otherwise the entry lands with tenant_id from JWT but user_id from a
+    // foreign tenant — the schedule listing then JOIN's against that other
+    // tenant's user row.
+    await this.assertUserInTenant(dto.userId, tenantID);
+
     // Upsert — backed by unique index (tenant_id, user_id, date).
     // Prevents duplicate entries that caused attendance rating to count
     // a single day as multiple shifts.
