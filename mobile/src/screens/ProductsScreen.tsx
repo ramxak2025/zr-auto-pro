@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -110,6 +110,69 @@ const FolderRow = React.memo(function FolderRow({ folderName, count, hasLow, las
       )}
       <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
     </TouchableOpacity>
+  );
+});
+
+// ── ProductRow ────────────────────────────────────────────────────────
+// Memoised row for the warehouse list. Module-scope so `React.memo` can
+// short-circuit re-renders to "props unchanged" without per-screen
+// closure churn. Inline form was rebuilding the full subtree on every
+// parent render (search keystroke, SWR refetch, filter chip toggle).
+interface ProductRowProps {
+  item: Product;
+  index: number;
+  hideCategory: boolean;
+  canSeeCostPrice: boolean;
+  onOpenEdit: (product: Product) => void;
+  onOpenPhoto: (uri: string) => void;
+}
+const ProductRow = React.memo(function ProductRow({
+  item,
+  index,
+  hideCategory,
+  canSeeCostPrice,
+  onOpenEdit,
+  onOpenPhoto,
+}: ProductRowProps) {
+  const lowStock = item.stock <= item.minStock && item.minStock > 0;
+  const pUri = getImageUrl(item.photo);
+  return (
+    <AnimatedCard index={index} style={styles.productCard} onPress={() => onOpenEdit(item)}>
+      <View style={styles.productRow}>
+        <TouchableOpacity
+          onPress={() => {
+            if (pUri) onOpenPhoto(pUri);
+          }}
+        >
+          {pUri ? (
+            <CachedImage source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
+          ) : (
+            <View style={styles.productPhotoPlaceholder}>
+              <Ionicons name="cube-outline" size={22} color={colors.gray[300]} />
+            </View>
+          )}
+        </TouchableOpacity>
+        <View style={styles.productInfo}>
+          <Text style={styles.productName} numberOfLines={2}>
+            {item.name}
+          </Text>
+          {item.category && !hideCategory && (
+            <Text style={styles.productCategory}>{item.category.split('/').pop()}</Text>
+          )}
+          <View style={styles.productPrices}>
+            <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
+            {canSeeCostPrice && <Text style={styles.productCostPrice}>Себест. {formatMoney(item.costPrice)}</Text>}
+          </View>
+        </View>
+        <View style={styles.productStockWrap}>
+          {lowStock && (
+            <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
+          )}
+          <Text style={[styles.productStock, lowStock && styles.productStockLow]}>{item.stock}</Text>
+          <Text style={styles.productStockLabel}>шт</Text>
+        </View>
+      </View>
+    </AnimatedCard>
   );
 });
 
@@ -602,7 +665,11 @@ export default function ProductsScreen() {
     setModalOpen(true);
   };
 
-  const openEdit = (p: Product) => {
+  // useCallback so the row's onPress identity is stable across SWR
+  // refetches; otherwise React.memo on ProductRow can't short-circuit
+  // re-renders. Setters from useState are already stable so the deps
+  // array is intentionally empty.
+  const openEdit = useCallback((p: Product) => {
     setEditingProduct(p);
     setName(p.name);
     setCategory(p.category || '');
@@ -612,7 +679,7 @@ export default function ProductsScreen() {
     setMinStock(String(p.minStock));
     setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
     setModalOpen(true);
-  };
+  }, []);
 
   const closeModal = () => {
     setModalOpen(false);
@@ -897,6 +964,29 @@ export default function ProductsScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, sortedFolders, folderLastCheck]);
 
+  // Stable references for the warehouse FlashList — keys and render
+  // function. The renderItem indirection lets the memoised ProductRow
+  // do its own equality check on each item; the wrapper only re-creates
+  // when one of the captured props (search, canSeeCostPrice, handlers)
+  // actually changes.
+  const productKey = useCallback((item: Product) => item.id, []);
+  const renderProductItem = useCallback(
+    ({ item, index }: { item: Product; index: number }) => (
+      <ProductRow
+        item={item}
+        index={index}
+        hideCategory={!!search}
+        canSeeCostPrice={canSeeCostPrice}
+        onOpenEdit={openEdit}
+        onOpenPhoto={setFullscreenPhoto}
+      />
+    ),
+    // openEdit is recreated each render (uses local state), and search
+    // changes drive `hideCategory`. canSeeCostPrice is a stable bool.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [search, canSeeCostPrice, openEdit],
+  );
+
   return (
     <View style={styles.safe}>
       {/* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
@@ -981,57 +1071,13 @@ export default function ProductsScreen() {
       ) : (
         <FlashList
           data={currentProducts}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item, index }) => {
-            // Чистая product-row без swipe-actions (iter#12). Тап по
-            // строке открывает существующую edit-форму (тут же открывает
-            // её только тот, у кого есть warehouse_access — gate стоит
-            // на самом `openEdit`). Без swipe строка просто остаётся
-            // навигационной — это совпадает с поведением iOS Settings/Mail
-            // первого уровня списка.
-            const lowStock = item.stock <= item.minStock && item.minStock > 0;
-            const pUri = getImageUrl(item.photo);
-            return (
-              <AnimatedCard index={index} style={styles.productCard} onPress={() => openEdit(item)}>
-                <View style={styles.productRow}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      if (pUri) setFullscreenPhoto(pUri);
-                    }}
-                  >
-                    {pUri ? (
-                      <CachedImage source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
-                    ) : (
-                      <View style={styles.productPhotoPlaceholder}>
-                        <Ionicons name="cube-outline" size={22} color={colors.gray[300]} />
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                  <View style={styles.productInfo}>
-                    <Text style={styles.productName} numberOfLines={2}>
-                      {item.name}
-                    </Text>
-                    {item.category && !search && (
-                      <Text style={styles.productCategory}>{item.category.split('/').pop()}</Text>
-                    )}
-                    <View style={styles.productPrices}>
-                      <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
-                      {canSeeCostPrice && (
-                        <Text style={styles.productCostPrice}>Себест. {formatMoney(item.costPrice)}</Text>
-                      )}
-                    </View>
-                  </View>
-                  <View style={styles.productStockWrap}>
-                    {lowStock && (
-                      <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
-                    )}
-                    <Text style={[styles.productStock, lowStock && styles.productStockLow]}>{item.stock}</Text>
-                    <Text style={styles.productStockLabel}>шт</Text>
-                  </View>
-                </View>
-              </AnimatedCard>
-            );
-          }}
+          keyExtractor={productKey}
+          // Memoised module-level component renders the row; the
+          // wrapper here is only a closure that wires per-screen state
+          // (search, permissions, photo lightbox setter). React.memo on
+          // ProductRow short-circuits re-renders when those props are
+          // stable, which they are across SWR refetches.
+          renderItem={renderProductItem}
           contentContainerStyle={styles.list}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
