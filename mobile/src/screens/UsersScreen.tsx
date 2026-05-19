@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -131,6 +131,109 @@ interface UserForm {
   permissions: UserPermissions;
 }
 
+// ── UserCard ──────────────────────────────────────────────────────────
+// Module-scope memoised user row. Previously the entire user list was
+// re-rendered on every state change in UsersScreen (refresh toggle,
+// commission modal open, product search). Memo + stable callbacks
+// short-circuit unchanged rows.
+interface UserCardProps {
+  user: User;
+  index: number;
+  isDirectorOrSuperadmin: boolean;
+  canDelete: boolean;
+  badge: { bg: string; text: string };
+  roleLabel: string;
+  avatarUrl?: string | null;
+  onEdit: (user: User) => void;
+  onCommissions: (user: User) => void;
+  onAvatarChange: (userId: string) => void;
+  onDelete: (userId: string) => void;
+}
+const UserCard = React.memo(function UserCard({
+  user,
+  index,
+  isDirectorOrSuperadmin,
+  canDelete,
+  badge,
+  roleLabel,
+  avatarUrl,
+  onEdit,
+  onCommissions,
+  onAvatarChange,
+  onDelete,
+}: UserCardProps) {
+  return (
+    <AnimatedCard index={index} style={styles.userCard}>
+      <TouchableOpacity style={styles.userRow} onPress={() => onEdit(user)} activeOpacity={0.7}>
+        <View style={styles.avatarWrap}>
+          {avatarUrl ? (
+            <CachedImage source={{ uri: avatarUrl }} style={styles.avatarImage} />
+          ) : (
+            <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
+              <Text style={[styles.avatarText, { color: badge.text }]}>{user.fullName?.charAt(0) || 'U'}</Text>
+            </View>
+          )}
+          {isDirectorOrSuperadmin && (
+            <TouchableOpacity
+              style={styles.avatarCameraBtn}
+              onPress={() => onAvatarChange(user.id)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="camera" size={12} color={colors.white} />
+            </TouchableOpacity>
+          )}
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+            <Text style={styles.userName} numberOfLines={1}>
+              {user.fullName}
+            </Text>
+            <View style={[styles.roleBadge, { backgroundColor: badge.bg }]}>
+              <Text style={[styles.roleBadgeText, { color: badge.text }]}>{roleLabel}</Text>
+            </View>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 4 }}>
+            <Text style={styles.userPhone}>{formatPhone(user.phone)}</Text>
+            <Text style={styles.userDivider}>|</Text>
+            <Text style={styles.userPhone}>
+              {user.salaryPercent}%{user.productSalaryPercent ? ` / ${user.productSalaryPercent}%` : ''}
+            </Text>
+            <Text style={styles.userDivider}>|</Text>
+            {user.isActive ? (
+              <Text style={[styles.statusText, { color: colors.green[600] }]}>Активен</Text>
+            ) : (
+              <Text style={[styles.statusText, { color: colors.red[500] }]}>Неактивен</Text>
+            )}
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      {/* Action buttons row */}
+      <View style={styles.actionRow}>
+        <TouchableOpacity style={styles.actionChip} onPress={() => onEdit(user)}>
+          <Ionicons name="pencil-outline" size={14} color={colors.primary[600]} />
+          <Text style={styles.actionChipText}>Права</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.actionChip, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}
+          onPress={() => onCommissions(user)}
+        >
+          <Ionicons name="gift-outline" size={14} color={colors.green[600]} />
+          <Text style={[styles.actionChipText, { color: colors.green[700] }]}>Комиссии</Text>
+        </TouchableOpacity>
+        {canDelete && (
+          <TouchableOpacity
+            style={[styles.actionChip, { backgroundColor: colors.red[50], borderColor: colors.red[200] }]}
+            onPress={() => onDelete(user.id)}
+          >
+            <Ionicons name="trash-outline" size={14} color={colors.red[500]} />
+          </TouchableOpacity>
+        )}
+      </View>
+    </AnimatedCard>
+  );
+});
+
 const emptyForm: UserForm = {
   fullName: '',
   phone: '',
@@ -239,6 +342,66 @@ export default function UsersScreen() {
     );
   }, [allProducts, commissionItems, productSearchText]);
 
+  // useCallback hooks MUST come before the early `if (!hasPermission)` return
+  // below — rules-of-hooks demands every hook is called in the same order
+  // on every render. Each handler is also passed into UserCard.memo, so
+  // identity stability matters for the list re-render cost.
+  const openEdit = useCallback((user: User) => {
+    setEditingUser(user);
+    setForm({
+      fullName: user.fullName,
+      phone: user.phone ? formatPhone(user.phone) : '',
+      password: '',
+      role: user.role,
+      salaryPercent: user.salaryPercent,
+      productSalaryPercent: user.productSalaryPercent || 0,
+      isActive: user.isActive,
+      permissions: { ...defaultPermissions, ...user.permissions },
+    });
+    setModalOpen(true);
+  }, []);
+
+  const openCommissions = useCallback(async (user: User) => {
+    setCommissionUserId(user.id);
+    setCommissionUserName(user.fullName);
+    try {
+      const res = await usersApi.getProductCommissions(user.id);
+      const data = res.data;
+      setGlobalProductPercent(data.productSalaryPercent || 0);
+      setCommissionItems(data.items || []);
+    } catch {
+      setGlobalProductPercent(user.productSalaryPercent || 0);
+      setCommissionItems([]);
+    }
+  }, []);
+
+  const handleAvatarChange = useCallback(
+    async (userId: string) => {
+      try {
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        });
+        if (result.canceled || !result.assets?.length) return;
+        const asset = result.assets[0];
+        const filename = asset.fileName || `avatar_${userId}.jpg`;
+        const uploadRes = await uploadsApi.upload(asset.uri, filename);
+        const uploadedUrl = uploadRes.data.url;
+        await usersApi.update(userId, { avatar: uploadedUrl } as any);
+        queryClient.invalidateQueries({ queryKey: ['users'] });
+        Alert.alert('Готово', 'Аватар обновлён');
+      } catch (err: any) {
+        Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось загрузить аватар');
+      }
+    },
+    [queryClient],
+  );
+
+  // Stable delete-trigger so UserCard.memo holds across other UI toggles.
+  const triggerDelete = useCallback((userId: string) => setDeleteId(userId), []);
+
   if (!hasPermission('user_management')) {
     return (
       <View style={styles.safe}>
@@ -252,35 +415,6 @@ export default function UsersScreen() {
     setEditingUser(null);
     setForm({ ...emptyForm });
     setModalOpen(true);
-  };
-
-  const openEdit = (user: User) => {
-    setEditingUser(user);
-    setForm({
-      fullName: user.fullName,
-      phone: user.phone ? formatPhone(user.phone) : '',
-      password: '',
-      role: user.role,
-      salaryPercent: user.salaryPercent,
-      productSalaryPercent: user.productSalaryPercent || 0,
-      isActive: user.isActive,
-      permissions: { ...defaultPermissions, ...user.permissions },
-    });
-    setModalOpen(true);
-  };
-
-  const openCommissions = async (user: User) => {
-    setCommissionUserId(user.id);
-    setCommissionUserName(user.fullName);
-    try {
-      const res = await usersApi.getProductCommissions(user.id);
-      const data = res.data;
-      setGlobalProductPercent(data.productSalaryPercent || 0);
-      setCommissionItems(data.items || []);
-    } catch {
-      setGlobalProductPercent(user.productSalaryPercent || 0);
-      setCommissionItems([]);
-    }
   };
 
   const closeModal = () => {
@@ -336,27 +470,6 @@ export default function UsersScreen() {
   };
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
-
-  const handleAvatarChange = async (userId: string) => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-      if (result.canceled || !result.assets?.length) return;
-      const asset = result.assets[0];
-      const filename = asset.fileName || `avatar_${userId}.jpg`;
-      const uploadRes = await uploadsApi.upload(asset.uri, filename);
-      const uploadedUrl = uploadRes.data.url;
-      await usersApi.update(userId, { avatar: uploadedUrl } as any);
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-      Alert.alert('Готово', 'Аватар обновлён');
-    } catch (err: any) {
-      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось загрузить аватар');
-    }
-  };
 
   const isDirectorOrSuperadmin = currentUser?.role === 'director' || currentUser?.role === 'superadmin';
 
@@ -432,78 +545,20 @@ export default function UsersScreen() {
             const badge = getRoleBadge(user.role);
             const canDelete = user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director';
             return (
-              <AnimatedCard key={user.id} index={idx} style={styles.userCard}>
-                <TouchableOpacity style={styles.userRow} onPress={() => openEdit(user)} activeOpacity={0.7}>
-                  <View style={styles.avatarWrap}>
-                    {getImageUrl(user.avatar) ? (
-                      <CachedImage source={{ uri: getImageUrl(user.avatar)! }} style={styles.avatarImage} />
-                    ) : (
-                      <View style={[styles.avatar, { backgroundColor: badge.bg }]}>
-                        <Text style={[styles.avatarText, { color: badge.text }]}>
-                          {user.fullName?.charAt(0) || 'U'}
-                        </Text>
-                      </View>
-                    )}
-                    {isDirectorOrSuperadmin && (
-                      <TouchableOpacity
-                        style={styles.avatarCameraBtn}
-                        onPress={() => handleAvatarChange(user.id)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="camera" size={12} color={colors.white} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                      <Text style={styles.userName} numberOfLines={1}>
-                        {user.fullName}
-                      </Text>
-                      <View style={[styles.roleBadge, { backgroundColor: badge.bg }]}>
-                        <Text style={[styles.roleBadgeText, { color: badge.text }]}>
-                          {roleLabels[user.role] || user.role}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 4 }}>
-                      <Text style={styles.userPhone}>{formatPhone(user.phone)}</Text>
-                      <Text style={styles.userDivider}>|</Text>
-                      <Text style={styles.userPhone}>
-                        {user.salaryPercent}%{user.productSalaryPercent ? ` / ${user.productSalaryPercent}%` : ''}
-                      </Text>
-                      <Text style={styles.userDivider}>|</Text>
-                      {user.isActive ? (
-                        <Text style={[styles.statusText, { color: colors.green[600] }]}>Активен</Text>
-                      ) : (
-                        <Text style={[styles.statusText, { color: colors.red[500] }]}>Неактивен</Text>
-                      )}
-                    </View>
-                  </View>
-                </TouchableOpacity>
-
-                {/* Action buttons row */}
-                <View style={styles.actionRow}>
-                  <TouchableOpacity style={styles.actionChip} onPress={() => openEdit(user)}>
-                    <Ionicons name="pencil-outline" size={14} color={colors.primary[600]} />
-                    <Text style={styles.actionChipText}>Права</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionChip, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}
-                    onPress={() => openCommissions(user)}
-                  >
-                    <Ionicons name="gift-outline" size={14} color={colors.green[600]} />
-                    <Text style={[styles.actionChipText, { color: colors.green[700] }]}>Комиссии</Text>
-                  </TouchableOpacity>
-                  {canDelete && (
-                    <TouchableOpacity
-                      style={[styles.actionChip, { backgroundColor: colors.red[50], borderColor: colors.red[200] }]}
-                      onPress={() => setDeleteId(user.id)}
-                    >
-                      <Ionicons name="trash-outline" size={14} color={colors.red[500]} />
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </AnimatedCard>
+              <UserCard
+                key={user.id}
+                user={user}
+                index={idx}
+                isDirectorOrSuperadmin={isDirectorOrSuperadmin}
+                canDelete={canDelete}
+                badge={badge}
+                roleLabel={roleLabels[user.role] || user.role}
+                avatarUrl={getImageUrl(user.avatar)}
+                onEdit={openEdit}
+                onCommissions={openCommissions}
+                onAvatarChange={handleAvatarChange}
+                onDelete={triggerDelete}
+              />
             );
           })
         )}
