@@ -90,9 +90,20 @@ cd android
 ./gradlew :app:assembleDebug --no-daemon
 ```
 
-The first `assembleDebug` after a clean prebuild downloads several Gradle plugins + the Android Gradle Plugin and typically takes 5-10 minutes on a M-series Mac. Subsequent incremental builds are ~30s.
+The first `assembleDebug` after a clean prebuild downloads several
+Gradle plugins, the Android Gradle Plugin **and the NDK 27.1**
+(`~1.5 GB`) — total cold-build time is 10-25 minutes on an M-series
+Mac depending on network. Subsequent incremental builds are ~30 s.
 
 The resulting APK is at `mobile/android/app/build/outputs/apk/debug/app-debug.apk` (~80 MB).
+
+### What this pass verified on the developer's machine
+
+- `npx expo prebuild --platform android --clean` — completed (warnings noted below, all non-fatal).
+- Generated `AndroidManifest.xml` includes `android:enableOnBackInvokedCallback="true"` (Predictive Back).
+- Generated `styles.xml` includes `windowLightStatusBar=true`, `statusBarColor=transparent`, `windowLightNavigationBar=true`, `navigationBarColor=#f9fafb`.
+- Generated `colors.xml` includes `splashscreen_background=#f9fafb` and `iconBackground=#2563eb`.
+- `gradle :app:assembleDebug` was kicked off but went into a long NDK 27.1 install (~1.5 GB). The Gradle build itself reached the autolinking + Kotlin gradle-plugin compilation phase without errors. Whether the full APK assembled in the time allotted depended on network throughput. Owner should re-run on his Mac if the APK isn't already at `mobile/android/app/build/outputs/apk/debug/app-debug.apk` — after the one-time NDK install, builds will be fast.
 
 ## Owner acceptance checklist on Android device
 
