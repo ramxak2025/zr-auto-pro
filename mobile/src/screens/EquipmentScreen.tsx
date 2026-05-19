@@ -685,13 +685,20 @@ function IssueModal({
   };
 
   const pickPhoto = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const uploaded = await uploadsApi.upload(result.assets[0].uri, 'equipment.jpg');
-      setPhoto(uploaded.data.url);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const uploaded = await uploadsApi.upload(result.assets[0].uri, 'equipment.jpg');
+        setPhoto(uploaded.data.url);
+      }
+    } catch {
+      // Upload can fail on flaky connections; surface the error instead
+      // of letting it bubble as an unhandled-promise rejection (which
+      // would show the yellow box but no message to the user).
+      Alert.alert('Ошибка', 'Не удалось загрузить фото');
     }
   };
 
@@ -921,13 +928,17 @@ function CreateStorageItemDialog({
   });
 
   const pickPhoto = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.7,
-    });
-    if (!result.canceled && result.assets[0]) {
-      const uploaded = await uploadsApi.upload(result.assets[0].uri, 'equipment.jpg');
-      setPhoto(uploaded.data.url);
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.7,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const uploaded = await uploadsApi.upload(result.assets[0].uri, 'equipment.jpg');
+        setPhoto(uploaded.data.url);
+      }
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось загрузить фото');
     }
   };
 

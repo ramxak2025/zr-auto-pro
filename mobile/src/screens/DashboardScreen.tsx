@@ -1866,7 +1866,26 @@ export default function DashboardScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries();
+    // Invalidate only the queries this screen actually reads. The previous
+    // `invalidateQueries()` (no filter) refetched EVERY key in the app —
+    // products list, schedule grid, suppliers, cars — every time the
+    // owner pulled to refresh the dashboard. On a slow connection that
+    // stalled the JS thread with 15+ parallel refetches and a flurry of
+    // SWR `placeholderData` swaps across screens that weren't even on
+    // the stack. Targeting the dashboard-only keys cuts that to ~7.
+    const dashboardKeys: string[][] = [
+      ['dashboard-chart'],
+      ['employee-ranking'],
+      ['schedule-today'],
+      ['marketing-dashboard'],
+      ['calls-summary'],
+      // Master-side widgets:
+      ['shifts'],
+      ['salary'],
+    ];
+    await Promise.all(
+      dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })),
+    );
     setRefreshing(false);
   };
 
