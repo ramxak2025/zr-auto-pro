@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -59,10 +59,73 @@ function getCategoryColor(index: number) {
   return CATEGORY_COLORS[index % CATEGORY_COLORS.length];
 }
 
-function getCategoryColorByName(name: string, allNames: string[]) {
-  const idx = allNames.indexOf(name);
-  return getCategoryColor(idx >= 0 ? idx : 0);
+// ── ExpenseRow ────────────────────────────────────────────────────────
+// Module-scope memo'd row — keeps identity stable across the period
+// switcher, refresh-toggle, and category-modal opens. Without it the
+// inline factory rebuilt every closure on each render and the FlashList
+// re-rendered every visible row.
+interface ExpenseRowProps {
+  item: {
+    id: string;
+    amount: number;
+    description?: string;
+    categoryName?: string;
+    date: string;
+    userName?: string;
+  };
+  index: number;
+  catColor: { bg: string; light: string; text: string };
+  isDirector: boolean;
+  onDelete: (id: string) => void;
 }
+const ExpenseRow = React.memo(function ExpenseRow({ item, index, catColor, isDirector, onDelete }: ExpenseRowProps) {
+  return (
+    <AnimatedCard style={styles.card} index={index}>
+      <View style={styles.cardInner}>
+        {/* Left accent bar */}
+        <View style={[styles.accentBar, { backgroundColor: catColor.bg }]} />
+
+        <View style={styles.cardContent}>
+          {/* Top row: amount + category badge */}
+          <View style={styles.cardTopRow}>
+            <Text style={styles.cardAmount}>{formatMoney(item.amount)}</Text>
+            {item.categoryName && (
+              <View style={[styles.catBadge, { backgroundColor: catColor.light }]}>
+                <Text style={[styles.catBadgeText, { color: catColor.text }]}>{item.categoryName}</Text>
+              </View>
+            )}
+          </View>
+
+          {/* Description */}
+          {item.description && <Text style={styles.cardDesc}>{item.description}</Text>}
+
+          {/* Bottom row: date, user, trash icon */}
+          <View style={styles.cardBottomRow}>
+            <View style={styles.cardMeta}>
+              <Ionicons name="calendar-outline" size={11} color={colors.gray[400]} />
+              <Text style={styles.cardDate}>{formatDate(item.date)}</Text>
+              {item.userName && (
+                <>
+                  <Ionicons name="person-outline" size={11} color={colors.gray[400]} style={{ marginLeft: 8 }} />
+                  <Text style={styles.cardUser}>{item.userName}</Text>
+                </>
+              )}
+            </View>
+            {isDirector && (
+              <TouchableOpacity
+                onPress={() => onDelete(item.id)}
+                style={styles.deleteBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="trash-outline" size={15} color={colors.gray[300]} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+    </AnimatedCard>
+  );
+});
 
 function getDateRange(period: string) {
   const now = new Date();
@@ -177,17 +240,32 @@ export default function ExpensesScreen() {
     });
   };
 
-  const totalExpenses = expenses.reduce((s: number, e: any) => s + e.amount, 0);
-
-  // Group by category
-  const byCategory: Record<string, { name: string; total: number }> = {};
-  for (const exp of expenses) {
-    const cat = exp.categoryName || 'Без категории';
-    if (!byCategory[cat]) byCategory[cat] = { name: cat, total: 0 };
-    byCategory[cat].total += exp.amount;
-  }
-  const categoryBreakdown = Object.values(byCategory).sort((a, b) => b.total - a.total);
-  const allCategoryNames = categoryBreakdown.map((c) => c.name);
+  // Derived totals + category breakdown — wrapped in useMemo so a
+  // category-modal open / period flip doesn't recompute the O(n) walk
+  // through the expense list on every render. The expense FlashList row
+  // also reads `allCategoryNames` to compute its accent colour; keeping
+  // that array reference stable means ExpenseRow's React.memo holds.
+  const { totalExpenses, categoryBreakdown, allCategoryNames, colorByName } = useMemo(() => {
+    const total = expenses.reduce((s: number, e: any) => s + e.amount, 0);
+    const byCategory: Record<string, { name: string; total: number }> = {};
+    for (const exp of expenses) {
+      const cat = exp.categoryName || 'Без категории';
+      if (!byCategory[cat]) byCategory[cat] = { name: cat, total: 0 };
+      byCategory[cat].total += exp.amount;
+    }
+    const breakdown = Object.values(byCategory).sort((a, b) => b.total - a.total);
+    const names = breakdown.map((c) => c.name);
+    // Pre-compute name → colour once instead of doing indexOf() per row,
+    // so render is O(rows) instead of O(rows × categories).
+    const cmap = new Map<string, { bg: string; light: string; text: string }>();
+    names.forEach((n, i) => cmap.set(n, getCategoryColor(i)));
+    return {
+      totalExpenses: total,
+      categoryBreakdown: breakdown,
+      allCategoryNames: names,
+      colorByName: cmap,
+    };
+  }, [expenses]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -195,57 +273,19 @@ export default function ExpensesScreen() {
     setRefreshing(false);
   };
 
-  const renderExpense = ({ item, index }: { item: any; index: number }) => {
-    const catName = item.categoryName || 'Без категории';
-    const catColor = getCategoryColorByName(catName, allCategoryNames);
+  // Stable delete handler so memoised ExpenseRow doesn't bust on parent renders.
+  const handleDeleteExpense = useCallback((id: string) => setDeleteId(id), []);
 
-    return (
-      <AnimatedCard style={styles.card} index={index}>
-        <View style={styles.cardInner}>
-          {/* Left accent bar */}
-          <View style={[styles.accentBar, { backgroundColor: catColor.bg }]} />
-
-          <View style={styles.cardContent}>
-            {/* Top row: amount + category badge */}
-            <View style={styles.cardTopRow}>
-              <Text style={styles.cardAmount}>{formatMoney(item.amount)}</Text>
-              {item.categoryName && (
-                <View style={[styles.catBadge, { backgroundColor: catColor.light }]}>
-                  <Text style={[styles.catBadgeText, { color: catColor.text }]}>{item.categoryName}</Text>
-                </View>
-              )}
-            </View>
-
-            {/* Description */}
-            {item.description && <Text style={styles.cardDesc}>{item.description}</Text>}
-
-            {/* Bottom row: date, user, trash icon */}
-            <View style={styles.cardBottomRow}>
-              <View style={styles.cardMeta}>
-                <Ionicons name="calendar-outline" size={11} color={colors.gray[400]} />
-                <Text style={styles.cardDate}>{formatDate(item.date)}</Text>
-                {item.userName && (
-                  <>
-                    <Ionicons name="person-outline" size={11} color={colors.gray[400]} style={{ marginLeft: 8 }} />
-                    <Text style={styles.cardUser}>{item.userName}</Text>
-                  </>
-                )}
-              </View>
-              {isDirector && (
-                <TouchableOpacity
-                  onPress={() => setDeleteId(item.id)}
-                  style={styles.deleteBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="trash-outline" size={15} color={colors.gray[300]} />
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        </View>
-      </AnimatedCard>
-    );
-  };
+  const renderExpense = useCallback(
+    ({ item, index }: { item: any; index: number }) => {
+      const catName = item.categoryName || 'Без категории';
+      const catColor = colorByName.get(catName) || getCategoryColor(0);
+      return (
+        <ExpenseRow item={item} index={index} catColor={catColor} isDirector={isDirector} onDelete={handleDeleteExpense} />
+      );
+    },
+    [colorByName, isDirector, handleDeleteExpense],
+  );
 
   return (
     <View style={styles.safe}>
