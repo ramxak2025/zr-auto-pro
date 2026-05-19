@@ -1126,7 +1126,24 @@ function OwnerQuickActions() {
     [],
   );
 
-  const allowed = actions.filter((a) => !a.perm || hasPermission(a.perm as any));
+  // Memoise the permission-filtered subset so QuickActionTile's React.memo
+  // doesn't bust on every parent re-render via a new array identity.
+  const allowed = useMemo(
+    () => actions.filter((a) => !a.perm || hasPermission(a.perm as any)),
+    [actions, hasPermission],
+  );
+
+  // Build a stable per-tile onPress map so the inline arrow `() => a.navigate(nav)`
+  // doesn't allocate a new function identity per render, which would defeat
+  // QuickActionTile.memo. Map is keyed on the action.key.
+  const tilePressMap = useMemo(() => {
+    const m = new Map<string, () => void>();
+    for (const a of allowed) {
+      m.set(a.key, () => a.navigate(navigation));
+    }
+    return m;
+  }, [allowed, navigation]);
+
   if (allowed.length === 0) return null;
 
   return (
@@ -1134,7 +1151,7 @@ function OwnerQuickActions() {
       <Text style={styles.sectionLabel}>БЫСТРЫЕ ДЕЙСТВИЯ</Text>
       <View style={styles.quickGrid2x2}>
         {allowed.map((a, idx) => (
-          <QuickActionTile key={a.key} action={a} index={idx} onPress={() => a.navigate(navigation)} />
+          <QuickActionTile key={a.key} action={a} index={idx} onPress={tilePressMap.get(a.key)!} />
         ))}
       </View>
     </View>
