@@ -116,7 +116,26 @@ export default function CashFlowScreen() {
     setRefreshing(false);
   };
 
-  const totals = cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 };
+  // Memoise the derived "totals" so its identity is stable across renders
+  // when cashflow.totals didn't change. ChannelRow is a plain function but
+  // its parent (the AnimatedCard) participates in the AnimatedCard entrance
+  // sequencing, and a stable totals object keeps useMemo deps clean.
+  const totals = useMemo(
+    () => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 },
+    [cashflow?.totals],
+  );
+
+  // Memoise the daily breakdown array so each child <AnimatedCard> sees
+  // the same row reference between renders (e.g. master-picker open).
+  const days = useMemo<any[]>(() => cashflow?.days || [], [cashflow?.days]);
+
+  // Stable picker handler — kept here so MasterPickerRow's React.memo
+  // doesn't bust on each parent render.
+  const pickMaster = useCallback((id: string, fullName: string) => {
+    setMasterId(id);
+    setMasterName(fullName);
+    setShowMasterPicker(false);
+  }, []);
 
   const setQuickPeriod = (period: 'today' | 'week' | 'month') => {
     const now = new Date();
@@ -300,14 +319,14 @@ export default function CashFlowScreen() {
 
             {/* Daily breakdown */}
             <Text style={[iosSectionLabel, styles.sectionLabel]}>По дням</Text>
-            {(cashflow.days || []).length === 0 ? (
+            {days.length === 0 ? (
               <EmptyState
                 title="Нет операций"
                 description="За выбранный период чеков не было"
                 icon="receipt"
               />
             ) : (
-              (cashflow.days || []).map((day: any, idx: number) => (
+              days.map((day: any, idx: number) => (
                 <AnimatedCard key={day.date} style={styles.dayCard} index={idx + 1}>
                   <View style={styles.dayHeader}>
                     <Text style={styles.dayDate}>
@@ -377,28 +396,14 @@ export default function CashFlowScreen() {
             <FlashList
               data={masters || []}
               keyExtractor={(item: any) => item.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[styles.masterOption, masterId === item.id && styles.masterOptionActive]}
-                  onPress={() => {
-                    setMasterId(item.id);
-                    setMasterName(item.fullName);
-                    setShowMasterPicker(false);
-                  }}
-                >
-                  <View style={styles.masterAvatar}>
-                    <Text style={styles.masterAvatarText}>{item.fullName?.charAt(0) || '?'}</Text>
-                  </View>
-                  <Text
-                    style={[
-                      styles.masterOptionText,
-                      masterId === item.id && { color: colors.primary[600], fontWeight: fontWeight.bold },
-                    ]}
-                  >
-                    {item.fullName}
-                  </Text>
-                  {masterId === item.id && <Ionicons name="checkmark-circle" size={18} color={colors.primary[600]} />}
-                </TouchableOpacity>
+              extraData={masterId}
+              renderItem={({ item }: { item: any }) => (
+                <MasterPickerRow
+                  id={item.id}
+                  fullName={item.fullName}
+                  active={masterId === item.id}
+                  onPick={pickMaster}
+                />
               )}
             />
           </View>
