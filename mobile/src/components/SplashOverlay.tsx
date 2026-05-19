@@ -32,9 +32,10 @@
  *     placeholder while the real UI is loading underneath.
  */
 import React, { useEffect } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import { Image, StyleSheet } from 'react-native';
 import Animated, {
   Easing,
+  FadeOut,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
@@ -90,13 +91,14 @@ export default function SplashOverlay() {
   }));
 
   return (
-    <View
+    <Animated.View
       style={styles.root}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       pointerEvents="none"
+      exiting={FadeOut.duration(240)}
     >
-      <View style={styles.center}>
+      <Animated.View style={styles.center}>
         <Animated.View style={[styles.logoWrap, logoStyle]}>
           <Image source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
         </Animated.View>
@@ -105,13 +107,13 @@ export default function SplashOverlay() {
           <Text style={styles.tagline}>Система управления автосервисом</Text>
         </Animated.View>
 
-        <View style={styles.dotsRow}>
+        <Animated.View style={styles.dotsRow}>
           <Animated.View style={[styles.dot, dot1Style]} />
           <Animated.View style={[styles.dot, dot2Style]} />
           <Animated.View style={[styles.dot, dot3Style]} />
-        </View>
-      </View>
-    </View>
+        </Animated.View>
+      </Animated.View>
+    </Animated.View>
   );
 }
 
@@ -136,10 +138,11 @@ const styles = StyleSheet.create({
     marginBottom: spacing[4],
   },
   logoImage: {
-    // Fixed sizing so the entrance scale tween reads consistently across
-    // device widths.
-    width: 240,
-    height: 80,
+    // Sized to match the OS-level splash logo (logo.png at contain).
+    // logo.png aspect is 752/196 ≈ 3.84 — keeping width × height in that
+    // ratio avoids the "logo jumped" effect between OS splash and overlay.
+    width: 280,
+    height: 73,
   },
   tagline: {
     fontSize: 14,

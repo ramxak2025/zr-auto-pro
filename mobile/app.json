@@ -10,9 +10,9 @@
     "newArchEnabled": true,
     "jsEngine": "hermes",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/logo.png",
       "resizeMode": "contain",
-      "backgroundColor": "#2563eb"
+      "backgroundColor": "#f9fafb"
     },
     "assetBundlePatterns": ["**/*"],
     "ios": {
