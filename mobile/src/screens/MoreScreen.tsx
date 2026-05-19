@@ -1,7 +1,17 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, ActivityIndicator, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  StyleSheet,
+  Animated,
+  Alert,
+  ActivityIndicator,
+  Platform,
+} from 'react-native';
 import CachedImage from '../components/CachedImage';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
@@ -10,6 +20,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { uploadsApi, authApi, subscriptionApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
@@ -39,185 +50,213 @@ interface MenuItem {
   iconColor: string;
 }
 
-const menuItems: MenuItem[] = [
+interface MenuSection {
+  title: string;
+  items: MenuItem[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Menu structure — grouped sections, iOS Settings-style.
+//
+// Grouping rationale (per owner-traffic surveys):
+//   • ОПЕРАЦИИ  — day-to-day workflow (schedule, money in/out, calls)
+//   • ФИНАНСЫ   — owner-facing money screens (reports, salaries, expenses)
+//   • КАТАЛОГ   — reference data (clients, services, suppliers, equipment, marketing)
+//   • УПРАВЛЕНИЕ — administration (employees, users, company, subscription, admin)
+//
+// Inside each group items keep the order the owner asked for. The flat
+// menuItems list of v1 had no perceptual hierarchy — 16 rows in one card
+// blurred together and forced the owner to scan-and-search every time.
+// ─────────────────────────────────────────────────────────────────────────────
+const menuSections: MenuSection[] = [
   {
-    label: 'Сотрудники',
-    description: 'Карточки персонала, статус, рейтинги',
-    screen: 'Employees',
-    icon: 'people-circle-outline',
-    iconBg: colors.cyan[50],
-    iconColor: colors.cyan[600],
+    title: 'Операции',
+    items: [
+      {
+        label: 'Расписание',
+        description: 'График работы и смены',
+        screen: 'Schedule',
+        featureKey: 'schedule_view',
+        icon: 'calendar-outline',
+        iconBg: colors.indigo[50],
+        iconColor: colors.indigo[600],
+      },
+      {
+        label: 'Движение денег',
+        description: 'Касса по дням и сотрудникам',
+        screen: 'CashFlow',
+        featureKey: 'cashflow_view',
+        icon: 'swap-horizontal-outline',
+        iconBg: colors.teal[50],
+        iconColor: colors.teal[600],
+      },
+      {
+        label: 'Звонки',
+        description: 'Журнал звонков и записи',
+        screen: 'Calls',
+        roles: ['director', 'superadmin'],
+        icon: 'call-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+      },
+    ],
   },
   {
-    label: 'Расписание',
-    description: 'График работы и смены',
-    screen: 'Schedule',
-    featureKey: 'schedule_view',
-    icon: 'calendar-outline',
-    iconBg: colors.indigo[50],
-    iconColor: colors.indigo[600],
+    title: 'Финансы',
+    items: [
+      {
+        label: 'Отчёты',
+        description: 'Финансовые отчёты',
+        screen: 'Reports',
+        permission: 'financial_reports',
+        featureKey: 'reports_view',
+        icon: 'bar-chart-outline',
+        iconBg: colors.purple[50],
+        iconColor: colors.purple[700],
+      },
+      {
+        label: 'Зарплата',
+        description: 'Заработок мастеров',
+        screen: 'Salary',
+        featureKey: 'salary_view',
+        icon: 'wallet-outline',
+        iconBg: colors.green[50],
+        iconColor: colors.green[600],
+      },
+      {
+        label: 'Расходы',
+        description: 'Аренда, маркетинг и др.',
+        screen: 'Expenses',
+        roles: ['director', 'superadmin'],
+        icon: 'trending-down-outline',
+        iconBg: colors.rose[50],
+        iconColor: colors.rose[600],
+      },
+    ],
   },
   {
-    label: 'Клиенты',
-    description: 'Клиенты и автомобили',
-    screen: 'Clients',
-    permission: 'clients_view',
-    featureKey: 'clients_view',
-    icon: 'people-outline',
-    iconBg: colors.blue[50],
-    iconColor: colors.blue[600],
+    title: 'Каталог',
+    items: [
+      {
+        label: 'Клиенты',
+        description: 'Клиенты и автомобили',
+        screen: 'Clients',
+        permission: 'clients_view',
+        featureKey: 'clients_view',
+        icon: 'people-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+      },
+      {
+        label: 'Услуги',
+        description: 'Каталог услуг',
+        screen: 'Services',
+        featureKey: 'services_view',
+        icon: 'build-outline',
+        iconBg: colors.orange[50],
+        iconColor: colors.orange[600],
+      },
+      {
+        label: 'Поставщики',
+        description: 'Поставки и расчёты',
+        screen: 'Suppliers',
+        permission: 'suppliers_access',
+        featureKey: 'suppliers_view',
+        icon: 'cube-outline',
+        iconBg: colors.amber[50],
+        iconColor: colors.amber[600],
+      },
+      {
+        label: 'Имущество',
+        description: 'Инструменты и оборудование',
+        screen: 'Equipment',
+        icon: 'construct-outline',
+        iconBg: colors.emerald[50],
+        iconColor: colors.emerald[700],
+      },
+      {
+        label: 'Маркетинг',
+        description: 'Отзывы и рассылки',
+        screen: 'Marketing',
+        icon: 'megaphone-outline',
+        iconBg: colors.violet[50],
+        iconColor: colors.violet[600],
+      },
+    ],
   },
   {
-    label: 'Услуги',
-    description: 'Каталог услуг',
-    screen: 'Services',
-    featureKey: 'services_view',
-    icon: 'build-outline',
-    iconBg: colors.orange[50],
-    iconColor: colors.orange[600],
-  },
-  {
-    label: 'Поставщики',
-    description: 'Поставки и расчёты',
-    screen: 'Suppliers',
-    permission: 'suppliers_access',
-    featureKey: 'suppliers_view',
-    icon: 'truck-outline' as any,
-    iconBg: colors.amber[50],
-    iconColor: colors.amber[600],
-  },
-  {
-    label: 'Движение денег',
-    description: 'Касса по дням и сотрудникам',
-    screen: 'CashFlow',
-    featureKey: 'cashflow_view',
-    icon: 'swap-horizontal-outline',
-    iconBg: colors.teal[50],
-    iconColor: colors.teal[600],
-  },
-  {
-    label: 'Зарплата',
-    description: 'Заработок мастеров',
-    screen: 'Salary',
-    featureKey: 'salary_view',
-    icon: 'wallet-outline',
-    iconBg: colors.green[50],
-    iconColor: colors.green[600],
-  },
-  {
-    label: 'Расходы',
-    description: 'Аренда, маркетинг и др.',
-    screen: 'Expenses',
-    roles: ['director', 'superadmin'],
-    icon: 'trending-down-outline',
-    iconBg: colors.rose[50],
-    iconColor: colors.rose[600],
-  },
-  {
-    label: 'Отчёты',
-    description: 'Финансовые отчёты',
-    screen: 'Reports',
-    permission: 'financial_reports',
-    featureKey: 'reports_view',
-    icon: 'bar-chart-outline',
-    iconBg: colors.purple[50],
-    iconColor: colors.purple[700],
-  },
-  {
-    label: 'Звонки',
-    description: 'Журнал звонков и записи',
-    screen: 'Calls',
-    roles: ['director', 'superadmin'],
-    icon: 'call-outline',
-    iconBg: colors.blue[50],
-    iconColor: colors.blue[600],
-  },
-  {
-    label: 'Имущество',
-    description: 'Инструменты и оборудование',
-    screen: 'Equipment',
-    icon: 'cube-outline',
-    iconBg: colors.emerald[50],
-    iconColor: colors.emerald[700],
-  },
-  {
-    label: 'Маркетинг',
-    description: 'Отзывы и рассылки',
-    screen: 'Marketing',
-    icon: 'megaphone-outline',
-    iconBg: colors.violet[50],
-    iconColor: colors.violet[600],
-  },
-  {
-    label: 'Пользователи',
-    description: 'Управление доступом',
-    screen: 'Users',
-    permission: 'user_management',
-    featureKey: 'users_manage',
-    icon: 'shield-outline',
-    iconBg: colors.indigo[50],
-    iconColor: colors.indigo[600],
-  },
-  {
-    label: 'Настройки компании',
-    description: 'Реквизиты и данные для чеков',
-    screen: 'CompanySettings',
-    roles: ['director', 'superadmin'],
-    icon: 'business-outline',
-    iconBg: colors.slate[100],
-    iconColor: colors.slate[600],
-  },
-  {
-    label: 'Подписка',
-    description: 'Тариф и оплата',
-    screen: 'Subscription',
-    roles: ['director', 'superadmin'],
-    icon: 'card-outline',
-    iconBg: colors.primary[50],
-    iconColor: colors.primary[600],
-  },
-  {
-    label: 'Админ-панель',
-    description: 'Управление тенантами и планами',
-    screen: 'Admin',
-    roles: ['superadmin'],
-    icon: 'shield-checkmark-outline',
-    iconBg: colors.red[50],
-    iconColor: colors.red[600],
+    title: 'Управление',
+    items: [
+      {
+        label: 'Сотрудники',
+        description: 'Карточки персонала, статус, рейтинги',
+        screen: 'Employees',
+        icon: 'people-circle-outline',
+        iconBg: colors.cyan[50],
+        iconColor: colors.cyan[600],
+      },
+      {
+        label: 'Пользователи',
+        description: 'Управление доступом',
+        screen: 'Users',
+        permission: 'user_management',
+        featureKey: 'users_manage',
+        icon: 'shield-outline',
+        iconBg: colors.indigo[50],
+        iconColor: colors.indigo[600],
+      },
+      {
+        label: 'Настройки компании',
+        description: 'Реквизиты и данные для чеков',
+        screen: 'CompanySettings',
+        roles: ['director', 'superadmin'],
+        icon: 'business-outline',
+        iconBg: colors.slate[100],
+        iconColor: colors.slate[600],
+      },
+      {
+        label: 'Подписка',
+        description: 'Тариф и оплата',
+        screen: 'Subscription',
+        roles: ['director', 'superadmin'],
+        icon: 'card-outline',
+        iconBg: colors.primary[50],
+        iconColor: colors.primary[600],
+      },
+      {
+        label: 'Админ-панель',
+        description: 'Управление тенантами и планами',
+        screen: 'Admin',
+        roles: ['superadmin'],
+        icon: 'shield-checkmark-outline',
+        iconBg: colors.red[50],
+        iconColor: colors.red[600],
+      },
+    ],
   },
 ];
 
-function AnimatedMenuItem({
-  item,
-  index,
-  onPress,
-  locked,
-}: {
+interface MenuRowProps {
   item: MenuItem;
-  index: number;
   onPress: () => void;
-  locked?: boolean;
-}) {
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(24)).current;
+  locked: boolean;
+  showDivider: boolean;
+}
 
-  useEffect(() => {
-    const delay = index * 40;
-    Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 350, delay, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 350, delay, useNativeDriver: true }),
-    ]).start();
-  }, []);
-
+const MenuRow = React.memo(function MenuRow({ item, onPress, locked, showDivider }: MenuRowProps) {
   return (
-    <Animated.View style={{ opacity: fadeAnim, transform: [{ translateX: slideAnim }] }}>
-      <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.6}>
+    <>
+      <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.55}>
         <View style={[styles.menuIcon, { backgroundColor: item.iconBg }]}>
           <Ionicons name={item.icon} size={20} color={locked ? colors.gray[400] : item.iconColor} />
         </View>
         <View style={styles.menuTextWrap}>
-          <Text style={[styles.menuLabel, locked && { color: colors.gray[400] }]}>{item.label}</Text>
-          <Text style={styles.menuDesc}>{item.description}</Text>
+          <Text style={[styles.menuLabel, locked && { color: colors.gray[400] }]} numberOfLines={1}>
+            {item.label}
+          </Text>
+          <Text style={styles.menuDesc} numberOfLines={1}>
+            {item.description}
+          </Text>
         </View>
         {locked ? (
           <Ionicons name="lock-closed" size={14} color={colors.gray[300]} />
@@ -225,15 +264,15 @@ function AnimatedMenuItem({
           <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
         )}
       </TouchableOpacity>
-    </Animated.View>
+      {showDivider && <View style={styles.separator} />}
+    </>
   );
-}
+});
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
   const { user, logout, hasPermission, refreshUser } = useAuth();
   const tabBarHeight = useTabBarHeight();
-  const insetsTop = useSafeAreaInsets().top;
   const [uploading, setUploading] = useState(false);
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
@@ -259,11 +298,11 @@ export default function MoreScreen() {
     return !planFeatures.includes(featureKey);
   };
 
-  const filteredItems = menuItems.filter((item) => {
+  const filterItem = (item: MenuItem): boolean => {
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
     return true;
-  });
+  };
 
   const handleAvatarUpload = async () => {
     try {
@@ -289,31 +328,33 @@ export default function MoreScreen() {
 
   // Entrance animation for user card
   const cardFade = useRef(new Animated.Value(0)).current;
-  const cardScale = useRef(new Animated.Value(0.95)).current;
+  const cardTranslate = useRef(new Animated.Value(12)).current;
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(cardFade, { toValue: 1, duration: 400, useNativeDriver: true }),
-      Animated.spring(cardScale, { toValue: 1, friction: 8, tension: 40, useNativeDriver: true }),
+      Animated.timing(cardFade, { toValue: 1, duration: 320, useNativeDriver: true }),
+      Animated.spring(cardTranslate, { toValue: 0, friction: 9, tension: 50, useNativeDriver: true }),
     ]).start();
-  }, []);
+  }, [cardFade, cardTranslate]);
 
   return (
     <View style={styles.safe}>
+      <IosScreenHeader title="Ещё" />
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
           {
-            paddingTop: insetsTop + spacing[3],
             // Android: contentInset is ignored; reserve bar space here.
-            paddingBottom: Platform.OS === 'ios' ? undefined : tabBarHeight,
+            paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4],
           },
         ]}
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
       >
-        {/* User card */}
-        <Animated.View style={[styles.userCard, { opacity: cardFade, transform: [{ scale: cardScale }] }]}>
+        {/* Identity card — compact iOS Settings-style profile cell */}
+        <Animated.View
+          style={[styles.userCard, { opacity: cardFade, transform: [{ translateY: cardTranslate }] }]}
+        >
           <View style={styles.userRow}>
             <View style={styles.avatarWrap}>
               {avatarUrl ? (
@@ -323,15 +364,20 @@ export default function MoreScreen() {
                   <Text style={styles.avatarText}>{userInitial}</Text>
                 </View>
               )}
-              <TouchableOpacity style={styles.avatarEditBtn} onPress={handleAvatarUpload} disabled={uploading}>
+              <TouchableOpacity
+                style={styles.avatarEditBtn}
+                onPress={handleAvatarUpload}
+                disabled={uploading}
+                hitSlop={6}
+              >
                 {uploading ? (
                   <ActivityIndicator size="small" color={colors.gray[500]} />
                 ) : (
-                  <Ionicons name="camera" size={14} color={colors.gray[500]} />
+                  <Ionicons name="camera" size={12} color={colors.gray[500]} />
                 )}
               </TouchableOpacity>
             </View>
-            <View style={{ flex: 1 }}>
+            <View style={{ flex: 1, gap: 4 }}>
               <Text style={styles.userName} numberOfLines={1}>
                 {user?.fullName || 'User'}
               </Text>
@@ -342,20 +388,28 @@ export default function MoreScreen() {
           </View>
         </Animated.View>
 
-        {/* Menu items */}
-        <View style={styles.menuCard}>
-          {filteredItems.map((item, idx) => (
-            <React.Fragment key={item.screen}>
-              {idx > 0 && <View style={styles.separator} />}
-              <AnimatedMenuItem
-                item={item}
-                index={idx}
-                locked={isFeatureLocked(item.featureKey)}
-                onPress={() => navigation.navigate(item.screen)}
-              />
-            </React.Fragment>
-          ))}
-        </View>
+        {/* Grouped sections — iOS Settings pattern */}
+        {menuSections.map((section) => {
+          const visibleItems = section.items.filter(filterItem);
+          if (visibleItems.length === 0) return null;
+
+          return (
+            <View key={section.title} style={styles.section}>
+              <Text style={[iosSectionLabel, styles.sectionTitle]}>{section.title}</Text>
+              <View style={styles.menuCard}>
+                {visibleItems.map((item, idx) => (
+                  <MenuRow
+                    key={item.screen}
+                    item={item}
+                    locked={isFeatureLocked(item.featureKey)}
+                    showDivider={idx < visibleItems.length - 1}
+                    onPress={() => navigation.navigate(item.screen)}
+                  />
+                ))}
+              </View>
+            </View>
+          );
+        })}
 
         {/* Logout */}
         <TouchableOpacity style={styles.logoutBtn} onPress={logout} activeOpacity={0.7}>
@@ -369,49 +423,41 @@ export default function MoreScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  // No paddingBottom — handled at the ScrollView level via contentInset
-  // so content flows visibly under the floating glass bar.
-  scrollContent: { padding: spacing[4], gap: spacing[4] },
-  // User card
+  scrollContent: { paddingHorizontal: spacing[4], paddingTop: spacing[1], gap: spacing[4] },
+
+  // Identity card
   userCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[5],
-    shadowColor: colors.black,
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
+    ...iosCard,
+    paddingVertical: spacing[4],
+    paddingHorizontal: spacing[4],
   },
-  userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
+  userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3.5] },
   avatarWrap: { position: 'relative' },
   avatar: {
-    width: 56,
-    height: 56,
+    width: 48,
+    height: 48,
     borderRadius: borderRadius['2xl'],
     backgroundColor: colors.primary[100],
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarImage: {
-    width: 56,
-    height: 56,
+    width: 48,
+    height: 48,
     borderRadius: borderRadius['2xl'],
-    borderWidth: 2,
-    borderColor: colors.gray[100],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
   },
-  avatarText: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[700] },
+  avatarText: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.primary[700] },
   avatarEditBtn: {
     position: 'absolute',
     bottom: -4,
     right: -4,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: colors.white,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: colors.gray[200],
     alignItems: 'center',
     justifyContent: 'center',
@@ -420,39 +466,47 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
   },
-  userName: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  userName: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900], letterSpacing: -0.2 },
   roleBadge: {
     alignSelf: 'flex-start',
     paddingHorizontal: spacing[2],
     paddingVertical: 2,
     borderRadius: borderRadius.full,
-    marginTop: 4,
   },
   roleText: { fontSize: 11, fontWeight: fontWeight.semibold },
-  // Menu
+
+  // Section
+  section: { gap: spacing[1.5] },
+  sectionTitle: {
+    marginLeft: spacing[3],
+    marginBottom: spacing[1.5],
+  },
+
+  // Menu card — grouped cell container
   menuCard: {
     backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
     overflow: 'hidden',
     shadowColor: colors.black,
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    ...(Platform.OS === 'android' ? { elevation: 1 } : null),
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3.5],
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3.5],
+    paddingVertical: spacing[3],
+    minHeight: 56,
   },
   separator: {
-    height: 1,
-    backgroundColor: colors.gray[50],
-    marginHorizontal: spacing[4],
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.gray[200],
+    marginLeft: spacing[4] + 40 + spacing[3.5], // align under text (skip icon + gap)
   },
   menuIcon: {
     width: 40,
@@ -462,8 +516,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   menuTextWrap: { flex: 1, minWidth: 0 },
-  menuLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  menuDesc: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+  menuLabel: { fontSize: 16, fontWeight: '600', color: colors.gray[900], letterSpacing: -0.2 },
+  menuDesc: { fontSize: 12, color: colors.gray[500], marginTop: 1 },
+
   // Logout
   logoutBtn: {
     flexDirection: 'row',
@@ -472,13 +527,14 @@ const styles = StyleSheet.create({
     gap: spacing[2],
     backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    paddingVertical: spacing[4],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    paddingVertical: spacing[3.5],
+    minHeight: 52,
     shadowColor: colors.black,
     shadowOpacity: 0.04,
     shadowRadius: 4,
-    elevation: 2,
+    ...(Platform.OS === 'android' ? { elevation: 1 } : null),
   },
-  logoutText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.red[600] },
+  logoutText: { fontSize: 15, fontWeight: fontWeight.semibold, color: colors.red[600] },
 });
