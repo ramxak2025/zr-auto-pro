@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -13,16 +13,45 @@ import {
 import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
+import { Skeleton } from '../components/Skeleton';
+import EmptyState from '../components/EmptyState';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole } from '../../../shared/types';
+
+// ── MasterPickerRow ────────────────────────────────────────────────────
+// Module-scope memoised row for the master-picker FlashList. Without
+// memoisation the inline renderItem rebuilt every closure each time the
+// parent re-rendered (which happens on every text input + filter change),
+// thrashing the FlashList cell recycler.
+interface MasterPickerRowProps {
+  id: string;
+  fullName: string;
+  active: boolean;
+  onPick: (id: string, fullName: string) => void;
+}
+const MasterPickerRow = React.memo(function MasterPickerRow({ id, fullName, active, onPick }: MasterPickerRowProps) {
+  return (
+    <TouchableOpacity
+      style={[styles.masterOption, active && styles.masterOptionActive]}
+      onPress={() => onPick(id, fullName)}
+    >
+      <View style={styles.masterAvatar}>
+        <Text style={styles.masterAvatarText}>{fullName?.charAt(0) || '?'}</Text>
+      </View>
+      <Text style={[styles.masterOptionText, active && { color: colors.primary[600], fontWeight: fontWeight.bold }]}>
+        {fullName}
+      </Text>
+      {active && <Ionicons name="checkmark-circle" size={18} color={colors.primary[600]} />}
+    </TouchableOpacity>
+  );
+});
 
 function formatMoney(v: number) {
   return (
@@ -44,7 +73,7 @@ function formatDateLabel(dateStr: string) {
 export default function CashFlowScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { user, isRole } = useAuth();
+  const { isRole } = useAuth();
   const canFilterByMaster = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
@@ -122,13 +151,46 @@ export default function CashFlowScreen() {
     setDateInput('');
   };
 
+  // Cold-start skeleton — branded shimmer so the screen "comes alive"
+  // before the first response, instead of a generic dimmed spinner.
+  const renderColdStart = () => (
+    <View style={{ gap: spacing[3] }}>
+      <View style={[styles.totalsCard, { gap: spacing[3] }]}>
+        <Skeleton width={140} height={11} radius={4} />
+        <Skeleton width={180} height={32} radius={6} />
+        <View style={{ gap: spacing[2.5], marginTop: spacing[2] }}>
+          <Skeleton width="100%" height={14} radius={4} />
+          <Skeleton width="100%" height={14} radius={4} />
+          <Skeleton width="100%" height={14} radius={4} />
+        </View>
+      </View>
+      <View style={{ height: spacing[2] }} />
+      <Skeleton width={100} height={11} radius={4} style={{ marginLeft: spacing[3] }} />
+      {[0, 1, 2].map((i) => (
+        <View key={i} style={[styles.dayCard, { gap: spacing[2] }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <Skeleton width={110} height={14} radius={4} />
+            <Skeleton width={80} height={14} radius={4} />
+          </View>
+          <Skeleton width="60%" height={12} radius={4} />
+        </View>
+      ))}
+    </View>
+  );
+
   return (
     <View style={styles.safe}>
       {/* Унифицированная iOS-шапка — единый стиль с Расписанием/Журналом. */}
       <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
 
       <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: Platform.OS === 'ios' ? spacing[4] : tabBarHeight + spacing[4] },
+        ]}
+        contentInset={{ bottom: tabBarHeight }}
+        scrollIndicatorInsets={{ bottom: tabBarHeight }}
+        automaticallyAdjustContentInsets={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
@@ -185,52 +247,68 @@ export default function CashFlowScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Cold-start: keep loading spinner until a real response
-            lands. Once we have any data (cached or fresh), SWR keeps
-            it on screen across period changes — no "Нет данных" flash. */}
+        {/* Cold-start: branded skeleton until a real response lands.
+            Once we have any data (cached or fresh), SWR keeps it on screen
+            across period changes — no "Нет данных" flash. */}
         {cashflow === undefined ? (
-          <LoadingSpinner />
+          renderColdStart()
         ) : !cashflow && !isLoading ? (
-          <Text style={styles.empty}>Нет данных</Text>
+          <EmptyState
+            title="Нет данных"
+            description="За выбранный период чеков не было"
+            icon="wallet"
+          />
         ) : (
           <>
-            {/* Summary cards */}
-            <View style={styles.summaryRow}>
-              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.green[50] }]} index={0}>
-                <Ionicons name="cash-outline" size={20} color={colors.green[600]} />
-                <Text style={styles.summaryLabel}>Наличные</Text>
-                <Text style={[styles.summaryValue, { color: colors.green[700] }]}>{formatMoney(totals.cash)}</Text>
-              </AnimatedCard>
-              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.blue[50] }]} index={1}>
-                <Ionicons name="card-outline" size={20} color={colors.blue[600]} />
-                <Text style={styles.summaryLabel}>Карта</Text>
-                <Text style={[styles.summaryValue, { color: colors.blue[700] }]}>{formatMoney(totals.card)}</Text>
-              </AnimatedCard>
-            </View>
-
-            <View style={styles.summaryRow}>
-              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.yellow[50] }]} index={2}>
-                <Ionicons name="shield-outline" size={20} color={colors.yellow[600]} />
-                <Text style={styles.summaryLabel}>Гарантия</Text>
-                <Text style={[styles.summaryValue, { color: colors.yellow[700] }]}>{formatMoney(totals.warranty)}</Text>
-              </AnimatedCard>
-              <AnimatedCard style={[styles.summaryCard, { backgroundColor: colors.primary[50] }]} index={3}>
-                <Ionicons name="wallet-outline" size={20} color={colors.primary[600]} />
-                <Text style={styles.summaryLabel}>Итого</Text>
-                <Text style={[styles.summaryValue, { color: colors.gray[900] }]}>{formatMoney(totals.total)}</Text>
-              </AnimatedCard>
-            </View>
+            {/* Hero totals — one big card.
+                Top: caption + 32pt hero number for Итого.
+                Bottom: 3 channel rows (Нал / Карта / Гарантия) with money
+                and tiny share-of-total caption. Single visual unit reads
+                an order of magnitude cleaner than the previous 4-tile grid. */}
+            <AnimatedCard index={0} style={styles.totalsCard}>
+              <Text style={[iosSectionLabel, { marginBottom: 4 }]}>Итого за период</Text>
+              <Text style={styles.totalsHero}>{formatMoney(totals.total)}</Text>
+              <View style={styles.totalsBreakdown}>
+                <ChannelRow
+                  iconName="cash-outline"
+                  iconBg={colors.green[50]}
+                  iconColor={colors.green[600]}
+                  label="Наличные"
+                  amount={totals.cash}
+                  total={totals.total}
+                />
+                <View style={styles.totalsDivider} />
+                <ChannelRow
+                  iconName="card-outline"
+                  iconBg={colors.blue[50]}
+                  iconColor={colors.blue[600]}
+                  label="Карта"
+                  amount={totals.card}
+                  total={totals.total}
+                />
+                <View style={styles.totalsDivider} />
+                <ChannelRow
+                  iconName="shield-checkmark-outline"
+                  iconBg={colors.yellow[50]}
+                  iconColor={colors.yellow[700]}
+                  label="Гарантия"
+                  amount={totals.warranty}
+                  total={totals.total}
+                />
+              </View>
+            </AnimatedCard>
 
             {/* Daily breakdown */}
-            <Text style={styles.sectionTitle}>По дням</Text>
+            <Text style={[iosSectionLabel, styles.sectionLabel]}>По дням</Text>
             {(cashflow.days || []).length === 0 ? (
-              <View style={styles.emptyCard}>
-                <Ionicons name="document-text-outline" size={32} color={colors.gray[300]} />
-                <Text style={styles.emptyCardText}>Нет данных за выбранный период</Text>
-              </View>
+              <EmptyState
+                title="Нет операций"
+                description="За выбранный период чеков не было"
+                icon="receipt"
+              />
             ) : (
               (cashflow.days || []).map((day: any, idx: number) => (
-                <AnimatedCard key={day.date} style={styles.dayCard} index={idx + 4}>
+                <AnimatedCard key={day.date} style={styles.dayCard} index={idx + 1}>
                   <View style={styles.dayHeader}>
                     <Text style={styles.dayDate}>
                       {new Date(day.date).toLocaleDateString('ru-RU', {
@@ -357,23 +435,43 @@ export default function CashFlowScreen() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ChannelRow — single line inside the Итого card. Icon | label + share% | amount.
+// Memo not strictly needed (3 instances) but keeps the JSX tidy.
+// ─────────────────────────────────────────────────────────────────────────────
+function ChannelRow({
+  iconName,
+  iconBg,
+  iconColor,
+  label,
+  amount,
+  total,
+}: {
+  iconName: keyof typeof Ionicons.glyphMap;
+  iconBg: string;
+  iconColor: string;
+  label: string;
+  amount: number;
+  total: number;
+}) {
+  const pct = total > 0 ? ((amount / total) * 100).toFixed(0) : '0';
+  return (
+    <View style={styles.channelRow}>
+      <View style={[styles.channelIcon, { backgroundColor: iconBg }]}>
+        <Ionicons name={iconName} size={16} color={iconColor} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.channelLabel}>{label}</Text>
+        {total > 0 && amount > 0 && <Text style={styles.channelShare}>{pct}% от итого</Text>}
+      </View>
+      <Text style={styles.channelAmount}>{formatMoney(amount)}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    backgroundColor: colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
-  },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
-  empty: { textAlign: 'center', padding: spacing[8], color: colors.gray[400] },
+  scrollContent: { padding: spacing[4], gap: spacing[3] },
 
   // Quick period
   quickRow: { flexDirection: 'row', gap: spacing[2] },
@@ -382,7 +480,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2],
     borderRadius: borderRadius.lg,
     backgroundColor: colors.white,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.gray[200],
     alignItems: 'center',
   },
@@ -397,7 +495,7 @@ const styles = StyleSheet.create({
     gap: spacing[1.5],
     backgroundColor: colors.white,
     borderRadius: borderRadius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.gray[200],
     paddingVertical: spacing[2.5],
     paddingHorizontal: spacing[3],
@@ -412,63 +510,67 @@ const styles = StyleSheet.create({
     gap: spacing[2],
     backgroundColor: colors.white,
     borderRadius: borderRadius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.primary[200],
     paddingVertical: spacing[2.5],
     paddingHorizontal: spacing[3],
   },
   masterFilterText: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
 
-  // Summary
-  summaryRow: { flexDirection: 'row', gap: spacing[2] },
-  summaryCard: {
-    flex: 1,
-    borderRadius: borderRadius.xl,
-    padding: spacing[3],
-    alignItems: 'center',
-    gap: 4,
+  // Totals card — one hero card replaces the 4-tile colour grid.
+  totalsCard: {
+    ...iosCard,
+    paddingVertical: spacing[4],
+    paddingHorizontal: spacing[4],
   },
-  summaryLabel: { fontSize: 10, color: colors.gray[500] },
-  summaryValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  totalsHero: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: colors.gray[900],
+    letterSpacing: -0.6,
+    marginBottom: spacing[3],
+  },
+  totalsBreakdown: { gap: 0 },
+  totalsDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.gray[200],
+    marginVertical: spacing[2.5],
+  },
+  channelRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  channelIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  channelLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  channelShare: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
+  channelAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
 
   // Section
-  sectionTitle: {
-    fontSize: fontSize.base,
-    fontWeight: fontWeight.bold,
-    color: colors.gray[800],
-    marginTop: spacing[1],
+  sectionLabel: {
+    marginTop: spacing[2],
+    marginLeft: spacing[1],
   },
-
-  // Empty card
-  emptyCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
-    padding: spacing[8],
-    alignItems: 'center',
-    gap: spacing[2],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-  },
-  emptyCardText: { fontSize: fontSize.sm, color: colors.gray[400] },
 
   // Day cards
   dayCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[4],
+    ...iosCard,
+    paddingVertical: spacing[3.5],
+    paddingHorizontal: spacing[4],
   },
   dayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   dayDate: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
   dayTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   dayDetails: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing[3],
     marginTop: spacing[2],
     paddingTop: spacing[2],
-    borderTopWidth: 1,
-    borderTopColor: colors.gray[50],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.gray[200],
   },
   dayDetailItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   dayDot: { width: 6, height: 6, borderRadius: 3 },
@@ -488,8 +590,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: spacing[4],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
   },
   modalTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   masterOption: {
@@ -520,7 +622,7 @@ const styles = StyleSheet.create({
     gap: spacing[4],
   },
   dateInput: {
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.gray[200],
     borderRadius: borderRadius.lg,
     paddingVertical: spacing[3],
