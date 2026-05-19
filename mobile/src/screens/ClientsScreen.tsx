@@ -317,7 +317,10 @@ export default function ClientsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries({ queryKey: ['clients'] });
+    // Pull-to-refresh refreshes the currently-visible list. Earlier
+    // this hardcoded ['clients'], so pulling in Авто mode silently
+    // did nothing — the user thought the screen was frozen.
+    await queryClient.invalidateQueries({ queryKey: mode === 'cars' ? ['cars'] : ['clients'] });
     setRefreshing(false);
   };
 
@@ -404,7 +407,9 @@ export default function ClientsScreen() {
             {item.fullName}
           </Text>
           <Text style={styles.cardSub} numberOfLines={1}>
-            {[formatPhone(item.phone) || 'Без телефона', carsCount > 0 ? `${carsCount} авто` : null]
+            {/* item.phone is typed required but legacy rows have null —
+                pass through `|| ''` so formatPhone doesn't throw on .replace. */}
+            {[formatPhone(item.phone || '') || 'Без телефона', carsCount > 0 ? `${carsCount} авто` : null]
               .filter(Boolean)
               .join(' · ')}
           </Text>
