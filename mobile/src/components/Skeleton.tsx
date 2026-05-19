@@ -51,14 +51,19 @@ export function Skeleton({ width = '100%', height = 16, radius = 6, style }: Ske
           height,
           borderRadius: radius,
           overflow: 'hidden',
-          backgroundColor: '#EEF0F3',
+          // Subtle primary[50] tint — reads as Autexa brand instead of
+          // anonymous gray.
+          backgroundColor: '#eaf1fb',
         },
         style,
       ]}
     >
       <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
         <LinearGradient
-          colors={['transparent', 'rgba(255,255,255,0.85)', 'transparent']}
+          // White core sweep tinted with the brand blue at the edges so
+          // the moving highlight feels native to Autexa rather than a
+          // generic content placeholder.
+          colors={['rgba(37,99,235,0)', 'rgba(255,255,255,0.95)', 'rgba(37,99,235,0)']}
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={StyleSheet.absoluteFill}
