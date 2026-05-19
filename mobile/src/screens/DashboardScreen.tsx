@@ -9,14 +9,13 @@ import {
   RefreshControl,
   Animated,
   Dimensions,
-  Modal as RNModal,
-  Pressable,
+  PanResponder,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line } from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line, Circle } from 'react-native-svg';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
@@ -135,13 +134,11 @@ function RevenueChart() {
   const [period, setPeriod] = useState<ChartPeriod>('week');
   const [offset, setOffset] = useState(0);
   const animWidth = useRef(new Animated.Value(0)).current;
-  const [detailPoint, setDetailPoint] = useState<{
-    date: string;
-    revenue: number;
-    profit: number;
-    checkCount: number;
-    prev?: { revenue: number; profit: number; checkCount: number };
-  } | null>(null);
+  // selectedIdx: which point on the chart is currently being inspected by
+  // the user (touch / drag / tap on day card). null = no selection,
+  // bottom stats show period totals. number = stats + tooltip update
+  // to that point.
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-chart', period, offset],
@@ -155,6 +152,12 @@ function RevenueChart() {
   useEffect(() => {
     Animated.timing(animWidth, { toValue: 1, duration: 800, useNativeDriver: false }).start();
   }, [data]);
+
+  // Whenever the visible series changes (period change, offset change, refetch)
+  // drop the selection — the index would point at the wrong day otherwise.
+  useEffect(() => {
+    setSelectedIdx(null);
+  }, [period, offset, data?.points?.length]);
 
   const handlePeriodChange = (p: ChartPeriod) => {
     setPeriod(p);
@@ -214,13 +217,64 @@ function RevenueChart() {
   };
 
   const svgW = chartWidth;
-  const svgH = 120;
+  const svgH = 160;
   const revVals = points.map((p: any) => p.revenue || 0);
   const profVals = points.map((p: any) => p.profit || 0);
   const maxProfit = Math.max(...profVals, 1);
+  const overallMax = Math.max(maxValue, maxProfit, 1);
+
+  // ── Interactive scrub: convert touch X to point index. ──
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => points.length > 1,
+        onMoveShouldSetPanResponder: () => points.length > 1,
+        onPanResponderGrant: (e) => {
+          const x = e.nativeEvent.locationX;
+          const clamped = Math.max(0, Math.min(svgW, x));
+          const idx = Math.round((clamped / svgW) * (points.length - 1));
+          setSelectedIdx(idx);
+        },
+        onPanResponderMove: (e) => {
+          const x = e.nativeEvent.locationX;
+          const clamped = Math.max(0, Math.min(svgW, x));
+          const idx = Math.round((clamped / svgW) * (points.length - 1));
+          setSelectedIdx(idx);
+        },
+      }),
+    [points.length, svgW],
+  );
+
+  // Selected point — for marker + tooltip + bottom stats override.
+  const selPoint = selectedIdx !== null ? points[selectedIdx] : null;
+  const selX =
+    selectedIdx !== null && points.length > 1 ? (selectedIdx / (points.length - 1)) * svgW : 0;
+  const selRevY =
+    selPoint !== null ? svgH - ((selPoint.revenue || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
+  const selProfY =
+    selPoint !== null ? svgH - ((selPoint.profit || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
+
+  const displayRevenue = selPoint ? selPoint.revenue || 0 : totalRevenue;
+  const displayProfit = selPoint ? selPoint.profit || 0 : totalProfit;
+  const displayChecks = selPoint ? selPoint.checkCount || 0 : totalChecks;
+  const displayAvg = selPoint && selPoint.checkCount > 0 ? selPoint.revenue / selPoint.checkCount : null;
 
   // labels for month: show 1,2,3... in order
   const labelStep = period === 'month' ? (points.length > 15 ? 5 : 3) : 1;
+
+  // Tooltip horizontal placement — clamp so it doesn't go off-card edges.
+  const TOOLTIP_W = 132;
+  const tooltipLeft = Math.max(0, Math.min(svgW - TOOLTIP_W, selX - TOOLTIP_W / 2));
+
+  const formatPointDate = (iso: string): string => {
+    if (period === 'year') {
+      const [y, m] = iso.split('-');
+      const months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+      return `${months[parseInt(m) - 1] ?? ''} ${y}`;
+    }
+    const d = new Date(iso);
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  };
 
   return (
     <AnimatedCard index={0} style={styles.chartCard}>
@@ -263,16 +317,16 @@ function RevenueChart() {
           <ActivityIndicator color={colors.primary[400]} style={{ paddingVertical: spacing[8] }} />
         ) : points.length > 1 ? (
           <View style={styles.chartBody}>
-            {/* SVG Wave Chart */}
-            <View style={{ height: svgH, width: svgW }}>
+            {/* SVG Wave Chart — drag/tap anywhere on it to scrub through points. */}
+            <View style={{ height: svgH, width: svgW, position: 'relative' }} {...panResponder.panHandlers}>
               <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
                 <Defs>
                   <SvgGrad id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                    <Stop offset="0%" stopColor="rgb(37,99,235)" stopOpacity="0.4" />
+                    <Stop offset="0%" stopColor="rgb(37,99,235)" stopOpacity="0.55" />
                     <Stop offset="100%" stopColor="rgb(37,99,235)" stopOpacity="0" />
                   </SvgGrad>
                   <SvgGrad id="profGrad" x1="0" y1="0" x2="0" y2="1">
-                    <Stop offset="0%" stopColor="rgb(6,182,212)" stopOpacity="0.3" />
+                    <Stop offset="0%" stopColor="rgb(6,182,212)" stopOpacity="0.4" />
                     <Stop offset="100%" stopColor="rgb(6,182,212)" stopOpacity="0" />
                   </SvgGrad>
                 </Defs>
@@ -289,26 +343,66 @@ function RevenueChart() {
                   />
                 ))}
                 {/* Revenue area + line */}
-                <Path d={buildAreaPath(revVals, svgW, svgH, maxValue)} fill="url(#revGrad)" />
+                <Path d={buildAreaPath(revVals, svgW, svgH, overallMax)} fill="url(#revGrad)" />
                 <Path
-                  d={buildWavePath(revVals, svgW, svgH, maxValue)}
+                  d={buildWavePath(revVals, svgW, svgH, overallMax)}
                   stroke="rgb(59,130,246)"
-                  strokeWidth={2.5}
+                  strokeWidth={3}
+                  strokeLinecap="round"
                   fill="none"
                 />
                 {/* Profit area + line */}
+                <Path d={buildAreaPath(profVals, svgW, svgH, overallMax)} fill="url(#profGrad)" />
                 <Path
-                  d={buildAreaPath(profVals, svgW, svgH, maxProfit > maxValue ? maxProfit : maxValue)}
-                  fill="url(#profGrad)"
-                />
-                <Path
-                  d={buildWavePath(profVals, svgW, svgH, maxProfit > maxValue ? maxProfit : maxValue)}
+                  d={buildWavePath(profVals, svgW, svgH, overallMax)}
                   stroke="rgb(6,182,212)"
-                  strokeWidth={1.5}
+                  strokeWidth={2}
+                  strokeLinecap="round"
                   fill="none"
                   strokeDasharray="4,4"
                 />
+                {/* Scrub marker — vertical line + two dots at the selected x. */}
+                {selPoint !== null && (
+                  <>
+                    <Line
+                      x1={selX}
+                      y1={0}
+                      x2={selX}
+                      y2={svgH}
+                      stroke="rgba(255,255,255,0.45)"
+                      strokeWidth={1}
+                    />
+                    {/* Revenue dot */}
+                    <Circle cx={selX} cy={selRevY} r={5.5} fill="rgb(59,130,246)" stroke="white" strokeWidth={2} />
+                    {/* Profit dot */}
+                    <Circle cx={selX} cy={selProfY} r={4} fill="rgb(6,182,212)" stroke="white" strokeWidth={1.5} />
+                  </>
+                )}
               </Svg>
+
+              {/* Floating tooltip above the selected point. */}
+              {selPoint !== null && (
+                <View
+                  style={[
+                    styles.scrubTooltip,
+                    {
+                      left: tooltipLeft,
+                      width: TOOLTIP_W,
+                    },
+                  ]}
+                  pointerEvents="none"
+                >
+                  <Text style={styles.scrubTooltipDate}>{formatPointDate(selPoint.date)}</Text>
+                  <View style={styles.scrubTooltipRow}>
+                    <View style={[styles.scrubDot, { backgroundColor: 'rgb(59,130,246)' }]} />
+                    <Text style={styles.scrubTooltipValue}>{formatMoney(selPoint.revenue || 0)}</Text>
+                  </View>
+                  <View style={styles.scrubTooltipRow}>
+                    <View style={[styles.scrubDot, { backgroundColor: 'rgb(6,182,212)' }]} />
+                    <Text style={styles.scrubTooltipValueSm}>{formatMoney(selPoint.profit || 0)}</Text>
+                  </View>
+                </View>
+              )}
             </View>
 
             {/* X-axis labels */}
@@ -326,6 +420,11 @@ function RevenueChart() {
                 })}
               </View>
             )}
+
+            {/* Hint when nothing selected */}
+            {selPoint === null && (
+              <Text style={styles.scrubHint}>Проведите по графику для деталей</Text>
+            )}
           </View>
         ) : points.length === 1 ? (
           <View style={styles.todayStat}>
@@ -336,223 +435,72 @@ function RevenueChart() {
           <Text style={styles.chartEmpty}>Нет данных за период</Text>
         )}
 
-        {/* Bottom stats */}
+        {/* Bottom stats — switch between period totals and the selected point's
+            values; small "за день" / "за период" pill makes the mode obvious. */}
         {data && (
-          <View style={styles.chartStats}>
-            <View style={styles.chartStatItem}>
-              <Text style={styles.chartStatLabel}>Оборот</Text>
-              <Text style={styles.chartStatValue}>{formatMoney(totalRevenue)}</Text>
+          <>
+            <View style={styles.scopeBar}>
+              <Text style={styles.scopeBarLabel}>
+                {selPoint ? formatPointDate(selPoint.date).toUpperCase() : 'ИТОГО ЗА ПЕРИОД'}
+              </Text>
+              {selPoint !== null && (
+                <TouchableOpacity onPress={() => setSelectedIdx(null)} hitSlop={8}>
+                  <Text style={styles.scopeBarClear}>сбросить</Text>
+                </TouchableOpacity>
+              )}
             </View>
-            <View style={[styles.chartStatItem, styles.chartStatBorder]}>
-              <Text style={styles.chartStatLabel}>Прибыль</Text>
-              <Text style={[styles.chartStatValue, { color: colors.cyan[400] }]}>{formatMoney(totalProfit)}</Text>
+            <View style={styles.chartStats}>
+              <View style={styles.chartStatItem}>
+                <Text style={styles.chartStatLabel}>Оборот</Text>
+                <Text style={styles.chartStatValue}>{formatMoney(displayRevenue)}</Text>
+              </View>
+              <View style={[styles.chartStatItem, styles.chartStatBorder]}>
+                <Text style={styles.chartStatLabel}>Прибыль</Text>
+                <Text style={[styles.chartStatValue, { color: colors.cyan[400] }]}>{formatMoney(displayProfit)}</Text>
+              </View>
+              <View style={[styles.chartStatItem, styles.chartStatBorder]}>
+                <Text style={styles.chartStatLabel}>Чеков</Text>
+                <Text style={styles.chartStatValue}>{displayChecks || '—'}</Text>
+              </View>
             </View>
-            <View style={[styles.chartStatItem, styles.chartStatBorder]}>
-              <Text style={styles.chartStatLabel}>Чеков</Text>
-              <Text style={styles.chartStatValue}>{totalChecks || '—'}</Text>
-            </View>
-          </View>
+            {/* Selected-day extras — only when scrubbing. */}
+            {selPoint !== null && (
+              <View style={styles.chartStatsExtra}>
+                <View style={styles.chartStatExtraItem}>
+                  <Text style={styles.chartStatLabel}>Средний чек</Text>
+                  <Text style={styles.chartStatValueSm}>{displayAvg !== null ? formatMoney(displayAvg) : '—'}</Text>
+                </View>
+              </View>
+            )}
+          </>
         )}
 
-        {/* Scrollable day details — tap any point to see full metrics. */}
+        {/* Scrollable day strip — tap to select / scrub a specific point. */}
         {points.length > 1 && period !== 'today' && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chartDetailsScroll}>
-            {points.map((point: any, idx: number) => (
-              <TouchableOpacity
-                key={idx}
-                activeOpacity={0.7}
-                onPress={() =>
-                  setDetailPoint({
-                    date: point.date,
-                    revenue: point.revenue || 0,
-                    profit: point.profit || 0,
-                    checkCount: point.checkCount || 0,
-                    prev:
-                      idx > 0
-                        ? {
-                            revenue: points[idx - 1].revenue || 0,
-                            profit: points[idx - 1].profit || 0,
-                            checkCount: points[idx - 1].checkCount || 0,
-                          }
-                        : undefined,
-                  })
-                }
-                style={styles.chartDetailCard}
-              >
-                <Text style={styles.chartDetailDate}>{formatLabel(point.date, idx, points.length)}</Text>
-                <Text style={styles.chartDetailRevenue}>{formatMoney(point.revenue)}</Text>
-                <Text style={styles.chartDetailProfit}>{formatMoney(point.profit)}</Text>
-              </TouchableOpacity>
-            ))}
+            {points.map((point: any, idx: number) => {
+              const active = idx === selectedIdx;
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  activeOpacity={0.7}
+                  onPress={() => setSelectedIdx(active ? null : idx)}
+                  style={[styles.chartDetailCard, active && styles.chartDetailCardActive]}
+                >
+                  <Text style={[styles.chartDetailDate, active && styles.chartDetailDateActive]}>
+                    {formatLabel(point.date, idx, points.length)}
+                  </Text>
+                  <Text style={styles.chartDetailRevenue}>{formatMoney(point.revenue)}</Text>
+                  <Text style={styles.chartDetailProfit}>{formatMoney(point.profit)}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         )}
       </LinearGradient>
-
-      {/* Per-point detail sheet — opens on tap of a day card above. */}
-      <PointDetailSheet point={detailPoint} period={period} onClose={() => setDetailPoint(null)} />
     </AnimatedCard>
   );
 }
-
-// ── Per-point detail sheet (revenue, profit, checks, avg, delta vs prev) ──
-function PointDetailSheet({
-  point,
-  period,
-  onClose,
-}: {
-  point: { date: string; revenue: number; profit: number; checkCount: number; prev?: { revenue: number; profit: number; checkCount: number } } | null;
-  period: ChartPeriod;
-  onClose: () => void;
-}) {
-  if (!point) return null;
-  const avg = point.checkCount > 0 ? point.revenue / point.checkCount : 0;
-  const deltaRev =
-    point.prev && point.prev.revenue > 0 ? ((point.revenue - point.prev.revenue) / point.prev.revenue) * 100 : null;
-  const deltaProf =
-    point.prev && point.prev.profit !== 0 ? ((point.profit - point.prev.profit) / Math.abs(point.prev.profit)) * 100 : null;
-  const deltaChecks =
-    point.prev && point.prev.checkCount > 0
-      ? ((point.checkCount - point.prev.checkCount) / point.prev.checkCount) * 100
-      : null;
-
-  const formatDate = (iso: string): string => {
-    if (period === 'year') {
-      const [y, m] = iso.split('-');
-      const months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
-      return `${months[parseInt(m) - 1]} ${y}`;
-    }
-    const d = new Date(iso);
-    return d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-  };
-
-  const DeltaPill = ({ value, label }: { value: number | null; label: string }) => {
-    if (value === null) return <Text style={pointDetailStyles.deltaNone}>{label}: нет данных</Text>;
-    const up = value > 0;
-    const color = value === 0 ? colors.gray[500] : up ? colors.green[600] : colors.red[600];
-    return (
-      <View style={[pointDetailStyles.deltaPill, { backgroundColor: color + '14' }]}>
-        <Ionicons
-          name={value === 0 ? 'remove' : up ? 'trending-up' : 'trending-down'}
-          size={14}
-          color={color}
-        />
-        <Text style={[pointDetailStyles.deltaText, { color }]}>{Math.abs(value).toFixed(1)}%</Text>
-        <Text style={[pointDetailStyles.deltaLabel, { color }]}>{label}</Text>
-      </View>
-    );
-  };
-
-  return (
-    <RNModal visible animationType="fade" transparent onRequestClose={onClose}>
-      <Pressable style={pointDetailStyles.backdrop} onPress={onClose}>
-        <Pressable style={pointDetailStyles.sheet} onPress={(e) => e.stopPropagation()}>
-          <View style={pointDetailStyles.grabber} />
-          <Text style={pointDetailStyles.dateLabel}>{formatDate(point.date)}</Text>
-
-          <View style={pointDetailStyles.metricsRow}>
-            <View style={pointDetailStyles.metricBox}>
-              <Text style={pointDetailStyles.metricLabel}>Оборот</Text>
-              <Text style={pointDetailStyles.metricValue}>{formatMoney(point.revenue)}</Text>
-            </View>
-            <View style={pointDetailStyles.metricBox}>
-              <Text style={pointDetailStyles.metricLabel}>Прибыль</Text>
-              <Text style={[pointDetailStyles.metricValue, { color: colors.cyan[600] }]}>
-                {formatMoney(point.profit)}
-              </Text>
-            </View>
-          </View>
-
-          <View style={pointDetailStyles.metricsRow}>
-            <View style={pointDetailStyles.metricBox}>
-              <Text style={pointDetailStyles.metricLabel}>Чеков</Text>
-              <Text style={pointDetailStyles.metricValue}>{point.checkCount || 0}</Text>
-            </View>
-            <View style={pointDetailStyles.metricBox}>
-              <Text style={pointDetailStyles.metricLabel}>Средний чек</Text>
-              <Text style={pointDetailStyles.metricValue}>{point.checkCount > 0 ? formatMoney(avg) : '—'}</Text>
-            </View>
-          </View>
-
-          <Text style={pointDetailStyles.deltasTitle}>Изменение vs предыдущего периода</Text>
-          <View style={pointDetailStyles.deltasGrid}>
-            <DeltaPill value={deltaRev} label="оборот" />
-            <DeltaPill value={deltaProf} label="прибыль" />
-            <DeltaPill value={deltaChecks} label="чеки" />
-          </View>
-
-          <TouchableOpacity style={pointDetailStyles.closeBtn} onPress={onClose}>
-            <Text style={pointDetailStyles.closeBtnText}>Закрыть</Text>
-          </TouchableOpacity>
-        </Pressable>
-      </Pressable>
-    </RNModal>
-  );
-}
-
-const pointDetailStyles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: colors.white,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: spacing[5],
-    paddingBottom: spacing[6],
-    paddingTop: spacing[3],
-  },
-  grabber: {
-    alignSelf: 'center',
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.gray[300],
-    marginBottom: spacing[4],
-  },
-  dateLabel: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: colors.gray[900],
-    letterSpacing: -0.2,
-    marginBottom: spacing[4],
-    textTransform: 'capitalize' as const,
-  },
-  metricsRow: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[3] },
-  metricBox: {
-    flex: 1,
-    backgroundColor: colors.gray[50],
-    borderRadius: 14,
-    padding: spacing[3.5],
-  },
-  metricLabel: { fontSize: 12, color: colors.gray[500], fontWeight: '500', marginBottom: 4 },
-  metricValue: { fontSize: 18, fontWeight: '800', color: colors.gray[900], letterSpacing: -0.4 },
-  deltasTitle: {
-    fontSize: 12,
-    color: colors.gray[500],
-    fontWeight: '600',
-    letterSpacing: 0.3,
-    textTransform: 'uppercase' as const,
-    marginTop: spacing[2],
-    marginBottom: spacing[2],
-  },
-  deltasGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], marginBottom: spacing[5] },
-  deltaPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: spacing[1.5],
-    borderRadius: 999,
-  },
-  deltaText: { fontSize: 13, fontWeight: '700' },
-  deltaLabel: { fontSize: 12, fontWeight: '500', opacity: 0.85 },
-  deltaNone: { fontSize: 12, color: colors.gray[400] },
-  closeBtn: {
-    backgroundColor: colors.primary[600],
-    paddingVertical: spacing[3.5],
-    borderRadius: 14,
-    alignItems: 'center',
-  },
-  closeBtnText: { color: colors.white, fontSize: 15, fontWeight: '700' },
-});
 
 // ── Shift Control ──
 function ShiftControl() {
@@ -2074,6 +2022,66 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   chartStatValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.white, marginTop: 2 },
+  chartStatValueSm: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white, marginTop: 2 },
+  // Scope bar — shows whether stats below are for the period or a specific point.
+  scopeBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: spacing[3],
+    paddingHorizontal: spacing[1],
+  },
+  scopeBarLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.slate[400],
+    letterSpacing: 1.2,
+  },
+  scopeBarClear: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.blue[300],
+    letterSpacing: 0.2,
+  },
+  chartStatsExtra: {
+    flexDirection: 'row',
+    marginTop: spacing[2],
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: borderRadius.xl,
+    overflow: 'hidden',
+  },
+  chartStatExtraItem: { flex: 1, paddingVertical: spacing[2.5], alignItems: 'center' },
+  // Scrub tooltip — appears above the SVG when the user drags the chart.
+  scrubTooltip: {
+    position: 'absolute',
+    top: -2,
+    backgroundColor: 'rgba(15,23,42,0.95)',
+    borderRadius: 10,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.10)',
+  },
+  scrubTooltipDate: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.slate[300],
+    letterSpacing: 0.2,
+    textTransform: 'capitalize',
+    marginBottom: 2,
+  },
+  scrubTooltipRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  scrubDot: { width: 7, height: 7, borderRadius: 4 },
+  scrubTooltipValue: { fontSize: 12, fontWeight: '700', color: colors.white },
+  scrubTooltipValueSm: { fontSize: 11, fontWeight: '500', color: colors.cyan[400] },
+  scrubHint: {
+    fontSize: 10,
+    color: colors.slate[500],
+    textAlign: 'center',
+    marginTop: spacing[1],
+    letterSpacing: 0.3,
+    fontStyle: 'italic',
+  },
   chartDetailsScroll: { marginTop: spacing[3] },
   chartDetailCard: {
     backgroundColor: 'rgba(255,255,255,0.05)',
@@ -2084,7 +2092,13 @@ const styles = StyleSheet.create({
     minWidth: 64,
     alignItems: 'center',
   },
+  chartDetailCardActive: {
+    backgroundColor: 'rgba(59,130,246,0.20)',
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.50)',
+  },
   chartDetailDate: { fontSize: 9, color: colors.slate[500], fontWeight: fontWeight.medium },
+  chartDetailDateActive: { color: colors.white },
   chartDetailRevenue: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.blue[300] },
   chartDetailProfit: { fontSize: 9, color: colors.cyan[400] },
   // Shift
