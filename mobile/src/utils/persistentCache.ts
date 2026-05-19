@@ -126,6 +126,28 @@ function storageKey(qk: QueryKey): string {
 }
 
 /**
+ * Is this query key search-volatile — i.e. its sub-params contain a
+ * non-empty `search` string the user typed?
+ *
+ * We don't want to mirror every keystroke variant to AsyncStorage. That
+ * would (a) blow up disk usage on long sessions and (b) cause main-thread
+ * stalls because AsyncStorage writes serialise through a single bridge
+ * call. We still persist the BASE variant (`search === ''`) because
+ * that's the snapshot we want on cold start.
+ */
+function isSearchVolatile(qk: QueryKey): boolean {
+  if (!Array.isArray(qk)) return false;
+  for (let i = 1; i < qk.length; i++) {
+    const part = qk[i];
+    if (part && typeof part === 'object' && 'search' in (part as Record<string, unknown>)) {
+      const s = (part as { search?: unknown }).search;
+      if (typeof s === 'string' && s.length > 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Hydrate the QueryClient from AsyncStorage.
  *
  * Call once on app start, BEFORE the first render that uses `useQuery`.
@@ -180,8 +202,29 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
  *
  * Returns an unsubscribe function — keep the reference alive for the
  * lifetime of the app.
+ *
+ * Performance contract:
+ *   - SKIP search-volatile variants (`search: '<non-empty>'`). The base
+ *     `search: ''` slot is still persisted. This prevents per-keystroke
+ *     bridge writes that blocked the JS-thread on slower devices.
+ *   - COALESCE rapid updates per storage key via a 350 ms tail-debounce.
+ *     TanStack fires the `updated` event multiple times per refetch
+ *     (status transitions, dataUpdatedAt bumps); we only need to write
+ *     once after the last change settles.
+ *   - JSON.stringify + AsyncStorage.setItem still run, but only once
+ *     per query-key per quiet period.
  */
 export function attachPersistence(qc: QueryClient): () => void {
+  // One pending-write timer per storage key — overwriting the timer for
+  // a given key collapses N "updated" events into a single late write.
+  const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+  const WRITE_DEBOUNCE_MS = 350;
+
+  const flush = (skey: string, payload: string) => {
+    pendingWrites.delete(skey);
+    AsyncStorage.setItem(skey, payload).catch(() => {});
+  };
+
   const unsubscribe = qc.getQueryCache().subscribe((event) => {
     if (event.type !== 'updated') return;
     const query = event.query;
@@ -189,15 +232,31 @@ export function attachPersistence(qc: QueryClient): () => void {
     const f = firstKey(query.queryKey);
     if (!isPersisted(f)) return;
     if (query.state.data === undefined) return;
+    // Search-debounced lists (e.g. ['products', { search: 'мас' }])
+    // are NOT persisted — they're transient user input variants.
+    // The empty-search variant under the same first-segment IS persisted.
+    if (isSearchVolatile(query.queryKey)) return;
 
     const entry: StoredEntry = {
       queryKey: query.queryKey,
       data: query.state.data,
       storedAt: Date.now(),
     };
-    AsyncStorage.setItem(storageKey(query.queryKey), JSON.stringify(entry)).catch(() => {});
+    const skey = storageKey(query.queryKey);
+    const payload = JSON.stringify(entry);
+
+    const existing = pendingWrites.get(skey);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => flush(skey, payload), WRITE_DEBOUNCE_MS);
+    pendingWrites.set(skey, timer);
   });
-  return unsubscribe;
+
+  return () => {
+    unsubscribe();
+    // Cancel any debounced writes — App is unmounting (HMR / logout etc.)
+    for (const t of pendingWrites.values()) clearTimeout(t);
+    pendingWrites.clear();
+  };
 }
 
 /** Clear all persisted cache — call from logout. */
