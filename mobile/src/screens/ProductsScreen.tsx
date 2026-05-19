@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Dimensions,
   Modal as RNModal,
+  Platform,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import CachedImage from '../components/CachedImage';
@@ -1082,6 +1083,10 @@ export default function ProductsScreen() {
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
+          // Each product row carries a heavy CachedImage thumbnail.
+          // Explicitly enable clipped-subview removal so Android
+          // doesn't keep them mounted off-screen while flinging.
+          removeClippedSubviews
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
@@ -1733,7 +1738,13 @@ export default function ProductsScreen() {
         onRequestClose={() => setFullscreenPhoto(null)}
       >
         <Pressable style={styles.fullscreenOverlay} onPress={() => setFullscreenPhoto(null)}>
-          <BlurView intensity={90} tint="dark" style={StyleSheet.absoluteFill} />
+          {/* expo-blur intensity > ~25 is expensive / flaky on Android.
+              Cap it there and rely on the alpha-tinted backdrop layer
+              below for visual depth. */}
+          <BlurView intensity={Platform.OS === 'android' ? 24 : 90} tint="dark" style={StyleSheet.absoluteFill} />
+          {Platform.OS === 'android' && (
+            <View pointerEvents="none" style={styles.fullscreenAndroidScrim} />
+          )}
           {/* Inner Pressable absorbs taps on the image so the image
               itself doesn't dismiss the preview — only the backdrop does. */}
           {fullscreenPhoto && (
@@ -2101,6 +2112,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 16,
+  },
+  // Android fallback scrim: expo-blur on Android caps poorly at high
+  // intensity, so we overlay a translucent dark surface for the same
+  // perceived contrast without the blur cost.
+  fullscreenAndroidScrim: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
   fullscreenImageWrap: {
     borderRadius: 24,

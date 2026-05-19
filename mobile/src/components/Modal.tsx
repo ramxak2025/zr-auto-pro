@@ -65,7 +65,11 @@ const styles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
+    // M3 Alert Dialog uses a 28pt extra-large container corner — wider
+    // than the iOS 2xl (≈16-20pt) so the bottom corners read as more
+    // "rounded surface" than "squircle". Branch so each platform feels
+    // native.
+    borderRadius: Platform.OS === 'android' ? 28 : borderRadius['2xl'],
     width: '100%',
     maxHeight: SCREEN_HEIGHT * 0.85,
     shadowColor: colors.black,

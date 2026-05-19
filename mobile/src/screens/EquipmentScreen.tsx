@@ -207,7 +207,9 @@ const dialogStyles = StyleSheet.create({
     maxWidth: 460,
     maxHeight: 520,
     backgroundColor: colors.white,
-    borderRadius: 20,
+    // M3 Alert Dialog uses a 28pt extra-large container corner; iOS HIG
+    // uses ~20pt. Branch so each platform reads as native.
+    borderRadius: Platform.OS === 'android' ? 28 : 20,
     overflow: 'hidden',
     // Soft elevation so the card feels lifted off the scrim.
     shadowColor: colors.black,
@@ -264,8 +266,10 @@ const dialogStyles = StyleSheet.create({
   },
   btn: {
     flex: 1,
-    height: 48,
-    borderRadius: 14,
+    height: Platform.OS === 'android' ? 40 : 48,
+    // M3 buttons are pill-shaped (radius = height / 2 = 20pt at 40pt
+    // tall). iOS gets a softer ~14pt squircle.
+    borderRadius: Platform.OS === 'android' ? 20 : 14,
     alignItems: 'center',
     justifyContent: 'center',
   },

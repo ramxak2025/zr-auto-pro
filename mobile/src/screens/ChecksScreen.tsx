@@ -737,6 +737,11 @@ export default function ChecksScreen() {
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
+              // removeClippedSubviews is iOS-default; on Android the
+              // journal can grow to hundreds of rows so we opt in
+              // explicitly to avoid offscreen draws dragging the UI
+              // thread during fast flings.
+              removeClippedSubviews
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
@@ -777,6 +782,7 @@ export default function ChecksScreen() {
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
+              removeClippedSubviews
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }

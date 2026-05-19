@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import Modal from './Modal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
@@ -63,7 +63,9 @@ const styles = StyleSheet.create({
   cancelBtn: {
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
+    // M3 buttons are pill-shaped; iOS prefers a softer squircle. Branch
+    // so each platform reads as native.
+    borderRadius: Platform.OS === 'android' ? 999 : borderRadius.lg,
     borderWidth: 1,
     borderColor: colors.gray[300],
     backgroundColor: colors.white,
@@ -76,7 +78,7 @@ const styles = StyleSheet.create({
   confirmBtn: {
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
+    borderRadius: Platform.OS === 'android' ? 999 : borderRadius.lg,
     backgroundColor: colors.primary[600],
   },
   dangerBtn: {
