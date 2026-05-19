@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -37,6 +37,93 @@ function formatMoney(v: number) {
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
 }
+
+// ── SupplierRow ────────────────────────────────────────────────────────
+// Module-scope React.memo'd row + Swipeable wrapper. Identity is stable
+// across parent re-renders, so each keystroke in the search box (which
+// rebuilds the SuppliersScreen) doesn't tear down + rebuild every row.
+//
+// Memo works because the props are primitive + stable callbacks via
+// useCallback in the parent (onPress / onEdit / onDelete). Swipeable
+// retains its native handler across renders thanks to that stability.
+interface SupplierRowProps {
+  item: Supplier;
+  index: number;
+  canDelete: boolean;
+  onPress: (id: string) => void;
+  onEdit: (s: Supplier) => void;
+  onDelete: (s: Supplier) => void;
+}
+const SupplierRow = React.memo(function SupplierRow({
+  item,
+  index,
+  canDelete,
+  onPress,
+  onEdit,
+  onDelete,
+}: SupplierRowProps) {
+  const hasDebt = item.currentDebt > 0;
+
+  const card = (
+    <AnimatedCard style={styles.card} index={index} onPress={() => onPress(item.id)}>
+      <View style={styles.row}>
+        <View style={[styles.iconCircle, hasDebt ? styles.iconCircleDebt : styles.iconCircleClean]}>
+          <Ionicons
+            name={hasDebt ? 'wallet-outline' : 'business-outline'}
+            size={18}
+            color={hasDebt ? colors.orange[600] : colors.gray[400]}
+          />
+        </View>
+        <View style={styles.info}>
+          <Text style={styles.cardName} numberOfLines={1}>
+            {item.name}
+          </Text>
+          <Text style={styles.cardSub} numberOfLines={1}>
+            {[item.contactPerson, item.phone ? formatPhone(item.phone) : null].filter(Boolean).join(' · ') ||
+              'Без контактов'}
+          </Text>
+        </View>
+        <View style={styles.amountWrap}>
+          {hasDebt ? (
+            <>
+              <Text style={styles.debtAmount}>{formatMoney(item.currentDebt)}</Text>
+              <Text style={styles.debtLabel}>долг</Text>
+            </>
+          ) : (
+            <Ionicons name="checkmark-circle" size={20} color={colors.green[500]} />
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: 6 }} />
+      </View>
+    </AnimatedCard>
+  );
+
+  if (!canDelete) return card;
+
+  return (
+    <Swipeable
+      renderRightActions={() => (
+        /* Two trailing actions, iOS-style: Edit (primary blue, pencil)
+           then Delete (destructive red, trash). Tap on Edit opens
+           the same edit modal as a regular row tap; tap on Delete
+           goes through ConfirmDialog → optimistic delete. */
+        <View style={styles.swipeActionsRow}>
+          <TouchableOpacity style={styles.swipeEditAction} onPress={() => onEdit(item)} activeOpacity={0.85}>
+            <Ionicons name="pencil" size={20} color={colors.white} />
+            <Text style={styles.swipeEditText}>Изменить</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.swipeDeleteAction} onPress={() => onDelete(item)} activeOpacity={0.85}>
+            <Ionicons name="trash-outline" size={20} color={colors.white} />
+            <Text style={styles.swipeDeleteText}>Удалить</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      overshootRight={false}
+    >
+      {card}
+    </Swipeable>
+  );
+});
 
 export default function SuppliersScreen() {
   const navigation = useNavigation<any>();
@@ -112,23 +199,23 @@ export default function SuppliersScreen() {
     },
   });
 
-  const openCreate = () => {
+  const openCreate = useCallback(() => {
     setEditingSupplier(null);
     setName('');
     setPhone('');
     setContactPerson('');
     setComment('');
     setModalOpen(true);
-  };
+  }, []);
 
-  const openEdit = (s: Supplier) => {
+  const openEdit = useCallback((s: Supplier) => {
     setEditingSupplier(s);
     setName(s.name);
     setPhone(s.phone ? formatPhone(s.phone) : '');
     setContactPerson(s.contactPerson || '');
     setComment(s.comment || '');
     setModalOpen(true);
-  };
+  }, []);
 
   const closeModal = () => {
     setModalOpen(false);
@@ -155,80 +242,28 @@ export default function SuppliersScreen() {
     setRefreshing(false);
   };
 
-  const renderSupplier = ({ item, index }: { item: Supplier; index: number }) => {
-    const hasDebt = item.currentDebt > 0;
+  // Stable handlers passed to memoised SupplierRow — without useCallback
+  // every search-input keystroke would change the function identity and
+  // bust React.memo's shallow prop comparison for every row in the list.
+  const handlePressSupplier = useCallback(
+    (id: string) => navigation.navigate('SupplierDetail', { id }),
+    [navigation],
+  );
+  const handleDeleteSupplier = useCallback((s: Supplier) => setPendingDelete(s), []);
 
-    const card = (
-      <AnimatedCard
-        style={styles.card}
+  const renderSupplier = useCallback(
+    ({ item, index }: { item: Supplier; index: number }) => (
+      <SupplierRow
+        item={item}
         index={index}
-        onPress={() => navigation.navigate('SupplierDetail', { id: item.id })}
-      >
-        <View style={styles.row}>
-          <View style={[styles.iconCircle, hasDebt ? styles.iconCircleDebt : styles.iconCircleClean]}>
-            <Ionicons
-              name={hasDebt ? 'wallet-outline' : 'business-outline'}
-              size={18}
-              color={hasDebt ? colors.orange[600] : colors.gray[400]}
-            />
-          </View>
-          <View style={styles.info}>
-            <Text style={styles.cardName} numberOfLines={1}>
-              {item.name}
-            </Text>
-            <Text style={styles.cardSub} numberOfLines={1}>
-              {[item.contactPerson, item.phone ? formatPhone(item.phone) : null]
-                .filter(Boolean)
-                .join(' · ') || 'Без контактов'}
-            </Text>
-          </View>
-          <View style={styles.amountWrap}>
-            {hasDebt ? (
-              <>
-                <Text style={styles.debtAmount}>{formatMoney(item.currentDebt)}</Text>
-                <Text style={styles.debtLabel}>долг</Text>
-              </>
-            ) : (
-              <Ionicons name="checkmark-circle" size={20} color={colors.green[500]} />
-            )}
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: 6 }} />
-        </View>
-      </AnimatedCard>
-    );
-
-    // Without delete permission — a plain card. With permission — wrap
-    // in Swipeable and reveal a destructive trailing action on left-swipe.
-    if (!canDelete) return card;
-
-    return (
-      <Swipeable
-        renderRightActions={() => (
-          /* Two trailing actions, iOS-style: Edit (primary blue, pencil)
-             then Delete (destructive red, trash). Tap on Edit opens
-             the same edit modal as a regular row tap; tap on Delete
-             goes through ConfirmDialog → optimistic delete. */
-          <View style={styles.swipeActionsRow}>
-            <TouchableOpacity style={styles.swipeEditAction} onPress={() => openEdit(item)} activeOpacity={0.85}>
-              <Ionicons name="pencil" size={20} color={colors.white} />
-              <Text style={styles.swipeEditText}>Изменить</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.swipeDeleteAction}
-              onPress={() => setPendingDelete(item)}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="trash-outline" size={20} color={colors.white} />
-              <Text style={styles.swipeDeleteText}>Удалить</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        overshootRight={false}
-      >
-        {card}
-      </Swipeable>
-    );
-  };
+        canDelete={canDelete}
+        onPress={handlePressSupplier}
+        onEdit={openEdit}
+        onDelete={handleDeleteSupplier}
+      />
+    ),
+    [canDelete, handlePressSupplier, openEdit, handleDeleteSupplier],
+  );
 
   return (
     <View style={styles.safe}>
