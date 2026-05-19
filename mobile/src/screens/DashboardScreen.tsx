@@ -666,10 +666,25 @@ function OwnerAnalyticsChart() {
     [points.length, svgW],
   );
 
-  const selPoint = selectedIdx !== null ? points[selectedIdx] : null;
-  const selX = selectedIdx !== null && points.length > 1 ? (selectedIdx / (points.length - 1)) * svgW : 0;
-  const selRevY = selPoint !== null ? svgH - ((selPoint.revenue || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
-  const selProfY = selPoint !== null ? svgH - ((selPoint.profit || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
+  // ─────────────────────────────────────────────────────────────────────
+  // Race-safe scrub state.
+  //
+  // After the user changes period (week→year→today), `points.length` can
+  // SHRINK before the post-render effect resets `selectedIdx` to null.
+  // The intermediate render thus reads `points[selectedIdx]` with a
+  // stale, now-out-of-range index — returning `undefined`. The previous
+  // code only null-checked, so `selPoint.revenue` crashed.
+  //
+  // We coalesce undefined to null here so every downstream read is safe,
+  // and re-clamp `selX` to the new array length to avoid drawing the
+  // scrub line off-canvas in the same intermediate frame.
+  const safeSelectedIdx =
+    selectedIdx !== null && selectedIdx >= 0 && selectedIdx < points.length ? selectedIdx : null;
+  const selPoint = safeSelectedIdx !== null ? points[safeSelectedIdx] : null;
+  const selX =
+    safeSelectedIdx !== null && points.length > 1 ? (safeSelectedIdx / (points.length - 1)) * svgW : 0;
+  const selRevY = selPoint ? svgH - ((selPoint.revenue || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
+  const selProfY = selPoint ? svgH - ((selPoint.profit || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
 
   const displayRevenue = selPoint ? selPoint.revenue || 0 : totalRevenue;
   const displayProfit = selPoint ? selPoint.profit || 0 : totalProfit;
@@ -1376,8 +1391,13 @@ function MasterRatingCard({ userId }: { userId?: string }) {
   const myRating = data.employeeRatings.find((e: any) => e.employeeId === userId);
   if (!myRating) return null;
 
+  // `.sort()` mutates in place — calling it on `data.employeeRatings`
+  // directly would silently reorder the array held INSIDE the React Query
+  // cache, affecting every other consumer of `['marketing-dashboard']`
+  // until the next refetch produced a new reference. Copy first, then
+  // sort the local clone.
   const rank =
-    data.employeeRatings
+    [...data.employeeRatings]
       .sort((a: any, b: any) => b.avgRating - a.avgRating)
       .findIndex((e: any) => e.employeeId === userId) + 1;
 

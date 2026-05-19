@@ -58,7 +58,8 @@ describe('getGreeting', () => {
   const RealDate = Date;
   function fixHour(hour: number) {
     const date = new RealDate(2026, 4, 19, hour, 0, 0);
-    // @ts-expect-error — override global Date constructor for the test.
+    // `as any` already silences the TS error; the directive was unused
+    // and made `tsc --noEmit` fail with TS2578.
     global.Date = jest.fn(() => date) as any;
     global.Date.now = RealDate.now;
   }
