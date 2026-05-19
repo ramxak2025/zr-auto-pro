@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -34,6 +34,39 @@ function formatMoney(v: number) {
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
 }
+
+// ── ServiceRow ────────────────────────────────────────────────────────
+// Memoised row — module scope so React.memo's identity is stable across
+// parent re-renders. Inline form rebuilt every time the parent screen
+// re-rendered (which happens on every search keystroke, page advance,
+// or background SWR refetch).
+interface ServiceRowProps {
+  item: Service;
+  index: number;
+  onOpen: (s: Service) => void;
+}
+const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen }: ServiceRowProps) {
+  return (
+    <AnimatedCard style={styles.serviceCard} index={index} onPress={() => onOpen(item)}>
+      <View style={styles.serviceRow}>
+        <View style={styles.serviceIconCircle}>
+          <Ionicons name="construct-outline" size={16} color={colors.primary[500]} />
+        </View>
+        <View style={styles.serviceInfo}>
+          <Text style={styles.serviceName} numberOfLines={1}>
+            {item.name}
+          </Text>
+          {item.category && (
+            <Text style={styles.serviceCategory} numberOfLines={1}>
+              {item.category.split('/').pop()}
+            </Text>
+          )}
+        </View>
+        <Text style={styles.servicePrice}>{formatMoney(item.defaultPrice)}</Text>
+      </View>
+    </AnimatedCard>
+  );
+});
 
 export default function ServicesScreen() {
   const navigation = useNavigation<any>();
@@ -95,13 +128,13 @@ export default function ServicesScreen() {
     setModalOpen(true);
   };
 
-  const openEdit = (s: Service) => {
+  const openEdit = useCallback((s: Service) => {
     setEditingService(s);
     setName(s.name);
     setCategory(s.category || '');
     setDefaultPrice(String(s.defaultPrice));
     setModalOpen(true);
-  };
+  }, []);
 
   const closeModal = () => {
     setModalOpen(false);
@@ -164,25 +197,11 @@ export default function ServicesScreen() {
     };
   }, [services, activePath, search]);
 
-  const renderService = ({ item, index }: { item: Service; index: number }) => (
-    <AnimatedCard style={styles.serviceCard} index={index} onPress={() => openEdit(item)}>
-      <View style={styles.serviceRow}>
-        <View style={styles.serviceIconCircle}>
-          <Ionicons name="construct-outline" size={16} color={colors.primary[500]} />
-        </View>
-        <View style={styles.serviceInfo}>
-          <Text style={styles.serviceName} numberOfLines={1}>
-            {item.name}
-          </Text>
-          {item.category && (
-            <Text style={styles.serviceCategory} numberOfLines={1}>
-              {item.category.split('/').pop()}
-            </Text>
-          )}
-        </View>
-        <Text style={styles.servicePrice}>{formatMoney(item.defaultPrice)}</Text>
-      </View>
-    </AnimatedCard>
+  const renderService = useCallback(
+    ({ item, index }: { item: Service; index: number }) => (
+      <ServiceRow item={item} index={index} onOpen={openEdit} />
+    ),
+    [openEdit],
   );
 
   return (
