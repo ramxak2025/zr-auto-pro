@@ -29,7 +29,7 @@ import CompanySettingsScreen from '../screens/CompanySettingsScreen';
 import SubscriptionScreen from '../screens/SubscriptionScreen';
 import AdminScreen from '../screens/AdminScreen';
 import CallsScreen from '../screens/CallsScreen';
-import EquipmentScreen from '../screens/EquipmentScreen';
+import EquipmentScreen, { EquipmentEmployeeScreen } from '../screens/EquipmentScreen';
 import EmployeesScreen from '../screens/EmployeesScreen';
 import EmployeeDetailScreen from '../screens/EmployeeDetailScreen';
 import TrashScreen from '../screens/TrashScreen';
@@ -119,11 +119,21 @@ export type ProductsStackParamList = {
   ProductsHome: { activePath?: string[] } | undefined;
 };
 
+// EquipmentStackParamList — два экрана, корневой grid и detail на сотрудника.
+// Тап по карточке сотрудника пушит детальный экран; iOS edge-swipe pop = назад
+// к сетке. Раньше тот же переход делался через локальный `selectedEmp` state,
+// без swipe-back.
+export type EquipmentStackParamList = {
+  EquipmentHome: undefined;
+  EquipmentEmployee: { emp: any };
+};
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<TabParamList>();
 const MoreStack = createNativeStackNavigator();
 const ChecksStack = createNativeStackNavigator();
 const ProductsStack = createNativeStackNavigator<ProductsStackParamList>();
+const EquipmentStack = createNativeStackNavigator<EquipmentStackParamList>();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Navigation
@@ -158,7 +168,7 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Reports" component={gated('reports_view', ReportsScreen)} />
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
       <MoreStack.Screen name="Calls" component={CallsScreen} />
-      <MoreStack.Screen name="Equipment" component={EquipmentScreen} />
+      <MoreStack.Screen name="Equipment" component={EquipmentStackNavigator} />
       <MoreStack.Screen name="Users" component={gated('users_manage', UsersScreen)} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
       <MoreStack.Screen name="Admin" component={AdminScreen} />
@@ -196,6 +206,22 @@ function ProductsStackNavigator() {
     <ProductsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
       <ProductsStack.Screen name="ProductsHome" component={ProductsScreen} />
     </ProductsStack.Navigator>
+  );
+}
+
+/**
+ * EquipmentStackNavigator — local stack inside the MoreTab > Equipment.
+ * Grid сотрудников (EquipmentHome) → push detail сотрудника
+ * (EquipmentEmployee). iOS edge-swipe слева возвращает к сетке —
+ * привычное системное поведение, без необходимости целиться в кнопку
+ * "Назад".
+ */
+function EquipmentStackNavigator() {
+  return (
+    <EquipmentStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+      <EquipmentStack.Screen name="EquipmentHome" component={EquipmentScreen} />
+      <EquipmentStack.Screen name="EquipmentEmployee" component={EquipmentEmployeeScreen} />
+    </EquipmentStack.Navigator>
   );
 }
 

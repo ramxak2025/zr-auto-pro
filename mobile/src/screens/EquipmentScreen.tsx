@@ -34,7 +34,7 @@ import { BlurView } from 'expo-blur';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 
 import CachedImage from '../components/CachedImage';
@@ -712,7 +712,6 @@ export default function EquipmentScreen() {
   const tabBarHeight = useTabBarHeight();
   const { width: screenWidth } = useWindowDimensions();
   const [tab, setTab] = useState<Tab>('employees');
-  const [selectedEmp, setSelectedEmp] = useState<any>(null);
 
   const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
   const isMaster = user?.role === 'master';
@@ -769,20 +768,12 @@ export default function EquipmentScreen() {
     );
   }
 
-  // ── Employee detail (nested view) ──
-  if (selectedEmp) {
-    return (
-      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
-        <IosScreenHeader
-          title={selectedEmp.fullName || 'Сотрудник'}
-          onBack={() => setSelectedEmp(null)}
-        />
-        <EmployeeDetail emp={selectedEmp} canEdit={canEdit} />
-      </View>
-    );
-  }
-
   // ── Main: tabs + grid ──
+  // Сотрудник-детали раньше открывались через локальный `selectedEmp`
+  // state и рендерились inline. Теперь это отдельный экран в
+  // EquipmentStack (см. EquipmentEmployeeScreen ниже + AppNavigator),
+  // что даёт iOS edge-swipe slide-back назад к сетке. push() вместо
+  // navigate() чтобы каждое открытие создавало новый кадр стека.
   return (
     <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
       <IosScreenHeader title="Имущество" onBack={() => navigation.goBack()} />
@@ -826,7 +817,7 @@ export default function EquipmentScreen() {
                   key={emp.userId}
                   emp={emp}
                   cardWidth={cardWidth}
-                  onPress={() => setSelectedEmp(emp)}
+                  onPress={() => navigation.push('EquipmentEmployee', { emp })}
                 />
               ))
             )}
@@ -835,6 +826,37 @@ export default function EquipmentScreen() {
         {tab === 'storage' && <StorageTab />}
         {tab === 'trash' && <TrashTab />}
       </ScrollView>
+    </View>
+  );
+}
+
+// ─── Employee detail screen (отдельный экран в EquipmentStack) ─────────────
+// Раньше эта детальная карточка рендерилась inline внутри EquipmentScreen
+// при наличии selectedEmp. Перенесли в отдельный экран навигатора —
+// теперь iOS edge-swipe слева возвращает к сетке сотрудников, как
+// привычно в любом нативном iOS-приложении. emp читается из route.params,
+// header кнопкой "Назад" зовёт navigation.goBack().
+export function EquipmentEmployeeScreen() {
+  const route = useRoute<any>();
+  const navigation = useNavigation<any>();
+  const { user } = useAuth();
+  const emp = route.params?.emp;
+  const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+
+  if (!emp) {
+    // Защита от случая, когда экран получили без params (deep-link и т.п.).
+    // На корне стека `goBack()` всё равно не пустой — выкинет на grid.
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+        <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+      <IosScreenHeader title={emp.fullName || 'Сотрудник'} onBack={() => navigation.goBack()} />
+      <EmployeeDetail emp={emp} canEdit={canEdit} />
     </View>
   );
 }
