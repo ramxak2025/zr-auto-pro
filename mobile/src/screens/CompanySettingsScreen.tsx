@@ -20,6 +20,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Tenant } from '../../../shared/types';
+import { formatPhone } from '../../../shared/validation/phone';
 
 interface CompanyForm {
   name: string;
@@ -143,13 +144,16 @@ export default function CompanySettingsScreen() {
               <View style={styles.rowFields}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.label}>Телефон</Text>
+                  {/* Phone mask shared with LoginScreen — user types digits,
+                      formatPhone re-formats to +7 (XXX) XXX-XX-XX live. */}
                   <TextInput
                     value={form.phone}
-                    onChangeText={(v) => update({ phone: v })}
+                    onChangeText={(v) => update({ phone: formatPhone(v.replace(/\D/g, '')) })}
                     style={styles.input}
-                    placeholder="+7 (999) 123-45-67"
+                    placeholder="+7 (___) ___-__-__"
                     placeholderTextColor={colors.gray[400]}
                     keyboardType="phone-pad"
+                    autoComplete="tel"
                   />
                 </View>
                 <View style={{ flex: 1 }}>

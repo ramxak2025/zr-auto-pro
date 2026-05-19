@@ -28,6 +28,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Supplier } from '../../../shared/types';
+import { formatPhone } from '../../../shared/validation/phone';
 
 function formatMoney(v: number) {
   return (
@@ -123,7 +124,7 @@ export default function SuppliersScreen() {
   const openEdit = (s: Supplier) => {
     setEditingSupplier(s);
     setName(s.name);
-    setPhone(s.phone || '');
+    setPhone(s.phone ? formatPhone(s.phone) : '');
     setContactPerson(s.contactPerson || '');
     setComment(s.comment || '');
     setModalOpen(true);
@@ -176,7 +177,9 @@ export default function SuppliersScreen() {
               {item.name}
             </Text>
             <Text style={styles.cardSub} numberOfLines={1}>
-              {[item.contactPerson, item.phone].filter(Boolean).join(' · ') || 'Без контактов'}
+              {[item.contactPerson, item.phone ? formatPhone(item.phone) : null]
+                .filter(Boolean)
+                .join(' · ') || 'Без контактов'}
             </Text>
           </View>
           <View style={styles.amountWrap}>
@@ -280,12 +283,15 @@ export default function SuppliersScreen() {
         </View>
         <View style={styles.formField}>
           <Text style={styles.formLabel}>Телефон</Text>
+          {/* Phone mask shared with LoginScreen / ClientsScreen — user types
+              digits, formatPhone re-formats to +7 (XXX) XXX-XX-XX live. */}
           <TextInput
             value={phone}
-            onChangeText={setPhone}
+            onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}
             style={styles.formInput}
             keyboardType="phone-pad"
-            placeholder="+7..."
+            autoComplete="tel"
+            placeholder="+7 (___) ___-__-__"
             placeholderTextColor={colors.gray[400]}
           />
         </View>

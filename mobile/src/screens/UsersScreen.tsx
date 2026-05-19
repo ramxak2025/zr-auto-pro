@@ -258,7 +258,7 @@ export default function UsersScreen() {
     setEditingUser(user);
     setForm({
       fullName: user.fullName,
-      phone: user.phone || '',
+      phone: user.phone ? formatPhone(user.phone) : '',
       password: '',
       role: user.role,
       salaryPercent: user.salaryPercent,
@@ -525,13 +525,16 @@ export default function UsersScreen() {
 
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Телефон (логин)</Text>
+            {/* Phone mask shared with LoginScreen — user types digits,
+                formatPhone re-formats to +7 (XXX) XXX-XX-XX live. */}
             <TextInput
               value={form.phone}
-              onChangeText={(v) => setForm({ ...form, phone: v })}
+              onChangeText={(v) => setForm({ ...form, phone: formatPhone(v.replace(/\D/g, '')) })}
               style={styles.formInput}
-              placeholder="+7 (XXX) XXX-XX-XX"
+              placeholder="+7 (___) ___-__-__"
               placeholderTextColor={colors.gray[400]}
               keyboardType="phone-pad"
+              autoComplete="tel"
             />
           </View>
 
