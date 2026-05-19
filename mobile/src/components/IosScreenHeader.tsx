@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Pressable, ViewStyle, StyleProp } from 'react-native';
+import { View, StyleSheet, Pressable, ViewStyle, StyleProp, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
@@ -8,9 +8,13 @@ import { colors, spacing } from '../theme';
 /**
  * IosScreenHeader — shared top-bar treatment for every screen.
  *
- * Goal: make the app feel like one cohesive iOS product instead of a
- * collection of bespoke screen tops. Applies the same vertical rhythm,
- * typography, and safe-area handling everywhere.
+ * Despite the file name, this header is platform-adaptive:
+ *   • iOS — Settings / Mail-style header: 17pt semibold, transparent
+ *     background, no divider by default. Title can be centered with
+ *     `centerTitle`.
+ *   • Android — Material 3 Top App Bar (small variant): always shows
+ *     the hairline divider for surface separation, opaque white surface
+ *     so the bar reads as a defined region per M3 spec.
  *
  * Layout:
  *   [optional leading icon button]   Title       [optional trailing slot]
@@ -23,7 +27,6 @@ import { colors, spacing } from '../theme';
  *   • leading/trailing slots are 36pt squircles
  *   • respects useSafeAreaInsets().top — the header always sits below the
  *     Dynamic Island / notch
- *   • a hairline bottom-border by default; opt out with `noDivider`
  *
  * The header DOES NOT push the screen content down with padding — caller
  * decides how to space the rest of the screen below.
@@ -61,6 +64,14 @@ export default function IosScreenHeader({
   style,
 }: IosScreenHeaderProps) {
   const insets = useSafeAreaInsets();
+  // Android: Material 3 small top app bar uses an explicit separator
+  // and a left-aligned title. Force these defaults on Android unless
+  // the caller explicitly opted in to centered (some screens use
+  // `centerTitle` deliberately for symmetry with their action button
+  // arrangement; we respect that).
+  const isAndroid = Platform.OS === 'android';
+  const effectiveShowDivider = isAndroid ? true : showDivider;
+  const effectiveCenterTitle = isAndroid ? false : centerTitle;
 
   const leadingNode = leading ? (
     leading
@@ -87,15 +98,15 @@ export default function IosScreenHeader({
         {
           backgroundColor: bg,
           paddingTop: insets.top + spacing[2],
-          borderBottomWidth: showDivider ? StyleSheet.hairlineWidth : 0,
-          borderBottomColor: showDivider ? colors.gray[100] : 'transparent',
+          borderBottomWidth: effectiveShowDivider ? StyleSheet.hairlineWidth : 0,
+          borderBottomColor: effectiveShowDivider ? colors.gray[200] : 'transparent',
         },
         style,
       ]}
     >
-      <View style={[styles.row, centerTitle && styles.rowCenter]}>
+      <View style={[styles.row, effectiveCenterTitle && styles.rowCenter]}>
         {leadingNode}
-        <View style={[styles.center, centerTitle && styles.centerCentered]}>
+        <View style={[styles.center, effectiveCenterTitle && styles.centerCentered]}>
           <Text variant="bodyEmph" numberOfLines={1} style={styles.title}>
             {title}
           </Text>
