@@ -151,8 +151,29 @@ function getAvatarColors(name?: string): string[] {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
+/**
+ * Status descriptor used by BOTH the grid (heatmap-style) cells and the
+ * Today tab (subtle list). Fields:
+ *   bgColor   — soft tinted background, shade 50/100 — what the cell fills with
+ *   tintColor — slightly darker shade-200/300 — used as a top hairline accent
+ *               on the grid cell so the colour group reads as a band
+ *   dotColor  — primary status colour (shade 500/600) — used for text/icons
+ *   emoji     — single-glyph status indicator (✅ ⏰ 🚨 🤒 ❌ 😴 ➖)
+ *   icon      — Ionicons name for the legend chip
+ *   label     — optional in-cell short label (e.g. shift start "09:00")
+ *   hasEntry  — true when a real entry exists for that day
+ */
 function getCellDot(entry?: ScheduleEntry) {
-  if (!entry) return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
+  if (!entry)
+    return {
+      dotColor: 'transparent',
+      hasEntry: false,
+      icon: null,
+      bgColor: 'transparent',
+      tintColor: 'transparent',
+      label: '',
+      emoji: '',
+    };
   const note = (entry.note || '').toLowerCase();
   const lateMin = entry.lateMinutes || 0;
   const isPast = new Date(entry.date + 'T23:59:59') < new Date();
@@ -160,68 +181,104 @@ function getCellDot(entry?: ScheduleEntry) {
 
   // 1. Больничный
   if (note.includes('больнич'))
-    return { dotColor: colors.rose[500], hasEntry: true, icon: 'medkit' as const, bgColor: colors.rose[50], label: '' };
+    return {
+      dotColor: colors.rose[600],
+      hasEntry: true,
+      icon: 'medkit' as const,
+      bgColor: colors.rose[50],
+      tintColor: colors.rose[400],
+      label: '',
+      emoji: '🤒',
+    };
   // 2. Прогул из note
   if (note.includes('прогул'))
     return {
-      dotColor: colors.red[500],
+      dotColor: colors.red[600],
       hasEntry: true,
       icon: 'close-circle' as const,
       bgColor: colors.red[50],
+      tintColor: colors.red[300],
       label: '',
+      emoji: '❌',
     };
   // 3. Выходной
   if (entry.isDayOff)
-    return { dotColor: colors.gray[500], hasEntry: true, icon: 'moon' as const, bgColor: colors.gray[100], label: '' };
-  // 4. Опоздание >1ч (треугольник)
+    return {
+      dotColor: colors.gray[500],
+      hasEntry: true,
+      icon: 'moon' as const,
+      bgColor: colors.gray[100],
+      tintColor: colors.gray[300],
+      label: '',
+      emoji: '😴',
+    };
+  // 4. Опоздание >1ч
   if (entry.lateStatus === 'late_major' || lateMin >= 60)
     return {
-      dotColor: colors.yellow[600],
+      dotColor: colors.orange[700],
       hasEntry: true,
       icon: 'warning' as const,
-      bgColor: colors.yellow[50],
+      bgColor: colors.orange[50],
+      tintColor: colors.orange[400],
       label: '',
+      emoji: '🚨',
     };
-  // 5. Опоздание <1ч (будильник)
+  // 5. Опоздание <1ч
   if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60))
     return {
-      dotColor: colors.yellow[500],
+      dotColor: colors.yellow[700],
       hasEntry: true,
       icon: 'alarm' as const,
       bgColor: colors.yellow[50],
+      tintColor: colors.yellow[300],
       label: '',
+      emoji: '⏰',
     };
   // 6. Открыл смену вовремя — показываем время
   if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
     return {
-      dotColor: colors.green[600],
+      dotColor: colors.green[700],
       hasEntry: true,
-      icon: null,
+      icon: 'checkmark-circle' as const,
       bgColor: colors.green[100],
+      tintColor: colors.green[400],
       label: entry.shiftStart.slice(0, 5),
+      emoji: '✅',
     };
   }
   // 7. Прогул для прошедших дней без смены
   if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) {
     return {
-      dotColor: colors.red[500],
+      dotColor: colors.red[600],
       hasEntry: true,
       icon: 'close-circle' as const,
       bgColor: colors.red[50],
+      tintColor: colors.red[300],
       label: '',
+      emoji: '❌',
     };
   }
   // 8. Запланирована смена (сегодня или будущее) — зелёная галочка
   if (entry.shiftStart) {
     return {
-      dotColor: colors.green[500],
+      dotColor: colors.green[600],
       hasEntry: true,
       icon: 'checkmark' as const,
       bgColor: colors.green[50],
+      tintColor: colors.green[300],
       label: '',
+      emoji: '✅',
     };
   }
-  return { dotColor: 'transparent', hasEntry: false, icon: null, bgColor: 'transparent', label: '' };
+  return {
+    dotColor: 'transparent',
+    hasEntry: false,
+    icon: null,
+    bgColor: 'transparent',
+    tintColor: 'transparent',
+    label: '',
+    emoji: '',
+  };
 }
 
 /**
@@ -311,13 +368,24 @@ const GridDayRow = memo(function GridDayRow({
         const isWeekend = dow >= 5;
         const isToday = ds === today;
 
+        // Heatmap-style cell: when an entry exists the WHOLE cell takes the
+        // soft tinted background (shade 50/100), with a slightly darker
+        // hairline accent on top so the colour bands read at a glance.
+        // Today's column keeps its bordered emphasis on top.
+        const cellBg = cell.hasEntry
+          ? cell.bgColor
+          : isToday
+            ? colors.primary[50]
+            : isWeekend
+              ? colors.red[50] + '40'
+              : 'transparent';
+
         return (
           <TouchableOpacity
             key={ds}
             style={[
               styles.gridCell,
-              { width: CELL_W, height: ROW_H },
-              isWeekend && !cell.hasEntry && { backgroundColor: colors.red[50] + '40' },
+              { width: CELL_W, height: ROW_H, backgroundColor: cellBg },
               isToday && styles.gridCellToday,
             ]}
             onPress={() => {
@@ -326,28 +394,31 @@ const GridDayRow = memo(function GridDayRow({
             }}
             activeOpacity={canEdit ? 0.5 : 1}
           >
-            {cell.hasEntry ? (
+            {cell.hasEntry && cell.tintColor !== 'transparent' && (
               <View
-                style={[
-                  styles.gridDot,
-                  { backgroundColor: cell.bgColor || cell.dotColor + '30' },
-                  cell.label ? styles.gridDotLabel : styles.gridDotRound,
-                ]}
-              >
-                {cell.label ? (
+                style={[styles.gridCellAccent, { backgroundColor: cell.tintColor }]}
+                pointerEvents="none"
+              />
+            )}
+            {cell.hasEntry ? (
+              cell.label ? (
+                <View style={styles.gridCellInner}>
+                  <Text style={styles.gridCellEmoji} allowFontScaling={false}>
+                    {cell.emoji}
+                  </Text>
                   <Text
-                    style={{ fontSize: 9, fontWeight: '700', color: cell.dotColor }}
+                    style={[styles.gridCellLabel, { color: cell.dotColor }]}
                     numberOfLines={1}
                     allowFontScaling={false}
                   >
                     {cell.label}
                   </Text>
-                ) : cell.icon ? (
-                  <Ionicons name={cell.icon} size={14} color={cell.dotColor} />
-                ) : (
-                  <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: cell.dotColor }} />
-                )}
-              </View>
+                </View>
+              ) : (
+                <Text style={styles.gridCellEmojiSolo} allowFontScaling={false}>
+                  {cell.emoji}
+                </Text>
+              )
             ) : (
               canEdit && <View style={styles.gridCellEmpty} />
             )}
@@ -846,18 +917,21 @@ function GridTab() {
         </View>
       )}
 
-      {/* Legend */}
+      {/* Legend — mirrors the heatmap-style cells so the user can map
+          colours and emoji to statuses at a glance. */}
       <View style={styles.legendRow}>
         {[
-          { color: colors.green[500], label: 'Смена', icon: 'checkmark-circle' as const },
-          { color: colors.gray[400], label: 'Вых', icon: 'moon' as const },
-          { color: colors.rose[500], label: 'Б/Л', icon: 'medkit' as const },
-          { color: colors.yellow[500], label: '<1ч', icon: 'alarm' as const },
-          { color: colors.orange[500], label: '>1ч', icon: 'warning' as const },
-          { color: colors.red[500], label: 'Прогул', icon: 'close-circle' as const },
+          { emoji: '✅', label: 'Смена' },
+          { emoji: '😴', label: 'Вых' },
+          { emoji: '🤒', label: 'Б/Л' },
+          { emoji: '⏰', label: '<1ч' },
+          { emoji: '🚨', label: '>1ч' },
+          { emoji: '❌', label: 'Прогул' },
         ].map((item) => (
           <View key={item.label} style={styles.legendItem}>
-            <Ionicons name={item.icon} size={10} color={item.color} />
+            <Text style={styles.legendEmoji} allowFontScaling={false}>
+              {item.emoji}
+            </Text>
             <Text style={styles.legendText}>{item.label}</Text>
           </View>
         ))}
@@ -1366,30 +1440,29 @@ function TodayTab() {
       ) : (
         statuses.map((s, idx) => {
           const info = getStatusInfo(s);
+          // Calm list look: white card, coloured left-accent stripe, emoji
+          // + status label keep the colour so the row remains scannable,
+          // but the card body stays neutral. The bold colour palette now
+          // lives in the GridTab heatmap.
           return (
             <AnimatedCard key={s.userId} index={idx + 2} onPress={() => openEmployee(navigation, s.userId)}>
-              <View
-                style={[
-                  styles.todayCard,
-                  {
-                    backgroundColor: info.bgColor,
-                    borderColor: info.borderColor,
-                  },
-                ]}
-              >
+              <View style={styles.todayCard}>
+                <View style={[styles.todayCardAccent, { backgroundColor: info.borderColor }]} />
                 <View style={styles.todayCardContent}>
-                  <Text style={styles.todayEmoji}>{info.emoji}</Text>
+                  <Text style={styles.todayEmoji} allowFontScaling={false}>
+                    {info.emoji}
+                  </Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.todayName, { color: info.color }]}>{s.fullName}</Text>
+                    <Text style={styles.todayName}>{s.fullName}</Text>
                     <Text style={[styles.todayStatusLabel, { color: info.color }]}>{info.label}</Text>
                     <View style={styles.todayInfoRow}>
                       {s.shiftStart && s.shiftEnd && (
-                        <Text style={[styles.todayShift, { color: info.color }]}>
+                        <Text style={styles.todayShift}>
                           {s.shiftStart} — {s.shiftEnd}
                         </Text>
                       )}
                       {s.actualArrival && (
-                        <Text style={[styles.todayShift, { color: info.color }]}>
+                        <Text style={styles.todayShift}>
                           {'  ·  '}пришёл{' '}
                           {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
                             hour: '2-digit',
@@ -1398,7 +1471,7 @@ function TodayTab() {
                         </Text>
                       )}
                     </View>
-                    {s.note ? <Text style={[styles.todayNote, { color: info.color }]}>{s.note}</Text> : null}
+                    {s.note ? <Text style={styles.todayNote}>{s.note}</Text> : null}
                   </View>
                 </View>
               </View>
@@ -2539,6 +2612,10 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
   },
+  legendEmoji: {
+    fontSize: 12,
+    lineHeight: 14,
+  },
   legendText: {
     fontSize: 11,
     color: colors.gray[500],
@@ -2664,29 +2741,48 @@ const styles = StyleSheet.create({
     borderRightColor: colors.gray[100],
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.gray[100],
+    overflow: 'hidden',
   },
+  // Today column overlay — slightly stronger outline so the today
+  // vertical band still pops even when neighbouring cells are tinted
+  // by the heatmap.
   gridCellToday: {
-    backgroundColor: colors.primary[50],
+    borderLeftWidth: 1,
+    borderLeftColor: colors.primary[300],
+    borderRightWidth: 1,
+    borderRightColor: colors.primary[300],
   },
-  // Status pill — slightly larger, continuous corners, pleasant shadow
-  // so the indicator reads as a soft island instead of a flat dot.
-  gridDot: {
-    height: 26,
-    borderRadius: 8,
+  // 2pt top hairline in the slightly-darker shade — gives each colour
+  // band a clean edge instead of a flat rectangle. Sits on top of the
+  // cell background so the band reads even when row striping is on.
+  gridCellAccent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+  },
+  // Container for cells that include a label (e.g. "09:00" shift start).
+  // Stacks the emoji over the label so a tiny cell still fits both.
+  gridCellInner: {
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 1.5,
-    shadowOffset: { width: 0, height: 1 },
   },
-  gridDotRound: {
-    width: 26,
-    borderRadius: 13,
+  // Emoji used when the cell carries a label underneath it.
+  gridCellEmoji: {
+    fontSize: 13,
+    lineHeight: 16,
   },
-  gridDotLabel: {
-    minWidth: 38,
-    paddingHorizontal: 6,
+  // Emoji used when the cell carries no label — slightly larger so it
+  // remains readable at arm's length in a ~44×52 cell.
+  gridCellEmojiSolo: {
+    fontSize: 16,
+    lineHeight: 20,
+  },
+  gridCellLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    marginTop: 1,
   },
   gridCellEmpty: {
     width: 6,
@@ -2793,12 +2889,23 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: fontWeight.medium,
   },
+  // Calm Today-tab card — bold heatmap colours moved to GridTab. Here
+  // we keep a white surface with a coloured left-accent stripe; the
+  // emoji and the status label stay coloured so the row still reads
+  // at a glance.
   todayCard: {
+    backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
     overflow: 'hidden',
+    flexDirection: 'row',
+  },
+  todayCardAccent: {
+    width: 4,
   },
   todayCardContent: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
@@ -2806,20 +2913,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
   },
   todayEmoji: {
-    fontSize: 32,
-    lineHeight: 38,
+    fontSize: 26,
+    lineHeight: 32,
   },
   todayName: {
     fontSize: 16,
     fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
     letterSpacing: -0.2,
   },
   todayStatusLabel: {
-    fontSize: 15,
-    fontWeight: fontWeight.bold,
+    fontSize: 13,
+    fontWeight: fontWeight.semibold,
     marginTop: 2,
     letterSpacing: -0.1,
-    opacity: 0.95,
   },
   todayInfoRow: {
     flexDirection: 'row',
@@ -2830,13 +2937,13 @@ const styles = StyleSheet.create({
   todayShift: {
     fontSize: 13,
     fontWeight: fontWeight.medium,
-    opacity: 0.75,
+    color: colors.gray[600],
   },
   todayNote: {
     fontSize: 13,
     fontStyle: 'italic',
+    color: colors.gray[500],
     marginTop: 4,
-    opacity: 0.75,
   },
 
   // ── Shifts Stats ──
