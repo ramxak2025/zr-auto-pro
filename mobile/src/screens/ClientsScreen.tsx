@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -63,25 +63,37 @@ export default function ClientsScreen() {
   const tabBarHeight = useTabBarHeight();
 
   const [search, setSearch] = useState('');
+  // Cars and clients each have their OWN page cursor. Earlier the two
+  // modes shared `page` — flipping to «Клиенты» after paginating cars
+  // to page 5 instantly requested clients?page=5 (often returning
+  // empty), and switching back to «Авто» reset to 1. Independent
+  // cursors fix that.
   const [page, setPage] = useState(1);
+  const [carsPage, setCarsPage] = useState(1);
   // 'clients' = list of clients, 'cars' = same screen but car list below.
   // Default = 'cars' per product owner: when this screen opens the user is
   // most often looking for a vehicle (e.g. госномер of a car about to be
   // serviced), not a person — surface cars first.
   const [mode, setMode] = useState<'cars' | 'clients'>('cars');
 
-  // Cars query — only fires while mode === 'cars' so we don't waste bandwidth
+  const limit = 20;
+
+  // Cars query — only fires while mode === 'cars' so we don't waste bandwidth.
+  // Same shape as CarsScreen so persistent-cache hits on either entry point.
   const carsQuery = useQuery<{ data: Car[]; total: number } | Car[]>({
-    queryKey: ['cars', { search, page, limit: 20 }],
+    queryKey: ['cars', { search, page: carsPage, limit }],
     queryFn: async () => {
-      const res = await carsApi.getAll({ search, page, limit: 20 });
+      const res = await carsApi.getAll({ search, page: carsPage, limit });
       return res.data;
     },
     enabled: mode === 'cars',
     placeholderData: (prev) => prev as any,
   });
   const carsList: Car[] = Array.isArray(carsQuery.data) ? (carsQuery.data as Car[]) : (carsQuery.data?.data ?? []);
-  const limit = 20;
+  const carsTotal: number = Array.isArray(carsQuery.data)
+    ? (carsQuery.data as Car[]).length
+    : (carsQuery.data?.total ?? 0);
+  const carsHasMore = carsPage * limit < carsTotal;
   const [refreshing, setRefreshing] = useState(false);
 
   // Modal state
@@ -313,19 +325,40 @@ export default function ClientsScreen() {
   const total = data?.total || 0;
   const hasMore = page * limit < total;
 
-  const retailBuyer: Client = {
-    id: '__retail__',
-    fullName: 'Розничный покупатель',
-    phone: '',
-    comment: 'Все чеки без клиента — автоматически розничный покупатель',
-    tenantId: '',
-    createdAt: '',
-  } as Client;
+  // Static retail buyer sentinel — must not be recreated each render,
+  // otherwise FlashList sees a new `data[0]` every parent render and
+  // re-mounts the row. The empty `tenantId`/`createdAt` are fine — the
+  // detail screen treats id === '__retail__' as a virtual entity.
+  const retailBuyer = useMemo<Client>(
+    () => ({
+      id: '__retail__',
+      fullName: 'Розничный покупатель',
+      phone: '',
+      comment: 'Все чеки без клиента — автоматически розничный покупатель',
+      tenantId: '',
+      createdAt: '',
+    } as Client),
+    [],
+  );
 
-  // Pin "Розничный покупатель" at top when not searching
-  const displayClients = !search ? [retailBuyer, ...clients] : clients;
+  // Pin "Розничный покупатель" at top when not searching. Memoised so
+  // FlashList only sees a new array reference when the underlying data
+  // or search-mode actually changes — keeps virtualisation stable
+  // while parent state (modals, dialog flags) churns above it.
+  const displayClients = useMemo(
+    () => (!search ? [retailBuyer, ...clients] : clients),
+    [search, retailBuyer, clients],
+  );
 
-  const renderClient = ({ item }: { item: Client; index: number }) => {
+  // Cars FlashList data — same retail-buyer pin treatment. Inline
+  // `[{ id: '__retail__' }, ...carsList]` re-created on every render
+  // caused the whole virtualised list to re-key its rows.
+  const displayCars = useMemo<Car[]>(
+    () => (!search ? ([{ id: '__retail__' } as unknown as Car, ...carsList]) : carsList),
+    [search, carsList],
+  );
+
+  const renderClient = useCallback(({ item }: { item: Client; index: number }) => {
     // Pinned retail buyer — same row geometry, branded icon instead of
     // initials so it reads as a "system" entry above the alphabet. Tap
     // opens the virtual retail-buyer view (ClientDetail with id
@@ -408,7 +441,74 @@ export default function ClientsScreen() {
         {card}
       </Swipeable>
     );
-  };
+  // The inline TouchableOpacity / Swipeable rendering captures
+  // openEditModal / setDeleteId / etc, but those identities are stable
+  // for the lifetime of this screen instance, so we intentionally only
+  // depend on the things that actually flow into row visuals.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canDelete, navigation]);
+
+  // Cars renderer — stable identity (FlashList re-renders every row
+  // when this changes), so wrap in useCallback. The retail-pin branch
+  // and the regular car row share the same handler.
+  const renderCar = useCallback(
+    ({ item }: { item: Car }) => {
+      if (item.id === '__retail__') {
+        return (
+          <TouchableOpacity
+            style={cnStyles.carRow}
+            activeOpacity={0.6}
+            onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
+          >
+            <View style={[cnStyles.carIconBox, { backgroundColor: colors.primary[50] }]}>
+              <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={cnStyles.carName} numberOfLines={1}>
+                Розничный покупатель
+              </Text>
+              <Text style={cnStyles.carClient} numberOfLines={1}>
+                Все чеки без клиента
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+          </TouchableOpacity>
+        );
+      }
+      return (
+        <TouchableOpacity
+          style={cnStyles.carRow}
+          activeOpacity={0.6}
+          onPress={() => {
+            if (item.client?.id) {
+              navigation.navigate('ClientDetail', { id: item.client.id });
+            }
+          }}
+        >
+          <View style={cnStyles.carIconBox}>
+            <Ionicons name="car-sport-outline" size={18} color={colors.primary[600]} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={cnStyles.carName} numberOfLines={1}>
+              {item.makeModel || '—'}
+            </Text>
+            {item.plateNumber && (
+              <View style={cnStyles.platePill}>
+                <Text style={cnStyles.platePillText}>{item.plateNumber}</Text>
+              </View>
+            )}
+          </View>
+          {item.client?.fullName && (
+            <Text style={cnStyles.carClient} numberOfLines={1}>
+              {item.client.fullName}
+            </Text>
+          )}
+          <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+        </TouchableOpacity>
+      );
+    },
+    [navigation],
+  );
 
   return (
     <View style={styles.safe}>
@@ -436,6 +536,7 @@ export default function ClientsScreen() {
               setMode('cars');
               setSearch('');
               setPage(1);
+              setCarsPage(1);
             }}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
@@ -448,6 +549,7 @@ export default function ClientsScreen() {
               setMode('clients');
               setSearch('');
               setPage(1);
+              setCarsPage(1);
             }}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
@@ -466,6 +568,7 @@ export default function ClientsScreen() {
           onChange={(v) => {
             setSearch(v);
             setPage(1);
+            setCarsPage(1);
           }}
           placeholder={mode === 'clients' ? 'Поиск по имени или телефону...' : 'Поиск по госномеру или марке...'}
         />
@@ -483,79 +586,29 @@ export default function ClientsScreen() {
         ) : (
           <FlashList
             // Pin "Розничный покупатель" at the top of the cars list when
-            // not searching. It's the new default landing tab; the retail
-            // buyer is the most common "client" by check volume in most
-            // тенантах, so it should be one tap away. A sentinel object
-            // with id === '__retail__' is rendered with a branded row
-            // (storefront icon) and routes to ClientDetail/__retail__,
-            // which the detail screen treats as a virtual retail buyer
-            // entity (all checks paid by walk-in retail).
-            data={
-              !search
-                ? ([{ id: '__retail__' } as unknown as Car, ...carsList])
-                : carsList
-            }
+            // not searching. A sentinel object with id === '__retail__'
+            // is rendered with a branded row (storefront icon) and routes
+            // to ClientDetail/__retail__, which the detail screen treats
+            // as a virtual retail buyer entity (all checks paid by walk-in
+            // retail). `displayCars` is memoised so the FlashList virtualiser
+            // doesn't re-mount every row on each parent re-render.
+            data={displayCars}
             keyExtractor={(item: Car) => item.id}
-            renderItem={({ item }: { item: Car }) => {
-              if (item.id === '__retail__') {
-                return (
-                  <TouchableOpacity
-                    style={cnStyles.carRow}
-                    activeOpacity={0.6}
-                    onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
-                  >
-                    <View style={[cnStyles.carIconBox, { backgroundColor: colors.primary[50] }]}>
-                      <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={cnStyles.carName} numberOfLines={1}>
-                        Розничный покупатель
-                      </Text>
-                      <Text style={cnStyles.carClient} numberOfLines={1}>
-                        Все чеки без клиента
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
-                  </TouchableOpacity>
-                );
-              }
-              return (
-                <TouchableOpacity
-                  style={cnStyles.carRow}
-                  activeOpacity={0.6}
-                  onPress={() => {
-                    if (item.client?.id) {
-                      navigation.navigate('ClientDetail', { id: item.client.id });
-                    }
-                  }}
-                >
-                  <View style={cnStyles.carIconBox}>
-                    <Ionicons name="car-sport-outline" size={18} color={colors.primary[600]} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={cnStyles.carName} numberOfLines={1}>
-                      {item.makeModel || '—'}
-                    </Text>
-                    {item.plateNumber && (
-                      <View style={cnStyles.platePill}>
-                        <Text style={cnStyles.platePillText}>{item.plateNumber}</Text>
-                      </View>
-                    )}
-                  </View>
-                  {item.client?.fullName && (
-                    <Text style={cnStyles.carClient} numberOfLines={1}>
-                      {item.client.fullName}
-                    </Text>
-                  )}
-                  <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
-                </TouchableOpacity>
-              );
-            }}
+            renderItem={renderCar}
             contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
             removeClippedSubviews
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
+            // Cars list also paginates — without onEndReached the limit=20
+            // first page silently capped how many vehicles the user could
+            // browse from the segmented Авто tab. CarsScreen has had this
+            // since the start; ClientsScreen's cars mode just regressed
+            // when the segment swap was introduced.
+            onEndReached={() => {
+              if (carsHasMore) setCarsPage((p) => p + 1);
+            }}
+            onEndReachedThreshold={0.5}
           />
         )
       ) : data === undefined ? (
