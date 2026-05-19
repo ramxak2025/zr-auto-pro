@@ -10,20 +10,19 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { Swipeable } from 'react-native-gesture-handler';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi } from '../api/services';
 import type { Car } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { useAuth } from '../contexts/AuthContext';
+import { UserRole } from '../../../shared/types';
 import SearchInput from '../components/SearchInput';
-import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
-import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
@@ -31,10 +30,35 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Client, PaginatedResponse } from '../../../shared/types';
 
+// ─── Avatar helpers (mirror ClientDetailScreen so initials/colour match) ───
+function getInitials(name: string): string {
+  const parts = (name || '').trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return (parts[0]?.[0] || '?').toUpperCase();
+}
+
+const AVATAR_PALETTE = [
+  colors.primary[500],
+  colors.green[600],
+  colors.orange[500],
+  colors.purple[700],
+  colors.teal[600],
+  colors.rose[500],
+  colors.indigo[600],
+  colors.yellow[600],
+];
+
+function getAvatarColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < (name || '').length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
+}
+
 export default function ClientsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { hasPermission, isRole } = useAuth();
+  const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
   const tabBarHeight = useTabBarHeight();
 
   const [search, setSearch] = useState('');
@@ -194,63 +218,81 @@ export default function ClientsScreen() {
   // Pin "Розничный покупатель" at top when not searching
   const displayClients = !search ? [retailBuyer, ...clients] : clients;
 
-  const renderClient = ({ item, index }: { item: Client; index: number }) => {
-    // Special render for pinned retail buyer
+  const renderClient = ({ item }: { item: Client; index: number }) => {
+    // Pinned retail buyer — same row geometry, branded icon instead of
+    // initials so it reads as a "system" entry above the alphabet.
     if (item.id === '__retail__') {
       return (
-        <View style={[styles.clientCard, styles.retailCard]}>
-          <View style={styles.clientTop}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], flex: 1 }}>
-              <View style={styles.retailIcon}>
-                <Ionicons name="storefront-outline" size={16} color={colors.primary[600]} />
-              </View>
-              <Text style={[styles.clientName, { color: colors.primary[700] }]}>{item.fullName}</Text>
-            </View>
-            <View style={styles.retailBadge}>
-              <Text style={styles.retailBadgeText}>По умолчанию</Text>
-            </View>
+        <View style={styles.row}>
+          <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
+            <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
           </View>
-          <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[1] }}>{item.comment}</Text>
+          <View style={styles.info}>
+            <Text style={styles.cardName} numberOfLines={1}>
+              {item.fullName}
+            </Text>
+            <Text style={styles.cardSub} numberOfLines={1}>
+              По умолчанию
+            </Text>
+          </View>
         </View>
       );
     }
 
-    return (
-      <AnimatedCard
-        style={styles.clientCard}
-        index={index}
+    const initials = getInitials(item.fullName);
+    const avatarBg = getAvatarColor(item.fullName);
+    const carsCount = item.cars?.length || 0;
+
+    const card = (
+      <TouchableOpacity
+        style={styles.row}
+        activeOpacity={0.6}
         onPress={() => navigation.navigate('ClientDetail', { id: item.id })}
       >
-        <View style={styles.clientTop}>
-          <Text style={styles.clientName} numberOfLines={1}>
+        <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+          <Text style={styles.avatarInitials}>{initials}</Text>
+        </View>
+        <View style={styles.info}>
+          <Text style={styles.cardName} numberOfLines={1}>
             {item.fullName}
           </Text>
-          <View style={styles.clientActions}>
-            <TouchableOpacity onPress={() => openEditModal(item)} style={styles.actionBtn}>
-              <Ionicons name="create-outline" size={16} color={colors.gray[400]} />
+          <Text style={styles.cardSub} numberOfLines={1}>
+            {[formatPhone(item.phone) || 'Без телефона', carsCount > 0 ? `${carsCount} авто` : null]
+              .filter(Boolean)
+              .join(' · ')}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: 4 }} />
+      </TouchableOpacity>
+    );
+
+    if (!canDelete) return card;
+
+    return (
+      <Swipeable
+        renderRightActions={() => (
+          <View style={styles.swipeActionsRow}>
+            <TouchableOpacity style={styles.swipeEditAction} onPress={() => openEditModal(item)} activeOpacity={0.85}>
+              <Ionicons name="pencil" size={20} color={colors.white} />
+              <Text style={styles.swipeActionText}>Изменить</Text>
             </TouchableOpacity>
             <TouchableOpacity
+              style={styles.swipeDeleteAction}
               onPress={() => {
                 setDeleteId(item.id);
                 setConfirmOpen(true);
               }}
-              style={styles.actionBtn}
+              activeOpacity={0.85}
             >
-              <Ionicons name="close" size={16} color={colors.red[400]} />
+              <Ionicons name="trash-outline" size={20} color={colors.white} />
+              <Text style={styles.swipeActionText}>Удалить</Text>
             </TouchableOpacity>
           </View>
-        </View>
-        <View style={styles.clientBottom}>
-          <View style={styles.phoneRow}>
-            <Ionicons name="call-outline" size={13} color={colors.gray[400]} />
-            <Text style={styles.clientPhone}>{formatPhone(item.phone)}</Text>
-          </View>
-          <View style={styles.carsBadge}>
-            <Ionicons name="car-outline" size={12} color={colors.blue[700]} />
-            <Text style={styles.carsBadgeText}>{item.cars?.length || 0} авто</Text>
-          </View>
-        </View>
-      </AnimatedCard>
+        )}
+        overshootRight={false}
+      >
+        {card}
+      </Swipeable>
     );
   };
 
@@ -488,36 +530,60 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: spacing[4] },
-  list: { paddingHorizontal: spacing[4], paddingBottom: spacing[8], gap: spacing[3] },
-  clientCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[4],
-    shadowColor: colors.black,
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  clientTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[2] },
-  clientName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900], flex: 1 },
-  clientActions: { flexDirection: 'row', gap: spacing[1] },
-  actionBtn: { padding: spacing[1.5] },
-  actionIcon: { fontSize: 14, color: colors.gray[400] },
-  clientBottom: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
-  phoneRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  clientPhone: { fontSize: fontSize.sm, color: colors.gray[500] },
-  carsBadge: {
+  list: { paddingHorizontal: 0, paddingBottom: spacing[8] },
+
+  // ── iOS Contacts-style dense row ──
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: colors.blue[50],
-    paddingHorizontal: spacing[2],
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    backgroundColor: colors.white,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
   },
-  carsBadgeText: { fontSize: 11, color: colors.blue[700], fontWeight: fontWeight.medium },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarInitials: {
+    color: colors.white,
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  info: { flex: 1, minWidth: 0 },
+  cardName: { fontSize: 15, fontWeight: '600', color: colors.gray[900], letterSpacing: -0.1 },
+  cardSub: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+
+  // ── Swipe-to-delete actions (mirror SuppliersScreen) ──
+  swipeActionsRow: { flexDirection: 'row' },
+  swipeEditAction: {
+    backgroundColor: colors.primary[600],
+    width: 84,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  swipeDeleteAction: {
+    backgroundColor: colors.red[500],
+    width: 84,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  swipeActionText: {
+    color: colors.white,
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+  },
   // Form
   formField: { marginBottom: spacing[4] },
   formLabel: {
@@ -559,32 +625,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[600],
   },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
-  // Retail buyer card
-  retailCard: {
-    borderColor: colors.primary[200],
-    borderWidth: 1.5,
-    backgroundColor: colors.primary[50],
-    borderStyle: 'dashed' as any,
-  },
-  retailIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: colors.primary[100],
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  },
-  retailBadge: {
-    backgroundColor: colors.primary[100],
-    paddingHorizontal: spacing[2],
-    paddingVertical: 3,
-    borderRadius: borderRadius.sm,
-  },
-  retailBadgeText: {
-    fontSize: 10,
-    fontWeight: fontWeight.semibold,
-    color: colors.primary[600],
-  },
 });
 
 // Standalone styles for the Clients ⇄ Cars segmented control. Kept apart
