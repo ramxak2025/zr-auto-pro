@@ -21,6 +21,7 @@ import { equipmentApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 
 type Tab = 'employees' | 'storage' | 'trash';
 
@@ -49,6 +50,7 @@ function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
 // ── Employee detail screen (within Equipment) ──
 function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdit: boolean }) {
   const qc = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const [showIssue, setShowIssue] = useState(false);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
 
@@ -127,7 +129,7 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; onBack: () => void; canEdi
   };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.gray[50] }} contentContainerStyle={{ padding: spacing[4] }}>
+    <ScrollView style={{ flex: 1, backgroundColor: colors.gray[50] }} contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
       <View style={styles.empHeader}>
         {emp.avatar ? (
           <CachedImage source={{ uri: emp.avatar }} style={styles.empAvatar} />
@@ -323,6 +325,7 @@ export default function EquipmentScreen() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
   const qc = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const [tab, setTab] = useState<Tab>('employees');
   const [selectedEmp, setSelectedEmp] = useState<any>(null);
   const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
@@ -346,7 +349,7 @@ export default function EquipmentScreen() {
     return (
       <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
         <IosScreenHeader title="Моё имущество" onBack={() => navigation.goBack()} />
-        <ScrollView contentContainerStyle={{ padding: spacing[4] }}>
+        <ScrollView contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
           <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginBottom: spacing[3] }}>
             {myEquipment.length} предметов на {formatMoney(total)}
           </Text>
@@ -405,7 +408,7 @@ export default function EquipmentScreen() {
         ))}
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: spacing[4] }}>
+      <ScrollView contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
         {tab === 'employees' && (
           <View style={{ gap: spacing[2] }}>
             {summary.map((emp: any) => (

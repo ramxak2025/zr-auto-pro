@@ -17,6 +17,9 @@ function getApiBaseUrl(): string {
 
 const API_BASE_URL = getApiBaseUrl();
 
+// Exposed so screens can show what URL they're hitting in error dialogs.
+export const API_URL = API_BASE_URL;
+
 // Derive server origin for image URLs (strip /api suffix)
 export const SERVER_URL = API_BASE_URL.replace(/\/api\/?$/, '');
 
@@ -57,7 +60,12 @@ api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError<{ message?: string }>) => {
     if (!error.response) {
-      return Promise.reject(new Error('Нет соединения с сервером'));
+      const baseURL = error.config?.baseURL || API_BASE_URL;
+      const reason = error.code || error.message || 'unknown';
+      const wrapped = new Error(`Нет соединения с сервером\nURL: ${baseURL}\nПричина: ${reason}`);
+      (wrapped as any).code = error.code;
+      (wrapped as any).baseURL = baseURL;
+      return Promise.reject(wrapped);
     }
 
     const status = error.response.status;

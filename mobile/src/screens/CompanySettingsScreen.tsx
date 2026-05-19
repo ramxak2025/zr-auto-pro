@@ -18,6 +18,7 @@ import { myCompanyApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Tenant } from '../../../shared/types';
 
 interface CompanyForm {
@@ -36,6 +37,7 @@ interface CompanyForm {
 export default function CompanySettingsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
 
   const { data: company, isLoading } = useQuery<Tenant>({
     queryKey: ['my-company'],
@@ -118,7 +120,7 @@ export default function CompanySettingsScreen() {
       <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
           {/* Basic info */}
           <AnimatedCard index={0}>
             <View style={styles.card}>

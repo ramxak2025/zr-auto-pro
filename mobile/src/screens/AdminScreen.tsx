@@ -3,14 +3,15 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   RefreshControl, TextInput, ActivityIndicator, Alert,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { tenantsApi, plansApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Tenant, Plan, PlatformStats } from '../../../shared/types';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -652,6 +653,7 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
 export default function AdminScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -741,15 +743,8 @@ export default function AdminScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <Ionicons name="arrow-back" size={20} color={colors.gray[700]} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Админ-панель</Text>
-        <View style={{ width: 40 }} />
-      </View>
+    <View style={styles.safe}>
+      <IosScreenHeader title="Админ-панель" onBack={() => navigation.goBack()} />
 
       {/* Tab bar */}
       <View style={styles.tabBar}>
@@ -783,7 +778,7 @@ export default function AdminScreen() {
         </View>
       ) : (
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -811,7 +806,7 @@ export default function AdminScreen() {
           )}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -821,30 +816,6 @@ export default function AdminScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  // Header
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    backgroundColor: colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
-  },
-  backBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: borderRadius.xl,
-    backgroundColor: colors.gray[100],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontSize: fontSize.xl,
-    fontWeight: fontWeight.bold,
-    color: colors.gray[900],
-  },
   // Tab bar
   tabBar: {
     flexDirection: 'row',

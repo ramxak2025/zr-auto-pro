@@ -10,7 +10,6 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
@@ -21,6 +20,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Client, Car, Check } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -259,17 +259,8 @@ export default function ClientDetailScreen() {
   const cars = client.cars || [];
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={22} color={colors.gray[700]} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>
-          {client.fullName}
-        </Text>
-        <View style={{ width: 22 }} />
-      </View>
+    <View style={styles.safe}>
+      <IosScreenHeader title={client.fullName} onBack={() => navigation.goBack()} centerTitle />
 
       <ScrollView
         style={styles.scroll}
@@ -576,30 +567,12 @@ export default function ClientDetailScreen() {
         }
         openExistingLabel={duplicateCar?.clientId === id ? 'Закрыть' : 'Открыть владельца'}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    backgroundColor: colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[200],
-  },
-  backBtn: { width: 60 },
-  headerTitle: {
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.semibold,
-    color: colors.gray[900],
-    flex: 1,
-    textAlign: 'center',
-  },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
 

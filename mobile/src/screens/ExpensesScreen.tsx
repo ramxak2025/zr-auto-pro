@@ -24,6 +24,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 
 function formatMoney(v: number) {
   return (
@@ -82,6 +83,7 @@ export default function ExpensesScreen() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const isDirector = user?.role === 'director' || user?.role === 'superadmin';
+  const tabBarHeight = useTabBarHeight();
 
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<string>('month');
@@ -353,7 +355,7 @@ export default function ExpensesScreen() {
           data={expenses}
           keyExtractor={(i) => i.id}
           renderItem={renderExpense}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }

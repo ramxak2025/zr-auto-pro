@@ -9,6 +9,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { SubscriptionInfo, Plan } from '../../../shared/types';
 
 const WHATSAPP_PHONE = '79884444436';
@@ -34,6 +35,7 @@ function formatDate(d: string) {
 export default function SubscriptionScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = React.useState(false);
 
   const { data: sub, isLoading } = useQuery<SubscriptionInfo>({
@@ -69,7 +71,7 @@ export default function SubscriptionScreen() {
       <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }

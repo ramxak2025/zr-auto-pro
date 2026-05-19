@@ -24,6 +24,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Service, PaginatedResponse } from '../../../shared/types';
 
 function formatMoney(v: number) {
@@ -37,6 +38,7 @@ function formatMoney(v: number) {
 export default function ServicesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const limit = 30;
@@ -252,7 +254,7 @@ export default function ServicesScreen() {
           data={currentServices}
           keyExtractor={(item) => item.id}
           renderItem={renderService}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }

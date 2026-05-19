@@ -15,6 +15,7 @@ import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import SearchInput from '../components/SearchInput';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Product } from '../../../shared/types';
 
 const formatMoney = (v: number): string =>
@@ -33,6 +34,7 @@ interface TrashScreenProps {
 export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
@@ -159,7 +161,7 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
             data={filtered}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }

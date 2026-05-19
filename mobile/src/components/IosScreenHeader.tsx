@@ -87,6 +87,7 @@ export default function IosScreenHeader({
         {
           backgroundColor: bg,
           paddingTop: insets.top + spacing[2],
+          borderBottomWidth: showDivider ? StyleSheet.hairlineWidth : 0,
           borderBottomColor: showDivider ? colors.gray[100] : 'transparent',
         },
         style,
@@ -114,7 +115,6 @@ const styles = StyleSheet.create({
   wrap: {
     paddingBottom: spacing[2.5],
     paddingHorizontal: spacing[3],
-    borderBottomWidth: StyleSheet.hairlineWidth,
   },
   row: {
     flexDirection: 'row',

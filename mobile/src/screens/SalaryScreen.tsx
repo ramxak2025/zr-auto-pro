@@ -21,6 +21,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole } from '../../../shared/types';
 import type { MasterSalary, SalaryPayment } from '../../../shared/types';
 
@@ -109,6 +110,7 @@ export default function SalaryScreen() {
   const queryClient = useQueryClient();
   const { user, isRole } = useAuth();
   const canManagePayments = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+  const tabBarHeight = useTabBarHeight();
 
   // Month navigation state
   const [selectedMonth, setSelectedMonth] = useState<Date>(new Date());
@@ -234,7 +236,7 @@ export default function SalaryScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }

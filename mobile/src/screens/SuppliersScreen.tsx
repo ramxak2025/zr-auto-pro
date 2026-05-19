@@ -26,6 +26,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Supplier } from '../../../shared/types';
 
 function formatMoney(v: number) {
@@ -40,6 +41,7 @@ export default function SuppliersScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission, isRole } = useAuth();
+  const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
@@ -257,7 +259,8 @@ export default function SuppliersScreen() {
           data={suppliers}
           keyExtractor={(i) => i.id}
           renderItem={renderSupplier}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+          scrollIndicatorInsets={{ bottom: tabBarHeight }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }

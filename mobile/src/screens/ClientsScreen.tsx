@@ -28,12 +28,14 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Client, PaginatedResponse } from '../../../shared/types';
 
 export default function ClientsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const tabBarHeight = useTabBarHeight();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -351,7 +353,7 @@ export default function ClientsScreen() {
                 <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
               </View>
             )}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
@@ -373,7 +375,7 @@ export default function ClientsScreen() {
           data={displayClients}
           keyExtractor={(item) => item.id}
           renderItem={renderClient}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }

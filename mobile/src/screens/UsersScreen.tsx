@@ -26,6 +26,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { User, UserPermissions, Product } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -153,6 +154,7 @@ export default function UsersScreen() {
   const navigation = useNavigation<any>();
   const { hasPermission, user: currentUser } = useAuth();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -414,7 +416,7 @@ export default function UsersScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }

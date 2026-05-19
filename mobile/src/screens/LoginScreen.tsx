@@ -67,7 +67,7 @@ export default function LoginScreen() {
       await login(phone, password);
     } catch (error: any) {
       if (error.code === 'ERR_NETWORK' || !error.response) {
-        Alert.alert('Ошибка', 'Сервер недоступен! Проверьте подключение.');
+        Alert.alert('Сервер недоступен', error.message || 'Проверьте подключение.');
       } else if (error.response?.status === 401) {
         Alert.alert('Ошибка', error.response?.data?.message || 'Неверный телефон или пароль');
       } else {
@@ -84,7 +84,7 @@ export default function LoginScreen() {
       await login(demoPhone, 'demo123');
     } catch (err: any) {
       if (err.code === 'ERR_NETWORK' || !err.response) {
-        Alert.alert('Ошибка', 'Сервер недоступен!');
+        Alert.alert('Сервер недоступен', err.message || 'Проверьте подключение.');
       } else {
         Alert.alert('Ошибка', `Ошибка демо-входа: ${err.response?.data?.message || err.response?.status}`);
       }

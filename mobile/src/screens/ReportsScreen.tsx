@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { FinancialReport } from '../../../shared/types';
 
 function formatMoney(v: number) {
@@ -51,6 +52,7 @@ export default function ReportsScreen() {
   const navigation = useNavigation<any>();
   const { hasPermission } = useAuth();
   const queryClient = useQueryClient();
+  const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<string>('month');
   const [dateFrom, setDateFrom] = useState(getDateRange('month').from);
@@ -108,7 +110,7 @@ export default function ReportsScreen() {
       <IosScreenHeader title="Отчёты" onBack={() => navigation.goBack()} />
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }

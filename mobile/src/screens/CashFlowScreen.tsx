@@ -21,6 +21,7 @@ import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole } from '../../../shared/types';
 
 function formatMoney(v: number) {
@@ -45,6 +46,7 @@ export default function CashFlowScreen() {
   const queryClient = useQueryClient();
   const { user, isRole } = useAuth();
   const canFilterByMaster = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
+  const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
 
   const now = new Date();
@@ -126,7 +128,7 @@ export default function CashFlowScreen() {
       <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }

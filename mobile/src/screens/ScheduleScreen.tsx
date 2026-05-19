@@ -1214,6 +1214,7 @@ function TodayTab() {
   const queryClient = useQueryClient();
   const navigation = useNavigation<any>();
   const [refreshing, setRefreshing] = useState(false);
+  const tabBarHeight = useTabBarHeight();
 
   const { data: todayData, isLoading } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
@@ -1297,7 +1298,7 @@ function TodayTab() {
 
   return (
     <ScrollView
-      contentContainerStyle={styles.tabContent}
+      contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
     >
       {/* Date header card */}
@@ -1418,6 +1419,7 @@ function ShiftsTab() {
   const { currentMonth } = useScheduleMonth();
   const year = currentMonth.getFullYear();
   const month = currentMonth.getMonth();
+  const tabBarHeight = useTabBarHeight();
 
   const { data: stats, isLoading } = useQuery({
     queryKey: ['schedule-my-stats', year, month],
@@ -1463,7 +1465,7 @@ function ShiftsTab() {
   const totalLate = (s.totalLateMinor || 0) + (s.totalLateMajor || 0);
 
   return (
-    <ScrollView contentContainerStyle={styles.tabContent}>
+    <ScrollView contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
       {isLoading ? (
         <LoadingSpinner />
       ) : (
@@ -1563,6 +1565,7 @@ function ShiftsTab() {
 
 // ============== RATING TAB ==============
 function RatingTab() {
+  const tabBarHeight = useTabBarHeight();
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -1614,7 +1617,7 @@ function RatingTab() {
   })();
 
   return (
-    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3], paddingBottom: 120 }}>
+    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3], paddingBottom: tabBarHeight + spacing[4] }}>
       <View
         style={{
           flexDirection: 'row',
@@ -1863,6 +1866,7 @@ function RatingTab() {
 function SettingsTab() {
   const queryClient = useQueryClient();
   const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes'>('daysoff');
+  const tabBarHeight = useTabBarHeight();
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
@@ -1919,7 +1923,7 @@ function SettingsTab() {
   });
 
   return (
-    <ScrollView contentContainerStyle={styles.tabContent}>
+    <ScrollView contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
       {/* Segmented sub-tabs */}
       <View style={styles.subTabs}>
         <TouchableOpacity
@@ -2407,12 +2411,10 @@ const styles = StyleSheet.create({
   },
 
   // ── Tab content ──
-  // paddingBottom reserves space for the floating iOS tab bar:
-  // 60 (bar) + 8 (padTop) + 34 (max home indicator) + 16 (buffer) ≈ 120
+  // Bottom padding is added per-tab via useTabBarHeight() inline override.
   tabContent: {
     padding: spacing[4],
     gap: spacing[3],
-    paddingBottom: 120,
   },
 
   // ── Empty state ──
