@@ -4,11 +4,36 @@ import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 
+// Roles that may be assigned through this service. Anything outside this set
+// is rejected up front so a manipulated DTO can't sneak a role string past
+// the DB CHECK constraint (which would still reject it, but the early throw
+// gives a clearer error and avoids relying on the DB layer alone).
+const ALLOWED_ROLES = new Set(['master', 'admin', 'director', 'superadmin']);
+
+// Only `superadmin` may mint or grant the `superadmin` role. A `director`
+// cannot escalate themselves or anyone else to `superadmin`.
+const SUPERADMIN_ONLY_ROLES = new Set(['superadmin']);
+
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger('UsersService');
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * Reject any role-assignment that the actor is not allowed to perform.
+   * Throws ForbiddenException — caller does NOT need to catch this; Nest
+   * will turn it into a 403 response.
+   */
+  private assertCanAssignRole(actorRole: string, requestedRole: string | undefined) {
+    if (!requestedRole) return;
+    if (!ALLOWED_ROLES.has(requestedRole)) {
+      throw new BadRequestException({ message: `Недопустимая роль: ${requestedRole}` });
+    }
+    if (SUPERADMIN_ONLY_ROLES.has(requestedRole) && actorRole !== 'superadmin') {
+      throw new ForbiddenException({ message: 'Только суперадмин может назначить эту роль' });
+    }
+  }
 
   private mapUser(row: any) {
     let daysOff: number[] = [];
@@ -91,10 +116,18 @@ export class UsersService {
     return this.mapUser(rows[0]);
   }
 
-  async create(tenantID: string, dto: any) {
+  async create(tenantID: string, actorRole: string, dto: any) {
     if (!dto.phone || !dto.password || !dto.fullName) {
       throw new BadRequestException({ message: 'Телефон, пароль и имя обязательны' });
     }
+
+    // Enforce reasonable password strength on creation (matches /auth/register).
+    if (typeof dto.password !== 'string' || dto.password.length < 8) {
+      throw new BadRequestException({ message: 'Пароль должен быть не менее 8 символов' });
+    }
+
+    const role = dto.role || 'master';
+    this.assertCanAssignRole(actorRole, role);
 
     const phone = normalizePhone(dto.phone);
 
@@ -109,7 +142,6 @@ export class UsersService {
 
     const hash = await bcrypt.hash(dto.password, 10);
     const perms = dto.permissions ? JSON.stringify(dto.permissions) : '{}';
-    const role = dto.role || 'master';
 
     try {
       const { rows } = await this.pool.query(
@@ -120,7 +152,7 @@ export class UsersService {
       );
       return this.mapUser(rows[0]);
     } catch (err: any) {
-      this.logger.error(`User create error: code=${err.code} detail=${err.detail} message=${err.message}`);
+      this.logger.error(`User create error: code=${err.code} detail=${err.detail}`);
       if (err.code === '23505') {
         throw new BadRequestException({ message: 'Пользователь с таким телефоном уже существует' });
       }
@@ -130,11 +162,49 @@ export class UsersService {
       if (err.code === '23514') {
         throw new BadRequestException({ message: `Недопустимая роль: ${role}` });
       }
-      throw new InternalServerErrorException({ message: `Ошибка создания сотрудника: ${err.message}` });
+      // Do not leak the raw driver/Postgres error to the client — it can
+      // reveal column names, hint text, etc. The full error is already in
+      // server logs above (with code + detail), so support can debug.
+      throw new InternalServerErrorException({ message: 'Ошибка создания сотрудника' });
     }
   }
 
-  async update(id: string, tenantID: string, dto: any) {
+  async update(id: string, tenantID: string, actorRole: string, actorID: string, dto: any) {
+    // Confirm the target lives in the actor's tenant. Without this the
+    // surrounding `WHERE id=$ AND tenant_id=$` only protects mutation;
+    // we'd still leak existence via different error paths.
+    const { rows: targetRows } = await this.pool.query(
+      'SELECT role FROM users WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
+    if (targetRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    const targetRole = targetRows[0].role as string;
+
+    // No one — not even superadmin — can demote the only director left in a
+    // tenant, and a non-superadmin cannot edit a superadmin / director other
+    // than themselves. This protects against a freshly-promoted admin turning
+    // around and bricking the owner's account.
+    const editingPrivilegedTarget =
+      targetRole === 'superadmin' || (targetRole === 'director' && actorRole !== 'superadmin');
+    if (editingPrivilegedTarget && id !== actorID) {
+      throw new ForbiddenException({ message: 'Недостаточно прав для редактирования этого пользователя' });
+    }
+
+    if (dto.role !== undefined) {
+      this.assertCanAssignRole(actorRole, dto.role);
+      // Do not let a non-superadmin strip the superadmin role off anyone
+      // (in case the target tenant has one).
+      if (targetRole === 'superadmin' && actorRole !== 'superadmin') {
+        throw new ForbiddenException({ message: 'Только суперадмин может менять роль суперадмина' });
+      }
+    }
+
+    if (dto.password !== undefined && typeof dto.password === 'string') {
+      if (dto.password.length < 8) {
+        throw new BadRequestException({ message: 'Пароль должен быть не менее 8 символов' });
+      }
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;

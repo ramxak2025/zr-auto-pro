@@ -1,11 +1,19 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
-@UseGuards(JwtAuthGuard)
+// Roles allowed to manage other users (create / update / delete / reorder /
+// edit per-product commissions). Masters and admin-light users CANNOT touch
+// other accounts because the update path is also the role-escalation path
+// (UpdateUserDto.role is honoured by the service). Self-avatar updates go
+// through /auth/avatar — never this controller.
+const MANAGER_ROLES = ['director', 'admin', 'superadmin'] as const;
+
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('users')
 export class UsersController {
   constructor(private usersService: UsersService) {}
@@ -20,6 +28,7 @@ export class UsersController {
     return this.usersService.getMasters(user.tenantID);
   }
 
+  @Roles(...MANAGER_ROLES)
   @Post('order')
   updateOrder(@CurrentUser() user: JwtPayload, @Body() dto: { orderedIds: string[] }) {
     return this.usersService.updateOrder(user.tenantID, dto.orderedIds);
@@ -30,16 +39,19 @@ export class UsersController {
     return this.usersService.getById(id, user.tenantID);
   }
 
+  @Roles(...MANAGER_ROLES)
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {
-    return this.usersService.create(user.tenantID, dto);
+    return this.usersService.create(user.tenantID, user.role, dto);
   }
 
+  @Roles(...MANAGER_ROLES)
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
-    return this.usersService.update(id, user.tenantID, dto);
+    return this.usersService.update(id, user.tenantID, user.role, user.userID, dto);
   }
 
+  @Roles(...MANAGER_ROLES)
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.usersService.remove(id, user.tenantID, user.userID, user.role);
@@ -47,11 +59,13 @@ export class UsersController {
 
   // ─── Product Commissions ────────────────────────────────────────────
 
+  @Roles(...MANAGER_ROLES)
   @Get(':id/product-commissions')
   getProductCommissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.usersService.getProductCommissions(id, user.tenantID);
   }
 
+  @Roles(...MANAGER_ROLES)
   @Post(':id/product-commissions')
   setProductCommissions(
     @Param('id') id: string,
