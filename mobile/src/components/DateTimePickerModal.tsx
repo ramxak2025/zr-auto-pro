@@ -30,9 +30,16 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
   const [viewYear, setViewYear] = useState(value.getFullYear());
   const [viewMonth, setViewMonth] = useState(value.getMonth());
 
+  // Sync the displayed month/year to whatever Date the parent currently
+  // shows. Parents often pass `value={someDate || new Date()}` inline — a
+  // brand-new Date instance on every render — which would re-fire this
+  // effect endlessly. Guard with functional setState + value-equality so
+  // a same-day re-render is a no-op rather than a render-loop trigger.
   useEffect(() => {
-    setViewYear(value.getFullYear());
-    setViewMonth(value.getMonth());
+    const nextYear = value.getFullYear();
+    const nextMonth = value.getMonth();
+    setViewYear((prev) => (prev === nextYear ? prev : nextYear));
+    setViewMonth((prev) => (prev === nextMonth ? prev : nextMonth));
   }, [value]);
 
   const daysInMonth = getDaysInMonth(viewYear, viewMonth);

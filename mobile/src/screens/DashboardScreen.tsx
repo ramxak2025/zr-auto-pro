@@ -149,15 +149,27 @@ function RevenueChart() {
     staleTime: 30_000,
   });
 
+  // Run the entrance tween ONCE per "new series" — keyed by points-length
+  // rather than the `data` reference. With our global SWR
+  // (`placeholderData: prev => prev`) every background refetch hands back
+  // a fresh `data` object even when the values are identical; depending
+  // on `data` re-fired the JS-thread `Animated.timing` on every poll,
+  // which is wasted work and a known source of stutter on iPhone.
+  const pointsLen = data?.points?.length ?? 0;
   useEffect(() => {
     Animated.timing(animWidth, { toValue: 1, duration: 800, useNativeDriver: false }).start();
-  }, [data]);
+    // animWidth is a useRef-wrapped Animated.Value — stable; omitting it
+    // intentionally to avoid the eslint-deps-noise / effect re-fires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointsLen]);
 
-  // Whenever the visible series changes (period change, offset change, refetch)
-  // drop the selection — the index would point at the wrong day otherwise.
+  // Whenever the visible series changes (period change, offset change, new
+  // points count) drop the selection — the index would point at the wrong
+  // day otherwise. Functional-update guard makes a same-state set a no-op
+  // so we don't add re-render pressure during scrub.
   useEffect(() => {
-    setSelectedIdx(null);
-  }, [period, offset, data?.points?.length]);
+    setSelectedIdx((prev) => (prev === null ? prev : null));
+  }, [period, offset, pointsLen]);
 
   const handlePeriodChange = (p: ChartPeriod) => {
     setPeriod(p);

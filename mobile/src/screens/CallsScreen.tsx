@@ -233,26 +233,40 @@ function ExpandedRecordingPlayer({ recordingUrl, onClose }: { recordingUrl: stri
     };
   }, [recordingUrl]);
 
+  // Auto-play once when the source URL resolves. Depend ONLY on `src` —
+  // including `player` in deps caused the effect to re-fire whenever
+  // expo-audio re-emitted a new player instance (each status tick can
+  // produce a new ref), which then re-called `.play()` mid-playback and
+  // racked up update churn. Reading `player` via a ref-pin keeps the
+  // call without making the effect dependent on the player reference.
+  const playerRef = useRef(player);
   useEffect(() => {
-    if (src) {
-      try {
-        player.play();
-      } catch {
-        /* ignore */
-      }
-    }
-  }, [src, player]);
+    playerRef.current = player;
+  }, [player]);
 
-  // Stop sound when this player unmounts (row collapsed or another row picked)
+  useEffect(() => {
+    if (!src) return;
+    try {
+      playerRef.current?.play();
+    } catch {
+      /* ignore */
+    }
+  }, [src]);
+
+  // Stop sound on unmount (row collapsed or another row picked). Cleanup
+  // pins to the latest player via ref — depending on `player` directly
+  // would re-run the cleanup on every status tick that produces a new
+  // player ref, which on iPhone surfaced as runaway re-renders inside
+  // the call list.
   useEffect(
     () => () => {
       try {
-        player.pause();
+        playerRef.current?.pause();
       } catch {
         /* ignore */
       }
     },
-    [player],
+    [],
   );
 
   const togglePlay = () => {
