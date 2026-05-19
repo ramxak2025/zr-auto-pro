@@ -9,6 +9,8 @@ import {
   RefreshControl,
   Animated,
   Dimensions,
+  Modal as RNModal,
+  Pressable,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -133,6 +135,13 @@ function RevenueChart() {
   const [period, setPeriod] = useState<ChartPeriod>('week');
   const [offset, setOffset] = useState(0);
   const animWidth = useRef(new Animated.Value(0)).current;
+  const [detailPoint, setDetailPoint] = useState<{
+    date: string;
+    revenue: number;
+    profit: number;
+    checkCount: number;
+    prev?: { revenue: number; profit: number; checkCount: number };
+  } | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-chart', period, offset],
@@ -345,22 +354,205 @@ function RevenueChart() {
           </View>
         )}
 
-        {/* Scrollable day details */}
+        {/* Scrollable day details — tap any point to see full metrics. */}
         {points.length > 1 && period !== 'today' && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chartDetailsScroll}>
             {points.map((point: any, idx: number) => (
-              <View key={idx} style={styles.chartDetailCard}>
+              <TouchableOpacity
+                key={idx}
+                activeOpacity={0.7}
+                onPress={() =>
+                  setDetailPoint({
+                    date: point.date,
+                    revenue: point.revenue || 0,
+                    profit: point.profit || 0,
+                    checkCount: point.checkCount || 0,
+                    prev:
+                      idx > 0
+                        ? {
+                            revenue: points[idx - 1].revenue || 0,
+                            profit: points[idx - 1].profit || 0,
+                            checkCount: points[idx - 1].checkCount || 0,
+                          }
+                        : undefined,
+                  })
+                }
+                style={styles.chartDetailCard}
+              >
                 <Text style={styles.chartDetailDate}>{formatLabel(point.date, idx, points.length)}</Text>
                 <Text style={styles.chartDetailRevenue}>{formatMoney(point.revenue)}</Text>
                 <Text style={styles.chartDetailProfit}>{formatMoney(point.profit)}</Text>
-              </View>
+              </TouchableOpacity>
             ))}
           </ScrollView>
         )}
       </LinearGradient>
+
+      {/* Per-point detail sheet — opens on tap of a day card above. */}
+      <PointDetailSheet point={detailPoint} period={period} onClose={() => setDetailPoint(null)} />
     </AnimatedCard>
   );
 }
+
+// ── Per-point detail sheet (revenue, profit, checks, avg, delta vs prev) ──
+function PointDetailSheet({
+  point,
+  period,
+  onClose,
+}: {
+  point: { date: string; revenue: number; profit: number; checkCount: number; prev?: { revenue: number; profit: number; checkCount: number } } | null;
+  period: ChartPeriod;
+  onClose: () => void;
+}) {
+  if (!point) return null;
+  const avg = point.checkCount > 0 ? point.revenue / point.checkCount : 0;
+  const deltaRev =
+    point.prev && point.prev.revenue > 0 ? ((point.revenue - point.prev.revenue) / point.prev.revenue) * 100 : null;
+  const deltaProf =
+    point.prev && point.prev.profit !== 0 ? ((point.profit - point.prev.profit) / Math.abs(point.prev.profit)) * 100 : null;
+  const deltaChecks =
+    point.prev && point.prev.checkCount > 0
+      ? ((point.checkCount - point.prev.checkCount) / point.prev.checkCount) * 100
+      : null;
+
+  const formatDate = (iso: string): string => {
+    if (period === 'year') {
+      const [y, m] = iso.split('-');
+      const months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+      return `${months[parseInt(m) - 1]} ${y}`;
+    }
+    const d = new Date(iso);
+    return d.toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  };
+
+  const DeltaPill = ({ value, label }: { value: number | null; label: string }) => {
+    if (value === null) return <Text style={pointDetailStyles.deltaNone}>{label}: нет данных</Text>;
+    const up = value > 0;
+    const color = value === 0 ? colors.gray[500] : up ? colors.green[600] : colors.red[600];
+    return (
+      <View style={[pointDetailStyles.deltaPill, { backgroundColor: color + '14' }]}>
+        <Ionicons
+          name={value === 0 ? 'remove' : up ? 'trending-up' : 'trending-down'}
+          size={14}
+          color={color}
+        />
+        <Text style={[pointDetailStyles.deltaText, { color }]}>{Math.abs(value).toFixed(1)}%</Text>
+        <Text style={[pointDetailStyles.deltaLabel, { color }]}>{label}</Text>
+      </View>
+    );
+  };
+
+  return (
+    <RNModal visible animationType="fade" transparent onRequestClose={onClose}>
+      <Pressable style={pointDetailStyles.backdrop} onPress={onClose}>
+        <Pressable style={pointDetailStyles.sheet} onPress={(e) => e.stopPropagation()}>
+          <View style={pointDetailStyles.grabber} />
+          <Text style={pointDetailStyles.dateLabel}>{formatDate(point.date)}</Text>
+
+          <View style={pointDetailStyles.metricsRow}>
+            <View style={pointDetailStyles.metricBox}>
+              <Text style={pointDetailStyles.metricLabel}>Оборот</Text>
+              <Text style={pointDetailStyles.metricValue}>{formatMoney(point.revenue)}</Text>
+            </View>
+            <View style={pointDetailStyles.metricBox}>
+              <Text style={pointDetailStyles.metricLabel}>Прибыль</Text>
+              <Text style={[pointDetailStyles.metricValue, { color: colors.cyan[600] }]}>
+                {formatMoney(point.profit)}
+              </Text>
+            </View>
+          </View>
+
+          <View style={pointDetailStyles.metricsRow}>
+            <View style={pointDetailStyles.metricBox}>
+              <Text style={pointDetailStyles.metricLabel}>Чеков</Text>
+              <Text style={pointDetailStyles.metricValue}>{point.checkCount || 0}</Text>
+            </View>
+            <View style={pointDetailStyles.metricBox}>
+              <Text style={pointDetailStyles.metricLabel}>Средний чек</Text>
+              <Text style={pointDetailStyles.metricValue}>{point.checkCount > 0 ? formatMoney(avg) : '—'}</Text>
+            </View>
+          </View>
+
+          <Text style={pointDetailStyles.deltasTitle}>Изменение vs предыдущего периода</Text>
+          <View style={pointDetailStyles.deltasGrid}>
+            <DeltaPill value={deltaRev} label="оборот" />
+            <DeltaPill value={deltaProf} label="прибыль" />
+            <DeltaPill value={deltaChecks} label="чеки" />
+          </View>
+
+          <TouchableOpacity style={pointDetailStyles.closeBtn} onPress={onClose}>
+            <Text style={pointDetailStyles.closeBtnText}>Закрыть</Text>
+          </TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </RNModal>
+  );
+}
+
+const pointDetailStyles = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: spacing[5],
+    paddingBottom: spacing[6],
+    paddingTop: spacing[3],
+  },
+  grabber: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.gray[300],
+    marginBottom: spacing[4],
+  },
+  dateLabel: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: colors.gray[900],
+    letterSpacing: -0.2,
+    marginBottom: spacing[4],
+    textTransform: 'capitalize' as const,
+  },
+  metricsRow: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[3] },
+  metricBox: {
+    flex: 1,
+    backgroundColor: colors.gray[50],
+    borderRadius: 14,
+    padding: spacing[3.5],
+  },
+  metricLabel: { fontSize: 12, color: colors.gray[500], fontWeight: '500', marginBottom: 4 },
+  metricValue: { fontSize: 18, fontWeight: '800', color: colors.gray[900], letterSpacing: -0.4 },
+  deltasTitle: {
+    fontSize: 12,
+    color: colors.gray[500],
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase' as const,
+    marginTop: spacing[2],
+    marginBottom: spacing[2],
+  },
+  deltasGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2], marginBottom: spacing[5] },
+  deltaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderRadius: 999,
+  },
+  deltaText: { fontSize: 13, fontWeight: '700' },
+  deltaLabel: { fontSize: 12, fontWeight: '500', opacity: 0.85 },
+  deltaNone: { fontSize: 12, color: colors.gray[400] },
+  closeBtn: {
+    backgroundColor: colors.primary[600],
+    paddingVertical: spacing[3.5],
+    borderRadius: 14,
+    alignItems: 'center',
+  },
+  closeBtnText: { color: colors.white, fontSize: 15, fontWeight: '700' },
+});
 
 // ── Shift Control ──
 function ShiftControl() {
