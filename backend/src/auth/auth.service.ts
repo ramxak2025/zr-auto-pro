@@ -1,4 +1,5 @@
 import { Injectable, Inject, UnauthorizedException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { JwtService } from '@nestjs/jwt';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
@@ -98,8 +99,23 @@ export class AuthService {
     return rows.length > 0;
   }
 
+  /**
+   * Purge already-expired entries from the revoked-tokens table. The
+   * revocation check only runs while a token would still be valid by
+   * signature, so rows older than `expires_at` are dead weight. Wiring
+   * this as a daily cron keeps the table from growing forever in a
+   * tenant with churny logins.
+   */
+  @Cron('17 3 * * *', { timeZone: 'Europe/Moscow' })
   async cleanExpiredTokens(): Promise<void> {
-    await this.pool.query(`DELETE FROM revoked_tokens WHERE expires_at < now()`);
+    try {
+      const { rowCount } = await this.pool.query(`DELETE FROM revoked_tokens WHERE expires_at < now()`);
+      if (rowCount && rowCount > 0) {
+        this.logger.log(`Purged ${rowCount} expired revoked tokens`);
+      }
+    } catch (err) {
+      this.logger.error(`cleanExpiredTokens failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async login(dto: LoginDto) {
