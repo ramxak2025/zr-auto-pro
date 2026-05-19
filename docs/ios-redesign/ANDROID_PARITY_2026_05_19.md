@@ -152,4 +152,6 @@ Smoke-test on a physical Android device or emulator (API 30+):
 2. `feat(android): edge-to-edge + Material 3 dialog geometry + perf tuning` — app.json status/nav bar + splash mirror + softwareKeyboard pan; dialogs with M3 corners and pill buttons; FlashList `removeClippedSubviews` on heavy screens; capped BlurView intensity on Android with translucent scrim.
 3. `feat(android): Material 3 top app bar — divider + left-aligned title` — IosScreenHeader divider + left-align on Android.
 4. `fix(android-tabbar): KassaButton fits inside 80pt M3 bar` — central CTA stays inside the bar surface.
-5. (next) `feat(android): Predictive Back + parity doc`.
+5. `feat(android): enable Predictive Back + parity doc` — withAndroidPredictiveBack config plugin + this doc.
+6. `fix(android): reserve M3 NavigationBar space via contentContainerStyle` — Android branch adds explicit paddingBottom to Dashboard/Checks/Products/Employees/More because Android ignores `contentInset`.
+7. `perf(android): removeClippedSubviews on Clients/Cars/Suppliers/Services` — extend the perf tweak to the remaining FlashList consumers.
