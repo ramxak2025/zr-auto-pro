@@ -3,6 +3,9 @@ import { StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as Font from 'expo-font';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { AuthProvider } from './src/contexts/AuthContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
@@ -33,6 +36,7 @@ const queryClient = new QueryClient({
 export default function App() {
   const [cacheReady, setCacheReady] = useState(false);
   const [authResolved, setAuthResolved] = useState(false);
+  const [fontsReady, setFontsReady] = useState(false);
   const persistenceCleanup = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -50,15 +54,38 @@ export default function App() {
     };
   }, []);
 
+  // Pre-load vector-icon font families. The default `@expo/vector-icons`
+  // wrapper renders an empty `<Text />` until each font finishes its own
+  // lazy `Font.loadAsync` on mount. On Android (especially with Hermes +
+  // New Architecture and on production builds where the async load can
+  // race the first paint or silently no-op), that meant chevrons and
+  // every other glyph rendered as blank squares — i.e. "icons gone".
+  // Loading the fonts once at startup makes `Font.isLoaded(name)` true
+  // for every Icon's first render — they appear immediately.
+  useEffect(() => {
+    let cancelled = false;
+    Font.loadAsync({
+      ...(Ionicons as any).font,
+      ...(MaterialCommunityIcons as any).font,
+    })
+      .catch(() => {
+        // Even if a single family fails, let the app continue rendering
+        // rather than blocking the splash forever — individual icons
+        // will retry their own load on mount.
+      })
+      .finally(() => {
+        if (!cancelled) setFontsReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Show the branded splash while either (a) the cache is still hydrating
-  // or (b) the AuthProvider is still verifying the stored token. Both
-  // windows are short (~50 ms cache + 200–600 ms /me), but together they
-  // were previously rendering as `null` then a tiny ActivityIndicator —
-  // jarring after the OS-level static splash. The SplashOverlay covers
-  // the full screen with the AUTEXA brand mark, smooth fade-in, and a
-  // subtle pulsing dots indicator. Native scene transitions fade it out
-  // when the navigator finally renders LoginScreen / DashboardScreen.
-  const showSplash = !cacheReady || !authResolved;
+  // or (b) the AuthProvider is still verifying the stored token, or (c)
+  // the icon fonts haven't finished loading yet. Both windows are short
+  // (~50 ms cache + 200–600 ms /me + ~50 ms fonts).
+  const showSplash = !cacheReady || !authResolved || !fontsReady;
 
   return (
     <ErrorBoundary>
@@ -100,7 +127,7 @@ export default function App() {
               {/* Render the navigator immediately so its scene is mounted
                   and ready to display the moment the splash unmounts —
                   no second-pass layout flash. */}
-              {cacheReady && <AppNavigator />}
+              {cacheReady && fontsReady && <AppNavigator />}
               {showSplash && <SplashOverlay />}
             </NavigationContainer>
           </AuthProvider>

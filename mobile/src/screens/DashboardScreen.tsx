@@ -56,6 +56,13 @@ import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../..
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
+// Width of each x-axis label box. Each label is absolutely positioned
+// at `pointX - X_AXIS_LABEL_W / 2` so its centre aligns with the point.
+// 28pt fits all label variants we display ("Пн", "Дек", "31") at 10pt
+// while keeping 12 monthly labels spaced ≥25pt apart on a ~300pt-wide
+// chart — no visible overlap, no clipping.
+const X_AXIS_LABEL_W = 28;
+
 function formatMoney(value: number): string {
   const rounded = Math.round(value);
   return rounded.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
@@ -599,19 +606,49 @@ function OwnerAnalyticsChart() {
   }, [points]);
   const chartWidth = SCREEN_WIDTH - spacing[4] * 2 - spacing[5] * 2;
 
-  const formatLabel = (dateStr: string): string => {
-    if (period === 'today') return '';
+  // Returns the visible label for a given point's x-axis tick, OR '' to
+  // hide that tick. Density rules (per period) are intentional — labels
+  // are rendered absolutely-positioned so each is centered on its own
+  // data point (see x-axis rendering below). The density just decides
+  // which subset of points carry a label.
+  //
+  // Important: for `month`, the date string from the API is `YYYY-MM-DD`
+  // (UTC midnight). Passing that to `new Date()` and calling `.getDate()`
+  // would silently shift by one day in any time zone behind UTC. We parse
+  // the calendar parts directly so the displayed day-of-month always
+  // matches what the API meant.
+  const formatLabel = (dateStr: string, idx: number, total: number): string => {
+    if (period === 'today') {
+      // 24 hourly points → show every 4 hours: 0, 4, 8, 12, 16, 20.
+      const h = new Date(dateStr).getHours();
+      return h % 4 === 0 ? `${h}` : '';
+    }
     if (period === 'year') {
+      // 12 monthly points → all months, short labels.
       const monthsShort = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
       const parts = dateStr.split('-');
       return monthsShort[parseInt(parts[1]) - 1] || '';
     }
-    const d = new Date(dateStr);
     if (period === 'week') {
+      // 7 daily points → all days. Parse the ISO date as a calendar date
+      // (no timezone math) so Sunday isn't accidentally drawn as Saturday.
+      const [y, m, d] = dateStr.split('-').map((n) => parseInt(n, 10));
+      const dt = new Date(y, (m || 1) - 1, d || 1);
       const days = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
-      return days[d.getDay()];
+      return days[dt.getDay()] ?? '';
     }
-    return `${d.getDate()}`;
+    // month: 28-31 daily points → show day-of-month, thinned so labels
+    // fit without overlapping. Always include the first and last day so
+    // the axis has clear endpoints.
+    const day = parseInt(dateStr.slice(8, 10), 10) || 0;
+    const isFirst = idx === 0;
+    const isLast = idx === total - 1;
+    if (isFirst || isLast) return `${day}`;
+    // Show every 5th day (5, 10, 15, 20, 25). Skip days within 2 of the
+    // endpoints so we don't draw "31" right next to "30".
+    if (day % 5 !== 0) return '';
+    if (idx < 2 || idx > total - 3) return '';
+    return `${day}`;
   };
 
   const buildWavePath = (vals: number[], w: number, h: number, maxV: number): string => {
@@ -690,8 +727,6 @@ function OwnerAnalyticsChart() {
   const displayProfit = selPoint ? selPoint.profit || 0 : totalProfit;
   const displayChecks = selPoint ? selPoint.checkCount || 0 : totalChecks;
   const displayAvg = selPoint && selPoint.checkCount > 0 ? selPoint.revenue / selPoint.checkCount : null;
-
-  const labelStep = period === 'month' ? (points.length > 15 ? 5 : 3) : 1;
 
   const TOOLTIP_W = 132;
   const tooltipLeft = Math.max(0, Math.min(svgW - TOOLTIP_W, selX - TOOLTIP_W / 2));
@@ -839,20 +874,30 @@ function OwnerAnalyticsChart() {
             )}
           </View>
 
-          {period !== 'today' && (
-            <View style={styles.xAxisLabels}>
-              {points.map((point: any, idx: number) => {
-                const label = formatLabel(point.date);
-                const show =
-                  period === 'week' || period === 'year' || idx % labelStep === 0 || idx === points.length - 1;
-                return (
-                  <Text key={idx} style={styles.xAxisLabelLight}>
-                    {show ? label : ''}
-                  </Text>
-                );
-              })}
-            </View>
-          )}
+          {/* X-axis ticks. Each label is positioned absolutely so its
+              center sits exactly on the data point's x-coordinate —
+              the same `(i / (N-1)) * svgW` formula used for the curve
+              and the scrub circle. Previously the labels lived in a
+              `flex: 1` row, which spaced them as `(2i+1)/(2N) * svgW`,
+              i.e. shifted ~half-a-slot right of each point. Tapping
+              "Вт" would then highlight the Tuesday point but draw it
+              visually between the Monday and Tuesday labels. */}
+          <View style={[styles.xAxisLabels, { width: svgW }]}>
+            {points.map((point: any, idx: number) => {
+              const label = formatLabel(point.date, idx, points.length);
+              if (!label) return null;
+              const x = points.length > 1 ? (idx / (points.length - 1)) * svgW : svgW / 2;
+              return (
+                <Text
+                  key={idx}
+                  style={[styles.xAxisLabelLight, { left: x - X_AXIS_LABEL_W / 2 }]}
+                  numberOfLines={1}
+                >
+                  {label}
+                </Text>
+              );
+            })}
+          </View>
 
           {selPoint === null && <Text style={styles.scrubHintLight}>Проведите по графику для деталей</Text>}
         </View>
@@ -2230,8 +2275,19 @@ const styles = StyleSheet.create({
   segCtlTextActive: { color: colors.gray[900], fontWeight: '700' },
 
   chartBody: { gap: spacing[1] },
-  xAxisLabels: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: spacing[1] },
-  xAxisLabelLight: { fontSize: 10, color: colors.gray[400], textAlign: 'center', flex: 1 },
+  // Container is positioned relative; each label is absolutely placed
+  // so its centre coincides with the data point above it. Height is set
+  // explicitly because absolutely-positioned children don't contribute
+  // to layout height.
+  xAxisLabels: { position: 'relative', height: 14, marginTop: spacing[1] },
+  xAxisLabelLight: {
+    position: 'absolute',
+    top: 0,
+    width: X_AXIS_LABEL_W,
+    fontSize: 10,
+    color: colors.gray[400],
+    textAlign: 'center',
+  },
   todayStatLight: { alignItems: 'center', paddingVertical: spacing[6] },
   todayStatValueLight: { fontSize: fontSize['3xl'], fontWeight: '800', color: colors.gray[900], letterSpacing: -0.8 },
   todayStatSubLight: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 4 },

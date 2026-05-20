@@ -56,21 +56,20 @@ interface MenuSection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Menu structure — grouped sections, iOS Settings-style.
+// Menu structure — three owner-requested groups, iOS Settings-style.
 //
-// Grouping rationale (per owner-traffic surveys):
-//   • ОПЕРАЦИИ  — day-to-day workflow (schedule, money in/out, calls)
-//   • ФИНАНСЫ   — owner-facing money screens (reports, salaries, expenses)
-//   • КАТАЛОГ   — reference data (clients, services, suppliers, equipment, marketing)
-//   • УПРАВЛЕНИЕ — administration (employees, users, company, subscription, admin)
+//   • СЕРВИС     — production floor (schedule, clients, employees, services).
+//   • ФИНАНСЫ    — owner-facing money screens (cashflow, salary, expenses, reports).
+//   • УПРАВЛЕНИЕ — administration & catalog (suppliers, calls, equipment,
+//                  marketing, users, company settings, subscription, admin panel).
 //
-// Inside each group items keep the order the owner asked for. The flat
-// menuItems list of v1 had no perceptual hierarchy — 16 rows in one card
-// blurred together and forced the owner to scan-and-search every time.
+// Order within each group is the order the owner asked for. Items keep
+// their existing roles / permissions / featureKey gates so subscription
+// paywalls and role visibility are unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 const menuSections: MenuSection[] = [
   {
-    title: 'Операции',
+    title: 'Сервис',
     items: [
       {
         label: 'Расписание',
@@ -82,22 +81,31 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
-        label: 'Движение денег',
-        description: 'Касса по дням и сотрудникам',
-        screen: 'CashFlow',
-        featureKey: 'cashflow_view',
-        icon: 'swap-horizontal-outline',
-        iconBg: colors.teal[50],
-        iconColor: colors.teal[600],
-      },
-      {
-        label: 'Звонки',
-        description: 'Журнал звонков и записи',
-        screen: 'Calls',
-        roles: ['director', 'superadmin'],
-        icon: 'call-outline',
+        label: 'Клиенты',
+        description: 'Клиенты и автомобили',
+        screen: 'Clients',
+        permission: 'clients_view',
+        featureKey: 'clients_view',
+        icon: 'people-outline',
         iconBg: colors.blue[50],
         iconColor: colors.blue[600],
+      },
+      {
+        label: 'Сотрудники',
+        description: 'Карточки персонала, статус, рейтинги',
+        screen: 'Employees',
+        icon: 'people-circle-outline',
+        iconBg: colors.cyan[50],
+        iconColor: colors.cyan[600],
+      },
+      {
+        label: 'Услуги',
+        description: 'Каталог услуг',
+        screen: 'Services',
+        featureKey: 'services_view',
+        icon: 'build-outline',
+        iconBg: colors.orange[50],
+        iconColor: colors.orange[600],
       },
     ],
   },
@@ -105,14 +113,13 @@ const menuSections: MenuSection[] = [
     title: 'Финансы',
     items: [
       {
-        label: 'Отчёты',
-        description: 'Финансовые отчёты',
-        screen: 'Reports',
-        permission: 'financial_reports',
-        featureKey: 'reports_view',
-        icon: 'bar-chart-outline',
-        iconBg: colors.purple[50],
-        iconColor: colors.purple[700],
+        label: 'Движение денег',
+        description: 'Касса по дням и сотрудникам',
+        screen: 'CashFlow',
+        featureKey: 'cashflow_view',
+        icon: 'swap-horizontal-outline',
+        iconBg: colors.teal[50],
+        iconColor: colors.teal[600],
       },
       {
         label: 'Зарплата',
@@ -132,30 +139,21 @@ const menuSections: MenuSection[] = [
         iconBg: colors.rose[50],
         iconColor: colors.rose[600],
       },
+      {
+        label: 'Отчёты',
+        description: 'Финансовые отчёты',
+        screen: 'Reports',
+        permission: 'financial_reports',
+        featureKey: 'reports_view',
+        icon: 'bar-chart-outline',
+        iconBg: colors.purple[50],
+        iconColor: colors.purple[700],
+      },
     ],
   },
   {
-    title: 'Каталог',
+    title: 'Управление',
     items: [
-      {
-        label: 'Клиенты',
-        description: 'Клиенты и автомобили',
-        screen: 'Clients',
-        permission: 'clients_view',
-        featureKey: 'clients_view',
-        icon: 'people-outline',
-        iconBg: colors.blue[50],
-        iconColor: colors.blue[600],
-      },
-      {
-        label: 'Услуги',
-        description: 'Каталог услуг',
-        screen: 'Services',
-        featureKey: 'services_view',
-        icon: 'build-outline',
-        iconBg: colors.orange[50],
-        iconColor: colors.orange[600],
-      },
       {
         label: 'Поставщики',
         description: 'Поставки и расчёты',
@@ -165,6 +163,15 @@ const menuSections: MenuSection[] = [
         icon: 'cube-outline',
         iconBg: colors.amber[50],
         iconColor: colors.amber[600],
+      },
+      {
+        label: 'Звонки',
+        description: 'Журнал звонков и записи',
+        screen: 'Calls',
+        roles: ['director', 'superadmin'],
+        icon: 'call-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
       },
       {
         label: 'Имущество',
@@ -181,19 +188,6 @@ const menuSections: MenuSection[] = [
         icon: 'megaphone-outline',
         iconBg: colors.violet[50],
         iconColor: colors.violet[600],
-      },
-    ],
-  },
-  {
-    title: 'Управление',
-    items: [
-      {
-        label: 'Сотрудники',
-        description: 'Карточки персонала, статус, рейтинги',
-        screen: 'Employees',
-        icon: 'people-circle-outline',
-        iconBg: colors.cyan[50],
-        iconColor: colors.cyan[600],
       },
       {
         label: 'Пользователи',
