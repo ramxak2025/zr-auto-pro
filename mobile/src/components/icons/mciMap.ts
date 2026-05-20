@@ -42,9 +42,14 @@ export const MCI_TO_LUCIDE: Record<string, IconMapEntry> = {
 
   // home / store / building
   home: { lucide: 'Home', solid: true, fill: true },
+  'home-variant': { lucide: 'Home', solid: true, fill: true },
+  'home-variant-outline': { lucide: 'Home' },
   'office-building-outline': { lucide: 'Building2' },
   'package-variant-closed': { lucide: 'Package', solid: true, fill: true },
+  'package-variant-closed-outline': { lucide: 'Package' },
   'cube-outline': { lucide: 'Box' },
+  'view-grid-outline': { lucide: 'LayoutGrid' },
+  'text-box-outline': { lucide: 'FileText' },
 
   // vehicles
   'car-outline': { lucide: 'Car' },

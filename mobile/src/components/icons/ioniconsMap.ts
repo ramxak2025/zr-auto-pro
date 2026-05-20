@@ -64,9 +64,12 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // ── people / accounts ─────────────────────────────────────────────────
   person: { lucide: 'User', solid: true, fill: true },
   'person-outline': { lucide: 'User' },
+  'person-circle': { lucide: 'CircleUserRound', solid: true, fill: true },
   'person-circle-outline': { lucide: 'CircleUserRound' },
   people: { lucide: 'Users', solid: true, fill: true },
   'people-outline': { lucide: 'Users' },
+  'people-circle': { lucide: 'UsersRound', solid: true, fill: true },
+  'people-circle-outline': { lucide: 'UsersRound' },
 
   // ── communication ─────────────────────────────────────────────────────
   'call-outline': { lucide: 'Phone' },
@@ -125,7 +128,10 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // ── status / charts ───────────────────────────────────────────────────
   'analytics-outline': { lucide: 'BarChart3' },
   'stats-chart': { lucide: 'BarChart3', solid: true },
+  'bar-chart': { lucide: 'BarChart3', solid: true },
+  'bar-chart-outline': { lucide: 'BarChart3' },
   'pie-chart-outline': { lucide: 'PieChart' },
+  'pie-chart': { lucide: 'PieChart', solid: true, fill: true },
   speedometer: { lucide: 'Gauge', solid: true },
   'speedometer-outline': { lucide: 'Gauge' },
   'trending-up': { lucide: 'TrendingUp', solid: true },

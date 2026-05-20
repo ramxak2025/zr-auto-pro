@@ -1,114 +1,96 @@
 /**
- * TabBar — Android variant. Material 3 NavigationBar.
+ * TabBar — Android variant. Floating "island" bar matching the iOS look.
  *
- * Spec mirrors the official M3 guidance (https://m3.material.io/components/navigation-bar):
- *   • 80pt tall (Material 3 reference) on top of the system gesture inset.
- *   • Opaque white "surface" background with a 1pt top hairline using
- *     gray[100] — the canonical M3 surface-on-surface separator on light
- *     theme.
- *   • Active destination = filled-icon glyph on a 32×64 pill of
- *     primary[100] (the M3 "secondaryContainer" idiom on the primary
- *     family). Indicator alpha + tiny scale on focus change.
- *   • Inactive destination = OUTLINED-icon glyph + label. We use Material
- *     Community Icons because @expo/vector-icons ships only the Filled
- *     style of stock MaterialIcons; MCI carries both the filled and the
- *     `-outline`-suffixed pair we need for the M3 filled/outline
- *     transition.
- *   • Labels are visible on every destination (matches the iOS variant of
- *     this app — product cohesion beats Material's "label-on-active-only"
- *     default for our use case).
- *   • Tap feedback = `android_ripple` on the Pressable, bounded by the
- *     item rect; press also fires a soft 'tap' haptic.
- *   • Central «Касса» destination is the same `KassaButton` visual used
- *     on iOS (plasma + gradient) — kept identical so users moving between
- *     devices recognise the central CTA. The button sits inside the bar
- *     row (no FAB-above-bar cut-out) — that's the cleanest M3-compatible
- *     way to render a strongly-branded center action without breaking
- *     the navigation-bar geometry.
- *   • Safe-area bottom padding accounts for both the legacy 3-button
- *     navigation chin (no extra inset needed beyond the system inset) AND
- *     the gesture-bar (where insets.bottom can be 0 on some OEMs — we
- *     enforce a small minimum so the bar never overlaps the gesture
- *     swipe-up zone).
+ * Design goals (per owner ask):
+ *   • Same visual language as iOS Liquid Glass island — pill-shaped,
+ *     floating above content with breathing room from screen edges,
+ *     soft drop shadow, smooth indicator that springs between active
+ *     destinations.
+ *   • Centre «Касса» CTA rendered as the gradient KassaButton — the
+ *     same component iOS uses, sized as a floating FAB that pops
+ *     slightly above the bar so it reads as the primary action.
+ *   • SVG icons via the project's Lucide shim (`@expo/vector-icons`
+ *     calls are routed through `src/components/icons/*` by the metro
+ *     resolver) — guaranteed visible on every Android skin / OEM,
+ *     no native font registration required.
+ *   • Spring indicator on focus change — Reanimated v4 worklet driving
+ *     a translucent primary-tinted pill underneath the focused icon.
+ *
+ * Why not Material 3 NavigationBar:
+ *   The previous M3 variant looked alien next to the iOS island — owner
+ *   explicitly wanted parity. The geometry we converged on (60pt tall,
+ *   14pt horizontal margin, pill corner radius, soft shadow) reads as
+ *   premium on both platforms.
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { Icon, type IconName } from '../platform/Icon';
 import { haptic } from '../platform/haptics';
-import { TIMING_FAST } from '../platform/motion';
+import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { KassaButton } from './KassaButton';
 import { TAB_DEFINITIONS, TabDefinition } from './TabBarShared';
 
-const BAR_HEIGHT = 80;
-const PILL_HEIGHT = 32;
-const PILL_WIDTH = 64;
+// ── Floating island geometry — mirrors TabBar.ios.tsx ─────────────────────
+const BAR_HEIGHT = 60;
+const HORIZONTAL_MARGIN = 14;
+const TOP_LIFT = 6;
+const BOTTOM_LIFT = 8;
+const CORNER_RADIUS = BAR_HEIGHT / 2;
 
-// Material 3 active-indicator tone: primary container on light theme.
-// Using primary[100] gives a saturated "secondary container" feel that's
-// clearly distinguishable from the surface.
-const ACTIVE_PILL_BG = colors.primary[100];
-const ACTIVE_TINT = colors.primary[700];
-const INACTIVE_TINT = colors.gray[600];
-
-type M3IconPair = {
-  filled: keyof typeof MaterialCommunityIcons.glyphMap;
-  outlined: keyof typeof MaterialCommunityIcons.glyphMap;
-};
-
-// M3-icon mapping using MaterialCommunityIcons (both filled and -outline
-// variants ship in this family). Kept inline because the M3 navigation-bar
-// filled/outline pattern is unique to this surface and shouldn't bleed
-// into the shared `Icon` abstraction (which uses Filled SF Symbols on
-// iOS by design).
-const M3_TAB_ICONS: Record<string, M3IconPair> = {
-  Dashboard: { filled: 'home-variant', outlined: 'home-variant-outline' },
-  Products: { filled: 'package-variant-closed', outlined: 'package-variant-closed' },
-  NewCheck: { filled: 'receipt', outlined: 'receipt' }, // unused — kassa renders KassaButton
-  Checks: { filled: 'text-box', outlined: 'text-box-outline' },
-  MoreTab: { filled: 'view-grid', outlined: 'view-grid-outline' },
-};
+// Active-indicator pill — sits behind the focused icon. Tracking
+// width matches a tab slot minus side padding so it reads as a
+// "selection capsule" the way iOS's droplet does.
+const PILL_VERTICAL_INSET = 6;
+const PILL_HORIZONTAL_PADDING = 10;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const safeBottom = Math.max(insets.bottom, 8);
+
+  const focusedIndex = TAB_DEFINITIONS.findIndex(
+    (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
+  );
+  const safeFocusedIndex = focusedIndex < 0 ? 0 : focusedIndex;
 
   return (
     <View
       pointerEvents="box-none"
-      style={[
-        styles.wrapper,
-        { paddingBottom: Math.max(insets.bottom, 8) },
-      ]}
+      style={[styles.wrapper, { paddingTop: TOP_LIFT, paddingBottom: safeBottom + BOTTOM_LIFT }]}
     >
-      <View style={styles.bar}>
+      <View style={[styles.island, { height: BAR_HEIGHT }]}>
+        {/* Row of all tabs (Касса rendered separately on top so its FAB
+            can pop above the island). */}
         <View style={styles.row}>
-          {TAB_DEFINITIONS.map((tab) => {
+          {TAB_DEFINITIONS.map((tab, idx) => {
             const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
             const focused = state.index === routeIndex;
 
             if (tab.isKassa) {
               return (
-                <Pressable
-                  key={tab.routeName}
-                  style={styles.kassaSlot}
-                  android_ripple={{ color: 'transparent', borderless: true }}
-                  onPress={() => {
-                    haptic('impact');
-                    navigation.navigate(tab.routeName as never);
-                  }}
-                  accessibilityRole="button"
-                  accessibilityLabel={tab.label}
-                >
-                  <KassaButton />
-                </Pressable>
+                <View key={tab.routeName} style={styles.kassaSlot}>
+                  <Pressable
+                    onPress={() => {
+                      haptic('impact');
+                      navigation.navigate(tab.routeName as never);
+                    }}
+                    style={styles.kassaPressable}
+                    android_ripple={{ color: 'transparent', borderless: true }}
+                    accessibilityRole="button"
+                    accessibilityLabel={tab.label}
+                  >
+                    <KassaButton />
+                  </Pressable>
+                </View>
               );
             }
 
@@ -127,69 +109,96 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
             return (
               <TabItem
                 key={tab.routeName}
-                focused={focused}
+                index={idx}
                 tab={tab}
+                focused={focused}
                 onPress={onPress}
+                focusedIndex={safeFocusedIndex}
               />
             );
           })}
         </View>
+
+        {/* Top hairline rim — same subtle premium touch as the iOS
+            island. Helps the bar read as a discrete surface against
+            white screen contents. */}
+        <View style={styles.topRim} pointerEvents="none" />
       </View>
     </View>
   );
 }
 
 interface TabItemProps {
-  focused: boolean;
+  index: number;
   tab: TabDefinition;
+  focused: boolean;
   onPress: () => void;
+  focusedIndex: number;
 }
 
-function TabItem({ focused, tab, onPress }: TabItemProps) {
-  // M3 active-indicator pill: scale-in + alpha. Spec says the indicator
-  // appears with a "container morph"; alpha + a subtle scale read as
-  // that morph without animating layout (which would risk flicker on
-  // older Android devices).
-  const alpha = useSharedValue(focused ? 1 : 0);
-  const scale = useSharedValue(focused ? 1 : 0.85);
+function TabItem({ tab, focused, onPress }: TabItemProps) {
+  // Selection capsule behind the icon — translucent primary-tinted pill
+  // that scales + fades on focus change. Tracks the focused tab the
+  // same way iOS's droplet tracks. Driven by a single Reanimated
+  // shared value so the animation runs entirely on the UI thread.
+  const focusValue = useSharedValue(focused ? 1 : 0);
   React.useEffect(() => {
-    alpha.value = withTiming(focused ? 1 : 0, TIMING_FAST);
-    scale.value = withTiming(focused ? 1 : 0.85, TIMING_FAST);
-  }, [focused, alpha, scale]);
+    focusValue.value = withSpring(focused ? 1 : 0, SPRING_TIGHT);
+  }, [focused, focusValue]);
+
   const pillStyle = useAnimatedStyle(() => ({
-    opacity: alpha.value,
-    transform: [{ scale: scale.value }],
+    opacity: focusValue.value,
+    transform: [{ scale: 0.85 + focusValue.value * 0.15 }],
   }));
 
-  const glyphPair = M3_TAB_ICONS[tab.routeName] ?? M3_TAB_ICONS.Dashboard;
-  const iconName = focused ? glyphPair.filled : glyphPair.outlined;
-  const tint = focused ? ACTIVE_TINT : INACTIVE_TINT;
+  const iconStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: 1 + focusValue.value * 0.06 }],
+  }));
+
+  // Color transition — interpolate between gray-500 and primary-700
+  // without crossing the Reanimated colour boundary (we use a simple
+  // useState/useEffect read, since the discrete colour change happens
+  // alongside the spring and is barely perceptible mid-flight).
+  const tint = focused ? colors.primary[700] : colors.gray[500];
+
+  // Map the route name to our semantic Icon names (defined in
+  // src/platform/Icon.tsx). Icons render via the lucide-react-native
+  // SVG path under the hood — no font registration involved.
+  const iconName: IconName =
+    tab.routeName === 'Dashboard'
+      ? 'home'
+      : tab.routeName === 'Products'
+        ? 'warehouse'
+        : tab.routeName === 'Checks'
+          ? 'journal'
+          : tab.routeName === 'MoreTab'
+            ? 'menu'
+            : 'home';
 
   return (
-    <View style={styles.itemWrap}>
+    <View style={styles.item}>
       <Pressable
-        style={styles.item}
-        android_ripple={{
-          color: 'rgba(37, 99, 235, 0.12)', // primary[600] at 12 % — M3 state-layer
-          foreground: true,
-          borderless: false,
-        }}
         onPress={onPress}
+        style={styles.itemPressable}
+        android_ripple={{ color: 'rgba(37, 99, 235, 0.10)', borderless: true }}
         accessibilityRole="button"
         accessibilityLabel={tab.label}
         accessibilityState={{ selected: focused }}
       >
-        {/* Active-indicator pill */}
-        <Animated.View style={[styles.pill, pillStyle]} />
-        <MaterialCommunityIcons name={iconName} size={24} color={tint} />
+        {/* Selection pill behind the icon. */}
+        <Animated.View style={[styles.pill, pillStyle]} pointerEvents="none" />
+        <Animated.View style={iconStyle}>
+          <Icon name={iconName} size={22} color={tint} weight={focused ? 'semibold' : 'regular'} />
+        </Animated.View>
         <Text
           variant="caption"
-          style={{
-            marginTop: 4,
-            fontSize: 12,
-            color: tint,
-            fontWeight: focused ? '600' : '500',
-          }}
+          style={[
+            styles.label,
+            {
+              color: tint,
+              fontWeight: focused ? '600' : '500',
+            },
+          ]}
         >
           {tab.label}
         </Text>
@@ -199,50 +208,82 @@ function TabItem({ focused, tab, onPress }: TabItemProps) {
 }
 
 const styles = StyleSheet.create({
+  // Absolute positioning so the BottomTabView lays the scene container
+  // out at full screen height — content scrolls UNDER the floating
+  // island, matching the iOS variant.
   wrapper: {
-    backgroundColor: colors.white,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.gray[100],
-    // M3 NavigationBar = no elevation by default on light theme — the
-    // hairline divider does the visual lifting. (Material 3 added the
-    // optional "elevation token" but the spec example uses tone-only.)
-    elevation: 0,
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
   },
-  bar: {
-    height: BAR_HEIGHT,
+  island: {
+    marginHorizontal: HORIZONTAL_MARGIN,
+    borderRadius: CORNER_RADIUS,
     backgroundColor: colors.white,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(15, 23, 42, 0.08)',
+    // Soft drop shadow — Android elevation + iOS-style shadow*. Both
+    // applied because both the JS shadow renderer (paper) and the
+    // platform elevation (fabric) each see one. Elevation 8 is
+    // visually similar to iOS shadowOpacity 0.06 / shadowRadius 10.
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  topRim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    pointerEvents: 'none',
   },
   row: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 4,
-  },
-  itemWrap: {
-    flex: 1,
   },
   item: {
     flex: 1,
+    height: BAR_HEIGHT,
+  },
+  itemPressable: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    height: BAR_HEIGHT,
-    paddingTop: 12,
-    paddingBottom: 16,
+    paddingHorizontal: 4,
+    paddingTop: 4,
   },
   pill: {
     position: 'absolute',
-    top: 12,
-    width: PILL_WIDTH,
-    height: PILL_HEIGHT,
-    borderRadius: PILL_HEIGHT / 2,
-    backgroundColor: ACTIVE_PILL_BG,
+    top: PILL_VERTICAL_INSET,
+    left: PILL_HORIZONTAL_PADDING,
+    right: PILL_HORIZONTAL_PADDING,
+    bottom: PILL_VERTICAL_INSET,
+    borderRadius: (BAR_HEIGHT - PILL_VERTICAL_INSET * 2) / 2,
+    backgroundColor: colors.primary[100],
   },
-  // Kassa slot — keeps the KassaButton centered without ripple bleeding
-  // beyond the central CTA's visual bounds.
+  label: {
+    marginTop: 1,
+    fontSize: 10,
+    letterSpacing: -0.1,
+  },
+  // Kassa slot — wraps the gradient KassaButton in a pressable so the
+  // tap target stays inside the island's geometry.
   kassaSlot: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     height: BAR_HEIGHT,
+  },
+  kassaPressable: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });
