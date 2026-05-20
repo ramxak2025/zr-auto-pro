@@ -72,8 +72,26 @@
         "expo-font",
         {
           "fonts": [
-            "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf",
-            "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf"
+            {
+              "fontFamily": "ionicons",
+              "fontDefinitions": [
+                {
+                  "path": "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf",
+                  "weight": 400,
+                  "style": "normal"
+                }
+              ]
+            },
+            {
+              "fontFamily": "material-community",
+              "fontDefinitions": [
+                {
+                  "path": "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf",
+                  "weight": 400,
+                  "style": "normal"
+                }
+              ]
+            }
           ]
         }
       ],
