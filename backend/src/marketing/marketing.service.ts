@@ -580,7 +580,11 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           );
 
           const template = settingsRows[0]?.message_template || 'Оцените обслуживание: {reviewLink}';
-          const reviewLink = `${process.env.APP_URL || 'https://crm.app'}/review/${token}`;
+          // Public review URL must be served by our own domain so clients
+          // don't see a placeholder like "crm.app" in their SMS / WhatsApp.
+          // Honour an explicit override (`APP_URL`) for any per-environment
+          // tweak (staging, dev), but fall back to the production domain.
+          const reviewLink = `${process.env.APP_URL || 'https://autexa.pw'}/review/${token}`;
           const message = template
             .replace('{clientName}', clientRows[0]?.full_name || 'клиент')
             .replace('{tenantName}', tenantRows[0]?.name || '')
