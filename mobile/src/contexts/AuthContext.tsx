@@ -7,6 +7,7 @@ import {
   servicesApi,
   usersApi,
   warehouseCategoriesApi,
+  warehousesApi,
   suppliersApi,
   clientsApi,
   carsApi,
@@ -80,6 +81,15 @@ function prefetchAfterLogin(qc: QueryClient): void {
   qc.prefetchQuery({
     queryKey: ['warehouse-categories'],
     queryFn: async () => (await warehouseCategoriesApi.getAll()).data,
+    staleTime: 10 * 60_000,
+  }).catch(() => {});
+
+  // Warehouses (3 rows: main/defect/used). Warehouse switcher in
+  // ProductsScreen reads this — prefetch so the picker can render
+  // synchronously even on a cold start.
+  qc.prefetchQuery({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehousesApi.list()).data,
     staleTime: 10 * 60_000,
   }).catch(() => {});
 

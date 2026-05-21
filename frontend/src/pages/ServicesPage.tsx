@@ -30,6 +30,7 @@ export default function ServicesPage() {
   const [category, setCategory] = useState('');
   const [defaultPrice, setDefaultPrice] = useState('');
   const [masterPercent, setMasterPercent] = useState('');
+  const [warrantyDays, setWarrantyDays] = useState('');
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -50,7 +51,7 @@ export default function ServicesPage() {
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null }) =>
+    mutationFn: (data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null; warrantyDays?: number | null }) =>
       servicesApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
@@ -63,7 +64,7 @@ export default function ServicesPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null } }) =>
+    mutationFn: ({ id, data }: { id: string; data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null; warrantyDays?: number | null } }) =>
       servicesApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
@@ -93,6 +94,7 @@ export default function ServicesPage() {
     setCategory('');
     setDefaultPrice('');
     setMasterPercent('');
+    setWarrantyDays('');
     setModalOpen(true);
   };
 
@@ -103,6 +105,7 @@ export default function ServicesPage() {
     setCategory(service.category || '');
     setDefaultPrice(String(service.defaultPrice));
     setMasterPercent(service.masterPercent != null ? String(service.masterPercent) : '');
+    setWarrantyDays(service.warrantyDays != null ? String(service.warrantyDays) : '');
     setModalOpen(true);
   };
 
@@ -114,11 +117,13 @@ export default function ServicesPage() {
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const pctVal = masterPercent.trim();
+    const wdVal = warrantyDays.trim();
     const payload = {
       name,
       category: category || undefined,
       defaultPrice: Number(defaultPrice),
       masterPercent: pctVal === '' ? null : Number(pctVal),
+      warrantyDays: wdVal === '' ? null : Math.max(0, Math.floor(Number(wdVal))),
     };
     if (editingService) {
       updateMutation.mutate({ id: editingService.id, data: payload });
@@ -350,6 +355,22 @@ export default function ServicesPage() {
             />
             <p className="text-xs text-gray-400 mt-1">
               Если заполнено — используется вместо стандартного процента мастера для этой услуги
+            </p>
+          </div>
+
+          <div>
+            <label className="label">Срок гарантии (дней)</label>
+            <input
+              type="number"
+              value={warrantyDays}
+              onChange={(e) => setWarrantyDays(e.target.value)}
+              className="input"
+              placeholder="Оставьте пустым — без гарантии"
+              min="0"
+              step="1"
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Дней с момента продажи. На эту услугу можно будет оформить гарантийный возврат.
             </p>
           </div>
 

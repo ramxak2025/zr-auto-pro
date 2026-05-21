@@ -23,9 +23,11 @@ import {
   Download,
   Upload,
   GripVertical,
+  ArrowLeftRight,
+  Recycle,
 } from 'lucide-react';
-import { productsApi, uploadsApi, warehouseCategoriesApi } from '../api/services';
-import type { Product, BundleItem, PaginatedResponse, StockMovement } from '../types';
+import { productsApi, uploadsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
+import type { Product, BundleItem, PaginatedResponse, StockMovement, Warehouse as WarehouseRecord } from '../types';
 import { UserRole } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -75,6 +77,8 @@ interface ProductFormData {
   unit: string;
   isBundle: boolean;
   bundleItems: BundleItem[];
+  warrantyDays: number | null;
+  warehouseId?: string;
 }
 
 interface ProductFormModalProps {
@@ -86,6 +90,8 @@ interface ProductFormModalProps {
   categories: string[];
   allProducts: Product[];
   defaultCategory?: string;
+  /** Warehouse the create form should default to (currently active picker). */
+  defaultWarehouseId?: string;
 }
 
 function ProductFormModal({
@@ -97,6 +103,7 @@ function ProductFormModal({
   categories,
   allProducts,
   defaultCategory,
+  defaultWarehouseId,
 }: ProductFormModalProps) {
   const [name, setName] = useState(product?.name || '');
   const [category, setCategory] = useState(product?.category || defaultCategory || '');
@@ -110,6 +117,9 @@ function ProductFormModal({
   const [isBundle, setIsBundle] = useState(product?.isBundle || false);
   const [bundleItems, setBundleItems] = useState<BundleItem[]>(product?.bundleItems || []);
   const [bundleSearch, setBundleSearch] = useState('');
+  const [warrantyDays, setWarrantyDays] = useState(
+    product?.warrantyDays != null ? String(product.warrantyDays) : '',
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const bundleSearchResults = useMemo(() => {
@@ -162,6 +172,7 @@ function ProductFormModal({
       toast.error('Добавьте товары в комплект');
       return;
     }
+    const trimmedWd = warrantyDays.trim();
     onSubmit({
       name: name.trim(),
       category: category.trim(),
@@ -173,6 +184,10 @@ function ProductFormModal({
       unit,
       isBundle,
       bundleItems: isBundle ? bundleItems : [],
+      warrantyDays: trimmedWd === '' ? null : Math.max(0, Math.floor(Number(trimmedWd))),
+      // For new products, fall back to the currently selected warehouse from
+      // the page. Edits keep the product's own warehouseId untouched here.
+      warehouseId: product?.warehouseId || defaultWarehouseId || undefined,
     });
   }
 
@@ -423,6 +438,25 @@ function ProductFormModal({
           </div>
         )}
 
+        {/* Warranty days */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">
+            Срок гарантии (дней)
+          </label>
+          <input
+            type="number"
+            value={warrantyDays}
+            onChange={(e) => setWarrantyDays(e.target.value)}
+            min="0"
+            step="1"
+            placeholder="Оставьте пустым — без гарантии"
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            Дней с момента продажи. На этот товар можно будет оформить гарантийный возврат.
+          </p>
+        </div>
+
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
             type="button"
@@ -454,13 +488,14 @@ interface WriteoffModalProps {
   isOpen: boolean;
   onClose: () => void;
   product: Product;
-  onSubmit: (data: { quantity: number; reason: string }) => void;
+  onSubmit: (data: { quantity: number; reason: string; recordAsExpense: boolean }) => void;
   isLoading: boolean;
 }
 
 function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: WriteoffModalProps) {
   const [quantity, setQuantity] = useState('1');
   const [reason, setReason] = useState('');
+  const [recordAsExpense, setRecordAsExpense] = useState(true);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -468,7 +503,7 @@ function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: Writeo
     if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
     if (qty > product.stock) { toast.error('Количество превышает остаток'); return; }
     if (!reason.trim()) { toast.error('Укажите причину списания'); return; }
-    onSubmit({ quantity: qty, reason: reason.trim() });
+    onSubmit({ quantity: qty, reason: reason.trim(), recordAsExpense });
   }
 
   return (
@@ -488,12 +523,189 @@ function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: Writeo
           <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="Причина списания..."
             className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
         </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Учёт</label>
+          <div className="space-y-2">
+            <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 px-3 py-2.5 hover:border-primary-300">
+              <input
+                type="radio"
+                name="writeoff-mode"
+                checked={recordAsExpense}
+                onChange={() => setRecordAsExpense(true)}
+                className="mt-0.5 h-4 w-4 text-primary-600 focus:ring-primary-500"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900">По закупке (как расход)</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Спишет товар и создаст запись в расходах на сумму закупки. Прибыль уменьшится.
+                </p>
+              </div>
+            </label>
+            <label className="flex items-start gap-2.5 cursor-pointer rounded-xl border border-gray-200 px-3 py-2.5 hover:border-primary-300">
+              <input
+                type="radio"
+                name="writeoff-mode"
+                checked={!recordAsExpense}
+                onChange={() => setRecordAsExpense(false)}
+                className="mt-0.5 h-4 w-4 text-primary-600 focus:ring-primary-500"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900">Просто списать</p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Уберёт остаток без проводки в расходы.
+                </p>
+              </div>
+            </label>
+          </div>
+        </div>
         <div className="flex items-center justify-end gap-3 pt-2">
           <button type="button" onClick={onClose} disabled={isLoading} className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Отмена</button>
           <button type="submit" disabled={isLoading} className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Списать
           </button>
         </div>
+      </form>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Transfer Modal — move stock from main → defect or main → used
+// ---------------------------------------------------------------------------
+
+interface TransferModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  product: Product;
+  warehouses: WarehouseRecord[];
+  sourceWarehouseId: string;
+  onSubmit: (data: {
+    type: 'defect_transfer' | 'used_transfer';
+    targetWarehouseId: string;
+    quantity: number;
+    purchasePrice?: number;
+    reason?: string;
+  }) => void;
+  isLoading: boolean;
+}
+
+function TransferModal({
+  isOpen,
+  onClose,
+  product,
+  warehouses,
+  sourceWarehouseId,
+  onSubmit,
+  isLoading,
+}: TransferModalProps) {
+  const defectWh = warehouses.find((w) => w.kind === 'defect');
+  const usedWh = warehouses.find((w) => w.kind === 'used');
+  const [mode, setMode] = useState<'defect' | 'used'>('defect');
+  const [quantity, setQuantity] = useState('1');
+  const [reason, setReason] = useState('');
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const qty = parseFloat(quantity);
+    if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
+    if (qty > product.stock) { toast.error('Количество превышает остаток'); return; }
+    const target = mode === 'defect' ? defectWh : usedWh;
+    if (!target) {
+      toast.error(mode === 'defect' ? 'Склад брака не найден' : 'Склад Б/У не найден');
+      return;
+    }
+    onSubmit({
+      type: mode === 'defect' ? 'defect_transfer' : 'used_transfer',
+      targetWarehouseId: target.id,
+      quantity: qty,
+      purchasePrice: product.costPrice,
+      reason: reason.trim() || undefined,
+    });
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Перенос на другой склад">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <p className="text-sm text-gray-600">
+          Товар: <span className="font-medium text-gray-900">{product.name}</span>
+          <br />Остаток на основном: <span className="font-medium text-gray-900">{product.stock}</span>
+        </p>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Куда перенести</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMode('defect')}
+              disabled={!defectWh}
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-colors disabled:opacity-50 ${
+                mode === 'defect'
+                  ? 'border-amber-500 bg-amber-50 text-amber-700'
+                  : 'border-gray-200 bg-white text-gray-700 hover:border-amber-300'
+              }`}
+            >
+              <AlertTriangle className="w-4 h-4" />
+              Брак
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('used')}
+              disabled={!usedWh}
+              className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-colors disabled:opacity-50 ${
+                mode === 'used'
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-gray-200 bg-white text-gray-700 hover:border-blue-300'
+              }`}
+            >
+              <Recycle className="w-4 h-4" />
+              Б/У
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Количество *</label>
+          <input
+            type="number"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            min="1"
+            max={product.stock}
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Комментарий</label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            placeholder="Например: дефект, не подошёл..."
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
+          />
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isLoading}
+            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Отмена
+          </button>
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+          >
+            {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}
+            Перенести
+          </button>
+        </div>
+        {/* Currently unused: sourceWarehouseId param kept for future flexibility. */}
+        <input type="hidden" value={sourceWarehouseId} readOnly />
       </form>
     </Modal>
   );
@@ -855,15 +1067,20 @@ const MOVEMENT_LABELS: Record<string, { label: string; color: string }> = {
   expense: { label: 'Расход', color: 'text-blue-600 bg-blue-50' },
   writeoff: { label: 'Списание', color: 'text-orange-600 bg-orange-50' },
   inventory: { label: 'Инвентаризация', color: 'text-purple-600 bg-purple-50' },
+  defect_transfer: { label: 'В брак', color: 'text-amber-600 bg-amber-50' },
+  used_transfer: { label: 'В Б/У', color: 'text-blue-600 bg-blue-50' },
+  defect_return_to_supplier: { label: 'Поставщику', color: 'text-red-700 bg-red-50' },
 };
 
-function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory, onDelete }: {
+function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory, onDelete, onTransfer, canTransfer }: {
   product: Product;
   onClose: () => void;
   onEdit: () => void;
   onWriteoff: () => void;
   onInventory: () => void;
   onDelete: () => void;
+  onTransfer?: () => void;
+  canTransfer?: boolean;
 }) {
   const [tab, setTab] = useState<'info' | 'movements' | 'prices'>('info');
   const isLow = product.stock <= product.minStock;
@@ -970,6 +1187,12 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
                 className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
                 <Pencil className="h-4 w-4 text-primary-500" />Редактировать
               </button>
+              {canTransfer && onTransfer && (
+                <button type="button" onClick={onTransfer}
+                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+                  <ArrowLeftRight className="h-4 w-4 text-amber-500" />Перенос в брак / Б/У
+                </button>
+              )}
               <button type="button" onClick={onWriteoff}
                 className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
                 <PackageMinus className="h-4 w-4 text-orange-500" />Списание
@@ -1110,6 +1333,9 @@ export default function ProductsPage() {
   const [searchText, setSearchText] = useState('');
   const [activePath, setActivePath] = useState<string[]>([]);
 
+  // Warehouse switcher state
+  const [activeWarehouseId, setActiveWarehouseId] = useState<string>('');
+
   // Modal state
   const [formOpen, setFormOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -1117,6 +1343,7 @@ export default function ProductsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
   const [writeoffTarget, setWriteoffTarget] = useState<Product | null>(null);
   const [inventoryTarget, setInventoryTarget] = useState<Product | null>(null);
+  const [transferTarget, setTransferTarget] = useState<Product | null>(null);
 
   // Global warehouse operations
   const [warehouseOpsOpen, setWarehouseOpsOpen] = useState(false);
@@ -1171,16 +1398,38 @@ export default function ProductsPage() {
 
   // ---- Queries ----
 
+  // Warehouses list — drives the switcher. Default to main on first load.
+  const { data: warehouses } = useQuery<WarehouseRecord[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehousesApi.list()).data,
+    staleTime: 5 * 60_000,
+  });
+
+  useEffect(() => {
+    if (!activeWarehouseId && warehouses && warehouses.length > 0) {
+      const main = warehouses.find((w) => w.kind === 'main') || warehouses[0];
+      setActiveWarehouseId(main.id);
+    }
+  }, [warehouses, activeWarehouseId]);
+
+  const activeWarehouseKind = useMemo<WarehouseRecord['kind'] | null>(() => {
+    return warehouses?.find((w) => w.id === activeWarehouseId)?.kind ?? null;
+  }, [warehouses, activeWarehouseId]);
+
   const {
     data: productsData,
     isLoading,
   } = useQuery<PaginatedResponse<Product>>({
-    queryKey: ['products', { limit: 1000 }],
+    queryKey: ['products', { limit: 1000, warehouseId: activeWarehouseId || 'all' }],
     queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 1000 });
+      const params: { limit: number; warehouseId?: string } = { limit: 1000 };
+      if (activeWarehouseId) params.warehouseId = activeWarehouseId;
+      const res = await productsApi.getAll(params);
       return res.data;
     },
     staleTime: 30_000,
+    enabled: !!activeWarehouseId,
+    placeholderData: (prev) => prev,
   });
 
   const allProducts = productsData?.data || [];
@@ -1430,14 +1679,61 @@ export default function ProductsPage() {
   });
 
   const writeoffMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { quantity: number; reason: string } }) =>
-      productsApi.updateStock(id, { type: 'writeoff', quantity: data.quantity, reason: data.reason }),
+    mutationFn: ({ id, data }: { id: string; data: { quantity: number; reason: string; recordAsExpense: boolean } }) =>
+      stockMovementsApi.create({
+        type: 'writeoff',
+        productId: id,
+        quantity: data.quantity,
+        reason: data.reason,
+        warehouseId: activeWarehouseId || undefined,
+        purchasePrice: writeoffTarget?.costPrice,
+        recordAsExpense: data.recordAsExpense,
+      }),
     onSuccess: () => {
       toast.success('Товар списан');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['defect-writeoff-report'] });
       setWriteoffTarget(null);
     },
     onError: () => toast.error('Не удалось списать товар'),
+  });
+
+  // Move stock between warehouses (main → defect, main → used)
+  const transferMutation = useMutation({
+    mutationFn: ({
+      productId,
+      type,
+      targetWarehouseId,
+      quantity,
+      purchasePrice,
+      reason,
+    }: {
+      productId: string;
+      type: 'defect_transfer' | 'used_transfer';
+      targetWarehouseId: string;
+      quantity: number;
+      purchasePrice?: number;
+      reason?: string;
+    }) =>
+      stockMovementsApi.create({
+        type,
+        productId,
+        quantity,
+        purchasePrice,
+        reason,
+        sourceWarehouseId: activeWarehouseId || undefined,
+        targetWarehouseId,
+      }),
+    onSuccess: (_, vars) => {
+      toast.success(vars.type === 'defect_transfer' ? 'Перенесено в брак' : 'Перенесено в Б/У');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['defect-writeoff-report'] });
+      setTransferTarget(null);
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Не удалось перенести товар';
+      toast.error(typeof msg === 'string' ? msg : 'Не удалось перенести товар');
+    },
   });
 
   const inventoryMutation = useMutation({
@@ -1828,6 +2124,36 @@ export default function ProductsPage() {
         )}
       </div>
 
+      {/* Warehouse switcher — main / defect / used */}
+      {warehouses && warehouses.length > 1 && (
+        <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-1">
+          {warehouses.map((w) => {
+            const active = w.id === activeWarehouseId;
+            const Icon = w.kind === 'defect' ? AlertTriangle : w.kind === 'used' ? Recycle : Package;
+            return (
+              <button
+                key={w.id}
+                type="button"
+                onClick={() => {
+                  setActiveWarehouseId(w.id);
+                  setActivePath([]);
+                  setSelectMode(false);
+                  setSelectedProducts(new Set());
+                }}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-colors flex-shrink-0 ${
+                  active
+                    ? 'bg-primary-600 text-white shadow-sm'
+                    : 'bg-white border border-gray-200 text-gray-600 hover:border-primary-300'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {w.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Warehouse stats for owner */}
       {isOwner && warehouseStats && (
         <div className="grid grid-cols-2 gap-2.5">
@@ -2079,6 +2405,10 @@ export default function ProductsPage() {
           onWriteoff={() => { setWriteoffTarget(detailTarget); setDetailTarget(null); }}
           onInventory={() => { setInventoryTarget(detailTarget); setDetailTarget(null); }}
           onDelete={() => { setDeleteTarget(detailTarget); setDetailTarget(null); }}
+          // Перенос доступен только с основного склада (продаём с main; брак/б/у —
+          // конечные точки, дальше — списание или возврат поставщику).
+          canTransfer={activeWarehouseKind === 'main'}
+          onTransfer={() => { setTransferTarget(detailTarget); setDetailTarget(null); }}
         />
       )}
 
@@ -2094,6 +2424,29 @@ export default function ProductsPage() {
           categories={categories}
           allProducts={allProducts}
           defaultCategory={activePath.length > 0 ? activePath.join('/') : undefined}
+          defaultWarehouseId={activeWarehouseId || undefined}
+        />
+      )}
+
+      {transferTarget && warehouses && (
+        <TransferModal
+          key={`tr-${transferTarget.id}`}
+          isOpen={!!transferTarget}
+          onClose={() => setTransferTarget(null)}
+          product={transferTarget}
+          warehouses={warehouses}
+          sourceWarehouseId={activeWarehouseId}
+          isLoading={transferMutation.isPending}
+          onSubmit={(data) =>
+            transferMutation.mutate({
+              productId: transferTarget.id,
+              type: data.type,
+              targetWarehouseId: data.targetWarehouseId,
+              quantity: data.quantity,
+              purchasePrice: data.purchasePrice,
+              reason: data.reason,
+            })
+          }
         />
       )}
 

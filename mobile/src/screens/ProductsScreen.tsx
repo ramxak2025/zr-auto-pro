@@ -22,7 +22,13 @@ import { Pressable } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { productsApi, warehouseCategoriesApi, uploadsApi } from '../api/services';
+import {
+  productsApi,
+  warehouseCategoriesApi,
+  uploadsApi,
+  warehousesApi,
+  stockMovementsApi,
+} from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -36,9 +42,10 @@ import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
 import TrashScreen from './TrashScreen';
+import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { Product, PaginatedResponse, StockMovement } from '../../../shared/types';
+import type { Product, PaginatedResponse, StockMovement, Warehouse } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -127,6 +134,10 @@ interface ProductRowProps {
   canSeeCostPrice: boolean;
   onOpenEdit: (product: Product) => void;
   onOpenPhoto: (uri: string) => void;
+  /** Long-press handler — when present, shown via AnimatedCard.onLongPress.
+   *  Used by ProductsScreen to open the per-product action sheet (move to
+   *  defect / Б-У) when viewing the main warehouse. */
+  onLongPress?: (product: Product) => void;
 }
 const ProductRow = React.memo(function ProductRow({
   item,
@@ -135,11 +146,17 @@ const ProductRow = React.memo(function ProductRow({
   canSeeCostPrice,
   onOpenEdit,
   onOpenPhoto,
+  onLongPress,
 }: ProductRowProps) {
   const lowStock = item.stock <= item.minStock && item.minStock > 0;
   const pUri = getImageUrl(item.photo);
   return (
-    <AnimatedCard index={index} style={styles.productCard} onPress={() => onOpenEdit(item)}>
+    <AnimatedCard
+      index={index}
+      style={styles.productCard}
+      onPress={() => onOpenEdit(item)}
+      onLongPress={onLongPress ? () => onLongPress(item) : undefined}
+    >
       <View style={styles.productRow}>
         <TouchableOpacity
           onPress={() => {
@@ -238,9 +255,31 @@ export default function ProductsScreen() {
   const [writeoffProductId, setWriteoffProductId] = useState('');
   const [writeoffProductName, setWriteoffProductName] = useState('');
   const [writeoffProductStock, setWriteoffProductStock] = useState(0);
+  const [writeoffProductCostPrice, setWriteoffProductCostPrice] = useState(0);
   const [writeoffQty, setWriteoffQty] = useState('');
   const [writeoffReason, setWriteoffReason] = useState('');
+  // Two-mode writeoff: 'expense' = recordAsExpense=true (по закупке),
+  // 'simple' = recordAsExpense=false (просто списать). Default 'expense'
+  // because owners overwhelmingly want the cost reflected in financials.
+  const [writeoffMode, setWriteoffMode] = useState<'expense' | 'simple'>('expense');
   const [showWriteoffPicker, setShowWriteoffPicker] = useState(false);
+
+  // Warehouse switcher state. The list of warehouses is fetched once
+  // (cached/persisted); the selection lives in component state and
+  // intentionally does NOT persist across mounts — owner spec.
+  const [showWarehouseSwitcher, setShowWarehouseSwitcher] = useState(false);
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
+
+  // Per-product action sheet (only on main warehouse): edit / move to
+  // defect / move to used. Opened by long-press on a product row.
+  const [actionsForProduct, setActionsForProduct] = useState<Product | null>(null);
+
+  // Transfer dialog state — used for both defect_transfer and
+  // used_transfer because the body shape is identical (only the
+  // movement type differs).
+  const [transferTarget, setTransferTarget] = useState<'defect' | 'used' | null>(null);
+  const [transferProduct, setTransferProduct] = useState<Product | null>(null);
+  const [transferQty, setTransferQty] = useState('');
 
   // Correction modal state
   const [showCorrectionPicker, setShowCorrectionPicker] = useState(false);
@@ -252,12 +291,53 @@ export default function ProductsScreen() {
   const [correctionNewStock, setCorrectionNewStock] = useState('');
   const [correctionReason, setCorrectionReason] = useState('');
 
+  // Warehouses list — server returns the 3 fixed rows (main / defect /
+  // used). Persisted (PERSISTED_KEYS contains 'warehouses') so the
+  // switcher opens instantly on cold start.
+  const { data: warehouses } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehousesApi.list()).data,
+    staleTime: 10 * 60_000,
+  });
+
+  // Derive the warehouse that is currently selected. We pick the "main"
+  // warehouse by default; otherwise honour the user's explicit choice.
+  // `selectedWarehouseId` lives in local state and resets on mount, so
+  // entering /Склад always starts on the main warehouse.
+  const activeWarehouse = useMemo<Warehouse | null>(() => {
+    if (!warehouses || warehouses.length === 0) return null;
+    if (selectedWarehouseId) {
+      const found = warehouses.find((w) => w.id === selectedWarehouseId);
+      if (found) return found;
+    }
+    return warehouses.find((w) => w.kind === 'main') ?? warehouses[0];
+  }, [warehouses, selectedWarehouseId]);
+
+  const activeWarehouseId = activeWarehouse?.id;
+  const isMainWarehouse = activeWarehouse?.kind === 'main';
+
   const { data, isLoading } = useQuery<PaginatedResponse<Product>>({
-    queryKey: ['products', { search, limit }],
+    // Include warehouseId in the key so each warehouse owns its own
+    // cache slot — switching tabs is instant via `placeholderData` while
+    // the new slot's fresh data arrives in the background.
+    queryKey: ['products', { search, limit, warehouseId: activeWarehouseId ?? null }],
     queryFn: async () => {
-      const res = await productsApi.getAll({ search, page: 1, limit });
+      const res = await productsApi.getAll({
+        search,
+        page: 1,
+        limit,
+        ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
+      });
       return res.data;
     },
+    // Defence-in-depth: the global QueryClient already sets
+    // placeholderData = prev=>prev, but writing it here too makes the
+    // intent explicit and survives any future global default change.
+    placeholderData: (prev) => prev,
+    // Only run once we know which warehouse to ask for. Without this
+    // guard the initial render would fire a query without warehouseId
+    // and then immediately refetch with it — wasted network + flash.
+    enabled: !!activeWarehouseId || warehouses === undefined,
   });
 
   const { data: extraFolders } = useQuery({
@@ -721,6 +801,10 @@ export default function ProductsScreen() {
       stock: Number(stock) || 0,
       minStock: Number(minStock) || 0,
       photo: uploadedPhotoPath,
+      // New products inherit the currently selected warehouse. On edit
+      // we don't override warehouseId — moving between warehouses is
+      // done via dedicated transfer actions, not the edit form.
+      ...(editingProduct ? {} : activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
     };
     if (editingProduct) {
       updateMutation.mutate({ id: editingProduct.id, data: payload });
@@ -731,7 +815,11 @@ export default function ProductsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
+    // Invalidate ALL warehouse slots — the user might have moved stock
+    // between warehouses since the last refresh, and we don't want to
+    // leave defect/used stale.
     await queryClient.invalidateQueries({ queryKey: ['products'] });
+    await queryClient.invalidateQueries({ queryKey: ['warehouses'] });
     setRefreshing(false);
   };
 
@@ -810,8 +898,10 @@ export default function ProductsScreen() {
     setWriteoffProductId(p.id);
     setWriteoffProductName(p.name);
     setWriteoffProductStock(p.stock);
+    setWriteoffProductCostPrice(p.costPrice || 0);
     setWriteoffQty('');
     setWriteoffReason('');
+    setWriteoffMode('expense');
     setShowWriteoffPicker(false);
     setShowWriteoffModal(true);
   };
@@ -819,45 +909,41 @@ export default function ProductsScreen() {
   const handleWriteoffSubmit = async () => {
     const qty = Number(writeoffQty);
     if (!qty || qty <= 0) {
-      Alert.alert(
-        '\u041E\u0448\u0438\u0431\u043A\u0430',
-        '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E',
-      );
+      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E');
       return;
     }
     if (qty > writeoffProductStock) {
-      Alert.alert(
-        '\u041E\u0448\u0438\u0431\u043A\u0430',
-        `\u041D\u0435\u043B\u044C\u0437\u044F \u0441\u043F\u0438\u0441\u0430\u0442\u044C \u0431\u043E\u043B\u044C\u0448\u0435 \u0447\u0435\u043C \u0435\u0441\u0442\u044C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0435 (${writeoffProductStock})`,
-      );
+      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', `\u041D\u0435\u043B\u044C\u0437\u044F \u0441\u043F\u0438\u0441\u0430\u0442\u044C \u0431\u043E\u043B\u044C\u0448\u0435 \u0447\u0435\u043C \u0435\u0441\u0442\u044C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0435 (${writeoffProductStock})`);
       return;
     }
     if (!writeoffReason.trim()) {
-      Alert.alert(
-        '\u041E\u0448\u0438\u0431\u043A\u0430',
-        '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043F\u0440\u0438\u0447\u0438\u043D\u0443 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F',
-      );
+      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043F\u0440\u0438\u0447\u0438\u043D\u0443 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F');
+      return;
+    }
+    if (!activeWarehouseId) {
+      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0421\u043A\u043B\u0430\u0434 \u0435\u0449\u0451 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D');
       return;
     }
 
     try {
-      await productsApi.updateStock(writeoffProductId, {
+      await stockMovementsApi.create({
         type: 'writeoff' as const,
+        warehouseId: activeWarehouseId,
+        productId: writeoffProductId,
         quantity: qty,
+        purchasePrice: writeoffProductCostPrice,
+        recordAsExpense: writeoffMode === 'expense',
         reason: writeoffReason.trim(),
       });
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
       setShowWriteoffModal(false);
       Alert.alert(
         '\u0413\u043E\u0442\u043E\u0432\u043E',
-        `\u0421\u043F\u0438\u0441\u0430\u043D\u043E ${qty} \u0448\u0442. "${writeoffProductName}"`,
+        `\u0421\u043F\u0438\u0441\u0430\u043D\u043E ${qty} \u0448\u0442. "${writeoffProductName}"${writeoffMode === 'expense' ? ' (\u0441 \u0443\u0447\u0451\u0442\u043E\u043C \u0432 \u0440\u0430\u0441\u0445\u043E\u0434\u0430\u0445)' : ''}`,
       );
     } catch (err: any) {
-      Alert.alert(
-        '\u041E\u0448\u0438\u0431\u043A\u0430',
-        err?.response?.data?.message ||
-          '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0438',
-      );
+      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', err?.response?.data?.message || '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0438');
     }
   };
 
@@ -879,6 +965,68 @@ export default function ProductsScreen() {
   const handleInventoryPickerClose = () => {
     setShowInventoryPicker(false);
     setTimeout(() => setShowInventoryModal(true), 300);
+  };
+
+  // --- Transfer handlers (main → defect / used) ----------------------
+  // Long-press on a product row (main warehouse only) opens the action
+  // sheet `actionsForProduct`. Selecting one of the transfer actions
+  // populates `transferTarget` + `transferProduct` and opens the qty
+  // dialog. On submit we POST a `defect_transfer` or `used_transfer`
+  // stock movement and invalidate the products query so both the source
+  // and (when the user switches) the target list refresh.
+  const openTransferDialog = (target: 'defect' | 'used', product: Product) => {
+    setTransferTarget(target);
+    setTransferProduct(product);
+    setTransferQty('');
+    setActionsForProduct(null);
+  };
+
+  const closeTransferDialog = () => {
+    setTransferTarget(null);
+    setTransferProduct(null);
+    setTransferQty('');
+  };
+
+  const handleTransferSubmit = async () => {
+    if (!transferProduct || !transferTarget) return;
+    const qty = Number(transferQty);
+    if (!qty || qty <= 0) {
+      Alert.alert('Ошибка', 'Укажите количество');
+      return;
+    }
+    if (qty > transferProduct.stock) {
+      Alert.alert('Ошибка', `Нельзя перенести больше чем есть на складе (${transferProduct.stock})`);
+      return;
+    }
+    if (!warehouses || warehouses.length === 0) {
+      Alert.alert('Ошибка', 'Склады ещё не загружены');
+      return;
+    }
+    const source = warehouses.find((w) => w.kind === 'main');
+    const target = warehouses.find((w) => w.kind === transferTarget);
+    if (!source || !target) {
+      Alert.alert('Ошибка', 'Не удалось определить склад');
+      return;
+    }
+
+    try {
+      await stockMovementsApi.create({
+        type: transferTarget === 'defect' ? 'defect_transfer' : 'used_transfer',
+        sourceWarehouseId: source.id,
+        targetWarehouseId: target.id,
+        productId: transferProduct.id,
+        quantity: qty,
+        purchasePrice: transferProduct.costPrice || 0,
+      });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      const targetLabel = transferTarget === 'defect' ? 'брак' : 'Б/У';
+      const productName = transferProduct.name;
+      closeTransferDialog();
+      Alert.alert('Готово', `Перенесено ${qty} шт. "${productName}" в ${targetLabel}`);
+    } catch (err: any) {
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка при переносе');
+    }
   };
 
   // --- Correction handlers ---
@@ -973,6 +1121,13 @@ export default function ProductsScreen() {
   // when one of the captured props (search, canSeeCostPrice, handlers)
   // actually changes.
   const productKey = useCallback((item: Product) => item.id, []);
+  // Stable long-press handler. `openActionsForProduct` is recreated each
+  // render but the eslint-disable below already covers that case for
+  // openEdit; we add isMainWarehouse to deps to flip the wiring when the
+  // user switches warehouses.
+  const openActionsForProduct = useCallback((p: Product) => {
+    setActionsForProduct(p);
+  }, []);
   const renderProductItem = useCallback(
     ({ item, index }: { item: Product; index: number }) => (
       <ProductRow
@@ -982,22 +1137,42 @@ export default function ProductsScreen() {
         canSeeCostPrice={canSeeCostPrice}
         onOpenEdit={openEdit}
         onOpenPhoto={setFullscreenPhoto}
+        // Long-press only enabled on the main warehouse — moving FROM
+        // defect/used isn't a defined movement type yet.
+        onLongPress={isMainWarehouse && canManageWarehouse ? openActionsForProduct : undefined}
       />
     ),
     // openEdit is recreated each render (uses local state), and search
     // changes drive `hideCategory`. canSeeCostPrice is a stable bool.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [search, canSeeCostPrice, openEdit],
+    [search, canSeeCostPrice, openEdit, isMainWarehouse, canManageWarehouse, openActionsForProduct],
   );
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       {/* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
-          / \u041F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0438. Title + product count subtitle on the left,
-          warehouse-ops + add buttons in the trailing slot. */}
+          / \u041F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0438. Title becomes the warehouse name (e.g. "\u0421\u043A\u043B\u0430\u0434
+          \u0431\u0440\u0430\u043A\u0430") so the user always knows which warehouse they're
+          looking at. A leading layers-glyph button (and a tap on the
+          title itself, via `leading` slot + onPress in the title row
+          below) opens the warehouse switcher sheet. */}
       <IosScreenHeader
-        title={'\u0421\u043A\u043B\u0430\u0434'}
+        title={activeWarehouse?.name || '\u0421\u043A\u043B\u0430\u0434'}
         subtitle={data === undefined ? undefined : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`}
+        leading={
+          warehouses && warehouses.length > 1 ? (
+            <TouchableOpacity
+              onPress={() => setShowWarehouseSwitcher(true)}
+              style={[styles.switcherBtn, { backgroundColor: palette.bg.muted }]}
+              accessibilityRole="button"
+              accessibilityLabel={'\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0441\u043A\u043B\u0430\u0434'}
+              hitSlop={8}
+            >
+              <Ionicons name="layers-outline" size={18} color={palette.text.primary} />
+              <Ionicons name="chevron-down" size={12} color={palette.text.secondary} style={{ marginLeft: -2 }} />
+            </TouchableOpacity>
+          ) : null
+        }
         trailing={
           <View style={{ flexDirection: 'row', gap: spacing[2] }}>
             {hasPermission('warehouse_access') && (
@@ -1013,6 +1188,19 @@ export default function ProductsScreen() {
           </View>
         }
       />
+      {/* Title-tap zone \u2014 owner spec: tapping the word "\u0421\u043A\u043B\u0430\u0434" itself
+          opens the switcher. The IosScreenHeader doesn't expose a
+          title-press hook, so we overlay an invisible Pressable that
+          covers the title text region. Pinned to insetsTop so it sits
+          right over the title row regardless of device safe area. */}
+      {warehouses && warehouses.length > 1 && (
+        <Pressable
+          onPress={() => setShowWarehouseSwitcher(true)}
+          style={[styles.titleTapZone, { top: insetsTop + spacing[2] }]}
+          accessibilityRole="button"
+          accessibilityLabel={'\u0421\u043C\u0435\u043D\u0438\u0442\u044C \u0441\u043A\u043B\u0430\u0434'}
+        />
+      )}
 
       {/* Stats cards (\u0441\u0435\u0431\u0435\u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C / \u0432 \u0440\u043E\u0437\u043D. \u0446\u0435\u043D\u0430\u0445) intentionally
           REMOVED from the warehouse top \u2014 these belong in the Reports
@@ -1577,13 +1765,17 @@ export default function ProductsScreen() {
         title="Выберите товар для списания"
       />
 
-      {/* Writeoff Form Modal */}
+      {/* Writeoff Form Modal — now with two modes (по закупке / просто).
+          The expense mode books an `expenses` row alongside the stock
+          movement; the simple mode only decrements the stock. */}
       <Modal visible={showWriteoffModal} onClose={() => setShowWriteoffModal(false)} title={'Списание товара'}>
-        <View style={styles.writeoffSelectedProduct}>
-          <Ionicons name="cube-outline" size={20} color={colors.primary[600]} />
+        <View style={[styles.writeoffSelectedProduct, { backgroundColor: palette.accent.primarySoft }]}>
+          <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.writeoffSelectedName}>{writeoffProductName}</Text>
-            <Text style={styles.writeoffSelectedStock}>
+            <Text style={[styles.writeoffSelectedName, { color: palette.text.primary }]}>
+              {writeoffProductName}
+            </Text>
+            <Text style={[styles.writeoffSelectedStock, { color: palette.text.secondary }]}>
               {'На складе: '}
               {writeoffProductStock} {'шт'}
             </Text>
@@ -1594,38 +1786,130 @@ export default function ProductsScreen() {
               setTimeout(() => setShowWriteoffPicker(true), 300);
             }}
           >
-            <Text style={{ fontSize: fontSize.xs, color: colors.primary[600] }}>{'Изменить'}</Text>
+            <Text style={{ fontSize: fontSize.xs, color: palette.accent.primaryText }}>{'Изменить'}</Text>
           </TouchableOpacity>
         </View>
 
+        {/* Two-mode radio. Radios are big tap targets, hairline-bordered
+            and theme-aware so dark mode renders correctly. */}
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'Количество к списанию'}</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Режим списания'}</Text>
+          <View style={{ gap: spacing[2] }}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => setWriteoffMode('expense')}
+              style={[
+                styles.writeoffRadioRow,
+                {
+                  backgroundColor: palette.bg.card,
+                  borderColor:
+                    writeoffMode === 'expense' ? palette.accent.primary : palette.border.subtle,
+                },
+              ]}
+            >
+              <View
+                style={[
+                  styles.writeoffRadioCircle,
+                  {
+                    borderColor:
+                      writeoffMode === 'expense' ? palette.accent.primary : palette.border.strong,
+                  },
+                ]}
+              >
+                {writeoffMode === 'expense' && (
+                  <View style={[styles.writeoffRadioDot, { backgroundColor: palette.accent.primary }]} />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.writeoffRadioTitle, { color: palette.text.primary }]}>
+                  {'По закупке (как расход)'}
+                </Text>
+                <Text style={[styles.writeoffRadioDesc, { color: palette.text.tertiary }]}>
+                  {'Списанная сумма попадёт в расходы. Закуп: '}
+                  {formatMoney(writeoffProductCostPrice)}
+                </Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => setWriteoffMode('simple')}
+              style={[
+                styles.writeoffRadioRow,
+                {
+                  backgroundColor: palette.bg.card,
+                  borderColor:
+                    writeoffMode === 'simple' ? palette.accent.primary : palette.border.subtle,
+                },
+              ]}
+            >
+              <View
+                style={[
+                  styles.writeoffRadioCircle,
+                  {
+                    borderColor:
+                      writeoffMode === 'simple' ? palette.accent.primary : palette.border.strong,
+                  },
+                ]}
+              >
+                {writeoffMode === 'simple' && (
+                  <View style={[styles.writeoffRadioDot, { backgroundColor: palette.accent.primary }]} />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.writeoffRadioTitle, { color: palette.text.primary }]}>
+                  {'Просто списать (без расхода)'}
+                </Text>
+                <Text style={[styles.writeoffRadioDesc, { color: palette.text.tertiary }]}>
+                  {'Уменьшает остаток, но не отражается в финансах.'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Количество к списанию'}</Text>
           <TextInput
             value={writeoffQty}
             onChangeText={setWriteoffQty}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             keyboardType="numeric"
             placeholder={`Макс: ${writeoffProductStock}`}
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             autoFocus
           />
         </View>
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'Причина списания *'}</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Причина списания *'}</Text>
           <TextInput
             value={writeoffReason}
             onChangeText={setWriteoffReason}
-            style={[styles.formInput, { minHeight: 56, textAlignVertical: 'top' }]}
+            style={[
+              styles.formInput,
+              {
+                minHeight: 56,
+                textAlignVertical: 'top',
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
             multiline
             placeholder={'Брак, порча, просрочка...'}
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
 
         <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowWriteoffModal(false)}>
-            <Text style={styles.cancelBtnText}>{'Отмена'}</Text>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+            onPress={() => setShowWriteoffModal(false)}
+          >
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>{'Отмена'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.submitBtn, { backgroundColor: colors.red[600] }]}
@@ -1786,6 +2070,134 @@ export default function ProductsScreen() {
           swipe-actions работали нестабильно, владелец явно попросил
           выкинуть. Удаление/переименование/реордер папок остаются
           доступны через web-админ (backend endpoints не трогали). */}
+
+      {/* Warehouse switcher sheet (main / defect / used). */}
+      <WarehouseSwitcher
+        visible={showWarehouseSwitcher}
+        onClose={() => setShowWarehouseSwitcher(false)}
+        warehouses={warehouses || []}
+        selectedId={activeWarehouseId ?? null}
+        onSelect={(wh) => setSelectedWarehouseId(wh.id)}
+      />
+
+      {/* Per-product action sheet — shown only on main warehouse.
+          Surfaces edit + "Перенести в брак" + "Перенести в Б/У". */}
+      <Modal
+        visible={!!actionsForProduct}
+        onClose={() => setActionsForProduct(null)}
+        title={actionsForProduct?.name || 'Действия с товаром'}
+      >
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => {
+            const p = actionsForProduct;
+            setActionsForProduct(null);
+            if (p) openEdit(p);
+          }}
+        >
+          <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+            <Ionicons name="create-outline" size={22} color={palette.accent.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Редактировать'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>{'Изменить параметры товара'}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => actionsForProduct && openTransferDialog('defect', actionsForProduct)}
+        >
+          <View style={[styles.opsIcon, { backgroundColor: 'rgba(239, 68, 68, 0.14)' }]}>
+            <Ionicons name="warning-outline" size={22} color={colors.red[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Перенести в брак'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              {'Списать с основного склада на склад брака'}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => actionsForProduct && openTransferDialog('used', actionsForProduct)}
+        >
+          <View style={[styles.opsIcon, { backgroundColor: 'rgba(245, 158, 11, 0.16)' }]}>
+            <Ionicons name="sync-outline" size={22} color={colors.orange[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Перенести в Б/У'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              {'Списать с основного склада на склад Б/У'}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Transfer qty dialog — same shape for defect_transfer and
+          used_transfer; only the action title and movement type differ. */}
+      <Modal
+        visible={!!transferTarget && !!transferProduct}
+        onClose={closeTransferDialog}
+        title={transferTarget === 'defect' ? 'Перенести в брак' : 'Перенести в Б/У'}
+      >
+        {transferProduct && (
+          <>
+            <View style={[styles.writeoffSelectedProduct, { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.writeoffSelectedName, { color: palette.text.primary }]}>
+                  {transferProduct.name}
+                </Text>
+                <Text style={[styles.writeoffSelectedStock, { color: palette.text.secondary }]}>
+                  {'На основном складе: '}
+                  {transferProduct.stock} {'шт'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Количество'}</Text>
+              <TextInput
+                value={transferQty}
+                onChangeText={setTransferQty}
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
+                ]}
+                keyboardType="numeric"
+                placeholder={`Макс: ${transferProduct.stock}`}
+                placeholderTextColor={palette.text.tertiary}
+                autoFocus
+              />
+            </View>
+
+            <View style={styles.formActions}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+                onPress={closeTransferDialog}
+              >
+                <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>{'Отмена'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.submitBtn,
+                  { backgroundColor: transferTarget === 'defect' ? colors.red[600] : colors.orange[600] },
+                ]}
+                onPress={handleTransferSubmit}
+              >
+                <Text style={styles.submitBtnText}>{'Перенести'}</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </Modal>
     </View>
   );
 }
@@ -1815,6 +2227,57 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Warehouse switcher button in the header leading slot. Stays
+  // theme-aware via inline backgroundColor from palette.bg.muted —
+  // these dimensions match the 36×36 squircle that IosScreenHeader
+  // uses for its built-in back button so the header reads as
+  // consistent across screens.
+  switcherBtn: {
+    height: 36,
+    paddingHorizontal: spacing[2],
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 2,
+  },
+  // Invisible tap zone that overlays the header title text. Sized to
+  // cover the title region (the centre of the header). The owner can
+  // tap "Склад брака" anywhere in that strip and the switcher opens.
+  // The `top` is set inline from `insetsTop + spacing[2]` so it aligns
+  // with the actual title row regardless of device safe area.
+  titleTapZone: {
+    position: 'absolute',
+    left: 64, // skip the leading button area
+    right: 120, // skip the trailing buttons area
+    height: 44, // approx header row height — title + subtitle
+  },
+  // Writeoff mode radio rows. Hairline-bordered cards with a leading
+  // circle radio — light/dark theme-aware via inline backgroundColor.
+  writeoffRadioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1.5,
+  },
+  writeoffRadioCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  writeoffRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  writeoffRadioTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  writeoffRadioDesc: { fontSize: fontSize.xs, marginTop: 2 },
   addBtn: {
     width: 36,
     height: 36,

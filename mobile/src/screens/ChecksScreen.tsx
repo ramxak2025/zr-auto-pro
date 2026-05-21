@@ -66,6 +66,11 @@ const movementTypeLabels: Record<string, string> = {
   writeoff: 'Списание',
   income: 'Приход',
   expense: 'Расход',
+  // Новые типы (миграция 0XX_defect_used_returns). UI-имена согласованы с
+  // веб-журналом и backend StockMovementType (shared/types).
+  defect_transfer: 'Перенос в брак',
+  used_transfer: 'Перенос в Б/У',
+  defect_return_to_supplier: 'Возврат поставщику',
 };
 
 const movementTypeIcons: Record<string, { name: keyof typeof Ionicons.glyphMap; color: string; accentColor: string }> =
@@ -74,7 +79,31 @@ const movementTypeIcons: Record<string, { name: keyof typeof Ionicons.glyphMap; 
     writeoff: { name: 'trash-outline', color: colors.red[600], accentColor: colors.red[500] },
     income: { name: 'arrow-down-outline', color: colors.green[600], accentColor: colors.green[500] },
     expense: { name: 'arrow-up-outline', color: colors.orange[500], accentColor: colors.orange[500] },
+    // Перенос в брак — янтарный (предупреждение, но не критический «трэш»),
+    // икона щита-предостережения. amber[600] используется и для бордера —
+    // в нашей палитре нет 500.
+    defect_transfer: { name: 'warning-outline', color: colors.amber[600], accentColor: colors.amber[600] },
+    // Перенос в Б/У — нейтральный swap, indigo чтоб отделить от прихода.
+    // indigo тоже без 500 в палитре, оставляем 600 для accent.
+    used_transfer: { name: 'swap-horizontal-outline', color: colors.indigo[600], accentColor: colors.indigo[600] },
+    // Возврат поставщику — красный (товар физически уходит со склада),
+    // стрелка возврата.
+    defect_return_to_supplier: {
+      name: 'arrow-undo-outline',
+      color: colors.red[600],
+      accentColor: colors.red[500],
+    },
   };
+
+// Outflow-движения — количество показываем со знаком «−» и красным цветом.
+// inventory всегда нейтральный знак (это коррекция, а не приход/расход).
+const NEGATIVE_MOVEMENT_TYPES = new Set<string>([
+  'writeoff',
+  'expense',
+  'defect_transfer',
+  'used_transfer',
+  'defect_return_to_supplier',
+]);
 
 type ActiveTab = 'checks' | 'warehouse';
 
@@ -247,10 +276,10 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect }: 
               <Text
                 style={[
                   styles.warehouseQty,
-                  { color: m.type === 'writeoff' || m.type === 'expense' ? colors.red[600] : colors.green[600] },
+                  { color: NEGATIVE_MOVEMENT_TYPES.has(m.type) ? colors.red[600] : colors.green[600] },
                 ]}
               >
-                {m.type === 'writeoff' || m.type === 'expense' ? '-' : '+'}
+                {NEGATIVE_MOVEMENT_TYPES.has(m.type) ? '-' : '+'}
                 {m.quantity} шт
               </Text>
               <Text style={styles.warehouseDate}>{formatDate(m.createdAt)}</Text>
@@ -832,10 +861,10 @@ export default function ChecksScreen() {
                   <Text
                     style={[
                       styles.docDetailValue,
-                      { color: m.type === 'writeoff' || m.type === 'expense' ? colors.red[600] : colors.green[600] },
+                      { color: NEGATIVE_MOVEMENT_TYPES.has(m.type) ? colors.red[600] : colors.green[600] },
                     ]}
                   >
-                    {m.type === 'writeoff' || m.type === 'expense' ? '-' : '+'}
+                    {NEGATIVE_MOVEMENT_TYPES.has(m.type) ? '-' : '+'}
                     {m.quantity} шт
                   </Text>
                 </View>

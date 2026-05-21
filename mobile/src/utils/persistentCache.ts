@@ -35,6 +35,10 @@ const PERSISTED_KEYS = [
   'products',
   'all-products-check',
   'warehouse-categories',
+  // Warehouses (main / defect / used) — 3-row reference list, almost
+  // never changes. Persisted so the warehouse switcher renders the
+  // tabs instantly on cold start instead of flashing the spinner.
+  'warehouses',
   // Reference data
   'all-services',
   'all-users',

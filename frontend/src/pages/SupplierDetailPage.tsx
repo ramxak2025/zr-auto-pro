@@ -18,21 +18,22 @@ import {
   FolderOpen,
   Calendar,
   ChevronLeft,
+  Undo2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { suppliersApi, productsApi } from '../api/services';
+import { suppliersApi, productsApi, stockMovementsApi, warehousesApi } from '../api/services';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
-import { Supplier, Delivery, SupplierPayment, Product, PaginatedResponse } from '../types';
+import { Supplier, Delivery, SupplierPayment, Product, PaginatedResponse, StockMovement, Warehouse } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
-type TabType = 'deliveries' | 'payments';
+type TabType = 'deliveries' | 'payments' | 'returns';
 
 interface SupplierFormData {
   name: string;
@@ -250,6 +251,8 @@ export default function SupplierDetailPage() {
   const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [showDeliveryPicker, setShowDeliveryPicker] = useState(false);
+  const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
+  const [showReturnPicker, setShowReturnPicker] = useState(false);
 
   // Supplier data
   const {
@@ -314,6 +317,40 @@ export default function SupplierDetailPage() {
     staleTime: 0,
   });
   const products: Product[] = productsData || [];
+
+  // Warehouses — used to find the defect warehouse for return-to-supplier
+  const { data: warehousesData } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: () => warehousesApi.list(),
+    select: (res) => res.data,
+    staleTime: 5 * 60_000,
+  });
+  const warehouses: Warehouse[] = warehousesData || [];
+  const defectWarehouse = warehouses.find((w) => w.kind === 'defect');
+
+  // Defect-stock products picker (only items currently in defect warehouse)
+  const { data: defectProductsData } = useQuery({
+    queryKey: ['products', 'defect', defectWarehouse?.id],
+    queryFn: () => productsApi.getAll({ limit: 5000, warehouseId: defectWarehouse!.id }),
+    select: (res) => {
+      const d = res.data;
+      return Array.isArray(d) ? d : (d as PaginatedResponse<Product>).data || [];
+    },
+    enabled: !!defectWarehouse?.id && (isReturnModalOpen || showReturnPicker),
+    staleTime: 30_000,
+  });
+  const defectProducts: Product[] = defectProductsData || [];
+
+  // Defect-return history for this supplier
+  const { data: returnsData } = useQuery({
+    queryKey: ['supplier-returns', id],
+    queryFn: () => stockMovementsApi.list({ type: 'defect_return_to_supplier' }),
+    select: (res) =>
+      (res.data || []).filter((m: StockMovement) => m.supplierId === id),
+    enabled: !!id,
+    staleTime: 30_000,
+  });
+  const returns: StockMovement[] = returnsData || [];
 
   // Edit supplier form
   const [editForm, setEditForm] = useState<SupplierFormData>({
@@ -470,6 +507,67 @@ export default function SupplierDetailPage() {
     });
   };
 
+  // ─── Return defect form ─────────────────────────────────────────────────────
+  const [returnForm, setReturnForm] = useState<{
+    productId: string;
+    productName: string;
+    productStock: number;
+    qty: string;
+    purchasePrice: string;
+    note: string;
+  }>({ productId: '', productName: '', productStock: 0, qty: '1', purchasePrice: '', note: '' });
+
+  const openReturnModal = () => {
+    setReturnForm({ productId: '', productName: '', productStock: 0, qty: '1', purchasePrice: '', note: '' });
+    setIsReturnModalOpen(true);
+  };
+
+  const handleReturnProductSelected = (p: Product) => {
+    setReturnForm((prev) => ({
+      ...prev,
+      productId: p.id,
+      productName: p.name,
+      productStock: p.stock,
+      purchasePrice: prev.purchasePrice || String(p.costPrice ?? ''),
+    }));
+  };
+
+  const returnDefectMutation = useMutation({
+    mutationFn: (body: { productId: string; qty: number; purchasePrice?: number; note?: string }) =>
+      suppliersApi.returnDefect(id!, body),
+    onSuccess: () => {
+      toast.success('Возврат брака зафиксирован');
+      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-returns', id] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['defect-writeoff-report'] });
+      setIsReturnModalOpen(false);
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Ошибка при оформлении возврата';
+      toast.error(typeof msg === 'string' ? msg : 'Ошибка при оформлении возврата');
+    },
+  });
+
+  const handleReturnSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!returnForm.productId) { toast.error('Выберите товар из склада брака'); return; }
+    const qty = Number(returnForm.qty);
+    if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
+    if (qty > returnForm.productStock) {
+      toast.error(`Количество превышает остаток на складе брака (${returnForm.productStock})`);
+      return;
+    }
+    const price = returnForm.purchasePrice.trim() ? Number(returnForm.purchasePrice) : undefined;
+    returnDefectMutation.mutate({
+      productId: returnForm.productId,
+      qty,
+      purchasePrice: price,
+      note: returnForm.note.trim() || undefined,
+    });
+  };
+
   if (isLoading) return <LoadingSpinner />;
 
   if (isError || !supplier) {
@@ -568,6 +666,17 @@ export default function SupplierDetailPage() {
           <CreditCard className="w-4 h-4 inline-block mr-1.5" />
           Оплаты ({payments.length})
         </button>
+        <button
+          onClick={() => setActiveTab('returns')}
+          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'returns'
+              ? 'border-primary-600 text-primary-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <Undo2 className="w-4 h-4 inline-block mr-1.5" />
+          Возвраты ({returns.length})
+        </button>
       </div>
 
       {/* Deliveries Tab */}
@@ -650,6 +759,60 @@ export default function SupplierDetailPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Returns Tab — defect returns to this supplier */}
+      {activeTab === 'returns' && (
+        <div className="space-y-4">
+          <div className="flex justify-end">
+            <button onClick={openReturnModal} className="btn-secondary" disabled={!defectWarehouse}>
+              <Undo2 className="w-4 h-4" />
+              Возврат брака
+            </button>
+          </div>
+
+          {returns.length === 0 ? (
+            <EmptyState
+              icon={Undo2}
+              title="Нет возвратов"
+              description={
+                defectWarehouse
+                  ? 'Здесь будет история возвратов брака этому поставщику'
+                  : 'Склад брака ещё не создан'
+              }
+              action={defectWarehouse ? { label: 'Возврат брака', onClick: openReturnModal } : undefined}
+            />
+          ) : (
+            <div className="space-y-2">
+              {returns.map((m) => {
+                const qty = Math.abs(m.quantity);
+                return (
+                  <div key={m.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-3.5 w-3.5 text-gray-400" />
+                          <p className="text-sm font-semibold text-gray-900">
+                            {format(new Date(m.createdAt), 'dd MMM yyyy', { locale: ru })}
+                          </p>
+                        </div>
+                        <p className="text-sm font-medium text-gray-900 mt-1.5">
+                          {m.product?.name || '—'}
+                        </p>
+                        {m.reason && (
+                          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{m.reason}</p>
+                        )}
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-base font-bold text-rose-600">−{qty} шт</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -886,6 +1049,104 @@ export default function SupplierDetailPage() {
           </div>
         </form>
       </Modal>
+
+      {/* Return Defect Modal */}
+      <Modal
+        isOpen={isReturnModalOpen}
+        onClose={() => setIsReturnModalOpen(false)}
+        title="Возврат брака поставщику"
+      >
+        <form onSubmit={handleReturnSubmit} className="space-y-4">
+          <p className="text-xs text-gray-500">
+            Возврат уменьшает остаток на складе брака и снижает долг перед поставщиком на сумму закупки.
+          </p>
+
+          {/* Product picker trigger */}
+          <div>
+            <label className="label">Товар *</label>
+            {returnForm.productId ? (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+                <Package className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{returnForm.productName}</p>
+                  <p className="text-[11px] text-gray-500">На складе брака: {returnForm.productStock} шт</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowReturnPicker(true)}
+                  className="text-primary-600 text-xs font-medium flex-shrink-0 hover:text-primary-700"
+                >
+                  Изменить
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowReturnPicker(true)}
+                className="w-full py-6 border-2 border-dashed border-gray-200 rounded-xl text-center hover:border-amber-300 hover:bg-amber-50/30 transition-colors"
+                disabled={!defectWarehouse}
+              >
+                <Package className="w-7 h-7 text-gray-300 mx-auto mb-1.5" />
+                <p className="text-sm text-gray-400">Выбрать товар из склада брака</p>
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Кол-во *</label>
+              <input
+                type="number"
+                className="input"
+                min={1}
+                step="1"
+                value={returnForm.qty}
+                onChange={(e) => setReturnForm({ ...returnForm, qty: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Цена закупки</label>
+              <input
+                type="number"
+                className="input"
+                min={0}
+                step="0.01"
+                value={returnForm.purchasePrice}
+                onChange={(e) => setReturnForm({ ...returnForm, purchasePrice: e.target.value })}
+                placeholder="Будет взята из товара"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Комментарий</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={returnForm.note}
+              onChange={(e) => setReturnForm({ ...returnForm, note: e.target.value })}
+              placeholder="Например: дефект упаковки, не подошёл и т. д."
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={() => setIsReturnModalOpen(false)} className="btn-secondary">
+              Отмена
+            </button>
+            <button type="submit" disabled={returnDefectMutation.isPending} className="btn-primary">
+              {returnDefectMutation.isPending ? 'Сохранение...' : 'Оформить возврат'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Return Product Picker — only defect-warehouse products */}
+      <DeliveryProductPicker
+        isOpen={showReturnPicker}
+        onClose={() => setShowReturnPicker(false)}
+        products={defectProducts}
+        onSelect={handleReturnProductSelected}
+      />
     </div>
   );
 }

@@ -21,8 +21,12 @@ import {
   CalendarDays,
   Gauge,
   Pencil,
+  ShieldCheck,
+  ChevronDown as ChevronDownIcon,
+  Warehouse as WarehouseIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { ru as ruLocale } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import {
   checksApi,
@@ -30,6 +34,8 @@ import {
   usersApi,
   servicesApi,
   productsApi,
+  warrantyApi,
+  warehousesApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import type {
@@ -40,6 +46,8 @@ import type {
   Product,
   CheckServiceLine,
   CheckProductLine,
+  WarrantyClaim,
+  Warehouse,
 } from '../types';
 import { UserRole } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -75,13 +83,28 @@ interface ProductPickerModalProps {
   onClose: () => void;
   products: Product[];
   onSelectProduct: (product: Product) => void;
+  /** Available warehouses to pick from. Hidden if 0 or 1 warehouse. */
+  warehouses?: Warehouse[];
+  /** Currently selected warehouse id (controlled). */
+  selectedWarehouseId?: string;
+  /** Called when the user switches warehouse. */
+  onSelectWarehouse?: (id: string) => void;
 }
+
+const WAREHOUSE_KIND_LABELS: Record<Warehouse['kind'], string> = {
+  main: 'Основной склад',
+  defect: 'Склад брака',
+  used: 'Склад Б/У',
+};
 
 function ProductPickerModal({
   isOpen,
   onClose,
   products,
   onSelectProduct,
+  warehouses,
+  selectedWarehouseId,
+  onSelectWarehouse,
 }: ProductPickerModalProps) {
   const [search, setSearch] = useState('');
   const [activePath, setActivePath] = useState<string[]>([]);
@@ -188,6 +211,32 @@ function ProductPickerModal({
           <h2 className="text-lg font-semibold text-gray-900 leading-tight truncate">{breadcrumbLabel}</h2>
         </div>
       </div>
+
+      {/* Warehouse switcher — visible if more than 1 warehouse exists */}
+      {warehouses && warehouses.length > 1 && (
+        <div className="px-4 pt-3 pb-1 border-b border-gray-100 bg-gray-50 flex-shrink-0">
+          <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-2">
+            {warehouses.map((w) => {
+              const active = w.id === selectedWarehouseId;
+              return (
+                <button
+                  key={w.id}
+                  type="button"
+                  onClick={() => onSelectWarehouse?.(w.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-colors flex-shrink-0 ${
+                    active
+                      ? 'bg-primary-600 text-white shadow-sm'
+                      : 'bg-white border border-gray-200 text-gray-600 hover:border-primary-300'
+                  }`}
+                >
+                  <WarehouseIcon className="w-3.5 h-3.5" />
+                  {w.name || WAREHOUSE_KIND_LABELS[w.kind]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Search */}
       <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex-shrink-0">
@@ -365,6 +414,10 @@ export default function CheckCreatePage() {
   // Product picker modal
   const [showProductPicker, setShowProductPicker] = useState(false);
 
+  // Warehouse filter for product picker (defaults to main warehouse)
+  const [pickerWarehouseId, setPickerWarehouseId] = useState<string>('');
+  const [warrantyExpanded, setWarrantyExpanded] = useState(false);
+
   // Prevent accidental page leave
   useEffect(() => {
     window.history.pushState({ checkGuard: true }, '');
@@ -416,7 +469,9 @@ export default function CheckCreatePage() {
     staleTime: 60_000,
   });
 
-  // Fetch all products (cached 60s — catalog data)
+  // Fetch all products (cached 60s — catalog data). We always pull the full
+  // catalogue here; the picker is filtered client-side by selected warehouse
+  // so flipping warehouses is instant.
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: ['products-all'],
     queryFn: async () => {
@@ -425,6 +480,45 @@ export default function CheckCreatePage() {
     },
     staleTime: 60_000,
   });
+
+  // Warehouses for the picker switcher. Main / defect / used.
+  const { data: warehouses } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehousesApi.list()).data,
+    staleTime: 5 * 60_000,
+  });
+  // Default the picker to the main warehouse once the list arrives.
+  useEffect(() => {
+    if (!pickerWarehouseId && warehouses && warehouses.length > 0) {
+      const main = warehouses.find((w) => w.kind === 'main') || warehouses[0];
+      setPickerWarehouseId(main.id);
+    }
+  }, [warehouses, pickerWarehouseId]);
+
+  // Active warranties for the currently-selected client+car combo.
+  // Tap-to-expand banner — shown above the receipt body.
+  const warrantyEnabled = !!(selectedClient?.id || selectedCarId);
+  const { data: activeWarranties } = useQuery<WarrantyClaim[]>({
+    queryKey: ['active-warranties', selectedClient?.id, selectedCarId],
+    queryFn: async () => {
+      const res = await warrantyApi.activeForClient({
+        clientId: selectedClient?.id,
+        carId: selectedCarId || undefined,
+      });
+      return res.data;
+    },
+    enabled: warrantyEnabled,
+    staleTime: 30_000,
+  });
+
+  // Filter the catalogue by chosen warehouse for the picker. We also keep
+  // products without a warehouseId (legacy) visible only in the main warehouse.
+  const pickerProducts = useMemo<Product[]>(() => {
+    const list = allProducts ?? [];
+    if (!pickerWarehouseId) return list;
+    const isMain = warehouses?.find((w) => w.id === pickerWarehouseId)?.kind === 'main';
+    return list.filter((p) => p.warehouseId === pickerWarehouseId || (isMain && !p.warehouseId));
+  }, [allProducts, warehouses, pickerWarehouseId]);
 
   // Load existing check for edit mode
   const { data: existingCheck } = useQuery({
@@ -914,6 +1008,50 @@ export default function CheckCreatePage() {
                 <LastVisitBadge clientId={selectedClient.id} carId={selectedCarId || undefined} />
               </div>
             )}
+
+            {/* Active warranties banner — shown when client/car has unclaimed warranties */}
+            {warrantyEnabled && activeWarranties && activeWarranties.length > 0 && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setWarrantyExpanded((v) => !v)}
+                  className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-amber-100/50 transition-colors"
+                >
+                  <ShieldCheck className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                  <span className="text-sm font-semibold text-amber-900 flex-1 text-left">
+                    Действующая гарантия — {activeWarranties.length}
+                  </span>
+                  <ChevronDownIcon
+                    className={`w-4 h-4 text-amber-700 transition-transform ${warrantyExpanded ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                {warrantyExpanded && (
+                  <div className="border-t border-amber-200 divide-y divide-amber-100">
+                    {activeWarranties.map((w) => (
+                      <div key={w.id} className="px-3 py-2 flex items-center justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                                w.kind === 'product'
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : 'bg-emerald-100 text-emerald-700'
+                              }`}
+                            >
+                              {w.kind === 'product' ? 'Товар' : 'Услуга'}
+                            </span>
+                            <p className="text-xs font-medium text-gray-900 truncate">{w.itemName || '—'}</p>
+                          </div>
+                          <p className="text-[11px] text-amber-700 mt-0.5">
+                            до {format(new Date(w.expiresAt), 'd MMM yyyy', { locale: ruLocale })}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Mileage */}
@@ -1332,8 +1470,11 @@ export default function CheckCreatePage() {
       <ProductPickerModal
         isOpen={showProductPicker}
         onClose={() => setShowProductPicker(false)}
-        products={allProducts ?? []}
+        products={pickerProducts}
         onSelectProduct={handleProductSelected}
+        warehouses={warehouses}
+        selectedWarehouseId={pickerWarehouseId}
+        onSelectWarehouse={setPickerWarehouseId}
       />
     </div>
   );

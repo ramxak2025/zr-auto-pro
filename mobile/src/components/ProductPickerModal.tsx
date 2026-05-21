@@ -39,6 +39,15 @@ export interface FolderAnnotation {
   color: string;
 }
 
+interface WarehouseSwitcherProps {
+  /** Currently selected warehouse id (matches Warehouse.id). */
+  value: string | null;
+  /** Open the warehouse picker sheet (parent owns the sheet UI). */
+  onPress: () => void;
+  /** Label shown next to the switcher icon — name of the active warehouse. */
+  label: string;
+}
+
 interface ProductPickerModalProps {
   visible: boolean;
   onClose: () => void;
@@ -47,6 +56,14 @@ interface ProductPickerModalProps {
   title?: string;
   showCostPrice?: boolean;
   folderAnnotations?: Map<string, FolderAnnotation>;
+  /**
+   * Active warehouse id used to filter the query — when set the picker fires
+   * `productsApi.getAll({ warehouseId, limit })` so brak / used / main are
+   * distinct caches. State lives in the parent (CheckCreateScreen).
+   */
+  warehouseId?: string | null;
+  /** Compact switcher rendered above the search input. Optional. */
+  warehouseSwitcher?: WarehouseSwitcherProps;
 }
 
 /**
@@ -183,6 +200,8 @@ export default function ProductPickerModal({
   title = 'Товары',
   showCostPrice = false,
   folderAnnotations,
+  warehouseId,
+  warehouseSwitcher,
 }: ProductPickerModalProps) {
   const [productPath, setProductPath] = useState<string[]>([]);
   // `localSearch` is what the input renders (every keystroke), `productSearch`
@@ -209,10 +228,17 @@ export default function ProductPickerModal({
   // so opening the picker is a cache hit on the first try, then revalidates
   // in the background. `placeholderData: prev => prev` is also redundantly
   // set on the global QueryClient — kept here too as defence in depth.
+  //
+  // When `warehouseId` is supplied the key gains a second segment so each
+  // warehouse (main / brak / used) has its own cache slot. Without the
+  // warehouse filter we keep the legacy `['all-products-check']` key so the
+  // login-time prefetch remains a hit.
   const { data: allProducts, isLoading } = useQuery<Product[]>({
-    queryKey: ['all-products-check'],
+    queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
     queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 500 });
+      const params: { limit: number; warehouseId?: string } = { limit: 500 };
+      if (warehouseId) params.warehouseId = warehouseId;
+      const res = await productsApi.getAll(params);
       return (res.data?.data || res.data) as Product[];
     },
     enabled: visible,
@@ -359,6 +385,28 @@ export default function ProductPickerModal({
             <View style={{ width: 36 }} />
           </View>
 
+          {/* Warehouse switcher — small chip on the right above the search.
+              Parent owns the warehouse picker sheet (so the modal stays
+              dumb / presentational) and passes the current label + an
+              onPress that opens that sheet. */}
+          {warehouseSwitcher ? (
+            <View style={styles.warehouseRow}>
+              <View style={{ flex: 1 }} />
+              <TouchableOpacity
+                onPress={warehouseSwitcher.onPress}
+                style={styles.warehouseChip}
+                activeOpacity={0.7}
+                accessibilityLabel="Выбрать склад"
+              >
+                <Ionicons name="layers-outline" size={14} color={colors.primary[600]} />
+                <Text style={styles.warehouseChipText} numberOfLines={1}>
+                  {warehouseSwitcher.label}
+                </Text>
+                <Ionicons name="chevron-down" size={12} color={colors.primary[600]} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+
           {/* Search */}
           <View style={styles.searchWrap}>
             <Ionicons name="search-outline" size={16} color={colors.gray[400]} />
@@ -488,6 +536,32 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
   },
   searchInput: { flex: 1, fontSize: fontSize.sm, color: colors.gray[900], paddingVertical: 0 },
+  // Warehouse switcher chip — sits in its own row right above the search
+  // input, right-aligned. Compact (24-pt tall) so it never pushes the
+  // search down enough to feel heavy.
+  warehouseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[1],
+  },
+  warehouseChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    backgroundColor: colors.primary[50],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primary[100],
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: 4,
+    maxWidth: 180,
+  },
+  warehouseChipText: {
+    fontSize: 12,
+    fontWeight: fontWeight.semibold,
+    color: colors.primary[700],
+  },
   breadcrumbRow: {
     flexDirection: 'row',
     alignItems: 'center',

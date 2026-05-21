@@ -6,6 +6,11 @@ interface AnimatedCardProps {
   style?: ViewStyle | ViewStyle[];
   index?: number;
   onPress?: () => void;
+  /**
+   * Optional long-press handler. Forwarded to the underlying
+   * TouchableOpacity in both skip-animation and animated branches.
+   */
+  onLongPress?: () => void;
   activeOpacity?: number;
   /**
    * Force-disable the entrance animation regardless of index. Use this
@@ -43,6 +48,7 @@ export default function AnimatedCard({
   style,
   index = 0,
   onPress,
+  onLongPress,
   activeOpacity = 0.7,
   disableEntrance = false,
 }: AnimatedCardProps) {
@@ -87,7 +93,12 @@ export default function AnimatedCard({
   if (skipAnimation) {
     if (onPress) {
       return (
-        <TouchableOpacity style={style} onPress={onPress} activeOpacity={activeOpacity}>
+        <TouchableOpacity
+          style={style}
+          onPress={onPress}
+          onLongPress={onLongPress}
+          activeOpacity={activeOpacity}
+        >
           {children}
         </TouchableOpacity>
       );
@@ -103,7 +114,12 @@ export default function AnimatedCard({
   if (onPress) {
     return (
       <Animated.View style={animatedStyle}>
-        <TouchableOpacity style={style} onPress={onPress} activeOpacity={activeOpacity}>
+        <TouchableOpacity
+          style={style}
+          onPress={onPress}
+          onLongPress={onLongPress}
+          activeOpacity={activeOpacity}
+        >
           {children}
         </TouchableOpacity>
       </Animated.View>

@@ -11,6 +11,10 @@ import {
   ArrowDownRight,
   BarChart3,
   Wallet,
+  AlertTriangle,
+  PackageMinus,
+  Undo2,
+  Recycle,
 } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 
@@ -36,6 +40,14 @@ export default function ReportsPage() {
     queryKey: ['financial-report', dateFrom, dateTo],
     queryFn: () => reportsApi.getFinancial({ dateFrom, dateTo }),
     select: (res) => res.data as FinancialReport,
+    enabled: canView,
+  });
+
+  // Defect + write-off + return-to-supplier aggregates for the period.
+  const { data: defectStats } = useQuery({
+    queryKey: ['defect-writeoff-report', dateFrom, dateTo],
+    queryFn: () => reportsApi.defectWriteoff({ from: dateFrom, to: dateTo }),
+    select: (res) => res.data,
     enabled: canView,
   });
 
@@ -232,6 +244,69 @@ export default function ReportsPage() {
               <p className="text-2xl font-bold text-primary-600">{report.checkCount}</p>
             </div>
           </div>
+
+          {/* Defect + write-offs section */}
+          {defectStats && (
+            <div className="rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-50 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Брак и списания</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 p-4">
+                {/* Defect */}
+                <div className="rounded-xl bg-amber-50 border border-amber-100 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100">
+                      <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+                    </div>
+                    <p className="text-[11px] font-semibold text-amber-700 uppercase tracking-wider">В браке</p>
+                  </div>
+                  <p className="text-base font-bold text-amber-900">{formatMoney(defectStats.defectValue)}</p>
+                  <p className="text-[11px] text-amber-600 mt-0.5">{defectStats.defectQty} шт</p>
+                </div>
+
+                {/* Returned to supplier */}
+                <div className="rounded-xl bg-rose-50 border border-rose-100 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-100">
+                      <Undo2 className="h-3.5 w-3.5 text-rose-600" />
+                    </div>
+                    <p className="text-[11px] font-semibold text-rose-700 uppercase tracking-wider">Возврат поставщику</p>
+                  </div>
+                  <p className="text-base font-bold text-rose-900">{formatMoney(defectStats.returnedToSupplierValue)}</p>
+                  <p className="text-[11px] text-rose-600 mt-0.5">{defectStats.returnedToSupplierQty} шт</p>
+                </div>
+
+                {/* Writeoff (as expense) */}
+                <div className="rounded-xl bg-red-50 border border-red-100 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-red-100">
+                      <PackageMinus className="h-3.5 w-3.5 text-red-600" />
+                    </div>
+                    <p className="text-[11px] font-semibold text-red-700 uppercase tracking-wider">Списано как расход</p>
+                  </div>
+                  <p className="text-base font-bold text-red-900">{formatMoney(defectStats.writeoffExpensedValue)}</p>
+                  <p className="text-[11px] text-red-600 mt-0.5">{defectStats.writeoffExpensedQty} шт</p>
+                </div>
+
+                {/* Writeoff (no expense) */}
+                <div className="rounded-xl bg-gray-50 border border-gray-100 p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-200">
+                      <Recycle className="h-3.5 w-3.5 text-gray-600" />
+                    </div>
+                    <p className="text-[11px] font-semibold text-gray-700 uppercase tracking-wider">Списано без расхода</p>
+                  </div>
+                  <p className="text-base font-bold text-gray-900">
+                    {formatMoney(defectStats.writeoffValue - defectStats.writeoffExpensedValue)}
+                  </p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    {defectStats.writeoffQty - defectStats.writeoffExpensedQty} шт
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

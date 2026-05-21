@@ -13,7 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { suppliersApi } from '../api/services';
+import { suppliersApi, warehousesApi, productsApi, stockMovementsApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -21,7 +21,7 @@ import Modal from '../components/Modal';
 import ProductPickerModal from '../components/ProductPickerModal';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Supplier, Delivery, SupplierPayment, Product } from '../../../shared/types';
+import type { Supplier, Delivery, SupplierPayment, Product, Warehouse, StockMovement, PaginatedResponse } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 function formatMoney(v: number) {
@@ -49,7 +49,7 @@ export default function SupplierDetailScreen() {
   const palette = useColors();
   const { id } = route.params;
   const [refreshing, setRefreshing] = useState(false);
-  const [tab, setTab] = useState<'deliveries' | 'payments'>('deliveries');
+  const [tab, setTab] = useState<'deliveries' | 'payments' | 'returns'>('deliveries');
   const [expandedDelivery, setExpandedDelivery] = useState<string | null>(null);
 
   // Delivery form
@@ -62,6 +62,16 @@ export default function SupplierDetailScreen() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentComment, setPaymentComment] = useState('');
+
+  // Return-defect form. Modal is rendered as a wide RN sheet (uses the
+  // shared <Modal>), product picker reused for selection but scoped to
+  // the defect warehouse via `productsApi.getAll({ warehouseId })`.
+  const [returnDefectModalOpen, setReturnDefectModalOpen] = useState(false);
+  const [defectPickerOpen, setDefectPickerOpen] = useState(false);
+  const [defectProduct, setDefectProduct] = useState<Product | null>(null);
+  const [defectQty, setDefectQty] = useState('');
+  const [defectPurchasePrice, setDefectPurchasePrice] = useState('');
+  const [defectNote, setDefectNote] = useState('');
 
   const { data: supplier, isLoading } = useQuery<Supplier>({
     queryKey: ['supplier', id],
@@ -87,12 +97,57 @@ export default function SupplierDetailScreen() {
     },
   });
 
+  // Warehouses — needed to discover the defect warehouse id. Reference
+  // data, rarely changes, so a 10-min staleTime is fine.
+  const { data: warehouses } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => (await warehousesApi.list()).data,
+    staleTime: 10 * 60_000,
+  });
+  const defectWarehouse = (warehouses || []).find((w) => w.kind === 'defect') || null;
+
+  // Products currently sitting in the defect warehouse. Only fetched when
+  // we know the warehouse id — query stays disabled until then so React
+  // Query doesn't spin up a request with `warehouseId=undefined`.
+  const { data: defectProductsPage } = useQuery<PaginatedResponse<Product>>({
+    queryKey: ['products', { warehouseId: defectWarehouse?.id }],
+    queryFn: async () => {
+      const res = await productsApi.getAll({ warehouseId: defectWarehouse!.id, limit: 500 });
+      return res.data;
+    },
+    enabled: !!defectWarehouse?.id,
+    staleTime: 60_000,
+  });
+  const defectProducts: Product[] = defectProductsPage?.data || [];
+
+  // Past defect-returns for this supplier — populates the "Возвраты брака"
+  // tab. Backend's /stock-movements list endpoint only filters by
+  // warehouse / product / type / dates, so we ask it for every
+  // `defect_return_to_supplier` movement in the tenant (capped at 200)
+  // and grep client-side by supplierId. Cheap because:
+  //   • the list is type-scoped server-side, so it's small,
+  //   • a single supplier-detail screen is the only consumer,
+  //   • 30s staleTime + persistent cache keep it warm.
+  const { data: defectReturns } = useQuery<StockMovement[]>({
+    queryKey: ['supplier-defect-returns', id],
+    queryFn: async () => {
+      const res = await stockMovementsApi.list({ type: 'defect_return_to_supplier' });
+      return (res.data || []).filter((m) => m.supplierId === id);
+    },
+    staleTime: 30_000,
+  });
+
   const invalidateAll = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ['supplier', id] }),
       queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] }),
       queryClient.invalidateQueries({ queryKey: ['supplier-payments', id] }),
+      queryClient.invalidateQueries({ queryKey: ['supplier-defect-returns', id] }),
       queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
+      // Defect stock + general products list both shift when stock is
+      // moved out → refresh both. Predicate match catches any
+      // ['products', { … }] variant since we keyed by an object.
+      queryClient.invalidateQueries({ queryKey: ['products'] }),
     ]);
 
   const createDeliveryMutation = useMutation({
@@ -115,6 +170,30 @@ export default function SupplierDetailScreen() {
       setPaymentComment('');
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании платежа'),
+  });
+
+  // Backend (POST /suppliers/:id/return-defect) does three things atomically:
+  //  1) decrement defect-warehouse stock by qty,
+  //  2) log a stock_movements row of type defect_return_to_supplier,
+  //  3) reduce supplier debt by qty * purchasePrice via supplier_payments.
+  // We just need to refresh caches that mirror any of those values.
+  const returnDefectMutation = useMutation({
+    mutationFn: (body: { productId: string; qty: number; purchasePrice: number; note?: string }) =>
+      suppliersApi.returnDefect(id, body),
+    onSuccess: (_data, vars) => {
+      const debtReduction = vars.qty * vars.purchasePrice;
+      invalidateAll();
+      setReturnDefectModalOpen(false);
+      setDefectProduct(null);
+      setDefectQty('');
+      setDefectPurchasePrice('');
+      setDefectNote('');
+      Alert.alert('Возврат оформлен', `Долг поставщику уменьшен на ${formatMoney(debtReduction)}`);
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Не удалось оформить возврат';
+      Alert.alert('Ошибка', String(msg));
+    },
   });
 
   const onRefresh = async () => {
@@ -189,6 +268,57 @@ export default function SupplierDetailScreen() {
     setPaymentModalOpen(true);
   };
 
+  // Open the return-defect modal. If we don't yet know the defect
+  // warehouse, tell the user instead of opening an empty picker.
+  const openReturnDefect = () => {
+    if (!defectWarehouse) {
+      Alert.alert('Брак-склад не найден', 'Перенесите товар в склад брака, прежде чем оформлять возврат.');
+      return;
+    }
+    setDefectProduct(null);
+    setDefectQty('');
+    setDefectPurchasePrice('');
+    setDefectNote('');
+    setReturnDefectModalOpen(true);
+  };
+
+  const onPickDefectProduct = (p: Product) => {
+    setDefectProduct(p);
+    // Pre-fill the editable inputs from the product. Backend can derive
+    // purchase price itself, but pre-fill matches owner mental model.
+    setDefectPurchasePrice(String(p.costPrice ?? 0));
+    setDefectQty('1');
+    setDefectPickerOpen(false);
+    setTimeout(() => setReturnDefectModalOpen(true), 250);
+  };
+
+  const handleReturnDefect = () => {
+    if (!defectProduct) {
+      Alert.alert('Выберите товар', 'Сначала выберите товар из склада брака.');
+      return;
+    }
+    const qty = Number(defectQty);
+    const price = Number(defectPurchasePrice);
+    if (!qty || qty <= 0) {
+      Alert.alert('Ошибка', 'Укажите количество больше нуля.');
+      return;
+    }
+    if (qty > defectProduct.stock) {
+      Alert.alert('Недостаточно на складе', `На складе брака доступно ${defectProduct.stock} шт.`);
+      return;
+    }
+    if (!(price >= 0)) {
+      Alert.alert('Ошибка', 'Укажите корректную закупочную цену.');
+      return;
+    }
+    returnDefectMutation.mutate({
+      productId: defectProduct.id,
+      qty,
+      purchasePrice: price,
+      note: defectNote || undefined,
+    });
+  };
+
   if (isLoading) return <LoadingSpinner />;
   if (!supplier) return <Text style={{ padding: 20, textAlign: 'center' }}>Поставщик не найден</Text>;
 
@@ -240,6 +370,20 @@ export default function SupplierDetailScreen() {
             <Text style={styles.quickPayText}>Погасить долг {formatMoney(supplier.currentDebt)}</Text>
           </TouchableOpacity>
         )}
+
+        {/* Secondary action: return defective stock to supplier. Always
+            available — even when there's no current debt the action is
+            legitimate (it can drive the debt negative = supplier owes us).
+            Styled as a subdued pill (outline + amber tint) to stay below
+            the primary "Погасить долг" CTA in the visual hierarchy. */}
+        <TouchableOpacity
+          style={[styles.secondaryActionBtn, { borderColor: palette.border.subtle, backgroundColor: palette.bg.card }]}
+          onPress={openReturnDefect}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-undo-outline" size={16} color={colors.orange[600]} />
+          <Text style={[styles.secondaryActionText, { color: palette.text.primary }]}>Возврат брака</Text>
+        </TouchableOpacity>
 
         {/* Info */}
         {(supplier.phone || supplier.contactPerson) && (
@@ -299,6 +443,26 @@ export default function SupplierDetailScreen() {
               ]}
             >
               Платежи ({payments?.length || 0})
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tabBtn, tab === 'returns' && styles.tabBtnActive, tab === 'returns' && { backgroundColor: palette.bg.card }]}
+            onPress={() => setTab('returns')}
+          >
+            <Ionicons
+              name="arrow-undo-outline"
+              size={15}
+              color={tab === 'returns' ? colors.primary[600] : palette.text.tertiary}
+              style={{ marginRight: 4 }}
+            />
+            <Text
+              style={[
+                styles.tabText,
+                { color: palette.text.secondary },
+                tab === 'returns' && [styles.tabTextActive, { color: palette.text.primary }],
+              ]}
+            >
+              Возвраты ({defectReturns?.length || 0})
             </Text>
           </TouchableOpacity>
         </View>
@@ -431,6 +595,57 @@ export default function SupplierDetailScreen() {
                 </View>
               </View>
             ))}
+          </>
+        )}
+
+        {tab === 'returns' && (
+          <>
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={openReturnDefect}
+            >
+              <Ionicons name="arrow-undo-outline" size={18} color={colors.primary[600]} />
+              <Text style={styles.actionBtnText}>Оформить возврат брака</Text>
+            </TouchableOpacity>
+
+            {(defectReturns || []).length === 0 && (
+              <View style={styles.emptyState}>
+                <Ionicons name="arrow-undo-outline" size={36} color={colors.gray[300]} />
+                <Text style={styles.emptyText}>Возвратов нет</Text>
+              </View>
+            )}
+
+            {(defectReturns || []).map((m) => {
+              // qty in stock_movements is negative for outflows; we
+              // render the absolute value because the "Возврат брака"
+              // header already conveys direction.
+              const qty = Math.abs(m.quantity);
+              const debtReduction = qty * (m.product?.costPrice ?? 0);
+              return (
+                <View key={m.id} style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+                  <View style={[styles.deliveryAccent, { backgroundColor: colors.orange[500] }]} />
+                  <View style={styles.paymentContent}>
+                    <View style={styles.paymentTop}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={[styles.paymentDate, { color: palette.text.primary }]} numberOfLines={1}>
+                          {m.product?.name || 'Товар удалён'}
+                        </Text>
+                        <Text style={[styles.commentText, { marginTop: 2 }]}>
+                          {formatDate(m.createdAt)} · {qty} шт
+                        </Text>
+                        {m.reason ? <Text style={styles.commentText}>{m.reason}</Text> : null}
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={[styles.paymentAmount, { color: colors.orange[600] }]}>
+                          −{formatMoney(debtReduction)}
+                        </Text>
+                        <Text style={[styles.commentText, { marginTop: 0 }]}>долг</Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
           </>
         )}
       </ScrollView>
@@ -574,7 +789,190 @@ export default function SupplierDetailScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {/* Return defective stock modal */}
+      <Modal
+        visible={returnDefectModalOpen}
+        onClose={() => setReturnDefectModalOpen(false)}
+        title="Возврат брака"
+      >
+        {/* Picker trigger — same UX as the delivery flow's "Добавить товар" */}
+        <TouchableOpacity
+          style={[styles.addItemBtn, { marginBottom: spacing[3] }]}
+          onPress={() => {
+            setReturnDefectModalOpen(false);
+            setTimeout(() => setDefectPickerOpen(true), 250);
+          }}
+        >
+          <Ionicons name={defectProduct ? 'swap-horizontal' : 'cube-outline'} size={18} color={colors.primary[600]} />
+          <Text style={styles.addItemText}>
+            {defectProduct ? `Товар: ${defectProduct.name}` : 'Выбрать товар из брака'}
+          </Text>
+        </TouchableOpacity>
+
+        {defectProduct ? (
+          <View
+            style={[styles.defectInfoBox, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            <View style={styles.defectInfoRow}>
+              <Text style={[styles.defectInfoLabel, { color: palette.text.tertiary }]}>На складе брака</Text>
+              <Text style={[styles.defectInfoValue, { color: palette.text.primary }]}>
+                {defectProduct.stock} шт
+              </Text>
+            </View>
+            <View style={styles.defectInfoRow}>
+              <Text style={[styles.defectInfoLabel, { color: palette.text.tertiary }]}>Закупочная (по умолчанию)</Text>
+              <Text style={[styles.defectInfoValue, { color: palette.text.primary }]}>
+                {formatMoney(defectProduct.costPrice ?? 0)}
+              </Text>
+            </View>
+          </View>
+        ) : null}
+
+        <View style={styles.formField}>
+          <Text style={styles.formLabel}>Количество *</Text>
+          <TextInput
+            value={defectQty}
+            onChangeText={setDefectQty}
+            style={styles.formInput}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={colors.gray[400]}
+            editable={!!defectProduct}
+          />
+          {defectProduct && defectProduct.stock > 0 ? (
+            <Text style={[styles.defectHint, { color: palette.text.tertiary }]}>
+              Максимум: {defectProduct.stock} шт
+            </Text>
+          ) : null}
+        </View>
+
+        <View style={styles.formField}>
+          <Text style={styles.formLabel}>Закупочная цена, ₽ *</Text>
+          <TextInput
+            value={defectPurchasePrice}
+            onChangeText={setDefectPurchasePrice}
+            style={styles.formInput}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={colors.gray[400]}
+            editable={!!defectProduct}
+          />
+        </View>
+
+        {/* Live preview of the resulting debt reduction. Keeps the owner
+            confident before they hit confirm. */}
+        {defectProduct && Number(defectQty) > 0 && Number(defectPurchasePrice) >= 0 ? (
+          <View style={[styles.defectTotalRow, { borderTopColor: palette.border.subtle }]}>
+            <Text style={[styles.defectTotalLabel, { color: palette.text.primary }]}>Уменьшение долга:</Text>
+            <Text style={[styles.defectTotalValue, { color: colors.orange[600] }]}>
+              −{formatMoney(Number(defectQty) * Number(defectPurchasePrice))}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={styles.formField}>
+          <Text style={styles.formLabel}>Комментарий</Text>
+          <TextInput
+            value={defectNote}
+            onChangeText={setDefectNote}
+            style={[styles.formInput, { height: 50, textAlignVertical: 'top' }]}
+            multiline
+            placeholder="Необязательно"
+            placeholderTextColor={colors.gray[400]}
+          />
+        </View>
+
+        <View style={styles.formActions}>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => setReturnDefectModalOpen(false)}>
+            <Text style={styles.cancelBtnText}>Отмена</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.submitBtn} onPress={handleReturnDefect}>
+            {returnDefectMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.submitBtnText}>Подтвердить возврат</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Defect-warehouse-scoped product picker. Different from the
+          deliveries picker (which uses ProductPickerModal + folder
+          navigation) because we already know the warehouse and want a
+          flat searchable list of what's available to return. */}
+      <DefectProductPickerModal
+        visible={defectPickerOpen}
+        onClose={() => {
+          setDefectPickerOpen(false);
+          setTimeout(() => setReturnDefectModalOpen(true), 250);
+        }}
+        products={defectProducts}
+        onSelect={onPickDefectProduct}
+        palette={palette}
+      />
     </View>
+  );
+}
+
+// ── DefectProductPickerModal ──────────────────────────────────────────
+// Lightweight searchable picker scoped to products that already live
+// in the defect warehouse. Kept inside this file because it's
+// supplier-specific UX and reuses the same <Modal> shell.
+function DefectProductPickerModal({
+  visible,
+  onClose,
+  products,
+  onSelect,
+  palette,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  products: Product[];
+  onSelect: (p: Product) => void;
+  palette: ReturnType<typeof useColors>;
+}) {
+  const [q, setQ] = useState('');
+  const filtered = q
+    ? products.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()))
+    : products;
+  return (
+    <Modal visible={visible} onClose={onClose} title="Товары на складе брака">
+      <TextInput
+        value={q}
+        onChangeText={setQ}
+        placeholder="Поиск по названию"
+        placeholderTextColor={colors.gray[400]}
+        style={[styles.formInput, { marginBottom: spacing[3] }]}
+      />
+      {filtered.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Ionicons name="cube-outline" size={36} color={colors.gray[300]} />
+          <Text style={styles.emptyText}>На складе брака ничего нет</Text>
+        </View>
+      ) : (
+        <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+          {filtered.map((p) => (
+            <TouchableOpacity
+              key={p.id}
+              style={[styles.defectPickerRow, { borderBottomColor: palette.border.subtle }]}
+              onPress={() => onSelect(p)}
+              activeOpacity={0.7}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.defectPickerName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {p.name}
+                </Text>
+                <Text style={[styles.defectPickerSub, { color: palette.text.tertiary }]}>
+                  {p.stock} шт · {formatMoney(p.costPrice ?? 0)}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+    </Modal>
   );
 }
 
@@ -597,6 +995,50 @@ const styles = StyleSheet.create({
     backgroundColor: colors.red[500],
   },
   quickPayText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
+  // Subdued pill — sits below the primary CTA in the visual hierarchy.
+  secondaryActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  secondaryActionText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  // Return-defect form helpers
+  defectInfoBox: {
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginBottom: spacing[4],
+    gap: 4,
+  },
+  defectInfoRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  defectInfoLabel: { fontSize: fontSize.xs },
+  defectInfoValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  defectHint: { fontSize: 11, marginTop: spacing[1] },
+  defectTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing[3],
+    borderTopWidth: 1,
+    marginBottom: spacing[3],
+  },
+  defectTotalLabel: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  defectTotalValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  defectPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  defectPickerName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  defectPickerSub: { fontSize: 11, marginTop: 2 },
   // Info card
   card: {
     backgroundColor: colors.white,

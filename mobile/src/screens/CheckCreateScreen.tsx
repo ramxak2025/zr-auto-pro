@@ -27,6 +27,7 @@ import {
   servicesApi,
   productsApi,
   warehouseCategoriesApi,
+  warehousesApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -47,9 +48,11 @@ import type {
   CheckServiceLine,
   CheckProductLine,
   PaymentMethod,
+  Warehouse,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
+import WarrantyBanner from '../components/WarrantyBanner';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -394,6 +397,12 @@ export default function CheckCreateScreen() {
   const [showServicePicker, setShowServicePicker] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [showMasterPicker, setShowMasterPicker] = useState<number | null>(null);
+  // Warehouse selection for the in-cash product picker. Null = «Все
+  // склады» (legacy behaviour — the picker shows main+brak+used pooled,
+  // same as before warehouses landed). State lives here so it survives
+  // a picker close/reopen during the same check.
+  const [pickerWarehouseId, setPickerWarehouseId] = useState<string | null>(null);
+  const [showWarehouseSheet, setShowWarehouseSheet] = useState(false);
 
   // Service search
   const [serviceSearch, setServiceSearch] = useState('');
@@ -456,6 +465,27 @@ export default function CheckCreateScreen() {
     placeholderData: (prev) => prev,
     staleTime: 5 * 60_000,
   });
+
+  // Warehouses for the in-cash picker switcher. Cached separately —
+  // identity-stable list, changes only when the owner edits warehouses.
+  const { data: warehouses } = useQuery<Warehouse[]>({
+    queryKey: ['warehouses'],
+    queryFn: async () => {
+      const res = await warehousesApi.list();
+      return res.data || [];
+    },
+    staleTime: 10 * 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  // Build a stable label for the warehouse switcher chip. When nothing is
+  // selected we still want a friendly hint ("Все склады") instead of an
+  // empty pill that would visually collapse.
+  const activeWarehouse = useMemo(
+    () => (pickerWarehouseId ? (warehouses || []).find((w) => w.id === pickerWarehouseId) : null),
+    [warehouses, pickerWarehouseId],
+  );
+  const warehouseChipLabel = activeWarehouse?.name || 'Все склады';
 
   // Pre-warm the products + categories cache as soon as the screen
   // mounts (rather than waiting for the picker to open). Net effect on
@@ -874,6 +904,11 @@ export default function CheckCreateScreen() {
                   </View>
                 )}
                 <LastVisitBadge clientId={selectedClient.id} carId={selectedCar?.id} />
+                {/* Active warranty for this client/car. Informational
+                    only — backend auto-redeems on check finalisation,
+                    so we render the same banner for edits of deferred
+                    checks too. Hidden when no claims are returned. */}
+                <WarrantyBanner clientId={selectedClient.id} carId={selectedCar?.id} />
               </View>
             ) : (
               <>
@@ -1426,7 +1461,76 @@ export default function CheckCreateScreen() {
         getCartQty={getProductCartQty}
         title={'Товары'}
         showCostPrice={canSeeCostPrice}
+        warehouseId={pickerWarehouseId}
+        warehouseSwitcher={{
+          value: pickerWarehouseId,
+          label: warehouseChipLabel,
+          onPress: () => setShowWarehouseSheet(true),
+        }}
       />
+
+      {/* Warehouse selector sheet — three options + "Все склады" fallback.
+          Used only by the cash product picker; state is local to this
+          screen so a brak/used selection doesn't leak into the standalone
+          Warehouse screen. */}
+      <Modal
+        visible={showWarehouseSheet}
+        onClose={() => setShowWarehouseSheet(false)}
+        title="Выбрать склад"
+      >
+        <TouchableOpacity
+          style={styles.warehouseOption}
+          onPress={() => {
+            setPickerWarehouseId(null);
+            setShowWarehouseSheet(false);
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="layers-outline" size={18} color={colors.primary[600]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.warehouseOptionName}>Все склады</Text>
+            <Text style={styles.warehouseOptionSub}>Сводный список товаров</Text>
+          </View>
+          {pickerWarehouseId === null ? (
+            <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />
+          ) : null}
+        </TouchableOpacity>
+        {(warehouses || []).map((w) => {
+          const iconName: keyof typeof Ionicons.glyphMap =
+            w.kind === 'defect'
+              ? 'warning-outline'
+              : w.kind === 'used'
+                ? 'cube-outline'
+                : 'home-outline';
+          const sub =
+            w.kind === 'defect'
+              ? 'Брак — можно продать со склада брака'
+              : w.kind === 'used'
+                ? 'Б/У — продажа подержанных деталей'
+                : 'Основной склад';
+          const active = pickerWarehouseId === w.id;
+          return (
+            <TouchableOpacity
+              key={w.id}
+              style={styles.warehouseOption}
+              onPress={() => {
+                setPickerWarehouseId(w.id);
+                setShowWarehouseSheet(false);
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name={iconName} size={18} color={colors.primary[600]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.warehouseOptionName}>{w.name}</Text>
+                <Text style={styles.warehouseOptionSub}>{sub}</Text>
+              </View>
+              {active ? (
+                <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />
+              ) : null}
+            </TouchableOpacity>
+          );
+        })}
+      </Modal>
     </View>
   );
 }
@@ -1798,6 +1902,18 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
   },
   emptyAddText: { fontSize: fontSize.sm, color: colors.gray[400] },
+  // Warehouse picker sheet rows — used by the in-cash product picker.
+  warehouseOption: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[1],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[100],
+  },
+  warehouseOptionName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  warehouseOptionSub: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
   // Discount
   discountRow: {
     flexDirection: 'row',

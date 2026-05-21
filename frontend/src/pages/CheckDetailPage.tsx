@@ -428,6 +428,64 @@ export default function CheckDetailPage() {
         </div>
       )}
 
+      {/* Warranty claims spawned by this check */}
+      {check.warrantyClaims && check.warrantyClaims.length > 0 && (
+        <div className="card overflow-hidden animate-fade-in-up" style={{ animationDelay: '440ms' }}>
+          <div className="px-4 py-3 sm:px-5 border-b border-amber-100 bg-amber-50/60">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-amber-600" />
+              <h2 className="text-base font-semibold text-amber-900">Гарантия выдана</h2>
+              <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">{check.warrantyClaims.length}</span>
+            </div>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {check.warrantyClaims.map((claim) => {
+              const expires = new Date(claim.expiresAt);
+              const now = new Date();
+              const used = !!claim.usedAt;
+              const expired = !used && expires < now;
+              return (
+                <div key={claim.id} className="px-4 py-3 sm:px-5 flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                        claim.kind === 'product' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {claim.kind === 'product' ? 'Товар' : 'Услуга'}
+                      </span>
+                      <p className="text-sm font-medium text-gray-900 truncate">{claim.itemName || '—'}</p>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Clock className="w-3 h-3 text-gray-400" />
+                      <span className="text-xs text-gray-500">{claim.warrantyDays} дн.</span>
+                      <span className="text-gray-300 text-xs">·</span>
+                      <span className="text-xs text-gray-500">
+                        до {format(expires, 'd MMM yyyy', { locale: ru })}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex-shrink-0 self-center">
+                    {used ? (
+                      <span className="text-[10px] font-semibold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                        Использована
+                      </span>
+                    ) : expired ? (
+                      <span className="text-[10px] font-semibold bg-red-100 text-red-600 px-2 py-0.5 rounded-full">
+                        Истекла
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-semibold bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
+                        Активна
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Summary & Payment */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Financial summary */}

@@ -23,6 +23,9 @@ import {
   createCallsApi,
   createEquipmentApi,
   createImportsApi,
+  createWarehousesApi,
+  createWarrantyApi,
+  createStockMovementsApi,
 } from '../../../shared/api/createServices';
 
 // Re-export all API request types for any file that imports them from here
@@ -63,6 +66,9 @@ export const publicReviewApi = createPublicReviewApi(api);
 export const callsApi = createCallsApi(api);
 export const equipmentApi = createEquipmentApi(api);
 export const importsApi = createImportsApi(api);
+export const warehousesApi = createWarehousesApi(api);
+export const warrantyApi = createWarrantyApi(api);
+export const stockMovementsApi = createStockMovementsApi(api);
 
 // --- Platform-specific: Image compression + Upload (uses Canvas API) ---
 

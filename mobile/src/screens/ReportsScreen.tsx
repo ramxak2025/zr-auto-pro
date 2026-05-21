@@ -74,6 +74,19 @@ export default function ReportsScreen() {
     placeholderData: (prev) => prev,
   });
 
+  // Отдельный запрос на агрегаты брака/списаний за тот же период. Бэкенд
+  // принимает `from` / `to` (а не `dateFrom` / `dateTo`), и значения
+  // совпадают с YYYY-MM-DD из основного фильтра выше.
+  const { data: defectWriteoff } = useQuery({
+    queryKey: ['defect-writeoff-report', dateFrom, dateTo],
+    queryFn: async () => {
+      const res = await reportsApi.defectWriteoff({ from: dateFrom, to: dateTo });
+      return res.data;
+    },
+    enabled: canView,
+    placeholderData: (prev) => prev,
+  });
+
   const handlePeriodChange = (p: string) => {
     setPeriod(p);
     const range = getDateRange(p);
@@ -252,6 +265,91 @@ export default function ReportsScreen() {
                 </View>
               </View>
               <Text style={styles.checkCount}>{report.checkCount}</Text>
+            </AnimatedCard>
+
+            {/* Defect + writeoff aggregates за тот же период. Сама секция
+                всегда показывается (даже на нулях) — владельцу важно
+                видеть, что данных нет, а не делать вид, что их не было.
+                Источник — reports/defect-writeoff из shared/api. */}
+            <AnimatedCard
+              index={4}
+              style={[styles.expCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <Text style={[styles.expTitle, { color: palette.text.tertiary }]}>БРАК И СПИСАНИЯ</Text>
+
+              <View style={styles.expRow}>
+                <View style={styles.expLeft}>
+                  <View style={[styles.expIcon, { backgroundColor: colors.amber[50] }]}>
+                    <Ionicons name="warning-outline" size={16} color={colors.amber[600]} />
+                  </View>
+                  <View>
+                    <Text style={[styles.expName, { color: palette.text.primary }]}>Перенос в брак</Text>
+                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
+                      {defectWriteoff?.defectQty ?? 0} шт
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
+                  {formatMoney(defectWriteoff?.defectValue ?? 0)}
+                </Text>
+              </View>
+
+              <View style={styles.expDivider} />
+
+              <View style={styles.expRow}>
+                <View style={styles.expLeft}>
+                  <View style={[styles.expIcon, { backgroundColor: colors.red[50] }]}>
+                    <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
+                  </View>
+                  <View>
+                    <Text style={[styles.expName, { color: palette.text.primary }]}>Списано всего</Text>
+                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
+                      {defectWriteoff?.writeoffQty ?? 0} шт
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
+                  {formatMoney(defectWriteoff?.writeoffValue ?? 0)}
+                </Text>
+              </View>
+
+              <View style={styles.expDivider} />
+
+              <View style={styles.expRow}>
+                <View style={styles.expLeft}>
+                  <View style={[styles.expIcon, { backgroundColor: colors.rose[50] }]}>
+                    <Ionicons name="receipt-outline" size={16} color={colors.rose[600]} />
+                  </View>
+                  <View>
+                    <Text style={[styles.expName, { color: palette.text.primary }]}>Списано в расходы</Text>
+                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
+                      {defectWriteoff?.writeoffExpensedQty ?? 0} шт
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
+                  {formatMoney(defectWriteoff?.writeoffExpensedValue ?? 0)}
+                </Text>
+              </View>
+
+              <View style={styles.expDivider} />
+
+              <View style={styles.expRow}>
+                <View style={styles.expLeft}>
+                  <View style={[styles.expIcon, { backgroundColor: colors.indigo[50] }]}>
+                    <Ionicons name="arrow-undo-outline" size={16} color={colors.indigo[600]} />
+                  </View>
+                  <View>
+                    <Text style={[styles.expName, { color: palette.text.primary }]}>Возврат поставщику</Text>
+                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
+                      {defectWriteoff?.returnedToSupplierQty ?? 0} шт
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
+                  {formatMoney(defectWriteoff?.returnedToSupplierValue ?? 0)}
+                </Text>
+              </View>
             </AnimatedCard>
           </>
         )}

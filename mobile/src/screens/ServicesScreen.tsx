@@ -84,6 +84,10 @@ export default function ServicesScreen() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [defaultPrice, setDefaultPrice] = useState('');
+  // Срок гарантии (дней) — необязательное поле. Пусто = без гарантии (null
+  // на бэке). Число > 0 — сколько дней действует гарантия на услугу после
+  // включения её в чек. Используется для авто-создания WarrantyClaim'ов.
+  const [warrantyDays, setWarrantyDays] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<PaginatedResponse<Service>>({
@@ -127,6 +131,7 @@ export default function ServicesScreen() {
     setName('');
     setCategory('');
     setDefaultPrice('');
+    setWarrantyDays('');
     setModalOpen(true);
   };
 
@@ -135,6 +140,9 @@ export default function ServicesScreen() {
     setName(s.name);
     setCategory(s.category || '');
     setDefaultPrice(String(s.defaultPrice));
+    // warrantyDays приходит как number | null — пустая строка означает «без
+    // гарантии», иначе показываем число дней.
+    setWarrantyDays(s.warrantyDays != null ? String(s.warrantyDays) : '');
     setModalOpen(true);
   }, []);
 
@@ -144,7 +152,17 @@ export default function ServicesScreen() {
   };
 
   const handleSubmit = () => {
-    const payload = { name, category: category || undefined, defaultPrice: Number(defaultPrice) || 0 };
+    // Парсим warrantyDays: пустая строка → null (нет гарантии). Число < 1
+    // тоже считаем «нет гарантии», чтобы не плодить мусорные WarrantyClaim'ы.
+    const trimmedWarranty = warrantyDays.trim();
+    const parsedWarranty = trimmedWarranty === '' ? null : Math.max(0, Math.floor(Number(trimmedWarranty) || 0));
+    const warrantyPayload = parsedWarranty && parsedWarranty > 0 ? parsedWarranty : null;
+    const payload = {
+      name,
+      category: category || undefined,
+      defaultPrice: Number(defaultPrice) || 0,
+      warrantyDays: warrantyPayload,
+    };
     if (editingService) {
       updateMutation.mutate({ id: editingService.id, data: payload });
     } else {
@@ -343,6 +361,17 @@ export default function ServicesScreen() {
             style={styles.formInput}
             keyboardType="numeric"
             placeholder="0"
+            placeholderTextColor={colors.gray[400]}
+          />
+        </View>
+        <View style={styles.formField}>
+          <Text style={styles.formLabel}>Срок гарантии (дней)</Text>
+          <TextInput
+            value={warrantyDays}
+            onChangeText={setWarrantyDays}
+            style={styles.formInput}
+            keyboardType="number-pad"
+            placeholder="напр. 30 (необязательно)"
             placeholderTextColor={colors.gray[400]}
           />
         </View>

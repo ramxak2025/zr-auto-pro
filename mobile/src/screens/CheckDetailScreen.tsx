@@ -110,6 +110,10 @@ export default function CheckDetailScreen() {
   // Безопасные локальные ссылки на массивы (list-payload может вернуть undefined).
   const services = check?.services ?? [];
   const products = check?.products ?? [];
+  // Выданные гарантии — берём из полного payload'а GET /checks/:id. List
+  // payload их не отдаёт, поэтому placeholder из ['checks-infinite'] не
+  // покажет секцию до подъезда детального запроса.
+  const warrantyClaims = check?.warrantyClaims ?? [];
 
   const { data: company } = useQuery<Tenant>({
     queryKey: ['my-company'],
@@ -501,6 +505,61 @@ export default function CheckDetailScreen() {
           </View>
         )}
 
+        {/* Выданные гарантии — секция отображается только если бэкенд
+            прислал warrantyClaims (полный GET /checks/:id). Имя позиции
+            берём из самого claim'а (itemName), fallback'имся на product /
+            service line из чека, если бэкенд имени не выдал. */}
+        {warrantyClaims.length > 0 && (
+          <View style={[styles.warrantyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <View style={styles.warrantyHeader}>
+              <View style={styles.warrantyHeaderIcon}>
+                <Ionicons name="shield-checkmark" size={15} color={colors.green[600]} />
+              </View>
+              <Text style={[styles.warrantyTitle, { color: palette.text.primary }]}>Гарантия выдана</Text>
+              <View style={styles.warrantyBadge}>
+                <Text style={styles.warrantyBadgeText}>{warrantyClaims.length}</Text>
+              </View>
+            </View>
+            {warrantyClaims.map((claim, idx) => {
+              // Резолвим название позиции в порядке: itemName с бэка →
+              // совпадение по productId/serviceId среди строк чека →
+              // дефолтная подпись по kind.
+              let displayName: string = claim.itemName || '';
+              if (!displayName) {
+                if (claim.kind === 'product' && claim.productId) {
+                  const match = products.find((p) => p.productId === claim.productId);
+                  if (match) displayName = match.name;
+                } else if (claim.kind === 'service' && claim.serviceId) {
+                  const match = services.find((s) => s.serviceId === claim.serviceId);
+                  if (match) displayName = match.name;
+                }
+              }
+              if (!displayName) {
+                displayName = claim.kind === 'product' ? 'Товар' : 'Услуга';
+              }
+              const expiry = new Date(claim.expiresAt);
+              const expiryLabel = `${String(expiry.getDate()).padStart(2, '0')}.${String(expiry.getMonth() + 1).padStart(2, '0')}.${expiry.getFullYear()}`;
+              return (
+                <View key={claim.id ?? idx} style={[styles.warrantyRow, idx > 0 && styles.warrantyRowBorder]}>
+                  <View style={styles.warrantyRowLeft}>
+                    <Ionicons
+                      name={claim.kind === 'product' ? 'cube-outline' : 'build-outline'}
+                      size={14}
+                      color={palette.text.tertiary}
+                    />
+                    <Text style={[styles.warrantyItemName, { color: palette.text.primary }]} numberOfLines={1}>
+                      {displayName}
+                    </Text>
+                  </View>
+                  <Text style={[styles.warrantyMeta, { color: palette.text.tertiary }]}>
+                    {claim.warrantyDays} дней — до {expiryLabel}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
         {/* Grand total — hero card */}
         <View style={styles.totalCard}>
           <LinearGradient
@@ -730,6 +789,54 @@ const styles = StyleSheet.create({
   },
   subtotalLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[500] },
   subtotalValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+
+  // Warranty issued card — compact iosCard style (matches other section
+  // cards on the screen). No gradient header; the green shield icon is
+  // enough signal that this is a guarantee block.
+  warrantyCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    overflow: 'hidden',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+  },
+  warrantyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingBottom: spacing[2],
+  },
+  warrantyHeaderIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: colors.green[50],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  warrantyTitle: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  warrantyBadge: {
+    backgroundColor: colors.green[50],
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+    minWidth: 24,
+    alignItems: 'center',
+  },
+  warrantyBadgeText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.green[700] },
+  warrantyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing[2],
+    gap: spacing[2],
+  },
+  warrantyRowBorder: { borderTopWidth: 1, borderTopColor: colors.gray[50] },
+  warrantyRowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: 1, minWidth: 0 },
+  warrantyItemName: { fontSize: 13, fontWeight: fontWeight.medium, color: colors.gray[900], flexShrink: 1 },
+  warrantyMeta: { fontSize: 11, color: colors.gray[500], fontWeight: fontWeight.medium },
 
   // Total card
   totalCard: {
