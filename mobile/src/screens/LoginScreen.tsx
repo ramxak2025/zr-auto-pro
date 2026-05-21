@@ -16,11 +16,13 @@ import { Button } from '../components/Button';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { formatPhone } from '../../../shared/validation/phone';
 
 export default function LoginScreen() {
   const { login } = useAuth();
+  const palette = useColors();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -94,7 +96,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
@@ -108,26 +110,34 @@ export default function LoginScreen() {
             <Animated.View style={[styles.logoWrap, { opacity: logoFade, transform: [{ scale: logoScale }] }]}>
               <CachedImage source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
             </Animated.View>
-            <Animated.Text style={[styles.subtitle, { opacity: logoFade }]}>Система управления автосервисом</Animated.Text>
+            <Animated.Text style={[styles.subtitle, { opacity: logoFade, color: palette.text.tertiary }]}>Система управления автосервисом</Animated.Text>
 
             {/* Phone */}
             <Animated.View style={[styles.fieldWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
-              <Text style={styles.label}>ТЕЛЕФОН</Text>
+              <Text style={[styles.label, { color: palette.text.secondary }]}>ТЕЛЕФОН</Text>
               <TextInput
                 value={phone}
                 onChangeText={handlePhoneChange}
                 placeholder="+7 (___) ___-__-__"
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
                 keyboardType="phone-pad"
                 autoComplete="tel"
-                style={[styles.input, phoneError ? styles.inputError : null]}
+                style={[
+                  styles.input,
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
+                  phoneError ? styles.inputError : null,
+                ]}
               />
               {phoneError ? <Text style={styles.errorText}>{phoneError}</Text> : null}
             </Animated.View>
 
             {/* Password */}
             <Animated.View style={[styles.fieldWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
-              <Text style={styles.label}>ПАРОЛЬ</Text>
+              <Text style={[styles.label, { color: palette.text.secondary }]}>ПАРОЛЬ</Text>
               <View style={styles.passwordWrap}>
                 <TextInput
                   value={password}
@@ -136,10 +146,19 @@ export default function LoginScreen() {
                     setPasswordError('');
                   }}
                   placeholder="Введите пароль"
-                  placeholderTextColor={colors.gray[400]}
+                  placeholderTextColor={palette.text.tertiary}
                   secureTextEntry={!showPassword}
                   autoComplete="password"
-                  style={[styles.input, styles.passwordInput, passwordError ? styles.inputError : null]}
+                  style={[
+                    styles.input,
+                    styles.passwordInput,
+                    {
+                      backgroundColor: palette.bg.muted,
+                      borderColor: palette.border.subtle,
+                      color: palette.text.primary,
+                    },
+                    passwordError ? styles.inputError : null,
+                  ]}
                 />
                 <TouchableOpacity
                   style={styles.eyeBtn}

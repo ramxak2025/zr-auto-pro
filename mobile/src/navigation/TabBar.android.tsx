@@ -2,43 +2,29 @@
  * TabBar — Android variant. Floating frosted-glass island with native
  * scrub gesture, iOS-style outline icons, and a squircle Касса CTA.
  *
- * Surface (matte glass):
- *   • `expo-blur` BlurView at `tint="light"`, intensity 80 — true
- *     native blur on Android 12+, translucent surface on older.
- *   • Faint warm surface tint on top so the bar still reads as a
- *     discrete surface on screens that have no contrast behind it.
- *   • Pill geometry (60pt × full-corner radius), 14pt side margins,
- *     soft drop shadow.
+ * Touch model (after build9 hot-fix):
+ *   • Per-tab `Pressable` handles the TAP. Pressables are the most
+ *     reliable RN touch primitive — they always fire, never get
+ *     starved by other gestures. One per tab, including the Касса
+ *     slot, so a static tap reliably navigates / triggers haptics.
+ *   • A SEPARATE Pan gesture sits OVER the entire bar via a
+ *     pass-through layer (zIndex above the row, but only ACTIVATES
+ *     after the user moves 10pt). Below that threshold, touches fall
+ *     through to the Pressable underneath. So a tap → Pressable, a
+ *     drag → Pan. They coexist cleanly without `Gesture.Race`, which
+ *     in build9 was eating taps.
  *
- * Icons (clean, NOT garishly filled):
- *   • Outline Lucide glyphs at fixed stroke-width. We DO NOT switch
- *     fill on focus — that was the "completely flooded" look the
- *     owner called ugly. Focus is communicated entirely by the
- *     selection capsule plus a tint colour swap + small scale; the
- *     icon stays a crisp outline at all times.
- *   • Active stroke = 2.2 (slightly bolder), inactive = 1.7.
- *
- * Selection capsule:
- *   • Rounded RECTANGLE (radius 14), translucent primary[100].
- *   • Springs into place via a single Reanimated shared value.
- *
- * Pan gesture (native scrub):
- *   • `Gesture.Pan().minDistance(0).runOnJS(false)` — runs entirely
- *     on the UI thread. Finger drives the capsule directly through
- *     `capsuleX` shared value, with NO bridge round-trip.
- *   • Tap is composed via `Gesture.Race(tap, pan)` so a static touch
- *     still fires the tab press immediately, no minimum drag distance.
- *   • Selection haptic fires as the capsule centre crosses a new
- *     slot — same rhythmic feedback iOS gives for keyboard-cursor
- *     scrub.
- *   • Release: snap capsule with spring, navigate to the slot under
- *     the finger (skipping the Касса slot — that's a discrete CTA).
+ * Pan does the iOS-style scrub:
+ *   • Capsule tracks the finger on the UI thread.
+ *   • Selection-haptic on every slot crossing.
+ *   • Release → spring snap to nearest slot + navigate (skipping
+ *     Касса — it has its own discrete CTA).
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { BlurView } from 'expo-blur';
 import { House, Package, Receipt, LayoutGrid, type LucideIcon } from 'lucide-react-native';
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
@@ -51,10 +37,10 @@ import { haptic } from '../platform/haptics';
 import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 import { KassaButton } from './KassaButton';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
-// ── Floating island geometry (mirrors TabBar.ios.tsx) ────────────────────
 const BAR_HEIGHT = 60;
 const HORIZONTAL_MARGIN = 14;
 const TOP_LIFT = 6;
@@ -65,8 +51,10 @@ const CAPSULE_RADIUS = 14;
 const CAPSULE_INSET_V = 6;
 const CAPSULE_PADDING_H = 6;
 
-// Direct Lucide → tab routing. We pick line-art icons with consistent
-// visual weight so the bar reads as a single family.
+// Minimum drag distance before pan activates. Below this, the touch
+// is treated as a tap and the per-tab Pressable handles it.
+const PAN_MIN_DISTANCE = 10;
+
 const TAB_ICONS: Record<string, LucideIcon> = {
   Dashboard: House,
   Products: Package,
@@ -77,30 +65,20 @@ const TAB_ICONS: Record<string, LucideIcon> = {
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 8);
+  const palette = useColors();
 
   const focusedIndex = TAB_DEFINITIONS.findIndex(
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
   );
   const safeFocusedIndex = focusedIndex < 0 ? 0 : focusedIndex;
 
-  // Measured row width — needed to translate the capsule into the
-  // right slot. Set on the GestureDetector's child via onLayout.
   const [rowWidth, setRowWidth] = React.useState(0);
   const slotWidth = rowWidth / TAB_DEFINITIONS.length;
 
-  // The currently visible capsule X (px from row's left).
   const capsuleX = useSharedValue(0);
-  // Which slot the capsule centre currently sits over — used to fire
-  // a selection haptic on every boundary crossing during pan.
   const lastSlot = useSharedValue(safeFocusedIndex);
-  // Whether the user is currently dragging — when true, suppress the
-  // spring-back animation that the `safeFocusedIndex` effect would
-  // otherwise trigger on every render.
   const dragging = useSharedValue(false);
 
-  // Snap to the focused tab whenever it changes (after navigation or
-  // initial layout). If the user is currently dragging, leave the
-  // capsule under their finger — onEnd will spring it home.
   React.useEffect(() => {
     if (rowWidth === 0) return;
     if (dragging.value) return;
@@ -131,14 +109,14 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     haptic('select');
   }, []);
 
-  // Pan — drives the capsule directly on the UI thread. minDistance(0)
-  // means the gesture activates immediately on touch (no dead zone),
-  // so a slow drag from the very first touch tracks the finger.
+  // Pan only — taps are handled by the Pressables underneath this
+  // layer. minDistance=10 means a tap (≤10pt of movement) never
+  // triggers pan, so the Pressable receives the touch as expected.
   const panGesture = React.useMemo(
     () =>
       Gesture.Pan()
-        .minDistance(0)
-        .onBegin(() => {
+        .minDistance(PAN_MIN_DISTANCE)
+        .onStart(() => {
           'worklet';
           dragging.value = true;
         })
@@ -160,8 +138,6 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
           const idx = Math.round(e.x / slotWidth);
           const clamped = Math.max(0, Math.min(TAB_DEFINITIONS.length - 1, idx));
           const def = TAB_DEFINITIONS[clamped];
-          // If we landed over the Касса slot, snap back without
-          // navigating — Касса has its own dedicated tap target.
           if (def && !def.isKassa) {
             runOnJS(navigateToIndex)(clamped);
           } else {
@@ -184,52 +160,52 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     ],
   );
 
-  // Tap — fires immediately on a static touch (no minimum drag).
-  // Composed with pan via Race: whichever wins first handles it,
-  // and a brief touch with no movement wins as a tap.
-  const tapGesture = React.useMemo(
-    () =>
-      Gesture.Tap()
-        .maxDuration(220)
-        .onEnd((e) => {
-          'worklet';
-          if (rowWidth === 0 || slotWidth === 0) return;
-          const idx = Math.floor(e.x / slotWidth);
-          const clamped = Math.max(0, Math.min(TAB_DEFINITIONS.length - 1, idx));
-          const def = TAB_DEFINITIONS[clamped];
-          if (!def) return;
-          if (def.isKassa) {
-            runOnJS(haptic)('impact');
-          }
-          runOnJS(navigateToIndex)(clamped);
-        }),
-    [rowWidth, slotWidth, navigateToIndex],
-  );
-
-  const combinedGesture = React.useMemo(
-    () => Gesture.Race(panGesture, tapGesture),
-    [panGesture, tapGesture],
-  );
-
   const capsuleStyle = useAnimatedStyle(() => ({
     width: slotWidth - CAPSULE_PADDING_H * 2,
     transform: [{ translateX: capsuleX.value + CAPSULE_PADDING_H }],
   }));
+
+  // Theme-aware surface tones. The bar uses BlurView underneath and a
+  // light overlay on top; both are tuned per mode so the bar reads as
+  // a discrete material in both light and dark contexts.
+  const blurTint = palette.bg.canvas === '#0a0d14' ? 'dark' : 'light';
+  const surfaceTint = palette.bg.canvas === '#0a0d14'
+    ? 'rgba(20, 26, 37, 0.65)' // dark mode — sit slightly above canvas
+    : 'rgba(255, 255, 255, 0.45)';
+  const rim = palette.bg.canvas === '#0a0d14'
+    ? 'rgba(255, 255, 255, 0.06)'
+    : 'rgba(255, 255, 255, 0.95)';
+  const islandBorder = palette.bg.canvas === '#0a0d14'
+    ? 'rgba(255, 255, 255, 0.08)'
+    : 'rgba(15, 23, 42, 0.08)';
 
   return (
     <View
       pointerEvents="box-none"
       style={[styles.wrapper, { paddingTop: TOP_LIFT, paddingBottom: safeBottom + BOTTOM_LIFT }]}
     >
-      <View style={[styles.island, { height: BAR_HEIGHT }]}>
-        <BlurView intensity={80} tint="light" style={StyleSheet.absoluteFill} />
-        <View style={styles.surfaceTint} pointerEvents="none" />
-        <View style={styles.topRim} pointerEvents="none" />
+      <View style={[styles.island, { height: BAR_HEIGHT, borderColor: islandBorder }]}>
+        <BlurView intensity={80} tint={blurTint} style={StyleSheet.absoluteFill} />
+        <View style={[styles.surfaceTint, { backgroundColor: surfaceTint }]} pointerEvents="none" />
+        <View style={[styles.topRim, { backgroundColor: rim }]} pointerEvents="none" />
 
         {/* Selection capsule behind icons. */}
-        <Animated.View style={[styles.capsule, capsuleStyle]} pointerEvents="none" />
+        <Animated.View
+          style={[
+            styles.capsule,
+            capsuleStyle,
+            {
+              backgroundColor: palette.accent.primarySoft,
+              borderColor: palette.bg.canvas === '#0a0d14' ? 'rgba(96, 165, 250, 0.25)' : 'rgba(37, 99, 235, 0.15)',
+            },
+          ]}
+          pointerEvents="none"
+        />
 
-        <GestureDetector gesture={combinedGesture}>
+        {/* Pan wraps the row; Pressables INSIDE the row receive taps
+            natively because Pan's minDistance(10) keeps it from
+            activating on static touches. Tap → Pressable. Drag → Pan. */}
+        <GestureDetector gesture={panGesture}>
           <View style={styles.row} onLayout={(e) => setRowWidth(e.nativeEvent.layout.width)}>
             {TAB_DEFINITIONS.map((tab) => {
               const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
@@ -237,13 +213,44 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
 
               if (tab.isKassa) {
                 return (
-                  <View key={tab.routeName} style={styles.kassaSlot}>
+                  <Pressable
+                    key={tab.routeName}
+                    style={styles.kassaSlot}
+                    onPress={() => {
+                      haptic('impact');
+                      navigation.navigate(tab.routeName as never);
+                    }}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={tab.label}
+                  >
                     <KassaButton />
-                  </View>
+                  </Pressable>
                 );
               }
 
-              return <TabItem key={tab.routeName} routeName={tab.routeName} label={tab.label} focused={focused} />;
+              const onPress = () => {
+                const event = navigation.emit({
+                  type: 'tabPress',
+                  target: state.routes[routeIndex]?.key ?? tab.routeName,
+                  canPreventDefault: true,
+                });
+                if (!focused && !event.defaultPrevented) {
+                  haptic('tap');
+                  navigation.navigate(tab.routeName as never);
+                }
+              };
+
+              return (
+                <TabItem
+                  key={tab.routeName}
+                  routeName={tab.routeName}
+                  label={tab.label}
+                  focused={focused}
+                  onPress={onPress}
+                  palette={palette}
+                />
+              );
             })}
           </View>
         </GestureDetector>
@@ -256,9 +263,11 @@ interface TabItemProps {
   routeName: string;
   label: string;
   focused: boolean;
+  onPress: () => void;
+  palette: ReturnType<typeof useColors>;
 }
 
-function TabItem({ routeName, label, focused }: TabItemProps) {
+function TabItem({ routeName, label, focused, onPress, palette }: TabItemProps) {
   const focusValue = useSharedValue(focused ? 1 : 0);
   React.useEffect(() => {
     focusValue.value = withSpring(focused ? 1 : 0, SPRING_TIGHT);
@@ -269,18 +278,21 @@ function TabItem({ routeName, label, focused }: TabItemProps) {
   }));
 
   const Cmp = TAB_ICONS[routeName];
-  const tint = focused ? colors.primary[700] : colors.gray[500];
+  const tint = focused ? palette.accent.primaryText : palette.text.secondary;
 
   return (
-    <View style={styles.item} pointerEvents="none">
+    <Pressable
+      style={styles.item}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: focused }}
+    >
       <Animated.View style={iconStyle}>
         {Cmp ? (
           <Cmp
             size={22}
             color={tint}
-            // OUTLINE-only icons — the previous "filled when active"
-            // look read as garish on Android. Focus is conveyed by
-            // the capsule + colour swap + small scale.
             strokeWidth={focused ? 2.2 : 1.7}
             fill="none"
           />
@@ -296,7 +308,7 @@ function TabItem({ routeName, label, focused }: TabItemProps) {
       >
         {label}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -313,7 +325,6 @@ const styles = StyleSheet.create({
     borderRadius: CORNER_RADIUS,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(15, 23, 42, 0.08)',
     elevation: 10,
     shadowColor: '#000',
     shadowOpacity: 0.12,
@@ -323,7 +334,6 @@ const styles = StyleSheet.create({
   },
   surfaceTint: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255, 255, 255, 0.45)',
   },
   topRim: {
     position: 'absolute',
@@ -331,7 +341,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
   },
   row: {
     flex: 1,
@@ -352,7 +361,6 @@ const styles = StyleSheet.create({
     borderRadius: CAPSULE_RADIUS,
     backgroundColor: colors.primary[100],
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(37, 99, 235, 0.15)',
   },
   label: {
     marginTop: 1,

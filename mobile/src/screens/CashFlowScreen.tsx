@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
@@ -74,6 +75,7 @@ export default function CashFlowScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { isRole } = useAuth();
+  const palette = useColors();
   const canFilterByMaster = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
@@ -198,7 +200,7 @@ export default function CashFlowScreen() {
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       {/* Унифицированная iOS-шапка — единый стиль с Расписанием/Журналом. */}
       <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
 

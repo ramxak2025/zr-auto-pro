@@ -17,6 +17,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import AnimatedCard from '../components/AnimatedCard';
@@ -109,6 +110,7 @@ export default function SalaryScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user, isRole } = useAuth();
+  const palette = useColors();
   const canManagePayments = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
   const tabBarHeight = useTabBarHeight();
 
@@ -218,7 +220,7 @@ export default function SalaryScreen() {
   const goToToday = () => setSelectedMonth(new Date());
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Зарплата" onBack={() => navigation.goBack()} />
 
       {/* Month Navigation */}

@@ -29,6 +29,7 @@ import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { User, TodayEmployeeStatus, EmployeeRanking } from '../../../shared/types';
@@ -175,6 +176,7 @@ export default function EmployeesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user: me, hasPermission } = useAuth();
+  const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -314,7 +316,7 @@ export default function EmployeesScreen() {
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Сотрудники"
         subtitle={users === undefined ? undefined : `На смене: ${onSmena} из ${sortedUsers.length}`}

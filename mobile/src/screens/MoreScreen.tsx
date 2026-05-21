@@ -17,6 +17,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { uploadsApi, authApi, subscriptionApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -235,9 +236,20 @@ interface MenuRowProps {
   onPress: () => void;
   locked: boolean;
   showDivider: boolean;
+  labelColor: string;
+  descColor: string;
+  separatorColor: string;
 }
 
-const MenuRow = React.memo(function MenuRow({ item, onPress, locked, showDivider }: MenuRowProps) {
+const MenuRow = React.memo(function MenuRow({
+  item,
+  onPress,
+  locked,
+  showDivider,
+  labelColor,
+  descColor,
+  separatorColor,
+}: MenuRowProps) {
   return (
     <>
       <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.55}>
@@ -245,10 +257,13 @@ const MenuRow = React.memo(function MenuRow({ item, onPress, locked, showDivider
           <Ionicons name={item.icon} size={20} color={locked ? colors.gray[400] : item.iconColor} />
         </View>
         <View style={styles.menuTextWrap}>
-          <Text style={[styles.menuLabel, locked && { color: colors.gray[400] }]} numberOfLines={1}>
+          <Text
+            style={[styles.menuLabel, { color: locked ? colors.gray[400] : labelColor }]}
+            numberOfLines={1}
+          >
             {item.label}
           </Text>
-          <Text style={styles.menuDesc} numberOfLines={1}>
+          <Text style={[styles.menuDesc, { color: descColor }]} numberOfLines={1}>
             {item.description}
           </Text>
         </View>
@@ -258,7 +273,7 @@ const MenuRow = React.memo(function MenuRow({ item, onPress, locked, showDivider
           <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
         )}
       </TouchableOpacity>
-      {showDivider && <View style={styles.separator} />}
+      {showDivider && <View style={[styles.separator, { backgroundColor: separatorColor }]} />}
     </>
   );
 });
@@ -266,6 +281,7 @@ const MenuRow = React.memo(function MenuRow({ item, onPress, locked, showDivider
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
   const { user, logout, hasPermission, refreshUser } = useAuth();
+  const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [uploading, setUploading] = useState(false);
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
@@ -331,7 +347,7 @@ export default function MoreScreen() {
   }, [cardFade, cardTranslate]);
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Ещё" />
       <ScrollView
         contentContainerStyle={[
@@ -347,7 +363,15 @@ export default function MoreScreen() {
       >
         {/* Identity card — compact iOS Settings-style profile cell */}
         <Animated.View
-          style={[styles.userCard, { opacity: cardFade, transform: [{ translateY: cardTranslate }] }]}
+          style={[
+            styles.userCard,
+            {
+              backgroundColor: palette.bg.card,
+              borderColor: palette.border.subtle,
+              opacity: cardFade,
+              transform: [{ translateY: cardTranslate }],
+            },
+          ]}
         >
           <View style={styles.userRow}>
             <View style={styles.avatarWrap}>
@@ -372,7 +396,7 @@ export default function MoreScreen() {
               </TouchableOpacity>
             </View>
             <View style={{ flex: 1, gap: 4 }}>
-              <Text style={styles.userName} numberOfLines={1}>
+              <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
                 {user?.fullName || 'User'}
               </Text>
               <View style={[styles.roleBadge, { backgroundColor: badgeColor.bg }]}>
@@ -389,8 +413,15 @@ export default function MoreScreen() {
 
           return (
             <View key={section.title} style={styles.section}>
-              <Text style={[iosSectionLabel, styles.sectionTitle]}>{section.title}</Text>
-              <View style={styles.menuCard}>
+              <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
+                {section.title}
+              </Text>
+              <View
+                style={[
+                  styles.menuCard,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                ]}
+              >
                 {visibleItems.map((item, idx) => (
                   <MenuRow
                     key={item.screen}
@@ -398,6 +429,9 @@ export default function MoreScreen() {
                     locked={isFeatureLocked(item.featureKey)}
                     showDivider={idx < visibleItems.length - 1}
                     onPress={() => navigation.navigate(item.screen)}
+                    labelColor={palette.text.primary}
+                    descColor={palette.text.secondary}
+                    separatorColor={palette.border.subtle}
                   />
                 ))}
               </View>
@@ -406,7 +440,14 @@ export default function MoreScreen() {
         })}
 
         {/* Logout */}
-        <TouchableOpacity style={styles.logoutBtn} onPress={logout} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={[
+            styles.logoutBtn,
+            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          ]}
+          onPress={logout}
+          activeOpacity={0.7}
+        >
           <Ionicons name="log-out-outline" size={18} color={colors.red[600]} />
           <Text style={styles.logoutText}>Выйти из аккаунта</Text>
         </TouchableOpacity>

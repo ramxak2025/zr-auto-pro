@@ -14,6 +14,7 @@ import { productsApi } from '../api/services';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import SearchInput from '../components/SearchInput';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Product } from '../../../shared/types';
@@ -35,6 +36,7 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
@@ -98,15 +100,15 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   };
 
   const renderItem = ({ item }: { item: Product }) => (
-    <View style={styles.row}>
+    <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
       <View style={styles.iconBox}>
         <Ionicons name="trash-outline" size={20} color={colors.rose[500]} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.name} numberOfLines={1}>
+        <Text style={[styles.name, { color: palette.text.primary }]} numberOfLines={1}>
           {item.name}
         </Text>
-        <Text style={styles.sub} numberOfLines={1}>
+        <Text style={[styles.sub, { color: palette.text.tertiary }]} numberOfLines={1}>
           {item.category || 'Без папки'}
           {'  ·  '}
           {formatMoney(item.sellPrice)}
@@ -130,8 +132,8 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   );
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+      <View style={[styles.header, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
         <TouchableOpacity onPress={() => (onClose ? onClose() : navigation.goBack())} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
@@ -139,7 +141,7 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
           <View style={styles.headerIcon}>
             <Ionicons name="trash-bin-outline" size={16} color={colors.rose[600]} />
           </View>
-          <Text style={styles.title}>Корзина склада</Text>
+          <Text style={[styles.title, { color: palette.text.primary }]}>Корзина склада</Text>
         </View>
         <View style={{ width: 40 }} />
       </View>
@@ -166,7 +168,7 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
           />
-          <View style={styles.footer}>
+          <View style={[styles.footer, { backgroundColor: palette.bg.card, borderTopColor: palette.border.subtle }]}>
             <TouchableOpacity style={styles.emptyBtn} onPress={confirmEmpty} disabled={emptyMut.isPending}>
               <Ionicons name="trash" size={16} color={colors.red[600]} />
               <Text style={styles.emptyBtnText}>

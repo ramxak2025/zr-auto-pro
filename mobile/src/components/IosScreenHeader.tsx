@@ -3,7 +3,8 @@ import { View, StyleSheet, Pressable, ViewStyle, StyleProp, Platform } from 'rea
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
-import { colors, spacing } from '../theme';
+import { spacing } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 
 /**
  * IosScreenHeader — shared top-bar treatment for every screen.
@@ -59,16 +60,12 @@ export default function IosScreenHeader({
   leading,
   trailing,
   showDivider = false,
-  bg = 'transparent',
+  bg,
   centerTitle = false,
   style,
 }: IosScreenHeaderProps) {
   const insets = useSafeAreaInsets();
-  // Android: Material 3 small top app bar uses an explicit separator
-  // and a left-aligned title. Force these defaults on Android unless
-  // the caller explicitly opted in to centered (some screens use
-  // `centerTitle` deliberately for symmetry with their action button
-  // arrangement; we respect that).
+  const palette = useColors();
   const isAndroid = Platform.OS === 'android';
   const effectiveShowDivider = isAndroid ? true : showDivider;
   const effectiveCenterTitle = isAndroid ? false : centerTitle;
@@ -79,11 +76,11 @@ export default function IosScreenHeader({
     <Pressable
       onPress={onBack}
       hitSlop={10}
-      style={styles.iconBtn}
+      style={[styles.iconBtn, { backgroundColor: palette.bg.muted }]}
       accessibilityRole="button"
       accessibilityLabel="Назад"
     >
-      <Ionicons name="chevron-back" size={20} color={colors.gray[800]} />
+      <Ionicons name="chevron-back" size={20} color={palette.text.primary} />
     </Pressable>
   ) : (
     <View style={styles.iconBtnPlaceholder} />
@@ -96,10 +93,10 @@ export default function IosScreenHeader({
       style={[
         styles.wrap,
         {
-          backgroundColor: bg,
+          backgroundColor: bg ?? 'transparent',
           paddingTop: insets.top + spacing[2],
           borderBottomWidth: effectiveShowDivider ? StyleSheet.hairlineWidth : 0,
-          borderBottomColor: effectiveShowDivider ? colors.gray[200] : 'transparent',
+          borderBottomColor: effectiveShowDivider ? palette.border.subtle : 'transparent',
         },
         style,
       ]}
@@ -107,11 +104,11 @@ export default function IosScreenHeader({
       <View style={[styles.row, effectiveCenterTitle && styles.rowCenter]}>
         {leadingNode}
         <View style={[styles.center, effectiveCenterTitle && styles.centerCentered]}>
-          <Text variant="bodyEmph" numberOfLines={1} style={styles.title}>
+          <Text variant="bodyEmph" numberOfLines={1} style={[styles.title, { color: palette.text.primary }]}>
             {title}
           </Text>
           {subtitle ? (
-            <Text variant="caption" numberOfLines={1} style={styles.subtitle}>
+            <Text variant="caption" numberOfLines={1} style={[styles.subtitle, { color: palette.text.secondary }]}>
               {subtitle}
             </Text>
           ) : null}
@@ -144,19 +141,16 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 17,
     fontWeight: '600',
-    color: colors.gray[900],
     letterSpacing: -0.4,
   },
   subtitle: {
     fontSize: 12,
-    color: colors.gray[500],
     marginTop: 1,
   },
   iconBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.gray[100],
     alignItems: 'center',
     justifyContent: 'center',
   },

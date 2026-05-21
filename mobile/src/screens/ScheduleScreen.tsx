@@ -34,6 +34,7 @@ import { useNavigation } from '@react-navigation/native';
 import { openEmployee } from '../navigation/entityLinks';
 import { scheduleApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
@@ -2276,6 +2277,7 @@ function SettingsTab() {
 export default function ScheduleScreen() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
+  const palette = useColors();
   const isAdmin = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   const [tab, setTab] = useState<TabType>('grid');
   // Single source of truth for the schedule month — provided to GridTab
@@ -2348,7 +2350,7 @@ export default function ScheduleScreen() {
 
   return (
     <ScheduleMonthCtx.Provider value={monthCtxValue}>
-      <View style={styles.safe}>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         {/* Unified iOS header — same component used across screens. */}
         <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
 

@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { marketingApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -718,6 +719,7 @@ export default function MarketingScreen() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [refreshing, setRefreshing] = useState(false);
@@ -741,7 +743,7 @@ export default function MarketingScreen() {
   };
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Маркетинг" onBack={() => navigation.goBack()} />
 
       {/* Tabs */}

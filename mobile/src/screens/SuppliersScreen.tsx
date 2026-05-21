@@ -18,6 +18,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
@@ -129,6 +130,7 @@ export default function SuppliersScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission, isRole } = useAuth();
+  const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -266,7 +268,7 @@ export default function SuppliersScreen() {
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Поставщики"
         onBack={() => navigation.goBack()}

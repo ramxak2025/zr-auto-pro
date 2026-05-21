@@ -737,9 +737,6 @@ function OwnerAnalyticsChart() {
   const displayChecks = selPoint ? selPoint.checkCount || 0 : totalChecks;
   const displayAvg = selPoint && selPoint.checkCount > 0 ? selPoint.revenue / selPoint.checkCount : null;
 
-  const TOOLTIP_W = 132;
-  const tooltipLeft = Math.max(0, Math.min(svgW - TOOLTIP_W, selX - TOOLTIP_W / 2));
-
   const formatPointDate = (iso: string): string => {
     if (period === 'year') {
       const [y, m] = iso.split('-');
@@ -865,22 +862,12 @@ function OwnerAnalyticsChart() {
               )}
             </Svg>
 
-            {selPoint !== null && (
-              <View
-                style={[styles.scrubTooltipLight, { left: tooltipLeft, width: TOOLTIP_W }]}
-                pointerEvents="none"
-              >
-                <Text style={styles.scrubTooltipDateLight}>{formatPointDate(selPoint.date)}</Text>
-                <View style={styles.scrubTooltipRow}>
-                  <View style={[styles.scrubDot, { backgroundColor: colors.primary[600] }]} />
-                  <Text style={styles.scrubTooltipValueLight}>{formatMoney(selPoint.revenue || 0)}</Text>
-                </View>
-                <View style={styles.scrubTooltipRow}>
-                  <View style={[styles.scrubDot, { backgroundColor: colors.cyan[600] }]} />
-                  <Text style={styles.scrubTooltipValueLightSm}>{formatMoney(selPoint.profit || 0)}</Text>
-                </View>
-              </View>
-            )}
+            {/* The floating tooltip that previously overlaid the scrubbed
+                point (date + revenue + profit) was removed per owner —
+                the exact same numbers are already displayed in the stats
+                row just below the chart, so the overlay was duplicating
+                information and obscuring the curve. The scrub line +
+                circles remain to indicate which point is selected. */}
           </View>
 
           {/* X-axis ticks. Each label is positioned absolutely so its
@@ -1935,6 +1922,7 @@ function MasterDashboard() {
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
   const { user } = useAuth();
+  const { palette } = useThemeMode();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const insetsTop = useSafeAreaInsets().top;
@@ -1983,7 +1971,7 @@ export default function DashboardScreen() {
   return (
     /* Edge-to-edge wrapper — gray-50 canvas flows under the glass tab bar.
        No SafeAreaView frame; insetsTop is applied inline to scroll content. */
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[

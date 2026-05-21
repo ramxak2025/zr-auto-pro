@@ -19,6 +19,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import ProductPickerModal from '../components/ProductPickerModal';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { Supplier, Delivery, SupplierPayment, Product } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -45,6 +46,7 @@ export default function SupplierDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const palette = useColors();
   const { id } = route.params;
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'deliveries' | 'payments'>('deliveries');
@@ -191,7 +193,7 @@ export default function SupplierDetailScreen() {
   if (!supplier) return <Text style={{ padding: 20, textAlign: 'center' }}>Поставщик не найден</Text>;
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title={supplier.name} onBack={() => navigation.goBack()} />
 
       <ScrollView
@@ -241,49 +243,61 @@ export default function SupplierDetailScreen() {
 
         {/* Info */}
         {(supplier.phone || supplier.contactPerson) && (
-          <View style={styles.card}>
+          <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             {supplier.contactPerson && (
               <View style={styles.infoRow}>
-                <Ionicons name="person-outline" size={16} color={colors.gray[400]} />
-                <Text style={styles.infoText}>{supplier.contactPerson}</Text>
+                <Ionicons name="person-outline" size={16} color={palette.text.tertiary} />
+                <Text style={[styles.infoText, { color: palette.text.primary }]}>{supplier.contactPerson}</Text>
               </View>
             )}
             {supplier.phone && (
               <View style={styles.infoRow}>
-                <Ionicons name="call-outline" size={16} color={colors.gray[400]} />
-                <Text style={styles.infoText}>{formatPhone(supplier.phone)}</Text>
+                <Ionicons name="call-outline" size={16} color={palette.text.tertiary} />
+                <Text style={[styles.infoText, { color: palette.text.primary }]}>{formatPhone(supplier.phone)}</Text>
               </View>
             )}
           </View>
         )}
 
         {/* Tabs */}
-        <View style={styles.tabRow}>
+        <View style={[styles.tabRow, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
-            style={[styles.tabBtn, tab === 'deliveries' && styles.tabBtnActive]}
+            style={[styles.tabBtn, tab === 'deliveries' && styles.tabBtnActive, tab === 'deliveries' && { backgroundColor: palette.bg.card }]}
             onPress={() => setTab('deliveries')}
           >
             <Ionicons
               name="cube-outline"
               size={15}
-              color={tab === 'deliveries' ? colors.primary[600] : colors.gray[400]}
+              color={tab === 'deliveries' ? colors.primary[600] : palette.text.tertiary}
               style={{ marginRight: 4 }}
             />
-            <Text style={[styles.tabText, tab === 'deliveries' && styles.tabTextActive]}>
+            <Text
+              style={[
+                styles.tabText,
+                { color: palette.text.secondary },
+                tab === 'deliveries' && [styles.tabTextActive, { color: palette.text.primary }],
+              ]}
+            >
               Поставки ({deliveries?.length || 0})
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tabBtn, tab === 'payments' && styles.tabBtnActive]}
+            style={[styles.tabBtn, tab === 'payments' && styles.tabBtnActive, tab === 'payments' && { backgroundColor: palette.bg.card }]}
             onPress={() => setTab('payments')}
           >
             <Ionicons
               name="cash-outline"
               size={15}
-              color={tab === 'payments' ? colors.primary[600] : colors.gray[400]}
+              color={tab === 'payments' ? colors.primary[600] : palette.text.tertiary}
               style={{ marginRight: 4 }}
             />
-            <Text style={[styles.tabText, tab === 'payments' && styles.tabTextActive]}>
+            <Text
+              style={[
+                styles.tabText,
+                { color: palette.text.secondary },
+                tab === 'payments' && [styles.tabTextActive, { color: palette.text.primary }],
+              ]}
+            >
               Платежи ({payments?.length || 0})
             </Text>
           </TouchableOpacity>
@@ -315,7 +329,7 @@ export default function SupplierDetailScreen() {
               return (
                 <TouchableOpacity
                   key={d.id}
-                  style={styles.deliveryCard}
+                  style={[styles.deliveryCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
                   onPress={() => setExpandedDelivery(isExpanded ? null : d.id)}
                   activeOpacity={0.7}
                 >
@@ -334,7 +348,7 @@ export default function SupplierDetailScreen() {
                   <View style={styles.deliveryContent}>
                     <View style={styles.deliveryTop}>
                       <View style={styles.deliveryTopLeft}>
-                        <Text style={styles.deliveryDate}>{formatDate(d.date)}</Text>
+                        <Text style={[styles.deliveryDate, { color: palette.text.primary }]}>{formatDate(d.date)}</Text>
                         {d.paymentStatus === 'paid' && (
                           <View style={[styles.statusBadge, styles.statusPaid]}>
                             <Ionicons name="checkmark-circle" size={11} color={colors.green[700]} />
@@ -343,7 +357,7 @@ export default function SupplierDetailScreen() {
                         )}
                       </View>
                       <View style={styles.deliveryTopRight}>
-                        <Text style={styles.deliveryAmount}>{formatMoney(d.totalAmount)}</Text>
+                        <Text style={[styles.deliveryAmount, { color: palette.text.primary }]}>{formatMoney(d.totalAmount)}</Text>
                         <Ionicons
                           name={isExpanded ? 'chevron-up' : 'chevron-down'}
                           size={16}
@@ -404,12 +418,12 @@ export default function SupplierDetailScreen() {
             )}
 
             {(payments || []).map((p) => (
-              <View key={p.id} style={styles.paymentCard}>
+              <View key={p.id} style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
                 <View style={[styles.deliveryAccent, { backgroundColor: colors.green[500] }]} />
                 <View style={styles.paymentContent}>
                   <View style={styles.paymentTop}>
                     <View>
-                      <Text style={styles.paymentDate}>{formatDate(p.date)}</Text>
+                      <Text style={[styles.paymentDate, { color: palette.text.primary }]}>{formatDate(p.date)}</Text>
                       {p.comment && <Text style={styles.commentText}>{p.comment}</Text>}
                     </View>
                     <Text style={styles.paymentAmount}>{formatMoney(p.amount)}</Text>

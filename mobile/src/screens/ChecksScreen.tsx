@@ -13,6 +13,7 @@ import { useNavigation } from '@react-navigation/native';
 // Переходы на сущности живут внутри открытой деталки чека.
 import { checksApi, usersApi, productsApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
@@ -307,6 +308,7 @@ export default function ChecksScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
   const { hasPermission } = useAuth();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
@@ -539,7 +541,7 @@ export default function ChecksScreen() {
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={[styles.safe, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.safe, { paddingTop: insets.top + 8, backgroundColor: palette.bg.canvas }]}>
       {/* Header removed per owner — the screen reads as Журнал from the
           tab-bar label already, and the count duplicates info shown at
           the bottom of the list (pagination). Less chrome → more list. */}

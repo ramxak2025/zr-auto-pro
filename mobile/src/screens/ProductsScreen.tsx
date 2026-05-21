@@ -25,6 +25,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { productsApi, warehouseCategoriesApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
@@ -183,6 +184,7 @@ export default function ProductsScreen() {
   const insetsTop = useSafeAreaInsets().top;
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
+  const palette = useColors();
   const { hasPermission, user } = useAuth();
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageWarehouse = hasPermission('warehouse_access');
@@ -989,7 +991,7 @@ export default function ProductsScreen() {
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       {/* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
           / \u041F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0438. Title + product count subtitle on the left,
           warehouse-ops + add buttons in the trailing slot. */}

@@ -16,6 +16,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { expensesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
@@ -145,6 +146,7 @@ export default function ExpensesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const palette = useColors();
   const isDirector = user?.role === 'director' || user?.role === 'superadmin';
   const tabBarHeight = useTabBarHeight();
 
@@ -288,7 +290,7 @@ export default function ExpensesScreen() {
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       {/* Унифицированная iOS-шапка — единый стиль с Расписанием/Журналом. */}
       <IosScreenHeader
         title="Расходы"

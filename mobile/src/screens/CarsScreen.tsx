@@ -12,6 +12,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 
@@ -19,6 +20,7 @@ export default function CarsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const limit = 30;
@@ -48,7 +50,7 @@ export default function CarsScreen() {
   const renderCar = ({ item, index }: { item: any; index: number }) => (
     <AnimatedCard
       index={index}
-      style={styles.carCard}
+      style={[styles.carCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       onPress={() => {
         if (item.clientId) {
           navigation.navigate('ClientDetail', { id: item.clientId });
@@ -60,43 +62,44 @@ export default function CarsScreen() {
           <Ionicons name="car-sport-outline" size={22} color={colors.primary[600]} />
         </View>
         <View style={styles.carInfo}>
-          <Text style={styles.carMakeModel} numberOfLines={1}>
+          <Text style={[styles.carMakeModel, { color: palette.text.primary }]} numberOfLines={1}>
             {item.makeModel || 'Автомобиль'}
           </Text>
           {item.plateNumber && (
+            // Plate badge stays road-sign white — never themed.
             <View style={styles.plateBadge}>
               <Text style={styles.plateText}>{item.plateNumber}</Text>
             </View>
           )}
           {item.client?.fullName && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginTop: 4 }}>
-              <Ionicons name="person-outline" size={12} color={colors.gray[400]} />
-              <Text style={styles.carClient}>{item.client.fullName}</Text>
+              <Ionicons name="person-outline" size={12} color={palette.text.tertiary} />
+              <Text style={[styles.carClient, { color: palette.text.tertiary }]}>{item.client.fullName}</Text>
             </View>
           )}
         </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.gray[300]} />
+        <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
       </View>
     </AnimatedCard>
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Автомобили" onBack={() => navigation.goBack()} />
 
       {/* Clients ⇄ Cars segmented — same shape as ClientsScreen so the
           two screens read as one unified Clients section. */}
       <View style={cnStyles.segmentWrap}>
-        <View style={cnStyles.segment}>
+        <View style={[cnStyles.segment, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
             style={cnStyles.segmentItem}
             onPress={() => navigation.replace('Clients')}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
-            <Ionicons name="people-outline" size={14} color={colors.gray[500]} />
-            <Text style={cnStyles.segmentLabelInactive}>Клиенты</Text>
+            <Ionicons name="people-outline" size={14} color={palette.text.secondary} />
+            <Text style={[cnStyles.segmentLabelInactive, { color: palette.text.secondary }]}>Клиенты</Text>
           </TouchableOpacity>
-          <View style={[cnStyles.segmentItem, cnStyles.segmentActive]}>
+          <View style={[cnStyles.segmentItem, cnStyles.segmentActive, { backgroundColor: palette.bg.card }]}>
             <Ionicons name="car-sport" size={14} color={colors.primary[700]} />
             <Text style={cnStyles.segmentLabelActive}>Авто</Text>
           </View>

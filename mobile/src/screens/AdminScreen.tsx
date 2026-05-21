@@ -10,6 +10,7 @@ import { useNavigation } from '@react-navigation/native';
 import { tenantsApi, plansApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Tenant, Plan, PlatformStats } from '../../../shared/types';
@@ -110,6 +111,7 @@ function OverviewTab({
   tenants: Tenant[];
   plans: Plan[];
 }) {
+  const palette = useColors();
   const totalRevenue = useMemo(() => tenants.reduce((s, t) => s + (t.monthlyPrice || 0), 0), [tenants]);
   const activeSubs = useMemo(() => tenants.filter(t => t.isActive && t.subscriptionEnd && !isExpired(t.subscriptionEnd)).length, [tenants]);
   const expiringSoon = useMemo(() => tenants.filter(t => {
@@ -157,10 +159,13 @@ function OverviewTab({
       </View>
 
       {/* Recent tenants */}
-      <AnimatedCard index={4} style={styles.sectionCard}>
+      <AnimatedCard
+        index={4}
+        style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
         <View style={styles.sectionHeader}>
-          <Ionicons name="time-outline" size={18} color={colors.gray[500]} />
-          <Text style={styles.sectionTitle}>Последние клиенты</Text>
+          <Ionicons name="time-outline" size={18} color={palette.text.secondary} />
+          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Последние клиенты</Text>
         </View>
         {tenants.length === 0 ? (
           <View style={styles.emptyState}>
@@ -174,15 +179,19 @@ function OverviewTab({
             .map((tenant) => {
               const status = getSubscriptionStatusColor(tenant);
               return (
-                <View key={tenant.id} style={styles.recentTenantRow}>
+                <View key={tenant.id} style={[styles.recentTenantRow, { borderTopColor: palette.border.subtle }]}>
                   <View style={styles.tenantAvatar}>
                     <Text style={styles.tenantAvatarText}>
                       {tenant.name?.charAt(0)?.toUpperCase() || 'T'}
                     </Text>
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.recentTenantName} numberOfLines={1}>{tenant.name}</Text>
-                    <Text style={styles.recentTenantDate}>{formatDate(tenant.createdAt)}</Text>
+                    <Text style={[styles.recentTenantName, { color: palette.text.primary }]} numberOfLines={1}>
+                      {tenant.name}
+                    </Text>
+                    <Text style={[styles.recentTenantDate, { color: palette.text.tertiary }]}>
+                      {formatDate(tenant.createdAt)}
+                    </Text>
                   </View>
                   <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
                     <Text style={[styles.statusBadgeText, { color: status.text }]}>{status.label}</Text>
@@ -195,10 +204,13 @@ function OverviewTab({
 
       {/* Plan distribution */}
       {plans.length > 0 && (
-        <AnimatedCard index={5} style={styles.sectionCard}>
+        <AnimatedCard
+          index={5}
+          style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
           <View style={styles.sectionHeader}>
-            <Ionicons name="pie-chart-outline" size={18} color={colors.gray[500]} />
-            <Text style={styles.sectionTitle}>Распределение по тарифам</Text>
+            <Ionicons name="pie-chart-outline" size={18} color={palette.text.secondary} />
+            <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Распределение по тарифам</Text>
           </View>
           {plans.map((plan) => {
             const count = tenants.filter(t => t.planId === plan.id).length;
@@ -207,10 +219,10 @@ function OverviewTab({
               <View key={plan.id} style={styles.planDistRow}>
                 <View style={{ flex: 1 }}>
                   <View style={styles.planDistHeader}>
-                    <Text style={styles.planDistName}>{plan.name}</Text>
-                    <Text style={styles.planDistCount}>{count} клиент(ов)</Text>
+                    <Text style={[styles.planDistName, { color: palette.text.primary }]}>{plan.name}</Text>
+                    <Text style={[styles.planDistCount, { color: palette.text.tertiary }]}>{count} клиент(ов)</Text>
                   </View>
-                  <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarBg, { backgroundColor: palette.bg.muted }]}>
                     <View style={[styles.progressBarFill, { width: `${pct}%` }]} />
                   </View>
                 </View>
@@ -238,12 +250,16 @@ function TenantDetailCard({
   togglingId: string | null;
   changingPlanId: string | null;
 }) {
+  const palette = useColors();
   const [expanded, setExpanded] = useState(false);
   const status = getSubscriptionStatusColor(tenant);
   const planName = tenant.plan?.name || plans.find(p => p.id === tenant.planId)?.name || 'Не назначен';
 
   return (
-    <AnimatedCard index={0} style={styles.tenantCard}>
+    <AnimatedCard
+      index={0}
+      style={[styles.tenantCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
       <TouchableOpacity
         style={styles.tenantCardHeader}
         onPress={() => setExpanded(!expanded)}
@@ -255,11 +271,11 @@ function TenantDetailCard({
           </Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.tenantName} numberOfLines={1}>{tenant.name}</Text>
+          <Text style={[styles.tenantName, { color: palette.text.primary }]} numberOfLines={1}>{tenant.name}</Text>
           <View style={styles.tenantMeta}>
-            <Text style={styles.tenantPlan}>{planName}</Text>
+            <Text style={[styles.tenantPlan, { color: palette.text.secondary }]}>{planName}</Text>
             <Text style={styles.metaDot}>{'\u00B7'}</Text>
-            <Text style={styles.tenantUsers}>
+            <Text style={[styles.tenantUsers, { color: palette.text.tertiary }]}>
               {tenant.userCount ?? tenant.users?.length ?? 0} польз.
             </Text>
           </View>
@@ -435,6 +451,7 @@ function TenantsTab({
   togglingId: string | null;
   changingPlanId: string | null;
 }) {
+  const palette = useColors();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'inactive' | 'expired'>('all');
 
@@ -472,19 +489,22 @@ function TenantsTab({
   return (
     <View style={styles.tabContent}>
       {/* Search */}
-      <AnimatedCard index={0} style={styles.searchCard}>
+      <AnimatedCard
+        index={0}
+        style={[styles.searchCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
         <View style={styles.searchRow}>
-          <Ionicons name="search-outline" size={18} color={colors.gray[400]} />
+          <Ionicons name="search-outline" size={18} color={palette.text.tertiary} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: palette.text.primary }]}
             placeholder="Поиск по названию, телефону..."
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             value={search}
             onChangeText={setSearch}
           />
           {search.length > 0 && (
             <TouchableOpacity onPress={() => setSearch('')}>
-              <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
+              <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
             </TouchableOpacity>
           )}
         </View>
@@ -540,6 +560,7 @@ function TenantsTab({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
+  const palette = useColors();
   const sortedPlans = useMemo(
     () => [...plans].sort((a, b) => a.sortOrder - b.sortOrder),
     [plans],
@@ -564,7 +585,11 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
         const features: string[] = Array.isArray(plan.features) ? plan.features : [];
         const isPopular = subscriberCount === Math.max(...plans.map(p => tenants.filter(t => t.planId === p.id).length));
         return (
-          <AnimatedCard key={plan.id} index={idx} style={styles.planCard}>
+          <AnimatedCard
+            key={plan.id}
+            index={idx}
+            style={[styles.planCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
             {isPopular && subscriberCount > 0 && (
               <LinearGradient
                 colors={[colors.primary[500], colors.primary[600]]}
@@ -577,8 +602,10 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
             <View style={styles.planCardBody}>
               <View style={styles.planCardHeaderRow}>
                 <View>
-                  <Text style={styles.planCardName}>{plan.name}</Text>
-                  {plan.description && <Text style={styles.planCardDesc}>{plan.description}</Text>}
+                  <Text style={[styles.planCardName, { color: palette.text.primary }]}>{plan.name}</Text>
+                  {plan.description && (
+                    <Text style={[styles.planCardDesc, { color: palette.text.secondary }]}>{plan.description}</Text>
+                  )}
                 </View>
                 <View style={[
                   styles.planActiveBadge,
@@ -654,6 +681,7 @@ export default function AdminScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -743,11 +771,11 @@ export default function AdminScreen() {
   };
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Админ-панель" onBack={() => navigation.goBack()} />
 
       {/* Tab bar */}
-      <View style={styles.tabBar}>
+      <View style={[styles.tabBar, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
         {TABS.map(tab => (
           <TouchableOpacity
             key={tab.key}
@@ -758,10 +786,11 @@ export default function AdminScreen() {
             <Ionicons
               name={tab.icon}
               size={16}
-              color={activeTab === tab.key ? colors.primary[600] : colors.gray[400]}
+              color={activeTab === tab.key ? colors.primary[600] : palette.text.tertiary}
             />
             <Text style={[
               styles.tabText,
+              { color: palette.text.tertiary },
               activeTab === tab.key && styles.tabTextActive,
             ]}>
               {tab.label}

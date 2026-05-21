@@ -29,6 +29,7 @@ import {
   warehouseCategoriesApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import Modal from '../components/Modal';
 import ProductPickerModal from '../components/ProductPickerModal';
 import RussianPlateInput from '../components/RussianPlateInput';
@@ -326,6 +327,7 @@ export default function CheckCreateScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const insetsTop = useSafeAreaInsets().top;
+  const palette = useColors();
   const editId = route.params?.id;
   const isStackScreen = !!editId;
   // When opened from the bottom tab (route name 'NewCheck'), the floating
@@ -731,7 +733,7 @@ export default function CheckCreateScreen() {
   };
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       {/* Floating back chevron — only when this screen is pushed onto a
           stack (edit-mode from Журнал). When opened from the central tab
           it's the Касса itself and needs no header. Native edge-swipe

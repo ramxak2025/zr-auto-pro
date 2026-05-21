@@ -11,6 +11,7 @@ import { checksApi, myCompanyApi } from '../api/services';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Check, Tenant } from '../../../shared/types';
@@ -54,6 +55,7 @@ export default function CheckDetailScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
+  const palette = useColors();
   const { id } = route.params;
   // Floating tab bar covers the bottom edge (CheckDetail lives inside the
   // tab navigator's stack, so the bar IS visible). Reserve its height so
@@ -225,26 +227,26 @@ export default function CheckDetailScreen() {
   const isDeferred = (check as any).isDeferred;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
       {/* Modern header with gradient accent */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>
+          <Text style={[styles.headerTitle, { color: palette.text.primary }]}>
             {'\u0427\u0435\u043A'} #{check.number}
           </Text>
-          <Text style={styles.headerDate}>{formatShortDate(check.date)}</Text>
+          <Text style={[styles.headerDate, { color: palette.text.tertiary }]}>{formatShortDate(check.date)}</Text>
         </View>
         <View style={styles.headerActions}>
-          <TouchableOpacity onPress={generatePdf} style={styles.actionBtn}>
+          <TouchableOpacity onPress={generatePdf} style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}>
             <Ionicons name="document-text-outline" size={17} color={colors.violet[600]} />
           </TouchableOpacity>
           {canEdit && (
             <TouchableOpacity
               onPress={() => navigation.navigate('CheckCreate', { id: check.id })}
-              style={styles.actionBtn}
+              style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}
             >
               <Ionicons name="create-outline" size={17} color={colors.primary[600]} />
             </TouchableOpacity>
@@ -326,7 +328,7 @@ export default function CheckDetailScreen() {
         </View>
 
         {/* Client & info — modern glassmorphism style card */}
-        <View style={styles.infoCard}>
+        <View style={[styles.infoCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <TouchableOpacity
             style={styles.infoRow}
             activeOpacity={check.clientId ? 0.6 : 1}
@@ -337,8 +339,8 @@ export default function CheckDetailScreen() {
               <Ionicons name="person" size={16} color={colors.blue[600]} />
             </View>
             <View style={styles.infoContent}>
-              <Text style={styles.infoLabel}>Клиент</Text>
-              <Text style={styles.infoValue}>
+              <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Клиент</Text>
+              <Text style={[styles.infoValue, { color: palette.text.primary }]}>
                 {check.client?.fullName ??
                   '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}
               </Text>
@@ -348,7 +350,7 @@ export default function CheckDetailScreen() {
 
           {check.car && (
             <>
-              <View style={styles.infoDivider} />
+              <View style={[styles.infoDivider, { backgroundColor: palette.border.subtle }]} />
               <TouchableOpacity
                 style={styles.infoRow}
                 activeOpacity={check.clientId ? 0.6 : 1}
@@ -359,9 +361,9 @@ export default function CheckDetailScreen() {
                   <Ionicons name="car-sport" size={16} color={colors.indigo[600]} />
                 </View>
                 <View style={styles.infoContent}>
-                  <Text style={styles.infoLabel}>Автомобиль</Text>
+                  <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Автомобиль</Text>
                   <View style={styles.carRow}>
-                    <Text style={styles.infoValue}>{check.car.makeModel}</Text>
+                    <Text style={[styles.infoValue, { color: palette.text.primary }]}>{check.car.makeModel}</Text>
                     {check.car.plateNumber && (
                       <View style={styles.plateTag}>
                         <Text style={styles.plateTagText}>{check.car.plateNumber}</Text>
@@ -376,7 +378,7 @@ export default function CheckDetailScreen() {
 
           {check.master && (
             <>
-              <View style={styles.infoDivider} />
+              <View style={[styles.infoDivider, { backgroundColor: palette.border.subtle }]} />
               <TouchableOpacity
                 style={styles.infoRow}
                 activeOpacity={check.masterId ? 0.6 : 1}
@@ -387,8 +389,8 @@ export default function CheckDetailScreen() {
                   <Ionicons name="build" size={16} color={colors.orange[500]} />
                 </View>
                 <View style={styles.infoContent}>
-                  <Text style={styles.infoLabel}>Мастер</Text>
-                  <Text style={styles.infoValue}>{check.master.fullName}</Text>
+                  <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Мастер</Text>
+                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>{check.master.fullName}</Text>
                 </View>
                 {check.masterId ? <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} /> : null}
               </TouchableOpacity>
@@ -397,14 +399,14 @@ export default function CheckDetailScreen() {
 
           {check.mileage ? (
             <>
-              <View style={styles.infoDivider} />
+              <View style={[styles.infoDivider, { backgroundColor: palette.border.subtle }]} />
               <View style={styles.infoRow}>
                 <View style={[styles.infoIconCircle, { backgroundColor: colors.teal[50] }]}>
                   <Ionicons name="speedometer" size={16} color={colors.teal[600]} />
                 </View>
                 <View style={styles.infoContent}>
-                  <Text style={styles.infoLabel}>Пробег</Text>
-                  <Text style={styles.infoValue}>{check.mileage.toLocaleString()} км</Text>
+                  <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Пробег</Text>
+                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>{check.mileage.toLocaleString()} км</Text>
                 </View>
               </View>
             </>
@@ -422,7 +424,7 @@ export default function CheckDetailScreen() {
         {/* Services — services может быть undefined в placeholder-данных
             из journal cache; используем безопасную локальную ссылку. */}
         {services.length > 0 && (
-          <View style={styles.sectionCard}>
+          <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <LinearGradient
                 colors={[colors.orange[50], '#fff']}
@@ -431,7 +433,7 @@ export default function CheckDetailScreen() {
                 style={styles.sectionGradient}
               >
                 <Ionicons name="build" size={15} color={colors.orange[500]} />
-                <Text style={styles.sectionTitle}>Услуги</Text>
+                <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Услуги</Text>
               </LinearGradient>
               <View style={styles.sectionBadge}>
                 <Text style={styles.sectionBadgeText}>{services.length}</Text>
@@ -440,7 +442,7 @@ export default function CheckDetailScreen() {
             {services.map((line, idx) => (
               <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
                 <View style={styles.lineItemLeft}>
-                  <Text style={styles.lineItemName}>{line.name}</Text>
+                  <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
                   <View style={styles.lineItemMeta}>
                     {line.master && <Text style={styles.lineItemMetaText}>{line.master.fullName}</Text>}
                     {line.quantity > 1 && (
@@ -450,7 +452,7 @@ export default function CheckDetailScreen() {
                     )}
                   </View>
                 </View>
-                <Text style={styles.lineItemPrice}>{formatMoney(line.total)}</Text>
+                <Text style={[styles.lineItemPrice, { color: palette.text.primary }]}>{formatMoney(line.total)}</Text>
               </View>
             ))}
             <View style={styles.sectionSubtotal}>
@@ -462,7 +464,7 @@ export default function CheckDetailScreen() {
 
         {/* Products — same defensive pattern as services. */}
         {products.length > 0 && (
-          <View style={styles.sectionCard}>
+          <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <LinearGradient
                 colors={[colors.blue[50], '#fff']}
@@ -471,7 +473,7 @@ export default function CheckDetailScreen() {
                 style={styles.sectionGradient}
               >
                 <Ionicons name="cube" size={15} color={colors.blue[600]} />
-                <Text style={styles.sectionTitle}>Товары</Text>
+                <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Товары</Text>
               </LinearGradient>
               <View style={styles.sectionBadge}>
                 <Text style={styles.sectionBadgeText}>{products.length}</Text>
@@ -480,7 +482,7 @@ export default function CheckDetailScreen() {
             {products.map((line, idx) => (
               <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
                 <View style={styles.lineItemLeft}>
-                  <Text style={styles.lineItemName}>{line.name}</Text>
+                  <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
                   {line.quantity > 1 && (
                     <View style={styles.lineItemMeta}>
                       <Text style={styles.lineItemMetaText}>
@@ -489,7 +491,7 @@ export default function CheckDetailScreen() {
                     </View>
                   )}
                 </View>
-                <Text style={styles.lineItemPrice}>{formatMoney(line.totalSell)}</Text>
+                <Text style={[styles.lineItemPrice, { color: palette.text.primary }]}>{formatMoney(line.totalSell)}</Text>
               </View>
             ))}
             <View style={styles.sectionSubtotal}>

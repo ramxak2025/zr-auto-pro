@@ -16,6 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { servicesApi } from '../api/services';
+import { useColors } from '../contexts/ThemeContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
@@ -71,6 +72,7 @@ const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen }: Servi
 export default function ServicesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
+  const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -205,7 +207,7 @@ export default function ServicesScreen() {
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Услуги"
         subtitle={total > 0 ? `Услуг: ${total}` : undefined}

@@ -20,6 +20,7 @@ import type { Car } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { processPlateMainInput } from '../utils/plateMask';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { UserRole } from '../../../shared/types';
 import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
@@ -59,6 +60,7 @@ export default function ClientsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission, isRole } = useAuth();
+  const palette = useColors();
   const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
   const tabBarHeight = useTabBarHeight();
 
@@ -516,7 +518,7 @@ export default function ClientsScreen() {
   );
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Клиенты"
         onBack={() => navigation.goBack()}

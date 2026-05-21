@@ -14,6 +14,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type {
@@ -89,6 +90,7 @@ export default function EmployeeDetailScreen() {
   const id = route.params?.id;
   const queryClient = useQueryClient();
   const { user: viewer, hasPermission } = useAuth();
+  const palette = useColors();
   const [refreshing, setRefreshing] = React.useState(false);
 
   // ── Permission rules ────────────────────────────────────────────────
@@ -319,7 +321,7 @@ export default function EmployeeDetailScreen() {
   if (isLoading) return <LoadingSpinner />;
   if (!user) {
     return (
-      <View style={styles.safe}>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
         <EmptyState title="Сотрудник не найден" description="Возможно учётка удалена или у вас нет к ней доступа." />
       </View>
@@ -338,7 +340,7 @@ export default function EmployeeDetailScreen() {
   const heroColors = getHeroGradient(user.fullName);
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
 
       <ScrollView

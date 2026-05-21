@@ -17,6 +17,7 @@ import { useNavigation } from '@react-navigation/native';
 import { myCompanyApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Tenant } from '../../../shared/types';
@@ -39,6 +40,7 @@ export default function CompanySettingsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
 
   const { data: company, isLoading } = useQuery<Tenant>({
     queryKey: ['my-company'],
@@ -109,61 +111,70 @@ export default function CompanySettingsScreen() {
 
   if (isLoading) {
     return (
-      <View style={styles.safe}>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
         <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />
       </View>
     );
   }
 
+  const cardStyle = StyleSheet.flatten([styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]);
+  const cardTitleStyle = StyleSheet.flatten([styles.cardTitle, { color: palette.text.primary }]);
+  const labelStyle = StyleSheet.flatten([styles.label, { color: palette.text.secondary }]);
+  const inputStyle = StyleSheet.flatten([
+    styles.input,
+    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+  ]);
+  const placeholderColor = palette.text.tertiary;
+
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
           {/* Basic info */}
           <AnimatedCard index={0}>
-            <View style={styles.card}>
+            <View style={cardStyle}>
               <View style={styles.cardHeader}>
-                <Ionicons name="business-outline" size={16} color={colors.gray[400]} />
-                <Text style={styles.cardTitle}>Основные данные</Text>
+                <Ionicons name="business-outline" size={16} color={palette.text.tertiary} />
+                <Text style={cardTitleStyle}>Основные данные</Text>
               </View>
 
               <View style={styles.field}>
-                <Text style={styles.label}>Название компании</Text>
+                <Text style={labelStyle}>Название компании</Text>
                 <TextInput
                   value={form.name}
                   onChangeText={(v) => update({ name: v })}
-                  style={styles.input}
+                  style={inputStyle}
                   placeholder="Автосервис «Мастер»"
-                  placeholderTextColor={colors.gray[400]}
+                  placeholderTextColor={placeholderColor}
                 />
               </View>
 
               <View style={styles.rowFields}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Телефон</Text>
+                  <Text style={labelStyle}>Телефон</Text>
                   {/* Phone mask shared with LoginScreen — user types digits,
                       formatPhone re-formats to +7 (XXX) XXX-XX-XX live. */}
                   <TextInput
                     value={form.phone}
                     onChangeText={(v) => update({ phone: formatPhone(v.replace(/\D/g, '')) })}
-                    style={styles.input}
+                    style={inputStyle}
                     placeholder="+7 (___) ___-__-__"
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={placeholderColor}
                     keyboardType="phone-pad"
                     autoComplete="tel"
                   />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Email</Text>
+                  <Text style={labelStyle}>Email</Text>
                   <TextInput
                     value={form.email}
                     onChangeText={(v) => update({ email: v })}
-                    style={styles.input}
+                    style={inputStyle}
                     placeholder="info@autoservice.ru"
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={placeholderColor}
                     keyboardType="email-address"
                     autoCapitalize="none"
                   />
@@ -171,24 +182,24 @@ export default function CompanySettingsScreen() {
               </View>
 
               <View style={styles.field}>
-                <Text style={styles.label}>Адрес</Text>
+                <Text style={labelStyle}>Адрес</Text>
                 <TextInput
                   value={form.address}
                   onChangeText={(v) => update({ address: v })}
-                  style={styles.input}
+                  style={inputStyle}
                   placeholder="г. Москва, ул. Примерная, д. 1"
-                  placeholderTextColor={colors.gray[400]}
+                  placeholderTextColor={placeholderColor}
                 />
               </View>
 
               <View style={styles.field}>
-                <Text style={styles.label}>Описание</Text>
+                <Text style={labelStyle}>Описание</Text>
                 <TextInput
                   value={form.description}
                   onChangeText={(v) => update({ description: v })}
-                  style={[styles.input, styles.textarea]}
+                  style={[inputStyle, styles.textarea]}
                   placeholder="Краткое описание автосервиса"
-                  placeholderTextColor={colors.gray[400]}
+                  placeholderTextColor={placeholderColor}
                   multiline
                   numberOfLines={2}
                 />
@@ -198,71 +209,73 @@ export default function CompanySettingsScreen() {
 
           {/* Receipt / Legal */}
           <AnimatedCard index={1}>
-            <View style={styles.card}>
+            <View style={cardStyle}>
               <View style={styles.cardHeader}>
-                <Ionicons name="receipt-outline" size={16} color={colors.gray[400]} />
-                <Text style={styles.cardTitle}>Реквизиты для чеков</Text>
+                <Ionicons name="receipt-outline" size={16} color={palette.text.tertiary} />
+                <Text style={cardTitleStyle}>Реквизиты для чеков</Text>
               </View>
 
               <View style={styles.field}>
-                <Text style={styles.label}>Юридическое название</Text>
+                <Text style={labelStyle}>Юридическое название</Text>
                 <TextInput
                   value={form.legalName}
                   onChangeText={(v) => update({ legalName: v })}
-                  style={styles.input}
+                  style={inputStyle}
                   placeholder="ИП Иванов И.И. или ООО «Мастер»"
-                  placeholderTextColor={colors.gray[400]}
+                  placeholderTextColor={placeholderColor}
                 />
               </View>
 
               <View style={styles.rowFields3}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>ИНН</Text>
+                  <Text style={labelStyle}>ИНН</Text>
                   <TextInput
                     value={form.inn}
                     onChangeText={(v) => update({ inn: v.replace(/\D/g, '').slice(0, 12) })}
-                    style={styles.input}
+                    style={inputStyle}
                     placeholder="1234567890"
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={placeholderColor}
                     keyboardType="numeric"
                   />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>КПП</Text>
+                  <Text style={labelStyle}>КПП</Text>
                   <TextInput
                     value={form.kpp}
                     onChangeText={(v) => update({ kpp: v.replace(/\D/g, '').slice(0, 9) })}
-                    style={styles.input}
+                    style={inputStyle}
                     placeholder="123456789"
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={placeholderColor}
                     keyboardType="numeric"
                   />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>ОГРН</Text>
+                  <Text style={labelStyle}>ОГРН</Text>
                   <TextInput
                     value={form.ogrn}
                     onChangeText={(v) => update({ ogrn: v.replace(/\D/g, '').slice(0, 15) })}
-                    style={styles.input}
+                    style={inputStyle}
                     placeholder="1234567890123"
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={placeholderColor}
                     keyboardType="numeric"
                   />
                 </View>
               </View>
 
               <View style={styles.field}>
-                <Text style={styles.label}>Текст внизу чека</Text>
+                <Text style={labelStyle}>Текст внизу чека</Text>
                 <TextInput
                   value={form.receiptFooter}
                   onChangeText={(v) => update({ receiptFooter: v })}
-                  style={[styles.input, styles.textarea]}
+                  style={[inputStyle, styles.textarea]}
                   placeholder="Спасибо за визит! Ждём вас снова!"
-                  placeholderTextColor={colors.gray[400]}
+                  placeholderTextColor={placeholderColor}
                   multiline
                   numberOfLines={2}
                 />
-                <Text style={styles.hint}>Этот текст печатается внизу каждого чека</Text>
+                <Text style={[styles.hint, { color: palette.text.tertiary }]}>
+                  Этот текст печатается внизу каждого чека
+                </Text>
               </View>
             </View>
           </AnimatedCard>

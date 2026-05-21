@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { callsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 
 // ---------------------------------------------------------------------------
@@ -368,6 +369,7 @@ const TABS: { key: FilterTab; label: string }[] = [
 
 export default function CallsScreen({ navigation }: { navigation: any }) {
   const { isRole } = useAuth();
+  const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
@@ -475,7 +477,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   );
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: palette.bg.canvas }]}>
       {/* Unified iOS header with date stepper as the trailing slot. */}
       <IosScreenHeader
         title="Звонки"

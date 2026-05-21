@@ -15,6 +15,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi, checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
@@ -95,6 +96,7 @@ export default function ClientDetailScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
+  const palette = useColors();
   const canViewProfit = hasPermission('profit_view');
   const { id } = route.params;
   // Virtual retail buyer sentinel — when navigated to with id === '__retail__',
@@ -263,7 +265,7 @@ export default function ClientDetailScreen() {
       }
     }
     return (
-      <View style={styles.safe}>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Розничный покупатель" onBack={() => navigation.goBack()} centerTitle />
         <ScrollView
           style={styles.scroll}
@@ -433,7 +435,7 @@ export default function ClientDetailScreen() {
   const cars = client.cars || [];
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title={client.fullName} onBack={() => navigation.goBack()} centerTitle />
 
       <ScrollView

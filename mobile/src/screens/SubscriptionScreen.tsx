@@ -8,6 +8,7 @@ import { subscriptionApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { SubscriptionInfo, Plan } from '../../../shared/types';
@@ -36,6 +37,7 @@ export default function SubscriptionScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
   const [refreshing, setRefreshing] = React.useState(false);
 
   const { data: sub, isLoading } = useQuery<SubscriptionInfo>({
@@ -67,7 +69,7 @@ export default function SubscriptionScreen() {
   if (isLoading) return <LoadingSpinner />;
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Подписка" onBack={() => navigation.goBack()} />
 
       <ScrollView
@@ -78,39 +80,45 @@ export default function SubscriptionScreen() {
       >
         {/* Current plan info */}
         <AnimatedCard index={0}>
-          <View style={styles.card}>
+          <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.planHeader}>
               <View style={styles.planIconWrap}>
                 <Ionicons name="card-outline" size={24} color={colors.primary[600]} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.planOrgName}>{sub?.tenantName || 'Организация'}</Text>
-                <Text style={styles.planName}>Тариф: {sub?.planName || 'Не назначен'}</Text>
+                <Text style={[styles.planOrgName, { color: palette.text.primary }]}>
+                  {sub?.tenantName || 'Организация'}
+                </Text>
+                <Text style={[styles.planName, { color: palette.text.secondary }]}>
+                  Тариф: {sub?.planName || 'Не назначен'}
+                </Text>
               </View>
             </View>
 
             {/* End date & price */}
             <View style={styles.infoGrid}>
-              <View style={styles.infoBlock}>
-                <Ionicons name="calendar-outline" size={18} color={colors.gray[400]} />
+              <View style={[styles.infoBlock, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="calendar-outline" size={18} color={palette.text.tertiary} />
                 <View>
-                  <Text style={styles.infoLabel}>Оплачено до</Text>
+                  <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Оплачено до</Text>
                   {sub?.subscriptionEnd ? (
-                    <Text style={[styles.infoValue, isExpired && { color: colors.red[600] }]}>
+                    <Text
+                      style={[styles.infoValue, { color: palette.text.primary }, isExpired && { color: colors.red[600] }]}
+                    >
                       {formatDate(sub.subscriptionEnd)}
                       {isExpired ? '  (истекла)' : ''}
                     </Text>
                   ) : (
-                    <Text style={[styles.infoValue, { color: colors.gray[400] }]}>Не указано</Text>
+                    <Text style={[styles.infoValue, { color: palette.text.tertiary }]}>Не указано</Text>
                   )}
                 </View>
               </View>
 
-              <View style={styles.infoBlock}>
-                <Ionicons name="card-outline" size={18} color={colors.gray[400]} />
+              <View style={[styles.infoBlock, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="card-outline" size={18} color={palette.text.tertiary} />
                 <View>
-                  <Text style={styles.infoLabel}>Стоимость</Text>
-                  <Text style={styles.infoValue}>
+                  <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Стоимость</Text>
+                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>
                     {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
                   </Text>
                 </View>
@@ -119,12 +127,12 @@ export default function SubscriptionScreen() {
 
             {/* Users */}
             {sub && (
-              <View style={styles.usersRow}>
+              <View style={[styles.usersRow, { borderTopColor: palette.border.subtle }]}>
                 <View style={styles.usersLeft}>
-                  <Ionicons name="people-outline" size={16} color={colors.gray[400]} />
-                  <Text style={styles.usersLabel}>Сотрудников</Text>
+                  <Ionicons name="people-outline" size={16} color={palette.text.tertiary} />
+                  <Text style={[styles.usersLabel, { color: palette.text.secondary }]}>Сотрудников</Text>
                 </View>
-                <Text style={styles.usersValue}>
+                <Text style={[styles.usersValue, { color: palette.text.primary }]}>
                   {sub.currentUsers} / {sub.maxUsers}
                 </Text>
               </View>
@@ -149,13 +157,19 @@ export default function SubscriptionScreen() {
         {/* Available plans */}
         {sub?.plans && sub.plans.length > 0 && (
           <>
-            <Text style={styles.sectionTitle}>Доступные тарифы</Text>
+            <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Доступные тарифы</Text>
             {sub.plans.map((plan, idx) => {
               const isCurrent = sub.planName === plan.name;
               const features: string[] = Array.isArray(plan.features) ? plan.features : [];
               return (
                 <AnimatedCard key={plan.id} index={idx + 1}>
-                  <View style={[styles.planCard, isCurrent && styles.planCardCurrent]}>
+                  <View
+                    style={[
+                      styles.planCard,
+                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                      isCurrent && styles.planCardCurrent,
+                    ]}
+                  >
                     {isCurrent && (
                       <LinearGradient colors={[colors.primary[500], colors.primary[600]]} style={styles.currentBanner}>
                         <Text style={styles.currentBannerText}>Ваш тариф</Text>
@@ -163,12 +177,16 @@ export default function SubscriptionScreen() {
                     )}
 
                     <View style={styles.planCardBody}>
-                      <Text style={styles.planCardName}>{plan.name}</Text>
-                      {plan.description && <Text style={styles.planCardDesc}>{plan.description}</Text>}
+                      <Text style={[styles.planCardName, { color: palette.text.primary }]}>{plan.name}</Text>
+                      {plan.description && (
+                        <Text style={[styles.planCardDesc, { color: palette.text.secondary }]}>{plan.description}</Text>
+                      )}
 
                       <View style={styles.priceRow}>
-                        <Text style={styles.priceValue}>{plan.monthlyPrice.toLocaleString('ru-RU')}</Text>
-                        <Text style={styles.priceSuffix}> ₽/мес</Text>
+                        <Text style={[styles.priceValue, { color: palette.text.primary }]}>
+                          {plan.monthlyPrice.toLocaleString('ru-RU')}
+                        </Text>
+                        <Text style={[styles.priceSuffix, { color: palette.text.secondary }]}> ₽/мес</Text>
                       </View>
 
                       <View style={styles.maxUsersRow}>
@@ -185,9 +203,15 @@ export default function SubscriptionScreen() {
                               <Ionicons
                                 name={included ? 'checkmark-circle' : 'close-circle'}
                                 size={18}
-                                color={included ? colors.green[500] : colors.gray[300]}
+                                color={included ? colors.green[500] : palette.text.tertiary}
                               />
-                              <Text style={[styles.featureText, !included && styles.featureTextDisabled]}>
+                              <Text
+                                style={[
+                                  styles.featureText,
+                                  { color: palette.text.primary },
+                                  !included && { color: palette.text.tertiary, textDecorationLine: 'line-through' },
+                                ]}
+                              >
                                 {feat.label}
                               </Text>
                             </View>

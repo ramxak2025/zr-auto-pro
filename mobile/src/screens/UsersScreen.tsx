@@ -25,6 +25,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { User, UserPermissions, Product } from '../../../shared/types';
@@ -162,8 +163,12 @@ const UserCard = React.memo(function UserCard({
   onAvatarChange,
   onDelete,
 }: UserCardProps) {
+  const palette = useColors();
   return (
-    <AnimatedCard index={index} style={styles.userCard}>
+    <AnimatedCard
+      index={index}
+      style={[styles.userCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
       <TouchableOpacity style={styles.userRow} onPress={() => onEdit(user)} activeOpacity={0.7}>
         <View style={styles.avatarWrap}>
           {avatarUrl ? (
@@ -185,7 +190,7 @@ const UserCard = React.memo(function UserCard({
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-            <Text style={styles.userName} numberOfLines={1}>
+            <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
               {user.fullName}
             </Text>
             <View style={[styles.roleBadge, { backgroundColor: badge.bg }]}>
@@ -193,12 +198,12 @@ const UserCard = React.memo(function UserCard({
             </View>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 4 }}>
-            <Text style={styles.userPhone}>{formatPhone(user.phone)}</Text>
-            <Text style={styles.userDivider}>|</Text>
-            <Text style={styles.userPhone}>
+            <Text style={[styles.userPhone, { color: palette.text.secondary }]}>{formatPhone(user.phone)}</Text>
+            <Text style={[styles.userDivider, { color: palette.text.tertiary }]}>|</Text>
+            <Text style={[styles.userPhone, { color: palette.text.secondary }]}>
               {user.salaryPercent}%{user.productSalaryPercent ? ` / ${user.productSalaryPercent}%` : ''}
             </Text>
-            <Text style={styles.userDivider}>|</Text>
+            <Text style={[styles.userDivider, { color: palette.text.tertiary }]}>|</Text>
             {user.isActive ? (
               <Text style={[styles.statusText, { color: colors.green[600] }]}>Активен</Text>
             ) : (
@@ -209,7 +214,7 @@ const UserCard = React.memo(function UserCard({
       </TouchableOpacity>
 
       {/* Action buttons row */}
-      <View style={styles.actionRow}>
+      <View style={[styles.actionRow, { borderTopColor: palette.border.subtle }]}>
         <TouchableOpacity style={styles.actionChip} onPress={() => onEdit(user)}>
           <Ionicons name="pencil-outline" size={14} color={colors.primary[600]} />
           <Text style={styles.actionChipText}>Права</Text>
@@ -258,6 +263,7 @@ export default function UsersScreen() {
   const { hasPermission, user: currentUser } = useAuth();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -404,7 +410,7 @@ export default function UsersScreen() {
 
   if (!hasPermission('user_management')) {
     return (
-      <View style={styles.safe}>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Сотрудники" onBack={() => navigation.goBack()} />
         <EmptyState title="Нет доступа" description="У вас нет прав для управления сотрудниками" />
       </View>
@@ -516,7 +522,7 @@ export default function UsersScreen() {
   };
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Сотрудники"
         subtitle={users.length ? `Всего: ${users.length}` : undefined}

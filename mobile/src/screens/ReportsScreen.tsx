@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { reportsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -51,6 +52,7 @@ function pctOf(part: number, total: number) {
 export default function ReportsScreen() {
   const navigation = useNavigation<any>();
   const { hasPermission } = useAuth();
+  const palette = useColors();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
@@ -87,7 +89,7 @@ export default function ReportsScreen() {
 
   if (!canView) {
     return (
-      <View style={styles.safe}>
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Отчёты" onBack={() => navigation.goBack()} />
         <View style={styles.accessDenied}>
           <Ionicons name="lock-closed" size={40} color={colors.gray[300]} />
@@ -106,7 +108,7 @@ export default function ReportsScreen() {
   const otherExpenses = (report as any)?.otherExpenses ?? 0;
 
   return (
-    <View style={styles.safe}>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Отчёты" onBack={() => navigation.goBack()} />
 
       <ScrollView

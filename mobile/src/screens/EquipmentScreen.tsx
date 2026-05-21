@@ -59,6 +59,7 @@ import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { equipmentApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { PressableScale } from '../platform/PressableScale';
@@ -478,6 +479,7 @@ function EmployeeCard({
 function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
   const qc = useQueryClient();
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
   const [showIssue, setShowIssue] = useState(false);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
 
@@ -569,13 +571,13 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
 
   return (
     <ScrollView
-      style={{ flex: 1, backgroundColor: colors.gray[50] }}
+      style={{ flex: 1, backgroundColor: palette.bg.canvas }}
       contentContainerStyle={{
         padding: spacing[4],
         paddingBottom: tabBarHeight + spacing[4],
       }}
     >
-      <View style={styles.empHeader}>
+      <View style={[styles.empHeader, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
         {emp.avatar ? (
           <CachedImage source={{ uri: emp.avatar }} style={styles.empAvatar} />
         ) : (
@@ -591,8 +593,8 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
           </View>
         )}
         <View style={{ flex: 1 }}>
-          <Text style={styles.empName}>{emp.fullName}</Text>
-          <Text style={styles.empStats}>
+          <Text style={[styles.empName, { color: palette.text.primary }]}>{emp.fullName}</Text>
+          <Text style={[styles.empStats, { color: palette.text.secondary }]}>
             {active.length} предметов · {formatMoney(total)}
           </Text>
         </View>
@@ -1272,6 +1274,7 @@ export default function EquipmentScreen() {
   const { user } = useAuth();
   const tabBarHeight = useTabBarHeight();
   const { width: screenWidth } = useWindowDimensions();
+  const palette = useColors();
   const [tab, setTab] = useState<Tab>('employees');
   const [showTrash, setShowTrash] = useState(false);
 
@@ -1318,30 +1321,33 @@ export default function EquipmentScreen() {
   if (isMaster) {
     const total = myEquipment.reduce((s: number, i: any) => s + i.cost, 0);
     return (
-      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+      <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
         <IosScreenHeader title="Моё имущество" onBack={() => navigation.goBack()} />
         <ScrollView
           contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}
         >
-          <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginBottom: spacing[3] }}>
+          <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary, marginBottom: spacing[3] }}>
             {myEquipment.length} предметов на {formatMoney(total)}
           </Text>
           {myEquipment.map((item: any) => (
-            <View key={item.id} style={styles.equipItem}>
+            <View
+              key={item.id}
+              style={[styles.equipItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
               {item.photo ? (
                 <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
               ) : (
                 <View
                   style={[
                     styles.equipPhoto,
-                    { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
+                    { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
                   ]}
                 >
-                  <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
+                  <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
                 </View>
               )}
               <View style={{ flex: 1 }}>
-                <Text style={styles.equipName}>{item.name}</Text>
+                <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
                 <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
               </View>
             </View>
@@ -1355,7 +1361,7 @@ export default function EquipmentScreen() {
   // Employee deтail lives in a separate stack screen (EquipmentEmployeeScreen
   // below + AppNavigator entry) — iOS edge-swipe slides back to the grid.
   return (
-    <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+    <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
       <IosScreenHeader
         title="Имущество"
         onBack={() => navigation.goBack()}
@@ -1404,19 +1410,20 @@ export function EquipmentEmployeeScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const { user } = useAuth();
+  const palette = useColors();
   const emp = route.params?.emp;
   const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
 
   if (!emp) {
     return (
-      <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+      <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
         <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.gray[50] }}>
+    <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
       <IosScreenHeader title={emp.fullName || 'Сотрудник'} onBack={() => navigation.goBack()} />
       <EmployeeDetail emp={emp} canEdit={canEdit} />
     </View>
