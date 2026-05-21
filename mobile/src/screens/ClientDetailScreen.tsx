@@ -282,47 +282,47 @@ export default function ClientDetailScreen() {
             />
           }
         >
-          <AnimatedCard style={styles.card} index={0}>
+          <AnimatedCard style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]} index={0}>
             <View style={styles.avatarSection}>
               <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
                 <Ionicons name="storefront-outline" size={26} color={colors.primary[600]} />
               </View>
-              <Text style={styles.clientName}>Розничный покупатель</Text>
+              <Text style={[styles.clientName, { color: palette.text.primary }]}>Розничный покупатель</Text>
             </View>
-            <View style={styles.statsRow}>
+            <View style={[styles.statsRow, { backgroundColor: palette.bg.muted }]}>
               <View style={styles.statItem}>
-                <Text style={styles.statValue}>{checks?.length || 0}</Text>
-                <Text style={styles.statLabel}>чеков</Text>
+                <Text style={[styles.statValue, { color: palette.text.primary }]}>{checks?.length || 0}</Text>
+                <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>чеков</Text>
               </View>
-              <View style={styles.statDivider} />
+              <View style={[styles.statDivider, { backgroundColor: palette.border.subtle }]} />
               <View style={styles.statItem}>
-                <Text style={styles.statValue}>{formatMoney(retailTotal)}</Text>
-                <Text style={styles.statLabel}>выручка</Text>
+                <Text style={[styles.statValue, { color: palette.text.primary }]}>{formatMoney(retailTotal)}</Text>
+                <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>выручка</Text>
               </View>
             </View>
             <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-              <Ionicons name="information-circle-outline" size={15} color={colors.gray[400]} />
-              <Text style={styles.infoLabel}>Тип</Text>
-              <Text style={styles.infoValue}>Все чеки без клиента</Text>
+              <Ionicons name="information-circle-outline" size={15} color={palette.text.tertiary} />
+              <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Тип</Text>
+              <Text style={[styles.infoValue, { color: palette.text.primary }]}>Все чеки без клиента</Text>
             </View>
           </AnimatedCard>
 
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Чеки ({checks?.length || 0})</Text>
+            <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Чеки ({checks?.length || 0})</Text>
           </View>
 
           {(!checks || checks.length === 0) ? (
             <View style={styles.emptyChecks}>
-              <Ionicons name="receipt-outline" size={32} color={colors.gray[300]} />
-              <Text style={styles.emptyChecksText}>Нет чеков</Text>
+              <Ionicons name="receipt-outline" size={32} color={palette.text.tertiary} />
+              <Text style={[styles.emptyChecksText, { color: palette.text.tertiary }]}>Нет чеков</Text>
             </View>
           ) : (
             retailGrouped.map((group, gi) => (
               <View key={group.label + gi}>
                 <View style={styles.dateGroupHeader}>
-                  <View style={styles.dateGroupLine} />
-                  <Text style={styles.dateGroupText}>{group.label}</Text>
-                  <View style={styles.dateGroupLine} />
+                  <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
+                  <Text style={[styles.dateGroupText, { color: palette.text.tertiary }]}>{group.label}</Text>
+                  <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
                 </View>
                 {group.checks.map((check) => {
                   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
@@ -330,7 +330,11 @@ export default function ClientDetailScreen() {
                   return (
                     <TouchableOpacity
                       key={check.id}
-                      style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
+                      style={[
+                        styles.checkCard,
+                        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                        check.isDeferred && styles.checkCardDeferred,
+                      ]}
                       onPress={() =>
                         navigation.navigate('Main', {
                           screen: 'Checks',
@@ -350,7 +354,7 @@ export default function ClientDetailScreen() {
                       <View style={styles.checkContent}>
                         <View style={styles.checkHeader}>
                           <View style={styles.checkHeaderLeft}>
-                            <Text style={styles.checkNumber}>#{check.number}</Text>
+                            <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
                             {check.isDeferred && (
                               <View style={styles.deferredBadge}>
                                 <Text style={styles.deferredText}>Отложен</Text>
@@ -362,13 +366,13 @@ export default function ClientDetailScreen() {
                               </Text>
                             </View>
                           </View>
-                          <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
+                          <Text style={[styles.checkTotal, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue)}</Text>
                         </View>
                         {check.car && (
                           <View style={styles.checkInfoRow}>
                             <View style={styles.infoChip}>
-                              <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
-                              <Text style={styles.infoChipText} numberOfLines={1}>
+                              <Ionicons name="car-outline" size={11} color={palette.text.tertiary} />
+                              <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
                                 {check.car.makeModel}
                               </Text>
                               {check.car.plateNumber && (
@@ -383,13 +387,17 @@ export default function ClientDetailScreen() {
                           </Text>
                         )}
                         <View style={styles.checkFooter}>
-                          <Text style={styles.footerTime}>
+                          <Text style={[styles.footerTime, { color: palette.text.tertiary }]}>
                             {new Date(check.date).toLocaleTimeString('ru-RU', {
                               hour: '2-digit',
                               minute: '2-digit',
                             })}
                           </Text>
-                          {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
+                          {check.master && (
+                            <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>
+                              {check.master.fullName}
+                            </Text>
+                          )}
                           {canViewProfit && check.profit !== undefined && (
                             <Text
                               style={[
@@ -415,7 +423,7 @@ export default function ClientDetailScreen() {
   }
 
   if (isLoading) return <LoadingSpinner />;
-  if (!client) return <Text style={{ padding: 20, textAlign: 'center' }}>Клиент не найден</Text>;
+  if (!client) return <Text style={{ padding: 20, textAlign: 'center', color: palette.text.secondary }}>Клиент не найден</Text>;
 
   // Group filtered checks by date
   const groupedChecks: { label: string; checks: Check[] }[] = [];
@@ -446,52 +454,52 @@ export default function ClientDetailScreen() {
         }
       >
         {/* Client info card */}
-        <AnimatedCard style={styles.card} index={0}>
+        <AnimatedCard style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]} index={0}>
           {/* Avatar + name */}
           <View style={styles.avatarSection}>
             <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
-            <Text style={styles.clientName}>{client.fullName}</Text>
+            <Text style={[styles.clientName, { color: palette.text.primary }]}>{client.fullName}</Text>
           </View>
 
           {/* Stats row */}
-          <View style={styles.statsRow}>
+          <View style={[styles.statsRow, { backgroundColor: palette.bg.muted }]}>
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{checks?.length || 0}</Text>
-              <Text style={styles.statLabel}>чеков</Text>
+              <Text style={[styles.statValue, { color: palette.text.primary }]}>{checks?.length || 0}</Text>
+              <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>чеков</Text>
             </View>
-            <View style={styles.statDivider} />
+            <View style={[styles.statDivider, { backgroundColor: palette.border.subtle }]} />
             <View style={styles.statItem}>
-              <Text style={styles.statValue}>{formatMoney(totalSpent)}</Text>
-              <Text style={styles.statLabel}>потрачено</Text>
+              <Text style={[styles.statValue, { color: palette.text.primary }]}>{formatMoney(totalSpent)}</Text>
+              <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>потрачено</Text>
             </View>
           </View>
 
           {/* Info rows */}
-          <View style={styles.infoRow}>
-            <Ionicons name="call-outline" size={15} color={colors.gray[400]} />
-            <Text style={styles.infoLabel}>Телефон</Text>
-            <Text style={styles.infoValue}>{formatPhone(client.phone)}</Text>
+          <View style={[styles.infoRow, { borderBottomColor: palette.border.subtle }]}>
+            <Ionicons name="call-outline" size={15} color={palette.text.tertiary} />
+            <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Телефон</Text>
+            <Text style={[styles.infoValue, { color: palette.text.primary }]}>{formatPhone(client.phone)}</Text>
           </View>
           {client.comment && (
-            <View style={styles.infoRow}>
-              <Ionicons name="chatbubble-outline" size={15} color={colors.gray[400]} />
-              <Text style={styles.infoLabel}>Комментарий</Text>
-              <Text style={styles.infoValue}>{client.comment}</Text>
+            <View style={[styles.infoRow, { borderBottomColor: palette.border.subtle }]}>
+              <Ionicons name="chatbubble-outline" size={15} color={palette.text.tertiary} />
+              <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Комментарий</Text>
+              <Text style={[styles.infoValue, { color: palette.text.primary }]}>{client.comment}</Text>
             </View>
           )}
           <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-            <Ionicons name="calendar-outline" size={15} color={colors.gray[400]} />
-            <Text style={styles.infoLabel}>Дата</Text>
-            <Text style={styles.infoValue}>{formatDate(client.createdAt)}</Text>
+            <Ionicons name="calendar-outline" size={15} color={palette.text.tertiary} />
+            <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Дата</Text>
+            <Text style={[styles.infoValue, { color: palette.text.primary }]}>{formatDate(client.createdAt)}</Text>
           </View>
         </AnimatedCard>
 
         {/* Cars */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Автомобили ({cars.length})</Text>
-          <TouchableOpacity style={styles.smallBtn} onPress={openAddCar}>
+          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Автомобили ({cars.length})</Text>
+          <TouchableOpacity style={[styles.smallBtn, { backgroundColor: palette.accent.primary }]} onPress={openAddCar}>
             <Text style={styles.smallBtnText}>+ Добавить</Text>
           </TouchableOpacity>
         </View>
@@ -499,36 +507,40 @@ export default function ClientDetailScreen() {
         {cars.map((car, idx) => {
           const carColor = getCarColor(car.id);
           return (
-            <AnimatedCard key={car.id} style={styles.carCard} index={idx + 1}>
+            <AnimatedCard
+              key={car.id}
+              style={[styles.carCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              index={idx + 1}
+            >
               <View style={styles.carTop}>
                 <View style={styles.carInfo}>
                   <View style={[styles.carIconWrap, { backgroundColor: carColor + '18' }]}>
                     <Ionicons name="car-sport" size={16} color={carColor} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.carModel} numberOfLines={1}>
+                    <Text style={[styles.carModel, { color: palette.text.primary }]} numberOfLines={1}>
                       {car.makeModel}
                     </Text>
-                    <Text style={styles.carPlate}>{car.plateNumber}</Text>
+                    <Text style={[styles.carPlate, { color: palette.text.secondary }]}>{car.plateNumber}</Text>
                   </View>
                 </View>
                 <View style={styles.carActions}>
                   <TouchableOpacity onPress={() => openEditCar(car)} style={styles.iconBtn}>
-                    <Ionicons name="create-outline" size={15} color={colors.gray[400]} />
+                    <Ionicons name="create-outline" size={15} color={palette.text.tertiary} />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => setDeleteCarId(car.id)} style={styles.iconBtn}>
                     <Ionicons name="trash-outline" size={15} color={colors.red[400]} />
                   </TouchableOpacity>
                 </View>
               </View>
-              {car.comment && <Text style={styles.carComment}>{car.comment}</Text>}
+              {car.comment && <Text style={[styles.carComment, { color: palette.text.tertiary }]}>{car.comment}</Text>}
             </AnimatedCard>
           );
         })}
 
         {/* Checks section */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Чеки ({filteredChecks.length})</Text>
+          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Чеки ({filteredChecks.length})</Text>
         </View>
 
         {/* Car filter chips */}
@@ -536,19 +548,39 @@ export default function ClientDetailScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.carChipsScroll}>
             <View style={styles.carChipsRow}>
               <TouchableOpacity
-                style={[styles.carChip, !selectedCarId && styles.carChipActive]}
+                style={[
+                  styles.carChip,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  !selectedCarId && styles.carChipActive,
+                ]}
                 onPress={() => setSelectedCarId(null)}
               >
-                <Text style={[styles.carChipText, !selectedCarId && styles.carChipTextActive]}>Все авто</Text>
+                <Text
+                  style={[
+                    styles.carChipText,
+                    { color: palette.text.secondary },
+                    !selectedCarId && styles.carChipTextActive,
+                  ]}
+                >
+                  Все авто
+                </Text>
               </TouchableOpacity>
               {cars.map((car) => (
                 <TouchableOpacity
                   key={car.id}
-                  style={[styles.carChip, selectedCarId === car.id && styles.carChipActive]}
+                  style={[
+                    styles.carChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    selectedCarId === car.id && styles.carChipActive,
+                  ]}
                   onPress={() => setSelectedCarId(selectedCarId === car.id ? null : car.id)}
                 >
                   <Text
-                    style={[styles.carChipText, selectedCarId === car.id && styles.carChipTextActive]}
+                    style={[
+                      styles.carChipText,
+                      { color: palette.text.secondary },
+                      selectedCarId === car.id && styles.carChipTextActive,
+                    ]}
                     numberOfLines={1}
                   >
                     {car.makeModel} · {car.plateNumber}
@@ -562,17 +594,17 @@ export default function ClientDetailScreen() {
         {/* Grouped checks list */}
         {filteredChecks.length === 0 ? (
           <View style={styles.emptyChecks}>
-            <Ionicons name="receipt-outline" size={32} color={colors.gray[300]} />
-            <Text style={styles.emptyChecksText}>Нет чеков</Text>
+            <Ionicons name="receipt-outline" size={32} color={palette.text.tertiary} />
+            <Text style={[styles.emptyChecksText, { color: palette.text.tertiary }]}>Нет чеков</Text>
           </View>
         ) : (
           groupedChecks.map((group, gi) => (
             <View key={group.label + gi}>
               {/* Date group header */}
               <View style={styles.dateGroupHeader}>
-                <View style={styles.dateGroupLine} />
-                <Text style={styles.dateGroupText}>{group.label}</Text>
-                <View style={styles.dateGroupLine} />
+                <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
+                <Text style={[styles.dateGroupText, { color: palette.text.tertiary }]}>{group.label}</Text>
+                <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
               </View>
 
               {group.checks.map((check, ci) => {
@@ -581,7 +613,11 @@ export default function ClientDetailScreen() {
                 return (
                   <TouchableOpacity
                     key={check.id}
-                    style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
+                    style={[
+                      styles.checkCard,
+                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                      check.isDeferred && styles.checkCardDeferred,
+                    ]}
                     onPress={() =>
                       navigation.navigate('Main', {
                         screen: 'Checks',
@@ -604,7 +640,7 @@ export default function ClientDetailScreen() {
                       {/* Top row: number + badges | total */}
                       <View style={styles.checkHeader}>
                         <View style={styles.checkHeaderLeft}>
-                          <Text style={styles.checkNumber}>#{check.number}</Text>
+                          <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
                           {check.isDeferred && (
                             <View style={styles.deferredBadge}>
                               <Text style={styles.deferredText}>Отложен</Text>
@@ -616,15 +652,15 @@ export default function ClientDetailScreen() {
                             </Text>
                           </View>
                         </View>
-                        <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
+                        <Text style={[styles.checkTotal, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue)}</Text>
                       </View>
 
                       {/* Middle: car info chip */}
                       {check.car && (
                         <View style={styles.checkInfoRow}>
                           <View style={styles.infoChip}>
-                            <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
-                            <Text style={styles.infoChipText} numberOfLines={1}>
+                            <Ionicons name="car-outline" size={11} color={palette.text.tertiary} />
+                            <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
                               {check.car.makeModel}
                             </Text>
                             {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
@@ -641,10 +677,12 @@ export default function ClientDetailScreen() {
 
                       {/* Footer: time | master | profit */}
                       <View style={styles.checkFooter}>
-                        <Text style={styles.footerTime}>
+                        <Text style={[styles.footerTime, { color: palette.text.tertiary }]}>
                           {new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
                         </Text>
-                        {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
+                        {check.master && (
+                          <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
+                        )}
                         {canViewProfit && check.profit !== undefined && (
                           <Text
                             style={[
@@ -669,42 +707,51 @@ export default function ClientDetailScreen() {
       {/* Car Modal */}
       <Modal visible={carModalOpen} onClose={closeCarModal} title={editingCar ? 'Редактировать авто' : 'Добавить авто'}>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Гос. номер</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Гос. номер</Text>
           <TextInput
             value={plateNumber}
             onChangeText={setPlateNumber}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="А000АА 00"
             autoCapitalize="characters"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Марка и модель</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Марка и модель</Text>
           <TextInput
             value={makeModel}
             onChangeText={setMakeModel}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="Toyota Camry"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Комментарий</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
           <TextInput
             value={carComment}
             onChangeText={setCarComment}
-            style={[styles.formInput, { height: 80, textAlignVertical: 'top' }]}
+            style={[
+              styles.formInput,
+              { height: 80, textAlignVertical: 'top', backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             multiline
             placeholder="Необязательно"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={closeCarModal}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeCarModal}>
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.submitBtn} onPress={handleCarSubmit}>
+          <TouchableOpacity style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]} onPress={handleCarSubmit}>
             <Text style={styles.submitBtnText}>{editingCar ? 'Сохранить' : 'Добавить'}</Text>
           </TouchableOpacity>
         </View>

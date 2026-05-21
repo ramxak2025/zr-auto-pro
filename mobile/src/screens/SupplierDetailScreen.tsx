@@ -13,7 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { suppliersApi, warehousesApi, productsApi, stockMovementsApi } from '../api/services';
+import { suppliersApi, warehousesApi, productsApi, stockMovementsApi, warehouseCategoriesApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -73,6 +73,16 @@ export default function SupplierDetailScreen() {
   const [defectPurchasePrice, setDefectPurchasePrice] = useState('');
   const [defectNote, setDefectNote] = useState('');
 
+  // Used-purchase form. Owner types product name + qty + price + an
+  // optional folder; backend auto-creates the SKU on the Б/У warehouse
+  // and increments stock. The supplier's debt grows by qty*price.
+  const [usedPurchaseModalOpen, setUsedPurchaseModalOpen] = useState(false);
+  const [upName, setUpName] = useState('');
+  const [upQty, setUpQty] = useState('');
+  const [upPrice, setUpPrice] = useState('');
+  const [upCategory, setUpCategory] = useState('');
+  const [upNote, setUpNote] = useState('');
+
   const { data: supplier, isLoading } = useQuery<Supplier>({
     queryKey: ['supplier', id],
     queryFn: async () => {
@@ -119,6 +129,10 @@ export default function SupplierDetailScreen() {
   // a non-array so a stale cache entry can't crash the detail screen.
   const warehouseList: Warehouse[] = Array.isArray(warehouses) ? warehouses : [];
   const defectWarehouse = warehouseList.find((w) => w.kind === 'defect') || null;
+  const usedWarehouse = warehouseList.find((w) => w.kind === 'used') || null;
+  // Pinned system supplier → owner buys second-hand goods from clients
+  // through this row, never standard deliveries / returns.
+  const isUsedPurchaseSupplier = supplier?.kind === 'used_purchase';
 
   // Products currently sitting in the defect warehouse. Only fetched when
   // we know the warehouse id — query stays disabled until then so React
@@ -138,6 +152,17 @@ export default function SupplierDetailScreen() {
     : Array.isArray(defectProductsPage as any)
       ? (defectProductsPage as unknown as Product[])
       : [];
+
+  // Existing Б/У categories — surfaced as quick-pick chips in the used
+  // purchase modal so the user can avoid typing a folder name twice.
+  // Free-text input still wins; the chips are a suggestion list.
+  const { data: usedCategoriesRaw } = useQuery<Array<{ id: string; path: string; sort_order: number }>>({
+    queryKey: ['warehouse-categories', { warehouseId: usedWarehouse?.id }],
+    queryFn: async () => (await warehouseCategoriesApi.getAll(usedWarehouse!.id)).data,
+    enabled: !!usedWarehouse?.id && isUsedPurchaseSupplier,
+    staleTime: 60_000,
+  });
+  const usedCategories = Array.isArray(usedCategoriesRaw) ? usedCategoriesRaw : [];
 
   // Past defect-returns for this supplier — populates the "Возвраты брака"
   // tab. Backend's /stock-movements list endpoint only filters by
@@ -173,6 +198,14 @@ export default function SupplierDetailScreen() {
       // moved out → refresh both. Predicate match catches any
       // ['products', { … }] variant since we keyed by an object.
       queryClient.invalidateQueries({ queryKey: ['products'] }),
+      // Б/У warehouse contents — refreshed alongside, since
+      // used-purchase mutations write into it. Per-warehouse folder
+      // lists also need a refresh because we may have created a new
+      // category as part of the purchase.
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] }),
+      // Stock-movements feed (the warehouse-documents tab on the
+      // journal). Used-purchase rows show up there immediately.
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
     ]);
 
   const createDeliveryMutation = useMutation({
@@ -220,6 +253,58 @@ export default function SupplierDetailScreen() {
       Alert.alert('Ошибка', String(msg));
     },
   });
+
+  // Used-purchase mutation. Backend (POST /suppliers/:id/used-purchase)
+  // atomically creates / increments the Б/У product, writes a
+  // stock_movement with is_used_purchase=true, and grows the supplier's
+  // debt by qty*price.
+  const usedPurchaseMutation = useMutation({
+    mutationFn: (body: { productName: string; qty: number; purchasePrice: number; category?: string; note?: string }) =>
+      suppliersApi.usedPurchase(id, body),
+    onSuccess: (_data, vars) => {
+      const debtIncrease = vars.qty * vars.purchasePrice;
+      invalidateAll();
+      setUsedPurchaseModalOpen(false);
+      setUpName('');
+      setUpQty('');
+      setUpPrice('');
+      setUpCategory('');
+      setUpNote('');
+      Alert.alert(
+        'Товар добавлен',
+        `«${vars.productName}» (${vars.qty} шт) добавлен на склад Б/У.\nДолг вырос на ${formatMoney(debtIncrease)}.`,
+      );
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Не удалось оформить покупку';
+      Alert.alert('Ошибка', String(msg));
+    },
+  });
+
+  const handleSubmitUsedPurchase = () => {
+    const name = upName.trim();
+    const qty = Number(upQty);
+    const price = Number(upPrice);
+    if (!name) {
+      Alert.alert('Ошибка', 'Введите название товара');
+      return;
+    }
+    if (!qty || qty <= 0) {
+      Alert.alert('Ошибка', 'Укажите количество больше нуля');
+      return;
+    }
+    if (!(price >= 0)) {
+      Alert.alert('Ошибка', 'Укажите корректную закупочную цену');
+      return;
+    }
+    usedPurchaseMutation.mutate({
+      productName: name,
+      qty,
+      purchasePrice: price,
+      category: upCategory.trim() || undefined,
+      note: upNote.trim() || undefined,
+    });
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -359,30 +444,44 @@ export default function SupplierDetailScreen() {
       >
         {/* Stats cards */}
         <View style={styles.statsRow}>
-          <AnimatedCard style={[styles.statCard, { backgroundColor: colors.blue[50] }]} index={0}>
+          <AnimatedCard
+            style={[styles.statCard, { backgroundColor: palette.bg.card, borderWidth: 1, borderColor: palette.border.subtle }]}
+            index={0}
+          >
             <Ionicons name="cart-outline" size={16} color={colors.blue[600]} style={{ marginBottom: 2 }} />
-            <Text style={[styles.statLabel, { color: colors.blue[600] }]}>Закупки</Text>
-            <Text style={[styles.statValue, { color: colors.blue[800] }]}>{formatMoney(supplier.totalPurchases)}</Text>
-          </AnimatedCard>
-          <AnimatedCard style={[styles.statCard, { backgroundColor: colors.green[50] }]} index={1}>
-            <Ionicons name="checkmark-circle-outline" size={16} color={colors.green[600]} style={{ marginBottom: 2 }} />
-            <Text style={[styles.statLabel, { color: colors.green[600] }]}>Оплачено</Text>
-            <Text style={[styles.statValue, { color: colors.green[800] }]}>{formatMoney(supplier.totalPaid)}</Text>
+            <Text style={[styles.statLabel, { color: palette.text.secondary }]}>Закупки</Text>
+            <Text style={[styles.statValue, { color: palette.text.primary }]}>{formatMoney(supplier.totalPurchases)}</Text>
           </AnimatedCard>
           <AnimatedCard
-            style={[styles.statCard, { backgroundColor: supplier.currentDebt > 0 ? colors.red[50] : colors.gray[50] }]}
+            style={[styles.statCard, { backgroundColor: palette.bg.card, borderWidth: 1, borderColor: palette.border.subtle }]}
+            index={1}
+          >
+            <Ionicons name="checkmark-circle-outline" size={16} color={colors.green[600]} style={{ marginBottom: 2 }} />
+            <Text style={[styles.statLabel, { color: palette.text.secondary }]}>Оплачено</Text>
+            <Text style={[styles.statValue, { color: palette.text.primary }]}>{formatMoney(supplier.totalPaid)}</Text>
+          </AnimatedCard>
+          <AnimatedCard
+            style={[
+              styles.statCard,
+              { backgroundColor: palette.bg.card, borderWidth: 1, borderColor: palette.border.subtle },
+            ]}
             index={2}
           >
             <Ionicons
               name="alert-circle-outline"
               size={16}
-              color={supplier.currentDebt > 0 ? colors.red[600] : colors.gray[500]}
+              color={supplier.currentDebt > 0 ? colors.red[600] : palette.text.tertiary}
               style={{ marginBottom: 2 }}
             />
-            <Text style={[styles.statLabel, { color: supplier.currentDebt > 0 ? colors.red[600] : colors.gray[500] }]}>
+            <Text style={[styles.statLabel, { color: palette.text.secondary }]}>
               Долг
             </Text>
-            <Text style={[styles.statValue, { color: supplier.currentDebt > 0 ? colors.red[700] : colors.gray[700] }]}>
+            <Text
+              style={[
+                styles.statValue,
+                { color: supplier.currentDebt > 0 ? colors.red[600] : palette.text.primary },
+              ]}
+            >
               {formatMoney(supplier.currentDebt)}
             </Text>
           </AnimatedCard>
@@ -396,19 +495,52 @@ export default function SupplierDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {/* Secondary action: return defective stock to supplier. Always
-            available — even when there's no current debt the action is
-            legitimate (it can drive the debt negative = supplier owes us).
-            Styled as a subdued pill (outline + amber tint) to stay below
-            the primary "Погасить долг" CTA in the visual hierarchy. */}
-        <TouchableOpacity
-          style={[styles.secondaryActionBtn, { borderColor: palette.border.subtle, backgroundColor: palette.bg.card }]}
-          onPress={openReturnDefect}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-undo-outline" size={16} color={colors.orange[600]} />
-          <Text style={[styles.secondaryActionText, { color: palette.text.primary }]}>Возврат брака</Text>
-        </TouchableOpacity>
+        {isUsedPurchaseSupplier ? (
+          // System "Покупка б/у товара" supplier — single primary CTA.
+          // Standard delivery / return flows make no sense here: we
+          // always buy from a client and the product lands on Б/У.
+          // Recolour `quickPayBtn` (default = red, for debt pay-off) to
+          // primary blue — same visual hierarchy, neutral semantics.
+          <TouchableOpacity
+            style={[styles.quickPayBtn, { backgroundColor: colors.primary[600] }]}
+            onPress={() => {
+              if (!usedWarehouse) {
+                Alert.alert(
+                  'Склад Б/У не найден',
+                  'Подождите загрузку складов или обновите экран.',
+                );
+                return;
+              }
+              setUpName('');
+              setUpQty('');
+              setUpPrice('');
+              setUpCategory('');
+              setUpNote('');
+              setUsedPurchaseModalOpen(true);
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="cube-outline" size={18} color={colors.white} />
+            <Text style={styles.quickPayText}>Покупка б/у товара</Text>
+          </TouchableOpacity>
+        ) : (
+          // Secondary action: return defective stock to supplier. Always
+          // available — even when there's no current debt the action is
+          // legitimate (it can drive the debt negative = supplier owes us).
+          // Styled as a subdued pill (outline + amber tint) to stay below
+          // the primary "Погасить долг" CTA in the visual hierarchy.
+          <TouchableOpacity
+            style={[
+              styles.secondaryActionBtn,
+              { borderColor: palette.border.subtle, backgroundColor: palette.bg.card },
+            ]}
+            onPress={openReturnDefect}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="arrow-undo-outline" size={16} color={colors.orange[600]} />
+            <Text style={[styles.secondaryActionText, { color: palette.text.primary }]}>Возврат брака</Text>
+          </TouchableOpacity>
+        )}
 
         {/* Info */}
         {(supplier.phone || supplier.contactPerson) && (
@@ -508,8 +640,8 @@ export default function SupplierDetailScreen() {
 
             {(deliveries || []).length === 0 && (
               <View style={styles.emptyState}>
-                <Ionicons name="cube-outline" size={36} color={colors.gray[300]} />
-                <Text style={styles.emptyText}>Нет поставок</Text>
+                <Ionicons name="cube-outline" size={36} color={palette.text.tertiary} />
+                <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Нет поставок</Text>
               </View>
             )}
 
@@ -556,28 +688,35 @@ export default function SupplierDetailScreen() {
                     </View>
 
                     {/* Item count summary */}
-                    <Text style={styles.itemsSummary}>
+                    <Text style={[styles.itemsSummary, { color: palette.text.tertiary }]}>
                       {d.items.length} {d.items.length === 1 ? 'товар' : d.items.length < 5 ? 'товара' : 'товаров'}
                     </Text>
 
                     {/* Expanded items list */}
                     {isExpanded && (
-                      <View style={styles.expandedItems}>
+                      <View style={[styles.expandedItems, { borderTopColor: palette.border.subtle }]}>
                         {d.items.map((item, idx) => (
                           <View key={idx} style={styles.expandedItemRow}>
-                            <Text style={styles.expandedItemName} numberOfLines={1}>
+                            <Text
+                              style={[styles.expandedItemName, { color: palette.text.secondary }]}
+                              numberOfLines={1}
+                            >
                               {item.product?.name || '—'}
                             </Text>
-                            <Text style={styles.expandedItemQty}>
+                            <Text style={[styles.expandedItemQty, { color: palette.text.tertiary }]}>
                               {item.quantity} x {formatMoney(item.price)}
                             </Text>
-                            <Text style={styles.expandedItemTotal}>{formatMoney(item.total)}</Text>
+                            <Text style={[styles.expandedItemTotal, { color: palette.text.secondary }]}>
+                              {formatMoney(item.total)}
+                            </Text>
                           </View>
                         ))}
                       </View>
                     )}
 
-                    {d.comment && <Text style={styles.commentText}>{d.comment}</Text>}
+                    {d.comment && (
+                      <Text style={[styles.commentText, { color: palette.text.tertiary }]}>{d.comment}</Text>
+                    )}
                   </View>
                 </TouchableOpacity>
               );
@@ -601,8 +740,8 @@ export default function SupplierDetailScreen() {
 
             {(payments || []).length === 0 && (
               <View style={styles.emptyState}>
-                <Ionicons name="cash-outline" size={36} color={colors.gray[300]} />
-                <Text style={styles.emptyText}>Нет платежей</Text>
+                <Ionicons name="cash-outline" size={36} color={palette.text.tertiary} />
+                <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Нет платежей</Text>
               </View>
             )}
 
@@ -613,7 +752,9 @@ export default function SupplierDetailScreen() {
                   <View style={styles.paymentTop}>
                     <View>
                       <Text style={[styles.paymentDate, { color: palette.text.primary }]}>{formatDate(p.date)}</Text>
-                      {p.comment && <Text style={styles.commentText}>{p.comment}</Text>}
+                      {p.comment && (
+                        <Text style={[styles.commentText, { color: palette.text.tertiary }]}>{p.comment}</Text>
+                      )}
                     </View>
                     <Text style={styles.paymentAmount}>{formatMoney(p.amount)}</Text>
                   </View>
@@ -635,8 +776,8 @@ export default function SupplierDetailScreen() {
 
             {(defectReturns || []).length === 0 && (
               <View style={styles.emptyState}>
-                <Ionicons name="arrow-undo-outline" size={36} color={colors.gray[300]} />
-                <Text style={styles.emptyText}>Возвратов нет</Text>
+                <Ionicons name="arrow-undo-outline" size={36} color={palette.text.tertiary} />
+                <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Возвратов нет</Text>
               </View>
             )}
 
@@ -655,16 +796,18 @@ export default function SupplierDetailScreen() {
                         <Text style={[styles.paymentDate, { color: palette.text.primary }]} numberOfLines={1}>
                           {m.product?.name || 'Товар удалён'}
                         </Text>
-                        <Text style={[styles.commentText, { marginTop: 2 }]}>
+                        <Text style={[styles.commentText, { marginTop: 2, color: palette.text.tertiary }]}>
                           {formatDate(m.createdAt)} · {qty} шт
                         </Text>
-                        {m.reason ? <Text style={styles.commentText}>{m.reason}</Text> : null}
+                        {m.reason ? (
+                          <Text style={[styles.commentText, { color: palette.text.tertiary }]}>{m.reason}</Text>
+                        ) : null}
                       </View>
                       <View style={{ alignItems: 'flex-end' }}>
                         <Text style={[styles.paymentAmount, { color: colors.orange[600] }]}>
                           −{formatMoney(debtReduction)}
                         </Text>
-                        <Text style={[styles.commentText, { marginTop: 0 }]}>долг</Text>
+                        <Text style={[styles.commentText, { marginTop: 0, color: palette.text.tertiary }]}>долг</Text>
                       </View>
                     </View>
                   </View>
@@ -810,6 +953,124 @@ export default function SupplierDetailScreen() {
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
               <Text style={styles.submitBtnText}>Оплатить</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Used-purchase modal — owner types a free-form product name +
+          qty + price + optional folder. Backend auto-creates or
+          increments the matching Б/У SKU and grows supplier debt. */}
+      <Modal
+        visible={usedPurchaseModalOpen}
+        onClose={() => setUsedPurchaseModalOpen(false)}
+        title="Покупка б/у товара"
+      >
+        <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>Название товара *</Text>
+            <TextInput
+              value={upName}
+              onChangeText={setUpName}
+              style={styles.formInput}
+              placeholder="Например: Капот"
+              placeholderTextColor={colors.gray[400]}
+            />
+          </View>
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>Количество *</Text>
+            <TextInput
+              value={upQty}
+              onChangeText={setUpQty}
+              style={styles.formInput}
+              keyboardType="numeric"
+              placeholder="0"
+              placeholderTextColor={colors.gray[400]}
+            />
+          </View>
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>Закупочная цена, ₽ *</Text>
+            <TextInput
+              value={upPrice}
+              onChangeText={setUpPrice}
+              style={styles.formInput}
+              keyboardType="numeric"
+              placeholder="0"
+              placeholderTextColor={colors.gray[400]}
+            />
+          </View>
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>Папка на складе Б/У</Text>
+            <TextInput
+              value={upCategory}
+              onChangeText={setUpCategory}
+              style={styles.formInput}
+              placeholder="Необязательно"
+              placeholderTextColor={colors.gray[400]}
+            />
+            {usedCategories.length > 0 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={{ marginTop: spacing[2] }}
+                contentContainerStyle={{ gap: spacing[2] }}
+                keyboardShouldPersistTaps="handled"
+              >
+                {usedCategories.slice(0, 16).map((cat) => (
+                  <TouchableOpacity
+                    key={cat.id}
+                    style={[
+                      styles.categoryChip,
+                      upCategory === cat.path && styles.categoryChipActive,
+                    ]}
+                    onPress={() => setUpCategory(cat.path)}
+                  >
+                    <Text
+                      style={[
+                        styles.categoryChipText,
+                        upCategory === cat.path && styles.categoryChipTextActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {cat.path}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : null}
+          </View>
+
+          {Number(upQty) > 0 && Number(upPrice) >= 0 ? (
+            <View style={[styles.defectTotalRow, { borderTopColor: palette.border.subtle }]}>
+              <Text style={[styles.defectTotalLabel, { color: palette.text.primary }]}>Долг вырастет на:</Text>
+              <Text style={[styles.defectTotalValue, { color: colors.red[600] }]}>
+                +{formatMoney(Number(upQty) * Number(upPrice))}
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>Комментарий</Text>
+            <TextInput
+              value={upNote}
+              onChangeText={setUpNote}
+              style={[styles.formInput, { height: 50, textAlignVertical: 'top' }]}
+              multiline
+              placeholder="Необязательно"
+              placeholderTextColor={colors.gray[400]}
+            />
+          </View>
+        </ScrollView>
+
+        <View style={styles.formActions}>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => setUsedPurchaseModalOpen(false)}>
+            <Text style={styles.cancelBtnText}>Отмена</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmitUsedPurchase}>
+            {usedPurchaseMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.submitBtnText}>Добавить</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -1291,4 +1552,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[600],
   },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
+  // Suggestion chips for existing Б/У folder paths — used in the used
+  // purchase modal so the owner doesn't retype folder names. Free-text
+  // input still wins; chips just fill the input on tap.
+  categoryChip: {
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+    backgroundColor: colors.gray[50],
+  },
+  categoryChipActive: {
+    borderColor: colors.primary[600],
+    backgroundColor: colors.primary[50],
+  },
+  categoryChipText: { fontSize: 12, color: colors.gray[700], fontWeight: fontWeight.medium },
+  categoryChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
 });

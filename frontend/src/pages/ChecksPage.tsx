@@ -1,7 +1,7 @@
 import { useState, memo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { Plus, FileText, Trash2, Clock, MessageSquare, TrendingUp, Car, User as UserIcon, Percent, Package, AlertTriangle, ArrowDown, ArrowUp, ClipboardCheck, ArrowLeftRight, Recycle, Undo2 } from 'lucide-react';
+import { Plus, FileText, Trash2, Clock, MessageSquare, TrendingUp, Car, User as UserIcon, Percent, Package, PackagePlus, AlertTriangle, ArrowDown, ArrowUp, ClipboardCheck, ArrowLeftRight, Recycle, Undo2 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
@@ -23,6 +23,16 @@ const movementTypeConfig: Record<string, { label: string; color: string; bg: str
   defect_transfer: { label: 'Перемещение в брак', color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200', icon: ArrowLeftRight },
   used_transfer: { label: 'Перемещение в Б/У', color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200', icon: Recycle },
   defect_return_to_supplier: { label: 'Возврат поставщику', color: 'text-red-700', bg: 'bg-red-50 border-red-200', icon: Undo2 },
+};
+
+// Special config for is_used_purchase=true rows. Distinct cyan palette
+// makes it impossible to confuse a б/у purchase with a regular
+// "Поступление" income line in the journal.
+const usedPurchaseConfig = {
+  label: 'Покупка Б/У',
+  color: 'text-cyan-700',
+  bg: 'bg-cyan-50 border-cyan-200',
+  icon: PackagePlus,
 };
 
 const paymentMethodBadge: Record<string, string> = {
@@ -286,13 +296,19 @@ export default function ChecksPage() {
         <div className="space-y-1.5">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1">Складские операции</p>
           {(showWarehouseDocs ? recentMovements : recentMovements.slice(0, 5)).map((m) => {
-            const cfg = movementTypeConfig[m.type] || movementTypeConfig.expense;
+            // is_used_purchase=true rows override the default "Поступление"
+            // styling with the dedicated "Покупка Б/У" config.
+            const cfg = m.isUsedPurchase
+              ? usedPurchaseConfig
+              : movementTypeConfig[m.type] || movementTypeConfig.expense;
             const Icon = cfg.icon;
             const direction =
               m.type === 'defect_transfer' || m.type === 'used_transfer'
                 ? `${m.sourceWarehouseName ?? 'Основной'} → ${m.targetWarehouseName ?? '—'}`
                 : m.type === 'defect_return_to_supplier'
                 ? `${m.warehouseName ?? 'Склад брака'}${m.supplierName ? ` → ${m.supplierName}` : ''}`
+                : m.isUsedPurchase && m.supplierName
+                ? `${m.supplierName} → ${m.warehouseName ?? 'Склад Б/У'}`
                 : null;
             return (
               <div key={m.id} className={`rounded-xl border shadow-sm p-3 flex items-center gap-3 ${cfg.bg}`}>

@@ -371,7 +371,7 @@ export default function ClientsScreen() {
     if (item.id === '__retail__') {
       return (
         <TouchableOpacity
-          style={styles.row}
+          style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
           activeOpacity={0.6}
           onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
         >
@@ -379,14 +379,14 @@ export default function ClientsScreen() {
             <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
           </View>
           <View style={styles.info}>
-            <Text style={styles.cardName} numberOfLines={1}>
+            <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
               {item.fullName}
             </Text>
-            <Text style={styles.cardSub} numberOfLines={1}>
+            <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
               Все чеки без клиента
             </Text>
           </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: 4 }} />
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
         </TouchableOpacity>
       );
     }
@@ -397,7 +397,7 @@ export default function ClientsScreen() {
 
     const card = (
       <TouchableOpacity
-        style={styles.row}
+        style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
         activeOpacity={0.6}
         onPress={() => navigation.navigate('ClientDetail', { id: item.id })}
       >
@@ -405,10 +405,10 @@ export default function ClientsScreen() {
           <Text style={styles.avatarInitials}>{initials}</Text>
         </View>
         <View style={styles.info}>
-          <Text style={styles.cardName} numberOfLines={1}>
+          <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
             {item.fullName}
           </Text>
-          <Text style={styles.cardSub} numberOfLines={1}>
+          <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
             {/* item.phone is typed required but legacy rows have null —
                 pass through `|| ''` so formatPhone doesn't throw on .replace. */}
             {[formatPhone(item.phone || '') || 'Без телефона', carsCount > 0 ? `${carsCount} авто` : null]
@@ -416,7 +416,7 @@ export default function ClientsScreen() {
               .join(' · ')}
           </Text>
         </View>
-        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: 4 }} />
+        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
       </TouchableOpacity>
     );
 
@@ -453,7 +453,7 @@ export default function ClientsScreen() {
   // for the lifetime of this screen instance, so we intentionally only
   // depend on the things that actually flow into row visuals.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canDelete, navigation]);
+  }, [canDelete, navigation, palette]);
 
   // Cars renderer — stable identity (FlashList re-renders every row
   // when this changes), so wrap in useCallback. The retail-pin branch
@@ -463,7 +463,7 @@ export default function ClientsScreen() {
       if (item.id === '__retail__') {
         return (
           <TouchableOpacity
-            style={cnStyles.carRow}
+            style={[cnStyles.carRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
             activeOpacity={0.6}
             onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
           >
@@ -471,20 +471,20 @@ export default function ClientsScreen() {
               <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={cnStyles.carName} numberOfLines={1}>
+              <Text style={[cnStyles.carName, { color: palette.text.primary }]} numberOfLines={1}>
                 Розничный покупатель
               </Text>
-              <Text style={cnStyles.carClient} numberOfLines={1}>
+              <Text style={[cnStyles.carClient, { color: palette.text.secondary }]} numberOfLines={1}>
                 Все чеки без клиента
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+            <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
           </TouchableOpacity>
         );
       }
       return (
         <TouchableOpacity
-          style={cnStyles.carRow}
+          style={[cnStyles.carRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
           activeOpacity={0.6}
           onPress={() => {
             if (item.client?.id) {
@@ -496,25 +496,25 @@ export default function ClientsScreen() {
             <Ionicons name="car-sport-outline" size={18} color={colors.primary[600]} />
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={cnStyles.carName} numberOfLines={1}>
+            <Text style={[cnStyles.carName, { color: palette.text.primary }]} numberOfLines={1}>
               {item.makeModel || '—'}
             </Text>
             {item.plateNumber && (
-              <View style={cnStyles.platePill}>
-                <Text style={cnStyles.platePillText}>{item.plateNumber}</Text>
+              <View style={[cnStyles.platePill, { backgroundColor: palette.bg.muted }]}>
+                <Text style={[cnStyles.platePillText, { color: palette.text.primary }]}>{item.plateNumber}</Text>
               </View>
             )}
           </View>
           {item.client?.fullName && (
-            <Text style={cnStyles.carClient} numberOfLines={1}>
+            <Text style={[cnStyles.carClient, { color: palette.text.secondary }]} numberOfLines={1}>
               {item.client.fullName}
             </Text>
           )}
-          <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+          <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
         </TouchableOpacity>
       );
     },
-    [navigation],
+    [navigation, palette],
   );
 
   return (
@@ -536,9 +536,12 @@ export default function ClientsScreen() {
           second — opening this screen, the user is usually scanning for a
           car (госномер) rather than a person. */}
       <View style={cnStyles.segmentWrap}>
-        <View style={cnStyles.segment}>
+        <View style={[cnStyles.segment, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
-            style={[cnStyles.segmentItem, mode === 'cars' && cnStyles.segmentActive]}
+            style={[
+              cnStyles.segmentItem,
+              mode === 'cars' && [cnStyles.segmentActive, { backgroundColor: palette.bg.card }],
+            ]}
             onPress={() => {
               setMode('cars');
               setSearch('');
@@ -547,11 +550,22 @@ export default function ClientsScreen() {
             }}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
-            <Ionicons name="car-sport" size={14} color={mode === 'cars' ? colors.primary[700] : colors.gray[500]} />
-            <Text style={mode === 'cars' ? cnStyles.segmentLabelActive : cnStyles.segmentLabelInactive}>Авто</Text>
+            <Ionicons name="car-sport" size={14} color={mode === 'cars' ? colors.primary[700] : palette.text.secondary} />
+            <Text
+              style={
+                mode === 'cars'
+                  ? cnStyles.segmentLabelActive
+                  : [cnStyles.segmentLabelInactive, { color: palette.text.secondary }]
+              }
+            >
+              Авто
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[cnStyles.segmentItem, mode === 'clients' && cnStyles.segmentActive]}
+            style={[
+              cnStyles.segmentItem,
+              mode === 'clients' && [cnStyles.segmentActive, { backgroundColor: palette.bg.card }],
+            ]}
             onPress={() => {
               setMode('clients');
               setSearch('');
@@ -560,8 +574,14 @@ export default function ClientsScreen() {
             }}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
-            <Ionicons name="people" size={14} color={mode === 'clients' ? colors.primary[700] : colors.gray[500]} />
-            <Text style={mode === 'clients' ? cnStyles.segmentLabelActive : cnStyles.segmentLabelInactive}>
+            <Ionicons name="people" size={14} color={mode === 'clients' ? colors.primary[700] : palette.text.secondary} />
+            <Text
+              style={
+                mode === 'clients'
+                  ? cnStyles.segmentLabelActive
+                  : [cnStyles.segmentLabelInactive, { color: palette.text.secondary }]
+              }
+            >
               Клиенты
             </Text>
           </TouchableOpacity>
@@ -651,36 +671,45 @@ export default function ClientsScreen() {
       {/* Create/Edit Modal */}
       <Modal visible={modalOpen} onClose={closeModal} title={editingClient ? 'Редактировать' : 'Новый клиент'}>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>ФИО</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>ФИО</Text>
           <TextInput
             value={fullName}
             onChangeText={setFullName}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="Введите ФИО клиента"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Телефон</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон</Text>
           <TextInput
             value={phone}
             onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="+7 (___) ___-__-__"
             keyboardType="phone-pad"
             autoComplete="tel"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Комментарий</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
           <TextInput
             value={comment}
             onChangeText={setComment}
-            style={[styles.formInput, { height: 80, textAlignVertical: 'top' }]}
+            style={[
+              styles.formInput,
+              { height: 80, textAlignVertical: 'top', backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="Необязательно"
             multiline
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
 
@@ -689,55 +718,64 @@ export default function ClientsScreen() {
             only if a госномер is typed. Plate dupes go through the
             same DuplicateWarningDialog as the standalone car add. */}
         {!editingClient && (
-          <View style={cnStyles.inlineCarBlock}>
+          <View style={[cnStyles.inlineCarBlock, { borderTopColor: palette.border.subtle }]}>
             <View style={cnStyles.inlineCarHeader}>
               <Ionicons name="car-sport-outline" size={14} color={colors.primary[600]} />
               <Text style={cnStyles.inlineCarHeaderText}>Автомобиль (необязательно)</Text>
             </View>
             <View style={styles.formField}>
-              <Text style={styles.formLabel}>Марка и модель</Text>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Марка и модель</Text>
               <TextInput
                 value={carMakeModel}
                 onChangeText={setCarMakeModel}
-                style={styles.formInput}
+                style={[
+                  styles.formInput,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                ]}
                 placeholder="Toyota Camry"
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
             </View>
             <View style={styles.formField}>
-              <Text style={styles.formLabel}>Госномер</Text>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Госномер</Text>
               <TextInput
                 value={carPlate}
                 onChangeText={(t) => setCarPlate(processPlateMainInput(t.replace(/\s/g, '')))}
-                style={styles.formInput}
+                style={[
+                  styles.formInput,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                ]}
                 placeholder="А000АА00"
                 autoCapitalize="characters"
                 autoCorrect={false}
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
             </View>
             <View style={styles.formField}>
-              <Text style={styles.formLabel}>VIN (необязательно)</Text>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN (необязательно)</Text>
               <TextInput
                 value={carVin}
                 onChangeText={(t) => setCarVin(t.toUpperCase())}
-                style={styles.formInput}
+                style={[
+                  styles.formInput,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                ]}
                 placeholder="1HGCM82633A123456"
                 autoCapitalize="characters"
                 autoCorrect={false}
                 maxLength={17}
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
             </View>
           </View>
         )}
 
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeModal}>
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.submitBtn}
+            style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
             onPress={handleSubmit}
             disabled={createMutation.isPending || updateMutation.isPending || submitting}
           >

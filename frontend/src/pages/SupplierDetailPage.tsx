@@ -24,7 +24,7 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { suppliersApi, productsApi, stockMovementsApi, warehousesApi } from '../api/services';
+import { suppliersApi, productsApi, stockMovementsApi, warehousesApi, warehouseCategoriesApi } from '../api/services';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
@@ -253,6 +253,16 @@ export default function SupplierDetailPage() {
   const [showDeliveryPicker, setShowDeliveryPicker] = useState(false);
   const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
   const [showReturnPicker, setShowReturnPicker] = useState(false);
+  // Used-purchase ("Покупка б/у товара") modal state. Only meaningful
+  // when the current supplier has kind='used_purchase'.
+  const [isUsedPurchaseModalOpen, setIsUsedPurchaseModalOpen] = useState(false);
+  const [usedPurchaseForm, setUsedPurchaseForm] = useState({
+    productName: '',
+    qty: '',
+    purchasePrice: '',
+    category: '',
+    note: '',
+  });
 
   // Supplier data
   const {
@@ -327,6 +337,24 @@ export default function SupplierDetailPage() {
   });
   const warehouses: Warehouse[] = warehousesData || [];
   const defectWarehouse = warehouses.find((w) => w.kind === 'defect');
+  const usedWarehouse = warehouses.find((w) => w.kind === 'used');
+  // System supplier → swap deliveries / returns actions for a single
+  // primary "Покупка б/у товара" CTA. We never let the user manually
+  // record deliveries or returns against this row.
+  const isUsedPurchaseSupplier = supplier?.kind === 'used_purchase';
+
+  // Existing folders inside the Б/У warehouse — surfaced as quick-pick
+  // chips so the user doesn't retype folder names.
+  const { data: usedCategoriesData } = useQuery({
+    queryKey: ['warehouse-categories', { warehouseId: usedWarehouse?.id }],
+    queryFn: () => warehouseCategoriesApi.getAll(usedWarehouse!.id),
+    select: (res) => res.data,
+    enabled: !!usedWarehouse?.id && isUsedPurchaseSupplier,
+    staleTime: 60_000,
+  });
+  const usedCategories: Array<{ id: string; path: string; sort_order: number }> = Array.isArray(usedCategoriesData)
+    ? usedCategoriesData
+    : [];
 
   // Defect-stock products picker (only items currently in defect warehouse)
   const { data: defectProductsData } = useQuery({
@@ -550,6 +578,56 @@ export default function SupplierDetailPage() {
     },
   });
 
+  // Used-purchase mutation. Backend (POST /suppliers/:id/used-purchase)
+  // atomically creates / increments the Б/У product, writes a delivery
+  // + supplier-debt entry, and stamps a stock_movement with
+  // is_used_purchase=true so the journal can render it specially.
+  const usedPurchaseMutation = useMutation({
+    mutationFn: (body: { productName: string; qty: number; purchasePrice: number; category?: string; note?: string }) =>
+      suppliersApi.usedPurchase(id!, body),
+    onSuccess: (_data, vars) => {
+      toast.success(`«${vars.productName}» добавлен на склад Б/У`);
+      queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+      queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] });
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      setIsUsedPurchaseModalOpen(false);
+      setUsedPurchaseForm({ productName: '', qty: '', purchasePrice: '', category: '', note: '' });
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Ошибка при оформлении покупки';
+      toast.error(typeof msg === 'string' ? msg : 'Ошибка при оформлении покупки');
+    },
+  });
+
+  const handleUsedPurchaseSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = usedPurchaseForm.productName.trim();
+    const qty = Number(usedPurchaseForm.qty);
+    const price = Number(usedPurchaseForm.purchasePrice);
+    if (!name) {
+      toast.error('Введите название товара');
+      return;
+    }
+    if (!qty || qty <= 0) {
+      toast.error('Количество должно быть больше нуля');
+      return;
+    }
+    if (!(price >= 0)) {
+      toast.error('Укажите корректную закупочную цену');
+      return;
+    }
+    usedPurchaseMutation.mutate({
+      productName: name,
+      qty,
+      purchasePrice: price,
+      category: usedPurchaseForm.category.trim() || undefined,
+      note: usedPurchaseForm.note.trim() || undefined,
+    });
+  };
+
   const handleReturnSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!returnForm.productId) { toast.error('Выберите товар из склада брака'); return; }
@@ -599,27 +677,60 @@ export default function SupplierDetailPage() {
       {/* Supplier info card */}
       <div className="card">
         <div className="card-body">
-          <div className="flex items-start justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">{supplier.name}</h1>
-              {supplier.contactPerson && (
-                <p className="mt-1 text-gray-600 flex items-center gap-2">
-                  <User className="w-4 h-4" />
-                  {supplier.contactPerson}
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-2xl font-bold text-gray-900">{supplier.name}</h1>
+                {supplier.isSystem ? (
+                  <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded bg-primary-50 text-primary-700">
+                    Системный
+                  </span>
+                ) : null}
+              </div>
+              {isUsedPurchaseSupplier ? (
+                <p className="mt-1 text-sm text-gray-500">
+                  Через этого поставщика оформляется покупка б/у товаров у клиентов. Товар попадает на склад Б/У.
                 </p>
+              ) : (
+                <>
+                  {supplier.contactPerson && (
+                    <p className="mt-1 text-gray-600 flex items-center gap-2">
+                      <User className="w-4 h-4" />
+                      {supplier.contactPerson}
+                    </p>
+                  )}
+                  {supplier.phone && (
+                    <p className="mt-1 text-gray-600 flex items-center gap-2">
+                      <Phone className="w-4 h-4" />
+                      {formatPhone(supplier.phone)}
+                    </p>
+                  )}
+                  {supplier.comment && <p className="mt-2 text-sm text-gray-500">{supplier.comment}</p>}
+                </>
               )}
-              {supplier.phone && (
-                <p className="mt-1 text-gray-600 flex items-center gap-2">
-                  <Phone className="w-4 h-4" />
-                  {formatPhone(supplier.phone)}
-                </p>
-              )}
-              {supplier.comment && <p className="mt-2 text-sm text-gray-500">{supplier.comment}</p>}
             </div>
-            <button onClick={openEditModal} className="btn-secondary">
-              <Edit2 className="w-4 h-4" />
-              Редактировать
-            </button>
+            {/* System suppliers are uneditable; backend would 403 anyway. */}
+            {supplier.isSystem ? (
+              <button
+                onClick={() => {
+                  if (!usedWarehouse) {
+                    toast.error('Склад Б/У не найден');
+                    return;
+                  }
+                  setUsedPurchaseForm({ productName: '', qty: '', purchasePrice: '', category: '', note: '' });
+                  setIsUsedPurchaseModalOpen(true);
+                }}
+                className="btn-primary flex-shrink-0"
+              >
+                <Package className="w-4 h-4" />
+                Покупка б/у товара
+              </button>
+            ) : (
+              <button onClick={openEditModal} className="btn-secondary flex-shrink-0">
+                <Edit2 className="w-4 h-4" />
+                Редактировать
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -682,12 +793,17 @@ export default function SupplierDetailPage() {
       {/* Deliveries Tab */}
       {activeTab === 'deliveries' && (
         <div className="space-y-4">
-          <div className="flex justify-end">
-            <button onClick={openDeliveryModal} className="btn-primary">
-              <Plus className="w-4 h-4" />
-              Новая поставка
-            </button>
-          </div>
+          {/* The "Новая поставка" action is hidden for the pinned
+              used_purchase supplier — deliveries against that row are
+              created via the dedicated "Покупка б/у товара" CTA above. */}
+          {isUsedPurchaseSupplier ? null : (
+            <div className="flex justify-end">
+              <button onClick={openDeliveryModal} className="btn-primary">
+                <Plus className="w-4 h-4" />
+                Новая поставка
+              </button>
+            </div>
+          )}
 
           {deliveries.length === 0 ? (
             <EmptyState
@@ -767,12 +883,16 @@ export default function SupplierDetailPage() {
       {/* Returns Tab — defect returns to this supplier */}
       {activeTab === 'returns' && (
         <div className="space-y-4">
-          <div className="flex justify-end">
-            <button onClick={openReturnModal} className="btn-secondary" disabled={!defectWarehouse}>
-              <Undo2 className="w-4 h-4" />
-              Возврат брака
-            </button>
-          </div>
+          {/* Same rationale as deliveries — defect returns make no
+              sense against the used_purchase row. */}
+          {isUsedPurchaseSupplier ? null : (
+            <div className="flex justify-end">
+              <button onClick={openReturnModal} className="btn-secondary" disabled={!defectWarehouse}>
+                <Undo2 className="w-4 h-4" />
+                Возврат брака
+              </button>
+            </div>
+          )}
 
           {returns.length === 0 ? (
             <EmptyState
@@ -1147,6 +1267,134 @@ export default function SupplierDetailPage() {
         products={defectProducts}
         onSelect={handleReturnProductSelected}
       />
+
+      {/* Used-purchase modal — free-form product name / qty / price /
+          optional Б/У folder. Backend auto-creates or increments the
+          matching SKU on the used warehouse. */}
+      <Modal
+        isOpen={isUsedPurchaseModalOpen}
+        onClose={() => setIsUsedPurchaseModalOpen(false)}
+        title="Покупка б/у товара"
+      >
+        <form onSubmit={handleUsedPurchaseSubmit} className="space-y-4">
+          <p className="text-xs text-gray-500">
+            Товар будет добавлен на склад Б/У. Долг поставщику вырастет на сумму закупки — погасите его позже через «Новая оплата».
+          </p>
+
+          <div>
+            <label className="label">Название товара *</label>
+            <input
+              type="text"
+              className="input"
+              value={usedPurchaseForm.productName}
+              onChange={(e) =>
+                setUsedPurchaseForm({ ...usedPurchaseForm, productName: e.target.value })
+              }
+              placeholder="Например: Капот"
+              autoFocus
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="label">Количество *</label>
+              <input
+                type="number"
+                className="input"
+                min={1}
+                step="1"
+                value={usedPurchaseForm.qty}
+                onChange={(e) => setUsedPurchaseForm({ ...usedPurchaseForm, qty: e.target.value })}
+                placeholder="0"
+              />
+            </div>
+            <div>
+              <label className="label">Закупочная цена, ₽ *</label>
+              <input
+                type="number"
+                className="input"
+                min={0}
+                step="0.01"
+                value={usedPurchaseForm.purchasePrice}
+                onChange={(e) =>
+                  setUsedPurchaseForm({ ...usedPurchaseForm, purchasePrice: e.target.value })
+                }
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="label">Папка на складе Б/У</label>
+            <input
+              type="text"
+              className="input"
+              value={usedPurchaseForm.category}
+              onChange={(e) => setUsedPurchaseForm({ ...usedPurchaseForm, category: e.target.value })}
+              placeholder="Необязательно"
+            />
+            {usedCategories.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {usedCategories.slice(0, 16).map((cat) => {
+                  const active = usedPurchaseForm.category === cat.path;
+                  return (
+                    <button
+                      type="button"
+                      key={cat.id}
+                      onClick={() =>
+                        setUsedPurchaseForm({ ...usedPurchaseForm, category: cat.path })
+                      }
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                        active
+                          ? 'border-primary-500 bg-primary-50 text-primary-700 font-semibold'
+                          : 'border-gray-200 bg-gray-50 text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      {cat.path}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+
+          {Number(usedPurchaseForm.qty) > 0 && Number(usedPurchaseForm.purchasePrice) >= 0 ? (
+            <div className="flex items-center justify-between text-sm font-semibold pt-3 border-t border-gray-200">
+              <span className="text-gray-700">Долг вырастет на:</span>
+              <span className="text-rose-600">
+                +
+                {formatMoney(
+                  Number(usedPurchaseForm.qty) * Number(usedPurchaseForm.purchasePrice),
+                )}
+              </span>
+            </div>
+          ) : null}
+
+          <div>
+            <label className="label">Комментарий</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={usedPurchaseForm.note}
+              onChange={(e) => setUsedPurchaseForm({ ...usedPurchaseForm, note: e.target.value })}
+              placeholder="Необязательно"
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setIsUsedPurchaseModalOpen(false)}
+              className="btn-secondary"
+            >
+              Отмена
+            </button>
+            <button type="submit" disabled={usedPurchaseMutation.isPending} className="btn-primary">
+              {usedPurchaseMutation.isPending ? 'Сохранение...' : 'Добавить'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

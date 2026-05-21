@@ -14,6 +14,7 @@ import { useNavigation } from '@react-navigation/native';
 import { checksApi, usersApi, productsApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import type { SemanticPalette } from '../theme/palette';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
@@ -73,6 +74,10 @@ const movementTypeLabels: Record<string, string> = {
   defect_return_to_supplier: 'Возврат поставщику',
 };
 
+// Special label for `isUsedPurchase=true` rows — overrides the generic
+// "Приход" label coming from movementTypeLabels.income.
+const USED_PURCHASE_LABEL = 'Покупка Б/У';
+
 const movementTypeIcons: Record<string, { name: keyof typeof Ionicons.glyphMap; color: string; accentColor: string }> =
   {
     inventory: { name: 'clipboard-outline', color: colors.blue[600], accentColor: colors.blue[500] },
@@ -94,6 +99,15 @@ const movementTypeIcons: Record<string, { name: keyof typeof Ionicons.glyphMap; 
       accentColor: colors.red[500],
     },
   };
+
+// Дополнительная палитра для inbound used-purchase rows. Цвет cyan
+// отличает её от обычного зелёного "Приход" — owner не путает покупку
+// нового товара с покупкой б/у у клиента.
+const USED_PURCHASE_ICON = {
+  name: 'cube-outline' as keyof typeof Ionicons.glyphMap,
+  color: colors.cyan[600],
+  accentColor: colors.cyan[400],
+};
 
 // Outflow-движения — количество показываем со знаком «−» и красным цветом.
 // inventory всегда нейтральный знак (это коррекция, а не приход/расход).
@@ -131,6 +145,7 @@ interface CheckRowProps {
   canViewProfit: boolean;
   onOpen: (checkId: string) => void;
   onDelete: (checkId: string, checkNumber: number) => void;
+  palette: SemanticPalette;
 }
 const CheckRow = React.memo(function CheckRow({
   check,
@@ -140,6 +155,7 @@ const CheckRow = React.memo(function CheckRow({
   canViewProfit,
   onOpen,
   onDelete,
+  palette,
 }: CheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = badgeColors[badgeKey];
@@ -152,13 +168,17 @@ const CheckRow = React.memo(function CheckRow({
     <View>
       {showDateHeader && (
         <View style={styles.dateGroupHeader}>
-          <View style={styles.dateGroupLine} />
-          <Text style={styles.dateGroupText}>{dateGroupLabel}</Text>
-          <View style={styles.dateGroupLine} />
+          <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
+          <Text style={[styles.dateGroupText, { color: palette.text.tertiary }]}>{dateGroupLabel}</Text>
+          <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
         </View>
       )}
       <TouchableOpacity
-        style={[styles.checkCard, check.isDeferred && styles.checkCardDeferred]}
+        style={[
+          styles.checkCard,
+          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          check.isDeferred && styles.checkCardDeferred,
+        ]}
         onPress={() => onOpen(check.id)}
         activeOpacity={0.7}
       >
@@ -171,7 +191,7 @@ const CheckRow = React.memo(function CheckRow({
         <View style={styles.checkContent}>
           <View style={styles.checkHeader}>
             <View style={styles.checkHeaderLeft}>
-              <Text style={styles.checkNumber}>#{check.number}</Text>
+              <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
               {check.isDeferred && (
                 <View style={styles.deferredBadge}>
                   <Text style={styles.deferredText}>Отложен</Text>
@@ -184,14 +204,16 @@ const CheckRow = React.memo(function CheckRow({
               </View>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-              <Text style={styles.checkTotal}>{formatMoney(check.totalRevenue)}</Text>
+              <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
+                {formatMoney(check.totalRevenue)}
+              </Text>
               {canDelete && (
                 <TouchableOpacity
                   onPress={() => onDelete(check.id, check.number)}
                   style={styles.deleteBtn}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Ionicons name="close" size={14} color={colors.gray[300]} />
+                  <Ionicons name="close" size={14} color={palette.text.tertiary} />
                 </TouchableOpacity>
               )}
             </View>
@@ -200,16 +222,16 @@ const CheckRow = React.memo(function CheckRow({
           <View style={styles.checkInfoRow}>
             {check.client?.fullName ? (
               <View style={styles.infoChip}>
-                <Ionicons name="person-outline" size={11} color={colors.gray[400]} />
-                <Text style={styles.infoChipText} numberOfLines={1}>
+                <Ionicons name="person-outline" size={11} color={palette.text.tertiary} />
+                <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
                   {check.client.fullName}
                 </Text>
               </View>
             ) : null}
             {check.car && (
               <View style={styles.infoChip}>
-                <Ionicons name="car-outline" size={11} color={colors.gray[400]} />
-                <Text style={styles.infoChipText} numberOfLines={1}>
+                <Ionicons name="car-outline" size={11} color={palette.text.tertiary} />
+                <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
                   {check.car.makeModel}
                 </Text>
                 {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
@@ -224,8 +246,10 @@ const CheckRow = React.memo(function CheckRow({
           )}
 
           <View style={styles.checkFooter}>
-            <Text style={styles.footerTime}>{timeLabel}</Text>
-            {check.master && <Text style={styles.footerMaster}>{check.master.fullName}</Text>}
+            <Text style={[styles.footerTime, { color: palette.text.tertiary }]}>{timeLabel}</Text>
+            {check.master && (
+              <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
+            )}
             {canViewProfit && (
               <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
                 {check.profit >= 0 ? '+' : ''}
@@ -253,13 +277,29 @@ type WarehouseDoc =
 interface WarehouseDocRowProps {
   item: WarehouseDoc;
   onSelect: (doc: WarehouseDoc) => void;
+  palette: SemanticPalette;
 }
-const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect }: WarehouseDocRowProps) {
+const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, palette }: WarehouseDocRowProps) {
   if (item.kind === 'movement') {
     const m = item.data;
-    const typeInfo = movementTypeIcons[m.type] || movementTypeIcons.income;
+    // "Покупка Б/У" — отдельная палитра (cyan) и лейбл. Owner brief:
+    // эти движения должны визуально выделяться в журнале.
+    const isUsedPurchase = !!m.isUsedPurchase;
+    const typeInfo = isUsedPurchase
+      ? USED_PURCHASE_ICON
+      : movementTypeIcons[m.type] || movementTypeIcons.income;
+    const label = isUsedPurchase ? USED_PURCHASE_LABEL : movementTypeLabels[m.type];
+    const qtyColor = isUsedPurchase
+      ? colors.cyan[600]
+      : NEGATIVE_MOVEMENT_TYPES.has(m.type)
+        ? colors.red[600]
+        : colors.green[600];
     return (
-      <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => onSelect(item)}>
+      <TouchableOpacity
+        style={[styles.warehouseCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        activeOpacity={0.7}
+        onPress={() => onSelect(item)}
+      >
         <View style={[styles.warehouseAccent, { backgroundColor: typeInfo.accentColor }]} />
         <View style={styles.warehouseCardContent}>
           <View style={styles.warehouseCardHeader}>
@@ -267,32 +307,29 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect }: 
               <Ionicons name={typeInfo.name as any} size={18} color={typeInfo.color} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.warehouseCardTitle} numberOfLines={1}>
+              <Text style={[styles.warehouseCardTitle, { color: palette.text.primary }]} numberOfLines={1}>
                 {m.product?.name || 'Товар'}
               </Text>
-              <Text style={styles.warehouseCardSubtitle}>{movementTypeLabels[m.type]}</Text>
+              <Text style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]}>{label}</Text>
             </View>
             <View style={{ alignItems: 'flex-end' }}>
-              <Text
-                style={[
-                  styles.warehouseQty,
-                  { color: NEGATIVE_MOVEMENT_TYPES.has(m.type) ? colors.red[600] : colors.green[600] },
-                ]}
-              >
+              <Text style={[styles.warehouseQty, { color: qtyColor }]}>
                 {NEGATIVE_MOVEMENT_TYPES.has(m.type) ? '-' : '+'}
                 {m.quantity} шт
               </Text>
-              <Text style={styles.warehouseDate}>{formatDate(m.createdAt)}</Text>
+              <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>{formatDate(m.createdAt)}</Text>
             </View>
           </View>
           {(m.reason || m.user) && (
-            <View style={styles.warehouseCardFooter}>
+            <View style={[styles.warehouseCardFooter, { borderTopColor: palette.border.subtle }]}>
               {m.reason ? (
-                <Text style={styles.warehouseReason} numberOfLines={1}>
+                <Text style={[styles.warehouseReason, { color: palette.text.secondary }]} numberOfLines={1}>
                   {m.reason}
                 </Text>
               ) : null}
-              {m.user ? <Text style={styles.warehouseUser}>{m.user.fullName}</Text> : null}
+              {m.user ? (
+                <Text style={[styles.warehouseUser, { color: palette.text.tertiary }]}>{m.user.fullName}</Text>
+              ) : null}
             </View>
           )}
         </View>
@@ -303,7 +340,11 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect }: 
   // product policy (debt tracking lives in the Suppliers screen).
   const d = item.data;
   return (
-    <TouchableOpacity style={styles.warehouseCard} activeOpacity={0.7} onPress={() => onSelect(item)}>
+    <TouchableOpacity
+      style={[styles.warehouseCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      activeOpacity={0.7}
+      onPress={() => onSelect(item)}
+    >
       <View style={[styles.warehouseAccent, { backgroundColor: colors.green[500] }]} />
       <View style={styles.warehouseCardContent}>
         <View style={styles.warehouseCardHeader}>
@@ -311,19 +352,21 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect }: 
             <Ionicons name="bus-outline" size={18} color={colors.green[600]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.warehouseCardTitle} numberOfLines={1}>
+            <Text style={[styles.warehouseCardTitle, { color: palette.text.primary }]} numberOfLines={1}>
               {d.supplier?.name || 'Поставщик'}
             </Text>
-            <Text style={styles.warehouseCardSubtitle}>Поставка {d.items?.length || 0} поз.</Text>
+            <Text style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]}>
+              Поставка {d.items?.length || 0} поз.
+            </Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[styles.warehouseQty, { color: colors.gray[900] }]}>{formatMoney(d.totalAmount)}</Text>
-            <Text style={styles.warehouseDate}>{formatDate(d.date)}</Text>
+            <Text style={[styles.warehouseQty, { color: palette.text.primary }]}>{formatMoney(d.totalAmount)}</Text>
+            <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>{formatDate(d.date)}</Text>
           </View>
         </View>
         {d.comment ? (
-          <View style={styles.warehouseCardFooter}>
-            <Text style={styles.warehouseReason} numberOfLines={1}>
+          <View style={[styles.warehouseCardFooter, { borderTopColor: palette.border.subtle }]}>
+            <Text style={[styles.warehouseReason, { color: palette.text.secondary }]} numberOfLines={1}>
               {d.comment}
             </Text>
           </View>
@@ -553,14 +596,17 @@ export default function ChecksScreen() {
         canViewProfit={canViewProfit}
         onOpen={openCheckDetail}
         onDelete={handleDelete}
+        palette={palette}
       />
     ),
-    [dateHeaderByIndex, canDelete, canViewProfit, openCheckDetail, handleDelete],
+    [dateHeaderByIndex, canDelete, canViewProfit, openCheckDetail, handleDelete, palette],
   );
 
   const renderWarehouseDoc = useCallback(
-    ({ item }: { item: WarehouseDoc }) => <WarehouseDocRow item={item} onSelect={setSelectedDoc} />,
-    [],
+    ({ item }: { item: WarehouseDoc }) => (
+      <WarehouseDocRow item={item} onSelect={setSelectedDoc} palette={palette} />
+    ),
+    [palette],
   );
 
   const isWarehouseLoading = movementsLoading || deliveriesLoading;
@@ -588,17 +634,21 @@ export default function ChecksScreen() {
           />
         </View>
         <TouchableOpacity
-          style={[styles.filterBtn, activeFilterCount > 0 && styles.filterBtnActive]}
+          style={[
+            styles.filterBtn,
+            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            activeFilterCount > 0 && styles.filterBtnActive,
+          ]}
           onPress={() => setShowFilters(!showFilters)}
           activeOpacity={0.7}
         >
           <Ionicons
             name={activeFilterCount > 0 ? 'funnel' : 'funnel-outline'}
             size={18}
-            color={activeFilterCount > 0 ? colors.primary[600] : colors.gray[500]}
+            color={activeFilterCount > 0 ? colors.primary[600] : palette.text.secondary}
           />
           {activeFilterCount > 0 && (
-            <View style={styles.filterCountDot}>
+            <View style={[styles.filterCountDot, { borderColor: palette.bg.canvas }]}>
               <Text style={styles.filterCountDotText}>{activeFilterCount}</Text>
             </View>
           )}
@@ -607,30 +657,50 @@ export default function ChecksScreen() {
 
       {/* Segmented control: Checks | Warehouse documents */}
       <View style={styles.segmentedWrap}>
-        <View style={styles.segmentedControl}>
+        <View style={[styles.segmentedControl, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
-            style={[styles.segmentBtn, activeTab === 'checks' && styles.segmentBtnActive]}
+            style={[
+              styles.segmentBtn,
+              activeTab === 'checks' && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }],
+            ]}
             onPress={() => setActiveTab('checks')}
             activeOpacity={0.7}
           >
             <Ionicons
               name="receipt-outline"
               size={15}
-              color={activeTab === 'checks' ? colors.primary[700] : colors.gray[500]}
+              color={activeTab === 'checks' ? colors.primary[700] : palette.text.secondary}
             />
-            <Text style={[styles.segmentBtnText, activeTab === 'checks' && styles.segmentBtnTextActive]}>Чеки</Text>
+            <Text
+              style={[
+                styles.segmentBtnText,
+                { color: palette.text.secondary },
+                activeTab === 'checks' && styles.segmentBtnTextActive,
+              ]}
+            >
+              Чеки
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.segmentBtn, activeTab === 'warehouse' && styles.segmentBtnActive]}
+            style={[
+              styles.segmentBtn,
+              activeTab === 'warehouse' && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }],
+            ]}
             onPress={() => setActiveTab('warehouse')}
             activeOpacity={0.7}
           >
             <Ionicons
               name="cube-outline"
               size={15}
-              color={activeTab === 'warehouse' ? colors.primary[700] : colors.gray[500]}
+              color={activeTab === 'warehouse' ? colors.primary[700] : palette.text.secondary}
             />
-            <Text style={[styles.segmentBtnText, activeTab === 'warehouse' && styles.segmentBtnTextActive]}>
+            <Text
+              style={[
+                styles.segmentBtnText,
+                { color: palette.text.secondary },
+                activeTab === 'warehouse' && styles.segmentBtnTextActive,
+              ]}
+            >
               Склад. документы
             </Text>
           </TouchableOpacity>
@@ -642,9 +712,18 @@ export default function ChecksScreen() {
         <View style={styles.filtersPanel}>
           {/* Date range */}
           <View style={styles.filterRow}>
-            <TouchableOpacity style={styles.filterDateBtn} onPress={() => setShowDateFromPicker(true)}>
-              <Ionicons name="calendar-outline" size={14} color={colors.gray[500]} />
-              <Text style={[styles.filterDateText, dateFrom && { color: colors.gray[900] }]}>
+            <TouchableOpacity
+              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => setShowDateFromPicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
+              <Text
+                style={[
+                  styles.filterDateText,
+                  { color: palette.text.tertiary },
+                  dateFrom && { color: palette.text.primary },
+                ]}
+              >
                 {dateFrom ? formatFilterDate(dateFrom) : 'С даты'}
               </Text>
               {dateFrom && (
@@ -655,14 +734,23 @@ export default function ChecksScreen() {
                   }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Ionicons name="close-circle" size={14} color={colors.gray[400]} />
+                  <Ionicons name="close-circle" size={14} color={palette.text.tertiary} />
                 </TouchableOpacity>
               )}
             </TouchableOpacity>
-            <Ionicons name="arrow-forward" size={12} color={colors.gray[300]} />
-            <TouchableOpacity style={styles.filterDateBtn} onPress={() => setShowDateToPicker(true)}>
-              <Ionicons name="calendar-outline" size={14} color={colors.gray[500]} />
-              <Text style={[styles.filterDateText, dateTo && { color: colors.gray[900] }]}>
+            <Ionicons name="arrow-forward" size={12} color={palette.text.tertiary} />
+            <TouchableOpacity
+              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => setShowDateToPicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
+              <Text
+                style={[
+                  styles.filterDateText,
+                  { color: palette.text.tertiary },
+                  dateTo && { color: palette.text.primary },
+                ]}
+              >
                 {dateTo ? formatFilterDate(dateTo) : 'По дату'}
               </Text>
               {dateTo && (
@@ -673,7 +761,7 @@ export default function ChecksScreen() {
                   }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Ionicons name="close-circle" size={14} color={colors.gray[400]} />
+                  <Ionicons name="close-circle" size={14} color={palette.text.tertiary} />
                 </TouchableOpacity>
               )}
             </TouchableOpacity>
@@ -683,24 +771,46 @@ export default function ChecksScreen() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing[2] }}>
             <View style={{ flexDirection: 'row', gap: spacing[1.5] }}>
               <TouchableOpacity
-                style={[styles.empChip, !filterMasterId && styles.empChipActive]}
+                style={[
+                  styles.empChip,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  !filterMasterId && styles.empChipActive,
+                ]}
                 onPress={() => {
                   setFilterMasterId('');
                   setPage(1);
                 }}
               >
-                <Text style={[styles.empChipText, !filterMasterId && styles.empChipTextActive]}>Все</Text>
+                <Text
+                  style={[
+                    styles.empChipText,
+                    { color: palette.text.secondary },
+                    !filterMasterId && styles.empChipTextActive,
+                  ]}
+                >
+                  Все
+                </Text>
               </TouchableOpacity>
               {activeUsers.map((u) => (
                 <TouchableOpacity
                   key={u.id}
-                  style={[styles.empChip, filterMasterId === u.id && styles.empChipActive]}
+                  style={[
+                    styles.empChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    filterMasterId === u.id && styles.empChipActive,
+                  ]}
                   onPress={() => {
                     setFilterMasterId(filterMasterId === u.id ? '' : u.id);
                     setPage(1);
                   }}
                 >
-                  <Text style={[styles.empChipText, filterMasterId === u.id && styles.empChipTextActive]}>
+                  <Text
+                    style={[
+                      styles.empChipText,
+                      { color: palette.text.secondary },
+                      filterMasterId === u.id && styles.empChipTextActive,
+                    ]}
+                  >
                     {u.fullName?.split(' ')[0]}
                   </Text>
                 </TouchableOpacity>
@@ -837,60 +947,72 @@ export default function ChecksScreen() {
       <Modal
         visible={!!selectedDoc}
         onClose={() => setSelectedDoc(null)}
-        title={selectedDoc?.kind === 'movement' ? movementTypeLabels[selectedDoc.data.type] || 'Документ' : 'Поставка'}
+        title={
+          selectedDoc?.kind === 'movement'
+            ? selectedDoc.data.isUsedPurchase
+              ? USED_PURCHASE_LABEL
+              : movementTypeLabels[selectedDoc.data.type] || 'Документ'
+            : 'Поставка'
+        }
       >
         {selectedDoc?.kind === 'movement' &&
           (() => {
             const m = selectedDoc.data;
-            const typeInfo = movementTypeIcons[m.type] || movementTypeIcons.income;
+            const isUsedPurchase = !!m.isUsedPurchase;
+            const typeInfo = isUsedPurchase
+              ? USED_PURCHASE_ICON
+              : movementTypeIcons[m.type] || movementTypeIcons.income;
+            const label = isUsedPurchase ? USED_PURCHASE_LABEL : movementTypeLabels[m.type];
+            const qtyColor = isUsedPurchase
+              ? colors.cyan[600]
+              : NEGATIVE_MOVEMENT_TYPES.has(m.type)
+                ? colors.red[600]
+                : colors.green[600];
             return (
               <View style={{ gap: spacing[3] }}>
-                <View style={styles.docDetailHeader}>
+                <View style={[styles.docDetailHeader, { borderBottomColor: palette.border.subtle }]}>
                   <View style={[styles.docDetailIcon, { backgroundColor: typeInfo.accentColor + '18' }]}>
                     <Ionicons name={typeInfo.name as any} size={28} color={typeInfo.color} />
                   </View>
-                  <Text style={styles.docDetailType}>{movementTypeLabels[m.type]}</Text>
+                  <Text style={[styles.docDetailType, { color: palette.text.primary }]}>{label}</Text>
                 </View>
 
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Товар</Text>
-                  <Text style={styles.docDetailValue}>{m.product?.name || '—'}</Text>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Товар</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.product?.name || '—'}</Text>
                 </View>
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Количество</Text>
-                  <Text
-                    style={[
-                      styles.docDetailValue,
-                      { color: NEGATIVE_MOVEMENT_TYPES.has(m.type) ? colors.red[600] : colors.green[600] },
-                    ]}
-                  >
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Количество</Text>
+                  <Text style={[styles.docDetailValue, { color: qtyColor }]}>
                     {NEGATIVE_MOVEMENT_TYPES.has(m.type) ? '-' : '+'}
                     {m.quantity} шт
                   </Text>
                 </View>
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Остаток до</Text>
-                  <Text style={styles.docDetailValue}>{m.stockBefore} шт</Text>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Остаток до</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.stockBefore} шт</Text>
                 </View>
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Остаток после</Text>
-                  <Text style={styles.docDetailValue}>{m.stockAfter} шт</Text>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Остаток после</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.stockAfter} шт</Text>
                 </View>
                 {m.reason && (
                   <View style={styles.docDetailRow}>
-                    <Text style={styles.docDetailLabel}>Причина</Text>
-                    <Text style={styles.docDetailValue}>{m.reason}</Text>
+                    <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Причина</Text>
+                    <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.reason}</Text>
                   </View>
                 )}
                 {m.user && (
                   <View style={styles.docDetailRow}>
-                    <Text style={styles.docDetailLabel}>Сотрудник</Text>
-                    <Text style={styles.docDetailValue}>{m.user.fullName}</Text>
+                    <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Сотрудник</Text>
+                    <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.user.fullName}</Text>
                   </View>
                 )}
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Дата</Text>
-                  <Text style={styles.docDetailValue}>{formatDate(m.createdAt)}</Text>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Дата</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>
+                    {formatDate(m.createdAt)}
+                  </Text>
                 </View>
               </View>
             );
@@ -904,40 +1026,46 @@ export default function ChecksScreen() {
             const d = selectedDoc.data;
             return (
               <View style={{ gap: spacing[3] }}>
-                <View style={styles.docDetailHeader}>
+                <View style={[styles.docDetailHeader, { borderBottomColor: palette.border.subtle }]}>
                   <View style={[styles.docDetailIcon, { backgroundColor: colors.green[50] }]}>
                     <Ionicons name="bus-outline" size={28} color={colors.green[600]} />
                   </View>
-                  <Text style={styles.docDetailType}>Поставка</Text>
+                  <Text style={[styles.docDetailType, { color: palette.text.primary }]}>Поставка</Text>
                 </View>
 
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Поставщик</Text>
-                  <Text style={styles.docDetailValue}>{d.supplier?.name || '—'}</Text>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Поставщик</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>
+                    {d.supplier?.name || '—'}
+                  </Text>
                 </View>
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Дата</Text>
-                  <Text style={styles.docDetailValue}>{formatDate(d.date)}</Text>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Дата</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{formatDate(d.date)}</Text>
                 </View>
                 <View style={styles.docDetailRow}>
-                  <Text style={styles.docDetailLabel}>Сумма</Text>
-                  <Text style={[styles.docDetailValue, { fontWeight: fontWeight.bold }]}>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Сумма</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary, fontWeight: fontWeight.bold }]}>
                     {formatMoney(d.totalAmount)}
                   </Text>
                 </View>
 
                 {d.items && d.items.length > 0 && (
-                  <View style={styles.docDetailItems}>
-                    <Text style={styles.docDetailItemsTitle}>Товары ({d.items.length})</Text>
+                  <View style={[styles.docDetailItems, { backgroundColor: palette.bg.muted }]}>
+                    <Text style={[styles.docDetailItemsTitle, { color: palette.text.primary }]}>
+                      Товары ({d.items.length})
+                    </Text>
                     {d.items.map((item, idx) => (
                       <View key={idx} style={styles.docDetailItemRow}>
-                        <Text style={styles.docDetailItemName} numberOfLines={1}>
+                        <Text style={[styles.docDetailItemName, { color: palette.text.secondary }]} numberOfLines={1}>
                           {item.product?.name || '—'}
                         </Text>
-                        <Text style={styles.docDetailItemQty}>
+                        <Text style={[styles.docDetailItemQty, { color: palette.text.tertiary }]}>
                           {item.quantity} x {formatMoney(item.price)}
                         </Text>
-                        <Text style={styles.docDetailItemTotal}>{formatMoney(item.total)}</Text>
+                        <Text style={[styles.docDetailItemTotal, { color: palette.text.primary }]}>
+                          {formatMoney(item.total)}
+                        </Text>
                       </View>
                     ))}
                   </View>
@@ -945,8 +1073,10 @@ export default function ChecksScreen() {
 
                 {d.comment && (
                   <View style={styles.docDetailRow}>
-                    <Text style={styles.docDetailLabel}>Комментарий</Text>
-                    <Text style={[styles.docDetailValue, { fontStyle: 'italic' }]}>{d.comment}</Text>
+                    <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Комментарий</Text>
+                    <Text style={[styles.docDetailValue, { color: palette.text.primary, fontStyle: 'italic' }]}>
+                      {d.comment}
+                    </Text>
                   </View>
                 )}
               </View>

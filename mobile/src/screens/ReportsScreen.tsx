@@ -105,9 +105,11 @@ export default function ReportsScreen() {
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Отчёты" onBack={() => navigation.goBack()} />
         <View style={styles.accessDenied}>
-          <Ionicons name="lock-closed" size={40} color={colors.gray[300]} />
-          <Text style={styles.adTitle}>Доступ ограничен</Text>
-          <Text style={styles.adDesc}>У вас нет прав для просмотра финансовых отчетов</Text>
+          <Ionicons name="lock-closed" size={40} color={palette.text.tertiary} />
+          <Text style={[styles.adTitle, { color: palette.text.primary }]}>Доступ ограничен</Text>
+          <Text style={[styles.adDesc, { color: palette.text.secondary }]}>
+            У вас нет прав для просмотра финансовых отчетов
+          </Text>
         </View>
       </View>
     );
@@ -135,10 +137,22 @@ export default function ReportsScreen() {
           {PERIODS.map((p) => (
             <TouchableOpacity
               key={p.key}
-              style={[styles.periodChip, period === p.key && styles.periodChipActive]}
+              style={[
+                styles.periodChip,
+                { backgroundColor: palette.bg.muted },
+                period === p.key && styles.periodChipActive,
+              ]}
               onPress={() => handlePeriodChange(p.key)}
             >
-              <Text style={[styles.periodText, period === p.key && styles.periodTextActive]}>{p.label}</Text>
+              <Text
+                style={[
+                  styles.periodText,
+                  { color: palette.text.secondary },
+                  period === p.key && styles.periodTextActive,
+                ]}
+              >
+                {p.label}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -149,7 +163,7 @@ export default function ReportsScreen() {
         {report === undefined ? (
           <LoadingSpinner />
         ) : !report && !isLoading ? (
-          <Text style={styles.empty}>Нет данных за выбранный период</Text>
+          <Text style={[styles.empty, { color: palette.text.tertiary }]}>Нет данных за выбранный период</Text>
         ) : (
           <>
             {/* Hero: Net Profit */}
@@ -175,30 +189,33 @@ export default function ReportsScreen() {
 
             {/* Revenue + Gross Profit */}
             <AnimatedCard index={1} style={styles.twoCol}>
-              <View style={styles.metricCard}>
+              <View style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
                 <View style={styles.metricIconWrap}>
                   <View style={[styles.metricIcon, { backgroundColor: colors.blue[50] }]}>
                     <Ionicons name="trending-up" size={16} color={colors.blue[600]} />
                   </View>
-                  <Text style={styles.metricLabel}>Выручка</Text>
+                  <Text style={[styles.metricLabel, { color: palette.text.secondary }]}>Выручка</Text>
                 </View>
-                <Text style={styles.metricValue}>{formatMoney(report.revenue)}</Text>
+                <Text style={[styles.metricValue, { color: palette.text.primary }]}>{formatMoney(report.revenue)}</Text>
               </View>
 
-              <View style={styles.metricCard}>
+              <View style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
                 <View style={styles.metricIconWrap}>
                   <View style={[styles.metricIcon, { backgroundColor: colors.green[50] }]}>
                     <Ionicons name="trending-up" size={16} color={colors.green[600]} />
                   </View>
-                  <Text style={styles.metricLabel}>Валовая прибыль</Text>
+                  <Text style={[styles.metricLabel, { color: palette.text.secondary }]}>Валовая прибыль</Text>
                 </View>
-                <Text style={styles.metricValue}>{formatMoney(report.grossProfit)}</Text>
+                <Text style={[styles.metricValue, { color: palette.text.primary }]}>{formatMoney(report.grossProfit)}</Text>
               </View>
             </AnimatedCard>
 
             {/* Expenses breakdown */}
-            <AnimatedCard index={2} style={styles.expCard}>
-              <Text style={styles.expTitle}>РАСХОДЫ</Text>
+            <AnimatedCard
+              index={2}
+              style={[styles.expCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <Text style={[styles.expTitle, { color: palette.text.tertiary }]}>РАСХОДЫ</Text>
 
               <View style={styles.expRow}>
                 <View style={styles.expLeft}>
@@ -206,16 +223,18 @@ export default function ReportsScreen() {
                     <Ionicons name="cube-outline" size={16} color={colors.orange[500]} />
                   </View>
                   <View>
-                    <Text style={styles.expName}>Себестоимость товаров</Text>
+                    <Text style={[styles.expName, { color: palette.text.primary }]}>Себестоимость товаров</Text>
                     {report.revenue > 0 && (
-                      <Text style={styles.expPct}>{pctOf(report.productCost, report.revenue)}% от выручки</Text>
+                      <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
+                        {pctOf(report.productCost, report.revenue)}% от выручки
+                      </Text>
                     )}
                   </View>
                 </View>
-                <Text style={styles.expAmount}>{formatMoney(report.productCost)}</Text>
+                <Text style={[styles.expAmount, { color: palette.text.primary }]}>{formatMoney(report.productCost)}</Text>
               </View>
 
-              <View style={styles.expDivider} />
+              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
 
               <View style={styles.expRow}>
                 <View style={styles.expLeft}>
@@ -223,45 +242,54 @@ export default function ReportsScreen() {
                     <Ionicons name="people-outline" size={16} color={colors.violet[500]} />
                   </View>
                   <View>
-                    <Text style={styles.expName}>Зарплаты мастерам</Text>
+                    <Text style={[styles.expName, { color: palette.text.primary }]}>Зарплаты мастерам</Text>
                     {report.revenue > 0 && (
-                      <Text style={styles.expPct}>{pctOf(report.salaries, report.revenue)}% от выручки</Text>
+                      <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
+                        {pctOf(report.salaries, report.revenue)}% от выручки
+                      </Text>
                     )}
                   </View>
                 </View>
-                <Text style={styles.expAmount}>{formatMoney(report.salaries)}</Text>
+                <Text style={[styles.expAmount, { color: palette.text.primary }]}>{formatMoney(report.salaries)}</Text>
               </View>
 
               {otherExpenses > 0 && (
                 <>
-                  <View style={styles.expDivider} />
+                  <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
                   <View style={styles.expRow}>
                     <View style={styles.expLeft}>
                       <View style={[styles.expIcon, { backgroundColor: colors.rose[50] }]}>
                         <Ionicons name="wallet-outline" size={16} color={colors.rose[500]} />
                       </View>
                       <View>
-                        <Text style={styles.expName}>Прочие расходы</Text>
+                        <Text style={[styles.expName, { color: palette.text.primary }]}>Прочие расходы</Text>
                         {report.revenue > 0 && (
-                          <Text style={styles.expPct}>{pctOf(otherExpenses, report.revenue)}% от выручки</Text>
+                          <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
+                            {pctOf(otherExpenses, report.revenue)}% от выручки
+                          </Text>
                         )}
                       </View>
                     </View>
-                    <Text style={styles.expAmount}>{formatMoney(otherExpenses)}</Text>
+                    <Text style={[styles.expAmount, { color: palette.text.primary }]}>{formatMoney(otherExpenses)}</Text>
                   </View>
                 </>
               )}
             </AnimatedCard>
 
             {/* Check count */}
-            <AnimatedCard index={3} style={styles.checkCard}>
+            <AnimatedCard
+              index={3}
+              style={[styles.checkCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
               <View style={styles.checkLeft}>
                 <View style={[styles.metricIcon, { backgroundColor: colors.primary[50] }]}>
                   <Ionicons name="receipt-outline" size={16} color={colors.primary[600]} />
                 </View>
                 <View>
-                  <Text style={styles.expName}>Количество чеков</Text>
-                  {report.checkCount > 0 && <Text style={styles.expPct}>Ср. чек: {avgCheck}</Text>}
+                  <Text style={[styles.expName, { color: palette.text.primary }]}>Количество чеков</Text>
+                  {report.checkCount > 0 && (
+                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>Ср. чек: {avgCheck}</Text>
+                  )}
                 </View>
               </View>
               <Text style={styles.checkCount}>{report.checkCount}</Text>
@@ -294,7 +322,7 @@ export default function ReportsScreen() {
                 </Text>
               </View>
 
-              <View style={styles.expDivider} />
+              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
 
               <View style={styles.expRow}>
                 <View style={styles.expLeft}>
@@ -313,7 +341,7 @@ export default function ReportsScreen() {
                 </Text>
               </View>
 
-              <View style={styles.expDivider} />
+              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
 
               <View style={styles.expRow}>
                 <View style={styles.expLeft}>
@@ -332,7 +360,7 @@ export default function ReportsScreen() {
                 </Text>
               </View>
 
-              <View style={styles.expDivider} />
+              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
 
               <View style={styles.expRow}>
                 <View style={styles.expLeft}>

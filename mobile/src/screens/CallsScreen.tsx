@@ -96,11 +96,13 @@ const CallRow = React.memo(function CallRow({
   navigation,
   playingId,
   setPlayingId,
+  palette,
 }: {
   call: Call;
   navigation: any;
   playingId: string | null;
   setPlayingId: (id: string | null) => void;
+  palette: ReturnType<typeof useColors>;
 }) {
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
   const isIncoming = call.direction === 'incoming';
@@ -139,14 +141,20 @@ const CallRow = React.memo(function CallRow({
   const isThisPlaying = playingId === call.id;
 
   return (
-    <View style={styles.callItemWrap}>
-      <View style={styles.callRow}>
+    <View style={[styles.callItemWrap, { backgroundColor: palette.bg.card }]}>
+      <View style={[styles.callRow, { borderBottomColor: palette.border.subtle }]}>
         <View style={[styles.callIcon, { backgroundColor: iconBg }]}>
           <Ionicons name={iconName as any} size={18} color={iconColor} />
         </View>
 
         <View style={styles.callInfo}>
-          <Text style={[styles.callPhone, isMissed && !call.calledBack && { color: colors.red[600] }]}>
+          <Text
+            style={[
+              styles.callPhone,
+              { color: palette.text.primary },
+              isMissed && !call.calledBack && { color: colors.red[600] },
+            ]}
+          >
             {formatPhone(displayPhone)}
           </Text>
           {call.client ? (
@@ -157,13 +165,15 @@ const CallRow = React.memo(function CallRow({
               </Text>
             </TouchableOpacity>
           ) : (
-            <Text style={styles.callUnknown}>Неизвестный номер</Text>
+            <Text style={[styles.callUnknown, { color: palette.text.tertiary }]}>Неизвестный номер</Text>
           )}
         </View>
 
         <View style={styles.callRight}>
-          <Text style={styles.callTime}>{callTime}</Text>
-          {call.duration > 0 && <Text style={styles.callDuration}>{formatDuration(call.duration)}</Text>}
+          <Text style={[styles.callTime, { color: palette.text.secondary }]}>{callTime}</Text>
+          {call.duration > 0 && (
+            <Text style={[styles.callDuration, { color: palette.text.tertiary }]}>{formatDuration(call.duration)}</Text>
+          )}
           {isMissed && call.calledBack && (
             <Text style={[styles.callStatus, { color: colors.green[600] }]}>Перезвонили</Text>
           )}
@@ -187,7 +197,7 @@ const CallRow = React.memo(function CallRow({
         )}
       </View>
       {isThisPlaying && call.recordingUrl && (
-        <ExpandedRecordingPlayer recordingUrl={call.recordingUrl} onClose={() => setPlayingId(null)} />
+        <ExpandedRecordingPlayer recordingUrl={call.recordingUrl} onClose={() => setPlayingId(null)} palette={palette} />
       )}
     </View>
   );
@@ -206,7 +216,15 @@ const CallRow = React.memo(function CallRow({
  *  • Audio mode is configured at the screen root so playback also works
  *    when the iPhone ringer switch is set to silent.
  */
-function ExpandedRecordingPlayer({ recordingUrl, onClose }: { recordingUrl: string; onClose: () => void }) {
+function ExpandedRecordingPlayer({
+  recordingUrl,
+  onClose,
+  palette,
+}: {
+  recordingUrl: string;
+  onClose: () => void;
+  palette: ReturnType<typeof useColors>;
+}) {
   const [src, setSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [trackWidth, setTrackWidth] = useState(0);
@@ -301,11 +319,13 @@ function ExpandedRecordingPlayer({ recordingUrl, onClose }: { recordingUrl: stri
   };
 
   return (
-    <View style={styles.expandedPlayer}>
+    <View style={[styles.expandedPlayer, { backgroundColor: palette.bg.muted, borderBottomColor: palette.border.subtle }]}>
       {/* Time labels */}
       <View style={styles.expandedTimeRow}>
-        <Text style={styles.expandedTime}>{formatDuration(positionSec)}</Text>
-        <Text style={styles.expandedTime}>{formatDuration(Math.max(0, durationSec - positionSec))}</Text>
+        <Text style={[styles.expandedTime, { color: palette.text.secondary }]}>{formatDuration(positionSec)}</Text>
+        <Text style={[styles.expandedTime, { color: palette.text.secondary }]}>
+          {formatDuration(Math.max(0, durationSec - positionSec))}
+        </Text>
       </View>
 
       {/* Tappable progress bar */}
@@ -317,17 +337,20 @@ function ExpandedRecordingPlayer({ recordingUrl, onClose }: { recordingUrl: stri
         }}
         style={styles.expandedTrackHit}
       >
-        <View style={styles.expandedTrack}>
+        <View style={[styles.expandedTrack, { backgroundColor: palette.border.subtle }]}>
           <View style={[styles.expandedTrackFill, { width: `${progress * 100}%` }]} />
-          <View style={[styles.expandedThumb, { left: `${progress * 100}%` }]} />
+          <View style={[styles.expandedThumb, { left: `${progress * 100}%`, backgroundColor: palette.bg.card }]} />
         </View>
       </Pressable>
 
       {/* Transport controls */}
       <View style={styles.expandedControls}>
-        <TouchableOpacity onPress={() => seekDelta(-15)} style={styles.expandedSkip}>
-          <Ionicons name="play-back" size={20} color={colors.gray[700]} />
-          <Text style={styles.expandedSkipLabel}>15</Text>
+        <TouchableOpacity
+          onPress={() => seekDelta(-15)}
+          style={[styles.expandedSkip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="play-back" size={20} color={palette.text.secondary} />
+          <Text style={[styles.expandedSkipLabel, { color: palette.text.secondary }]}>15</Text>
         </TouchableOpacity>
 
         <TouchableOpacity onPress={togglePlay} style={styles.expandedPlayBig}>
@@ -338,14 +361,17 @@ function ExpandedRecordingPlayer({ recordingUrl, onClose }: { recordingUrl: stri
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => seekDelta(15)} style={styles.expandedSkip}>
-          <Ionicons name="play-forward" size={20} color={colors.gray[700]} />
-          <Text style={styles.expandedSkipLabel}>15</Text>
+        <TouchableOpacity
+          onPress={() => seekDelta(15)}
+          style={[styles.expandedSkip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="play-forward" size={20} color={palette.text.secondary} />
+          <Text style={[styles.expandedSkipLabel, { color: palette.text.secondary }]}>15</Text>
         </TouchableOpacity>
 
         <View style={{ flex: 1 }} />
         <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="close" size={22} color={colors.gray[400]} />
+          <Ionicons name="close" size={22} color={palette.text.tertiary} />
         </TouchableOpacity>
       </View>
     </View>
@@ -487,18 +513,18 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           <View style={styles.dateNav}>
             <TouchableOpacity
               onPress={goToPrevDay}
-              style={styles.dateBtn}
+              style={[styles.dateBtn, { backgroundColor: palette.bg.muted }]}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             >
-              <Ionicons name="chevron-back" size={18} color={colors.gray[500]} />
+              <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={goToNextDay}
               disabled={isToday}
-              style={[styles.dateBtn, isToday && { opacity: 0.25 }]}
+              style={[styles.dateBtn, { backgroundColor: palette.bg.muted }, isToday && { opacity: 0.25 }]}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
             >
-              <Ionicons name="chevron-forward" size={18} color={colors.gray[500]} />
+              <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
             </TouchableOpacity>
           </View>
         }
@@ -509,7 +535,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
         {summaryItems.map((s) => (
           <View key={s.label} style={[styles.summaryCard, { backgroundColor: s.bg }]}>
             <Text style={[styles.summaryValue, { color: s.color }]}>{isLoading ? '-' : s.value}</Text>
-            <Text style={styles.summaryLabel}>{s.label}</Text>
+            <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>{s.label}</Text>
           </View>
         ))}
       </View>
@@ -537,10 +563,10 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           return (
             <TouchableOpacity
               key={tab.key}
-              style={[styles.tab, active && styles.tabActive]}
+              style={[styles.tab, { backgroundColor: palette.bg.muted }, active && styles.tabActive]}
               onPress={() => setActiveTab(tab.key)}
             >
-              <Text style={[styles.tabText, active && styles.tabTextActive]}>
+              <Text style={[styles.tabText, { color: palette.text.tertiary }, active && styles.tabTextActive]}>
                 {tab.label} {count !== undefined ? count : ''}
               </Text>
             </TouchableOpacity>
@@ -550,7 +576,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
 
       {/* Call list */}
       <ScrollView
-        style={styles.list}
+        style={[styles.list, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
         contentContainerStyle={{ paddingBottom: tabBarHeight + spacing[4] }}
         showsVerticalScrollIndicator={false}
       >
@@ -558,8 +584,10 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           <ActivityIndicator size="small" color={colors.primary[500]} style={{ marginTop: spacing[10] }} />
         ) : filteredCalls.length === 0 ? (
           <View style={styles.empty}>
-            <Ionicons name="call-outline" size={32} color={colors.gray[200]} />
-            <Text style={styles.emptyText}>{activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}</Text>
+            <Ionicons name="call-outline" size={32} color={palette.text.tertiary} />
+            <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>
+              {activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}
+            </Text>
           </View>
         ) : (
           filteredCalls.map((call, idx) => (
@@ -569,6 +597,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
               navigation={navigation}
               playingId={playingId}
               setPlayingId={setPlayingId}
+              palette={palette}
             />
           ))
         )}

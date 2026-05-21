@@ -293,7 +293,7 @@ function TenantDetailCard({
 
       {expanded && (
         <View style={styles.tenantDetailBody}>
-          <View style={styles.detailDivider} />
+          <View style={[styles.detailDivider, { backgroundColor: palette.border.subtle }]} />
 
           {/* Info rows */}
           <View style={styles.detailGrid}>
@@ -306,28 +306,29 @@ function TenantDetailCard({
 
           {/* Subscription info */}
           <View style={styles.detailSection}>
-            <Text style={styles.detailSectionTitle}>Подписка</Text>
-            <View style={styles.detailInfoCard}>
+            <Text style={[styles.detailSectionTitle, { color: palette.text.secondary }]}>Подписка</Text>
+            <View style={[styles.detailInfoCard, { backgroundColor: palette.bg.muted }]}>
               <View style={styles.detailInfoRow}>
-                <Text style={styles.detailInfoLabel}>Тариф</Text>
-                <Text style={styles.detailInfoValue}>{planName}</Text>
+                <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>Тариф</Text>
+                <Text style={[styles.detailInfoValue, { color: palette.text.primary }]}>{planName}</Text>
               </View>
               <View style={styles.detailInfoRow}>
-                <Text style={styles.detailInfoLabel}>Стоимость</Text>
-                <Text style={styles.detailInfoValue}>{formatMoney(tenant.monthlyPrice)}/мес</Text>
+                <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>Стоимость</Text>
+                <Text style={[styles.detailInfoValue, { color: palette.text.primary }]}>{formatMoney(tenant.monthlyPrice)}/мес</Text>
               </View>
               <View style={styles.detailInfoRow}>
-                <Text style={styles.detailInfoLabel}>Оплачено до</Text>
+                <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>Оплачено до</Text>
                 <Text style={[
                   styles.detailInfoValue,
+                  { color: palette.text.primary },
                   isExpired(tenant.subscriptionEnd) && { color: colors.red[600] },
                 ]}>
                   {tenant.subscriptionEnd ? formatFullDate(tenant.subscriptionEnd) : 'Не указано'}
                 </Text>
               </View>
               <View style={styles.detailInfoRow}>
-                <Text style={styles.detailInfoLabel}>Макс. польз.</Text>
-                <Text style={styles.detailInfoValue}>{tenant.maxUsers}</Text>
+                <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>Макс. польз.</Text>
+                <Text style={[styles.detailInfoValue, { color: palette.text.primary }]}>{tenant.maxUsers}</Text>
               </View>
             </View>
           </View>
@@ -335,18 +336,18 @@ function TenantDetailCard({
           {/* Legal details */}
           {(tenant.inn || tenant.legalName) && (
             <View style={styles.detailSection}>
-              <Text style={styles.detailSectionTitle}>Юр. данные</Text>
-              <View style={styles.detailInfoCard}>
+              <Text style={[styles.detailSectionTitle, { color: palette.text.secondary }]}>Юр. данные</Text>
+              <View style={[styles.detailInfoCard, { backgroundColor: palette.bg.muted }]}>
                 {tenant.legalName && (
                   <View style={styles.detailInfoRow}>
-                    <Text style={styles.detailInfoLabel}>Юр. имя</Text>
-                    <Text style={styles.detailInfoValue}>{tenant.legalName}</Text>
+                    <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>Юр. имя</Text>
+                    <Text style={[styles.detailInfoValue, { color: palette.text.primary }]}>{tenant.legalName}</Text>
                   </View>
                 )}
                 {tenant.inn && (
                   <View style={styles.detailInfoRow}>
-                    <Text style={styles.detailInfoLabel}>ИНН</Text>
-                    <Text style={styles.detailInfoValue}>{tenant.inn}</Text>
+                    <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>ИНН</Text>
+                    <Text style={[styles.detailInfoValue, { color: palette.text.primary }]}>{tenant.inn}</Text>
                   </View>
                 )}
               </View>
@@ -428,11 +429,12 @@ function TenantDetailCard({
 }
 
 function DetailRow({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMap; label: string; value: string }) {
+  const palette = useColors();
   return (
     <View style={styles.detailRow}>
-      <Ionicons name={icon} size={16} color={colors.gray[400]} />
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue} numberOfLines={1}>{value}</Text>
+      <Ionicons name={icon} size={16} color={palette.text.tertiary} />
+      <Text style={[styles.detailLabel, { color: palette.text.tertiary }]}>{label}</Text>
+      <Text style={[styles.detailValue, { color: palette.text.primary }]} numberOfLines={1}>{value}</Text>
     </View>
   );
 }
@@ -515,11 +517,19 @@ function TenantsTab({
         {statusFilters.map(f => (
           <TouchableOpacity
             key={f.key}
-            style={[styles.filterChip, filterStatus === f.key && styles.filterChipActive]}
+            style={[
+              styles.filterChip,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              filterStatus === f.key && styles.filterChipActive,
+            ]}
             onPress={() => setFilterStatus(f.key)}
             activeOpacity={0.7}
           >
-            <Text style={[styles.filterChipText, filterStatus === f.key && styles.filterChipTextActive]}>
+            <Text style={[
+              styles.filterChipText,
+              { color: palette.text.secondary },
+              filterStatus === f.key && styles.filterChipTextActive,
+            ]}>
               {f.label}
             </Text>
           </TouchableOpacity>
@@ -527,16 +537,19 @@ function TenantsTab({
       </ScrollView>
 
       {/* Count */}
-      <Text style={styles.resultsCount}>
+      <Text style={[styles.resultsCount, { color: palette.text.tertiary }]}>
         {filtered.length} из {tenants.length} клиент(ов)
       </Text>
 
       {/* Tenants list */}
       {filtered.length === 0 ? (
-        <AnimatedCard index={1} style={styles.emptyCard}>
-          <Ionicons name="search-outline" size={48} color={colors.gray[300]} />
-          <Text style={styles.emptyTitle}>Ничего не найдено</Text>
-          <Text style={styles.emptySubtitle}>Попробуйте изменить параметры поиска</Text>
+        <AnimatedCard
+          index={1}
+          style={[styles.emptyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="search-outline" size={48} color={palette.text.tertiary} />
+          <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Ничего не найдено</Text>
+          <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>Попробуйте изменить параметры поиска</Text>
         </AnimatedCard>
       ) : (
         filtered.map((tenant) => (
@@ -569,10 +582,13 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
   if (plans.length === 0) {
     return (
       <View style={styles.tabContent}>
-        <AnimatedCard index={0} style={styles.emptyCard}>
-          <Ionicons name="pricetags-outline" size={48} color={colors.gray[300]} />
-          <Text style={styles.emptyTitle}>Нет тарифов</Text>
-          <Text style={styles.emptySubtitle}>Тарифные планы ещё не созданы</Text>
+        <AnimatedCard
+          index={0}
+          style={[styles.emptyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="pricetags-outline" size={48} color={palette.text.tertiary} />
+          <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Нет тарифов</Text>
+          <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>Тарифные планы ещё не созданы</Text>
         </AnimatedCard>
       </View>
     );
@@ -626,26 +642,26 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
 
               {/* Price */}
               <View style={styles.planPriceBlock}>
-                <Text style={styles.planPriceValue}>
+                <Text style={[styles.planPriceValue, { color: palette.text.primary }]}>
                   {plan.monthlyPrice.toLocaleString('ru-RU')}
                 </Text>
-                <Text style={styles.planPriceSuffix}> \u20BD/мес</Text>
+                <Text style={[styles.planPriceSuffix, { color: palette.text.secondary }]}> \u20BD/мес</Text>
               </View>
 
               {/* Stats */}
               <View style={styles.planStatsRow}>
-                <View style={styles.planStatItem}>
+                <View style={[styles.planStatItem, { backgroundColor: palette.bg.muted }]}>
                   <Ionicons name="people" size={14} color={colors.primary[600]} />
-                  <Text style={styles.planStatText}>До {plan.maxUsers} польз.</Text>
+                  <Text style={[styles.planStatText, { color: palette.text.primary }]}>До {plan.maxUsers} польз.</Text>
                 </View>
-                <View style={styles.planStatItem}>
+                <View style={[styles.planStatItem, { backgroundColor: palette.bg.muted }]}>
                   <Ionicons name="business" size={14} color={colors.purple[700]} />
-                  <Text style={styles.planStatText}>{subscriberCount} подписчик(ов)</Text>
+                  <Text style={[styles.planStatText, { color: palette.text.primary }]}>{subscriberCount} подписчик(ов)</Text>
                 </View>
               </View>
 
               {/* Features */}
-              <View style={styles.planFeaturesList}>
+              <View style={[styles.planFeaturesList, { borderTopColor: palette.border.subtle }]}>
                 {ALL_FEATURES.map(feat => {
                   const included = features.includes(feat.key);
                   return (
@@ -653,11 +669,12 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
                       <Ionicons
                         name={included ? 'checkmark-circle' : 'close-circle'}
                         size={16}
-                        color={included ? colors.green[500] : colors.gray[300]}
+                        color={included ? colors.green[500] : palette.text.tertiary}
                       />
                       <Text style={[
                         styles.planFeatureText,
-                        !included && styles.planFeatureTextDisabled,
+                        { color: palette.text.primary },
+                        !included && [styles.planFeatureTextDisabled, { color: palette.text.tertiary }],
                       ]}>
                         {feat.label}
                       </Text>
@@ -803,7 +820,7 @@ export default function AdminScreen() {
       {isLoading ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="large" color={colors.primary[600]} />
-          <Text style={styles.loadingText}>Загрузка данных...</Text>
+          <Text style={[styles.loadingText, { color: palette.text.tertiary }]}>Загрузка данных...</Text>
         </View>
       ) : (
         <ScrollView

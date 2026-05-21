@@ -52,6 +52,14 @@ interface SupplierRowProps {
   onPress: (id: string) => void;
   onEdit: (s: Supplier) => void;
   onDelete: (s: Supplier) => void;
+  /** Theme palette tokens — passed in so memoised row reads dark/light
+   *  surface without subscribing to the theme context itself. */
+  cardBg: string;
+  separatorColor: string;
+  textPrimary: string;
+  textTertiary: string;
+  iconCircleCleanBg: string;
+  iconCircleCleanColor: string;
 }
 const SupplierRow = React.memo(function SupplierRow({
   item,
@@ -60,44 +68,80 @@ const SupplierRow = React.memo(function SupplierRow({
   onPress,
   onEdit,
   onDelete,
+  cardBg,
+  separatorColor,
+  textPrimary,
+  textTertiary,
+  iconCircleCleanBg,
+  iconCircleCleanColor,
 }: SupplierRowProps) {
   const hasDebt = item.currentDebt > 0;
+  // System suppliers (currently only "Покупка б/у товара") render with a
+  // distinct icon + chip and skip the swipe-to-delete affordance — the
+  // backend would 403 anyway.
+  const isSystem = !!item.isSystem;
+  const isUsedPurchase = item.kind === 'used_purchase';
 
   const card = (
-    <AnimatedCard style={styles.card} index={index} onPress={() => onPress(item.id)}>
+    <AnimatedCard
+      style={[styles.card, { backgroundColor: cardBg, borderBottomColor: separatorColor }]}
+      index={index}
+      onPress={() => onPress(item.id)}
+    >
       <View style={styles.row}>
-        <View style={[styles.iconCircle, hasDebt ? styles.iconCircleDebt : styles.iconCircleClean]}>
+        <View
+          style={[
+            styles.iconCircle,
+            isSystem
+              ? styles.iconCircleSystem
+              : hasDebt
+                ? styles.iconCircleDebt
+                : [styles.iconCircleClean, { backgroundColor: iconCircleCleanBg }],
+          ]}
+        >
           <Ionicons
-            name={hasDebt ? 'wallet-outline' : 'business-outline'}
+            name={isUsedPurchase ? 'cube-outline' : hasDebt ? 'wallet-outline' : 'business-outline'}
             size={18}
-            color={hasDebt ? colors.orange[600] : colors.gray[400]}
+            color={isSystem ? colors.primary[600] : hasDebt ? colors.orange[600] : iconCircleCleanColor}
           />
         </View>
         <View style={styles.info}>
-          <Text style={styles.cardName} numberOfLines={1}>
-            {item.name}
-          </Text>
-          <Text style={styles.cardSub} numberOfLines={1}>
-            {[item.contactPerson, item.phone ? formatPhone(item.phone) : null].filter(Boolean).join(' · ') ||
-              'Без контактов'}
+          <View style={styles.nameRow}>
+            <Text style={[styles.cardName, { color: textPrimary }]} numberOfLines={1}>
+              {item.name}
+            </Text>
+            {isSystem ? (
+              <View style={styles.systemChip}>
+                <Text style={styles.systemChipText}>СИСТЕМНЫЙ</Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={[styles.cardSub, { color: textTertiary }]} numberOfLines={1}>
+            {isUsedPurchase
+              ? 'Покупка б/у у клиентов'
+              : [item.contactPerson, item.phone ? formatPhone(item.phone) : null]
+                  .filter(Boolean)
+                  .join(' · ') || 'Без контактов'}
           </Text>
         </View>
         <View style={styles.amountWrap}>
           {hasDebt ? (
             <>
               <Text style={styles.debtAmount}>{formatMoney(item.currentDebt)}</Text>
-              <Text style={styles.debtLabel}>долг</Text>
+              <Text style={[styles.debtLabel, { color: textTertiary }]}>долг</Text>
             </>
           ) : (
             <Ionicons name="checkmark-circle" size={20} color={colors.green[500]} />
           )}
         </View>
-        <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: 6 }} />
+        <Ionicons name="chevron-forward" size={16} color={textTertiary} style={{ marginLeft: 6 }} />
       </View>
     </AnimatedCard>
   );
 
-  if (!canDelete) return card;
+  // System rows are uneditable + undeletable — return the bare card
+  // with no swipe affordance regardless of caller permissions.
+  if (isSystem || !canDelete) return card;
 
   return (
     <Swipeable
@@ -277,9 +321,25 @@ export default function SuppliersScreen() {
         onPress={handlePressSupplier}
         onEdit={openEdit}
         onDelete={handleDeleteSupplier}
+        cardBg={palette.bg.card}
+        separatorColor={palette.border.subtle}
+        textPrimary={palette.text.primary}
+        textTertiary={palette.text.tertiary}
+        iconCircleCleanBg={palette.bg.muted}
+        iconCircleCleanColor={palette.text.tertiary}
       />
     ),
-    [canDelete, handlePressSupplier, openEdit, handleDeleteSupplier],
+    [
+      canDelete,
+      handlePressSupplier,
+      openEdit,
+      handleDeleteSupplier,
+      palette.bg.card,
+      palette.bg.muted,
+      palette.border.subtle,
+      palette.text.primary,
+      palette.text.tertiary,
+    ],
   );
 
   return (
@@ -325,53 +385,71 @@ export default function SuppliersScreen() {
 
       <Modal visible={modalOpen} onClose={closeModal} title={editingSupplier ? 'Редактировать' : 'Новый поставщик'}>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Название</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Название</Text>
           <TextInput
             value={name}
             onChangeText={setName}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="ООО Запчасти"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Телефон</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон</Text>
           {/* Phone mask shared with LoginScreen / ClientsScreen — user types
               digits, formatPhone re-formats to +7 (XXX) XXX-XX-XX live. */}
           <TextInput
             value={phone}
             onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             keyboardType="phone-pad"
             autoComplete="tel"
             placeholder="+7 (___) ___-__-__"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Контактное лицо</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Контактное лицо</Text>
           <TextInput
             value={contactPerson}
             onChangeText={setContactPerson}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="Имя"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Комментарий</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
           <TextInput
             value={comment}
             onChangeText={setComment}
-            style={[styles.formInput, { height: 60, textAlignVertical: 'top' }]}
+            style={[
+              styles.formInput,
+              {
+                height: 60,
+                textAlignVertical: 'top',
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
             multiline
             placeholder="Необязательно"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeModal}>
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
             {createMutation.isPending || updateMutation.isPending ? (
@@ -433,7 +511,24 @@ const styles = StyleSheet.create({
   iconCircle: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
   iconCircleClean: { backgroundColor: colors.gray[100] },
   iconCircleDebt: { backgroundColor: colors.orange[50] },
+  iconCircleSystem: { backgroundColor: colors.primary[50] },
   info: { flex: 1, minWidth: 0 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+  // System chip — subtle pill next to the supplier name on the pinned
+  // "Покупка б/у товара" row. Owners read it as "row is protected,
+  // don't try to delete it".
+  systemChip: {
+    backgroundColor: colors.primary[50],
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+  },
+  systemChipText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.primary[700],
+    letterSpacing: 0.4,
+  },
   swipeActionsRow: {
     flexDirection: 'row',
   },

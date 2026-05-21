@@ -42,6 +42,7 @@ function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
 
 // ── Dashboard Tab ──
 function DashboardTab() {
+  const palette = useColors();
   const { data, isLoading } = useQuery({
     queryKey: ['marketing-dashboard'],
     queryFn: async () => {
@@ -90,20 +91,27 @@ function DashboardTab() {
       {/* Stats Grid */}
       <View style={styles.statsGrid}>
         {stats.map((stat, idx) => (
-          <AnimatedCard key={stat.label} index={idx} style={styles.statCard}>
+          <AnimatedCard
+            key={stat.label}
+            index={idx}
+            style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
             <View style={[styles.statIconBox, { backgroundColor: stat.bg }]}>
               <Ionicons name={stat.icon} size={18} color={stat.color} />
             </View>
-            <Text style={styles.statValue}>{stat.value}</Text>
-            <Text style={styles.statLabel}>{stat.label}</Text>
+            <Text style={[styles.statValue, { color: palette.text.primary }]}>{stat.value}</Text>
+            <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>{stat.label}</Text>
           </AnimatedCard>
         ))}
       </View>
 
       {/* Review Funnel */}
       {data.totalReviews > 0 && (
-        <AnimatedCard index={4} style={styles.card}>
-          <Text style={styles.sectionTitle}>Воронка отзывов</Text>
+        <AnimatedCard
+          index={4}
+          style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Воронка отзывов</Text>
           <View style={{ gap: spacing[3] }}>
             <FunnelBar
               label="Ссылки отправлены"
@@ -135,30 +143,36 @@ function DashboardTab() {
 
       {/* Employee Ratings */}
       {data.employeeRatings && data.employeeRatings.length > 0 && (
-        <AnimatedCard index={5} style={styles.card}>
+        <AnimatedCard
+          index={5}
+          style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
           <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Рейтинг сотрудников</Text>
+            <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Рейтинг сотрудников</Text>
             <Ionicons name="trophy-outline" size={18} color={colors.amber[600]} />
           </View>
           {data.employeeRatings.map((emp: any, idx: number) => (
-            <View key={emp.employeeId || idx} style={[styles.empRow, idx > 0 && styles.empRowBorder]}>
-              <View style={styles.empRankBadge}>
+            <View
+              key={emp.employeeId || idx}
+              style={[styles.empRow, idx > 0 && [styles.empRowBorder, { borderTopColor: palette.border.subtle }]]}
+            >
+              <View style={[styles.empRankBadge, { backgroundColor: palette.bg.muted }]}>
                 {idx < 3 ? (
                   <Ionicons name="trophy" size={16} color={idx === 0 ? '#FFD700' : idx === 1 ? '#C0C0C0' : '#CD7F32'} />
                 ) : (
-                  <Text style={styles.empRankText}>{idx + 1}</Text>
+                  <Text style={[styles.empRankText, { color: palette.text.tertiary }]}>{idx + 1}</Text>
                 )}
               </View>
               <View style={styles.empInfo}>
-                <Text style={styles.empName} numberOfLines={1}>
+                <Text style={[styles.empName, { color: palette.text.primary }]} numberOfLines={1}>
                   {emp.employeeName}
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                   <StarRating rating={emp.averageRating || 0} size={12} />
-                  <Text style={styles.empReviewCount}>{emp.reviewCount} отзывов</Text>
+                  <Text style={[styles.empReviewCount, { color: palette.text.tertiary }]}>{emp.reviewCount} отзывов</Text>
                 </View>
               </View>
-              <Text style={styles.empRating}>{(emp.averageRating || 0).toFixed(1)}</Text>
+              <Text style={[styles.empRating, { color: palette.text.primary }]}>{(emp.averageRating || 0).toFixed(1)}</Text>
             </View>
           ))}
         </AnimatedCard>
@@ -178,16 +192,17 @@ function DashboardTab() {
 }
 
 function FunnelBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
+  const palette = useColors();
   const percent = max > 0 ? Math.round((value / max) * 100) : 0;
   return (
     <View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-        <Text style={styles.funnelLabel}>{label}</Text>
-        <Text style={styles.funnelValue}>
+        <Text style={[styles.funnelLabel, { color: palette.text.secondary }]}>{label}</Text>
+        <Text style={[styles.funnelValue, { color: palette.text.primary }]}>
           {value} ({percent}%)
         </Text>
       </View>
-      <View style={styles.funnelBarBg}>
+      <View style={[styles.funnelBarBg, { backgroundColor: palette.bg.muted }]}>
         <View style={[styles.funnelBarFill, { width: `${percent}%`, backgroundColor: color }]} />
       </View>
     </View>
@@ -196,6 +211,7 @@ function FunnelBar({ label, value, max, color }: { label: string; value: number;
 
 // ── Reviews Tab ──
 function ReviewsTab() {
+  const palette = useColors();
   const [month, setMonth] = useState(() => {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -240,12 +256,18 @@ function ReviewsTab() {
     <View style={{ gap: spacing[4] }}>
       {/* Month navigation */}
       <View style={styles.monthNav}>
-        <TouchableOpacity onPress={() => navigateMonth(-1)} style={styles.monthBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.gray[600]} />
+        <TouchableOpacity
+          onPress={() => navigateMonth(-1)}
+          style={[styles.monthBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="chevron-back" size={20} color={palette.text.secondary} />
         </TouchableOpacity>
-        <Text style={styles.monthLabel}>{monthLabel}</Text>
-        <TouchableOpacity onPress={() => navigateMonth(1)} style={styles.monthBtn}>
-          <Ionicons name="chevron-forward" size={20} color={colors.gray[600]} />
+        <Text style={[styles.monthLabel, { color: palette.text.primary }]}>{monthLabel}</Text>
+        <TouchableOpacity
+          onPress={() => navigateMonth(1)}
+          style={[styles.monthBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Ionicons name="chevron-forward" size={20} color={palette.text.secondary} />
         </TouchableOpacity>
       </View>
 
@@ -253,24 +275,28 @@ function ReviewsTab() {
         <ActivityIndicator color={colors.primary[600]} style={{ marginTop: 20 }} />
       ) : (Array.isArray(reviews) ? reviews : []).length === 0 ? (
         <View style={styles.emptyCard}>
-          <Ionicons name="chatbubbles-outline" size={40} color={colors.gray[300]} />
-          <Text style={styles.emptyTitle}>Нет отзывов за этот месяц</Text>
+          <Ionicons name="chatbubbles-outline" size={40} color={palette.text.tertiary} />
+          <Text style={[styles.emptyTitle, { color: palette.text.tertiary }]}>Нет отзывов за этот месяц</Text>
         </View>
       ) : (
         (Array.isArray(reviews) ? reviews : []).map((review: any, idx: number) => (
-          <AnimatedCard key={review.id || idx} index={idx} style={styles.reviewCard}>
+          <AnimatedCard
+            key={review.id || idx}
+            index={idx}
+            style={[styles.reviewCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
             <View style={styles.reviewHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.reviewClientName}>{review.clientName || 'Клиент'}</Text>
-                <Text style={styles.reviewDate}>{new Date(review.createdAt).toLocaleDateString('ru-RU')}</Text>
+                <Text style={[styles.reviewClientName, { color: palette.text.primary }]}>{review.clientName || 'Клиент'}</Text>
+                <Text style={[styles.reviewDate, { color: palette.text.tertiary }]}>{new Date(review.createdAt).toLocaleDateString('ru-RU')}</Text>
               </View>
               <StarRating rating={review.rating} size={16} />
             </View>
-            {review.comment && <Text style={styles.reviewComment}>{review.comment}</Text>}
+            {review.comment && <Text style={[styles.reviewComment, { color: palette.text.secondary }]}>{review.comment}</Text>}
             {review.employeeName && (
-              <View style={styles.reviewEmployeeTag}>
-                <Ionicons name="person-outline" size={12} color={colors.gray[500]} />
-                <Text style={styles.reviewEmployeeText}>{review.employeeName}</Text>
+              <View style={[styles.reviewEmployeeTag, { borderTopColor: palette.border.subtle }]}>
+                <Ionicons name="person-outline" size={12} color={palette.text.tertiary} />
+                <Text style={[styles.reviewEmployeeText, { color: palette.text.tertiary }]}>{review.employeeName}</Text>
               </View>
             )}
           </AnimatedCard>
@@ -282,6 +308,7 @@ function ReviewsTab() {
 
 // ── Integrations Tab ── (with CRUD)
 function IntegrationsTab() {
+  const palette = useColors();
   const queryClient = useQueryClient();
   const { data: integrations, isLoading } = useQuery({
     queryKey: ['marketing-integrations'],
@@ -398,34 +425,37 @@ function IntegrationsTab() {
   return (
     <View style={{ gap: spacing[4] }}>
       {/* Messaging Channels */}
-      <AnimatedCard index={0} style={styles.card}>
+      <AnimatedCard
+        index={0}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Каналы отправки</Text>
-          <Ionicons name="paper-plane-outline" size={16} color={colors.gray[400]} />
+          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Каналы отправки</Text>
+          <Ionicons name="paper-plane-outline" size={16} color={palette.text.tertiary} />
         </View>
         {providers.map((p, idx) => {
           const active = activeIntegrations.find((i: any) => i.provider === p.key);
           return (
             <TouchableOpacity
               key={p.key}
-              style={[styles.integrationRow, idx > 0 && styles.integrationBorder]}
+              style={[styles.integrationRow, idx > 0 && [styles.integrationBorder, { borderTopColor: palette.border.subtle }]]}
               onPress={() => openProviderEdit(p.key)}
               activeOpacity={0.7}
             >
-              <View style={[styles.integrationIcon, { backgroundColor: active ? colors.green[50] : colors.gray[50] }]}>
-                <Ionicons name={p.icon} size={18} color={active ? colors.green[600] : colors.gray[400]} />
+              <View style={[styles.integrationIcon, { backgroundColor: active ? colors.green[50] : palette.bg.muted }]}>
+                <Ionicons name={p.icon} size={18} color={active ? colors.green[600] : palette.text.tertiary} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.integrationName}>{p.name}</Text>
-                <Text style={styles.integrationDesc}>{p.desc}</Text>
+                <Text style={[styles.integrationName, { color: palette.text.primary }]}>{p.name}</Text>
+                <Text style={[styles.integrationDesc, { color: palette.text.tertiary }]}>{p.desc}</Text>
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <View style={[styles.statusBadge, active ? styles.statusActive : styles.statusInactive]}>
-                  <Text style={[styles.statusText, active ? styles.statusTextActive : styles.statusTextInactive]}>
+                <View style={[styles.statusBadge, active ? styles.statusActive : [styles.statusInactive, { backgroundColor: palette.bg.muted }]]}>
+                  <Text style={[styles.statusText, active ? styles.statusTextActive : [styles.statusTextInactive, { color: palette.text.tertiary }]]}>
                     {active ? 'Активен' : 'Не настроен'}
                   </Text>
                 </View>
-                <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
               </View>
             </TouchableOpacity>
           );
@@ -433,38 +463,41 @@ function IntegrationsTab() {
       </AnimatedCard>
 
       {/* Platform Links */}
-      <AnimatedCard index={1} style={styles.card}>
+      <AnimatedCard
+        index={1}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Площадки для отзывов</Text>
-          <Ionicons name="globe-outline" size={16} color={colors.gray[400]} />
+          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Площадки для отзывов</Text>
+          <Ionicons name="globe-outline" size={16} color={palette.text.tertiary} />
         </View>
         {platforms.map((p, idx) => {
           const link = activeLinks.find((l: any) => l.platform === p.key);
           return (
             <TouchableOpacity
               key={p.key}
-              style={[styles.integrationRow, idx > 0 && styles.integrationBorder]}
+              style={[styles.integrationRow, idx > 0 && [styles.integrationBorder, { borderTopColor: palette.border.subtle }]]}
               onPress={() => openPlatformEdit(p.key)}
               activeOpacity={0.7}
             >
-              <View style={[styles.integrationIcon, { backgroundColor: link ? colors.blue[50] : colors.gray[50] }]}>
-                <Ionicons name={p.icon} size={18} color={link ? colors.blue[600] : colors.gray[400]} />
+              <View style={[styles.integrationIcon, { backgroundColor: link ? colors.blue[50] : palette.bg.muted }]}>
+                <Ionicons name={p.icon} size={18} color={link ? colors.blue[600] : palette.text.tertiary} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.integrationName}>{p.name}</Text>
+                <Text style={[styles.integrationName, { color: palette.text.primary }]}>{p.name}</Text>
                 {link && (
-                  <Text style={styles.integrationDesc} numberOfLines={1}>
+                  <Text style={[styles.integrationDesc, { color: palette.text.tertiary }]} numberOfLines={1}>
                     {link.url}
                   </Text>
                 )}
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <View style={[styles.statusBadge, link ? styles.statusActive : styles.statusInactive]}>
-                  <Text style={[styles.statusText, link ? styles.statusTextActive : styles.statusTextInactive]}>
+                <View style={[styles.statusBadge, link ? styles.statusActive : [styles.statusInactive, { backgroundColor: palette.bg.muted }]]}>
+                  <Text style={[styles.statusText, link ? styles.statusTextActive : [styles.statusTextInactive, { color: palette.text.tertiary }]]}>
                     {link ? 'Настроен' : 'Не настроен'}
                   </Text>
                 </View>
-                <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
               </View>
             </TouchableOpacity>
           );
@@ -589,6 +622,7 @@ function IntegrationsTab() {
 
 // ── Settings Tab ──
 function SettingsTab() {
+  const palette = useColors();
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useQuery({
     queryKey: ['marketing-settings'],
@@ -628,62 +662,71 @@ function SettingsTab() {
   return (
     <View style={{ gap: spacing[4] }}>
       {/* Auto-send toggle */}
-      <AnimatedCard index={0} style={styles.card}>
+      <AnimatedCard
+        index={0}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
         <TouchableOpacity style={styles.settingsToggleRow} onPress={() => setAutoSend(!autoSend)}>
-          <View style={[styles.settingsIconBox, { backgroundColor: autoSend ? colors.green[50] : colors.gray[50] }]}>
-            <Ionicons name="send" size={18} color={autoSend ? colors.green[600] : colors.gray[400]} />
+          <View style={[styles.settingsIconBox, { backgroundColor: autoSend ? colors.green[50] : palette.bg.muted }]}>
+            <Ionicons name="send" size={18} color={autoSend ? colors.green[600] : palette.text.tertiary} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.settingsLabel}>Автоматическая отправка</Text>
-            <Text style={styles.settingsHint}>Отправлять запросы на отзыв автоматически</Text>
+            <Text style={[styles.settingsLabel, { color: palette.text.primary }]}>Автоматическая отправка</Text>
+            <Text style={[styles.settingsHint, { color: palette.text.tertiary }]}>Отправлять запросы на отзыв автоматически</Text>
           </View>
           <Ionicons
             name={autoSend ? 'checkbox' : 'square-outline'}
             size={24}
-            color={autoSend ? colors.green[600] : colors.gray[400]}
+            color={autoSend ? colors.green[600] : palette.text.tertiary}
           />
         </TouchableOpacity>
       </AnimatedCard>
 
       {/* Timing settings */}
-      <AnimatedCard index={1} style={styles.card}>
-        <Text style={styles.sectionTitle}>Время отправки</Text>
+      <AnimatedCard
+        index={1}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Время отправки</Text>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Время отправки (ЧЧ:ММ)</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Время отправки (ЧЧ:ММ)</Text>
           <TextInput
             value={sendTime}
             onChangeText={setSendTime}
-            style={styles.formInput}
+            style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary }]}
             placeholder="10:00"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Задержка после визита (часы)</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Задержка после визита (часы)</Text>
           <TextInput
             value={delayHours}
             onChangeText={setDelayHours}
-            style={styles.formInput}
+            style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary }]}
             keyboardType="numeric"
             placeholder="24"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
       </AnimatedCard>
 
       {/* Message template */}
-      <AnimatedCard index={2} style={styles.card}>
-        <Text style={styles.sectionTitle}>Шаблон сообщения</Text>
+      <AnimatedCard
+        index={2}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Шаблон сообщения</Text>
         <View style={styles.formField}>
           <TextInput
             value={messageTemplate}
             onChangeText={setMessageTemplate}
-            style={[styles.formInput, { minHeight: 100, textAlignVertical: 'top' }]}
+            style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary, minHeight: 100, textAlignVertical: 'top' }]}
             multiline
             placeholder={'Здравствуйте, {client_name}!\nСпасибо за визит...\n{review_link}'}
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
-          <Text style={styles.templateHint}>
+          <Text style={[styles.templateHint, { color: palette.text.tertiary }]}>
             Переменные: {'{client_name}'}, {'{car_model}'}, {'{review_link}'}, {'{company_name}'}
           </Text>
         </View>
@@ -747,21 +790,21 @@ export default function MarketingScreen() {
       <IosScreenHeader title="Маркетинг" onBack={() => navigation.goBack()} />
 
       {/* Tabs */}
-      <View style={styles.tabBar}>
+      <View style={[styles.tabBar, { backgroundColor: palette.bg.card }]}>
         {tabs.map((tab) => {
           const active = activeTab === tab.key;
           return (
             <TouchableOpacity
               key={tab.key}
-              style={[styles.tab, active && styles.tabActive]}
+              style={[styles.tab, { backgroundColor: palette.bg.muted }, active && styles.tabActive]}
               onPress={() => setActiveTab(tab.key)}
             >
               <Ionicons
                 name={(active ? tab.icon.replace('-outline', '') : tab.icon) as any}
                 size={18}
-                color={active ? colors.primary[600] : colors.gray[400]}
+                color={active ? colors.primary[600] : palette.text.tertiary}
               />
-              <Text style={[styles.tabText, active && styles.tabTextActive]}>{tab.label}</Text>
+              <Text style={[styles.tabText, { color: palette.text.tertiary }, active && styles.tabTextActive]}>{tab.label}</Text>
             </TouchableOpacity>
           );
         })}

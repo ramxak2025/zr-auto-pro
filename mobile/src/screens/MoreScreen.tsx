@@ -376,22 +376,28 @@ export default function MoreScreen() {
           <View style={styles.userRow}>
             <View style={styles.avatarWrap}>
               {avatarUrl ? (
-                <CachedImage source={{ uri: avatarUrl }} style={styles.avatarImage} />
+                <CachedImage
+                  source={{ uri: avatarUrl }}
+                  style={[styles.avatarImage, { borderColor: palette.border.subtle }]}
+                />
               ) : (
-                <View style={styles.avatar}>
-                  <Text style={styles.avatarText}>{userInitial}</Text>
+                <View style={[styles.avatar, { backgroundColor: palette.accent.primarySoft }]}>
+                  <Text style={[styles.avatarText, { color: palette.accent.primaryText }]}>{userInitial}</Text>
                 </View>
               )}
               <TouchableOpacity
-                style={styles.avatarEditBtn}
+                style={[
+                  styles.avatarEditBtn,
+                  { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                ]}
                 onPress={handleAvatarUpload}
                 disabled={uploading}
                 hitSlop={6}
               >
                 {uploading ? (
-                  <ActivityIndicator size="small" color={colors.gray[500]} />
+                  <ActivityIndicator size="small" color={palette.text.secondary} />
                 ) : (
-                  <Ionicons name="camera-outline" size={14} color={colors.gray[500]} />
+                  <Ionicons name="camera-outline" size={14} color={palette.text.secondary} />
                 )}
               </TouchableOpacity>
             </View>

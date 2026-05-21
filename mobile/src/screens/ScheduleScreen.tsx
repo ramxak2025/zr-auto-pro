@@ -503,6 +503,7 @@ function GridTab() {
   const reduceMotion = useReduceMotion();
   const navigation = useNavigation<any>();
   const { user } = useAuth();
+  const palette = useColors();
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   // Lifted month state — same Date instance across the screen, driven
   // from the IosScreenHeader month picker.
@@ -999,7 +1000,7 @@ function GridTab() {
             <Text style={styles.legendEmoji} allowFontScaling={false}>
               {item.emoji}
             </Text>
-            <Text style={styles.legendText}>{item.label}</Text>
+            <Text style={[styles.legendText, { color: palette.text.secondary }]}>{item.label}</Text>
           </View>
         ))}
       </View>
@@ -1016,11 +1017,25 @@ function GridTab() {
         <GridSkeleton />
       ) : activeUsers.length === 0 ? (
         <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
-          <View style={[styles.emptyIcon, { width: 72, height: 72, borderRadius: 36 }]}>
-            <Ionicons name="people-outline" size={32} color={colors.gray[400]} />
+          <View
+            style={[
+              styles.emptyIcon,
+              { width: 72, height: 72, borderRadius: 36, backgroundColor: palette.bg.muted },
+            ]}
+          >
+            <Ionicons name="people-outline" size={32} color={palette.text.tertiary} />
           </View>
-          <Text style={[styles.emptyTitle, { fontSize: 17, fontWeight: '600' }]}>Нет мастеров</Text>
-          <Text style={[styles.emptySubtitle, { textAlign: 'center', maxWidth: 260, marginTop: 4 }]}>
+          <Text
+            style={[styles.emptyTitle, { fontSize: 17, fontWeight: '600', color: palette.text.secondary }]}
+          >
+            Нет мастеров
+          </Text>
+          <Text
+            style={[
+              styles.emptySubtitle,
+              { textAlign: 'center', maxWidth: 260, marginTop: 4, color: palette.text.tertiary },
+            ]}
+          >
             Чтобы планировать смены, добавьте сотрудников в разделе «Пользователи»
           </Text>
         </View>
@@ -1036,15 +1051,15 @@ function GridTab() {
            no JS bridge round-trip per scroll frame. */
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Sticky left column -- employee names with avatar initials */}
-          <View style={styles.stickyColumn}>
+          <View style={[styles.stickyColumn, { backgroundColor: palette.bg.card, borderRightColor: palette.border.subtle }]}>
             {/* Header cell */}
             <View
               style={[
                 styles.gridNameCell,
-                { width: NAME_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
+                { width: NAME_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: palette.border.subtle },
               ]}
             >
-              <Text style={styles.gridHeaderLabel}>Сотрудник</Text>
+              <Text style={[styles.gridHeaderLabel, { color: palette.text.tertiary }]}>Сотрудник</Text>
             </View>
             {/* Name cells — Reanimated.ScrollView so the scroll handler
                 runs on the UI thread and can drive the right-grid offset
@@ -1078,8 +1093,8 @@ function GridTab() {
                     activeOpacity={0.7}
                     style={[
                       styles.gridNameCell,
-                      { width: NAME_W, height: ROW_H },
-                      rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' },
+                      { width: NAME_W, height: ROW_H, borderBottomColor: palette.border.subtle },
+                      rowIdx % 2 === 1 && { backgroundColor: palette.bg.muted },
                     ]}
                   >
                     <View style={styles.gridNameInner}>
@@ -1092,18 +1107,22 @@ function GridTab() {
                         <Text style={styles.gridAvatarText}>{getInitials(u.fullName)}</Text>
                       </LinearGradient>
                       <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.gridName} numberOfLines={1} ellipsizeMode="tail">
+                        <Text
+                          style={[styles.gridName, { color: palette.text.primary }]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
                           {u.fullName}
                         </Text>
                         {stats && (
                           <View style={styles.gridStatsRow}>
                             <View style={styles.gridStatPill}>
                               <View style={[styles.gridStatDot, { backgroundColor: colors.green[500] }]} />
-                              <Text style={styles.gridStatText}>{stats.worked}</Text>
+                              <Text style={[styles.gridStatText, { color: palette.text.tertiary }]}>{stats.worked}</Text>
                             </View>
                             <View style={styles.gridStatPill}>
-                              <View style={[styles.gridStatDot, { backgroundColor: colors.gray[400] }]} />
-                              <Text style={styles.gridStatText}>{stats.off}</Text>
+                              <View style={[styles.gridStatDot, { backgroundColor: palette.text.tertiary }]} />
+                              <Text style={[styles.gridStatText, { color: palette.text.tertiary }]}>{stats.off}</Text>
                             </View>
                           </View>
                         )}
@@ -1327,6 +1346,7 @@ function GridTab() {
 function TodayTab() {
   const queryClient = useQueryClient();
   const navigation = useNavigation<any>();
+  const palette = useColors();
   const [refreshing, setRefreshing] = useState(false);
   const tabBarHeight = useTabBarHeight();
 
@@ -1471,11 +1491,13 @@ function TodayTab() {
         <LoadingSpinner />
       ) : statuses.length === 0 ? (
         <View style={styles.emptyState}>
-          <View style={styles.emptyIcon}>
-            <Ionicons name="calendar-outline" size={36} color={colors.gray[300]} />
+          <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="calendar-outline" size={36} color={palette.text.tertiary} />
           </View>
-          <Text style={styles.emptyTitle}>Расписание не настроено</Text>
-          <Text style={styles.emptySubtitle}>Добавьте смены в разделе "График"</Text>
+          <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Расписание не настроено</Text>
+          <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>
+            Добавьте смены в разделе "График"
+          </Text>
         </View>
       ) : (
         statuses.map((s, idx) => {
@@ -1486,23 +1508,23 @@ function TodayTab() {
           // lives in the GridTab heatmap.
           return (
             <AnimatedCard key={s.userId} index={idx + 2} onPress={() => openEmployee(navigation, s.userId)}>
-              <View style={styles.todayCard}>
+              <View style={[styles.todayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
                 <View style={[styles.todayCardAccent, { backgroundColor: info.borderColor }]} />
                 <View style={styles.todayCardContent}>
                   <Text style={styles.todayEmoji} allowFontScaling={false}>
                     {info.emoji}
                   </Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.todayName}>{s.fullName}</Text>
+                    <Text style={[styles.todayName, { color: palette.text.primary }]}>{s.fullName}</Text>
                     <Text style={[styles.todayStatusLabel, { color: info.color }]}>{info.label}</Text>
                     <View style={styles.todayInfoRow}>
                       {s.shiftStart && s.shiftEnd && (
-                        <Text style={styles.todayShift}>
+                        <Text style={[styles.todayShift, { color: palette.text.secondary }]}>
                           {s.shiftStart} — {s.shiftEnd}
                         </Text>
                       )}
                       {s.actualArrival && (
-                        <Text style={styles.todayShift}>
+                        <Text style={[styles.todayShift, { color: palette.text.secondary }]}>
                           {'  ·  '}пришёл{' '}
                           {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
                             hour: '2-digit',
@@ -1511,7 +1533,9 @@ function TodayTab() {
                         </Text>
                       )}
                     </View>
-                    {s.note ? <Text style={styles.todayNote}>{s.note}</Text> : null}
+                    {s.note ? (
+                      <Text style={[styles.todayNote, { color: palette.text.tertiary }]}>{s.note}</Text>
+                    ) : null}
                   </View>
                 </View>
               </View>
@@ -1677,6 +1701,7 @@ function ShiftsTab() {
 // ============== RATING TAB ==============
 function RatingTab() {
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -1735,21 +1760,21 @@ function RatingTab() {
           alignItems: 'center',
           justifyContent: 'center',
           gap: spacing[3],
-          backgroundColor: colors.white,
+          backgroundColor: palette.bg.card,
           borderRadius: borderRadius.xl,
           paddingVertical: spacing[2.5],
           borderWidth: 1,
-          borderColor: colors.gray[100],
+          borderColor: palette.border.subtle,
         }}
       >
         <TouchableOpacity onPress={() => shiftMonth(-1)} style={{ padding: spacing[1] }}>
-          <Ionicons name="chevron-back" size={20} color={colors.gray[500]} />
+          <Ionicons name="chevron-back" size={20} color={palette.text.secondary} />
         </TouchableOpacity>
         <Text
           style={{
             fontSize: fontSize.sm,
             fontWeight: fontWeight.bold,
-            color: colors.gray[900],
+            color: palette.text.primary,
             textTransform: 'capitalize' as const,
             minWidth: 140,
             textAlign: 'center',
@@ -1758,7 +1783,7 @@ function RatingTab() {
           {monthLabel}
         </Text>
         <TouchableOpacity onPress={() => shiftMonth(1)} style={{ padding: spacing[1] }}>
-          <Ionicons name="chevron-forward" size={20} color={colors.gray[500]} />
+          <Ionicons name="chevron-forward" size={20} color={palette.text.secondary} />
         </TouchableOpacity>
       </View>
 
@@ -1777,10 +1802,10 @@ function RatingTab() {
           <View
             key={u.id}
             style={{
-              backgroundColor: colors.white,
+              backgroundColor: palette.bg.card,
               borderRadius: borderRadius['2xl'],
               borderWidth: 1,
-              borderColor: idx < 3 ? colors.amber[200] : colors.gray[100],
+              borderColor: idx < 3 ? colors.amber[200] : palette.border.subtle,
               overflow: 'hidden',
             }}
           >
@@ -1795,7 +1820,7 @@ function RatingTab() {
                     width: 32,
                     height: 32,
                     borderRadius: 16,
-                    backgroundColor: idx < 3 ? colors.amber[100] : colors.gray[100],
+                    backgroundColor: idx < 3 ? colors.amber[100] : palette.bg.muted,
                     alignItems: 'center',
                     justifyContent: 'center',
                   }}
@@ -1804,7 +1829,7 @@ function RatingTab() {
                     style={{
                       fontSize: fontSize.sm,
                       fontWeight: fontWeight.bold,
-                      color: idx < 3 ? colors.amber[600] : colors.gray[500],
+                      color: idx < 3 ? colors.amber[600] : palette.text.secondary,
                     }}
                   >
                     {medal || idx + 1}
@@ -1812,7 +1837,7 @@ function RatingTab() {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text
-                    style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}
+                    style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: palette.text.primary }}
                     numberOfLines={1}
                   >
                     {u.fullName}
@@ -1905,9 +1930,9 @@ function RatingTab() {
                   <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: scoreColor }}>
                     {u.score}%
                   </Text>
-                  <Text style={{ fontSize: 8, color: colors.gray[400] }}>посещ.</Text>
+                  <Text style={{ fontSize: 8, color: palette.text.tertiary }}>посещ.</Text>
                 </View>
-                <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.gray[400]} />
+                <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={palette.text.tertiary} />
               </View>
             </TouchableOpacity>
 
@@ -1915,20 +1940,20 @@ function RatingTab() {
               <View
                 style={{
                   borderTopWidth: 1,
-                  borderTopColor: colors.gray[100],
-                  backgroundColor: colors.gray[50],
+                  borderTopColor: palette.border.subtle,
+                  backgroundColor: palette.bg.muted,
                   padding: spacing[3],
                   gap: spacing[1.5],
                 }}
               >
                 {s.fullDates.length > 0 && (
-                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                  <Text style={{ fontSize: 11, color: palette.text.secondary }}>
                     <Text style={{ fontWeight: '700', color: colors.green[700] }}>✓ Полная смена ({s.full}): </Text>
                     {s.fullDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.lateMinorDates.length > 0 && (
-                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                  <Text style={{ fontSize: 11, color: palette.text.secondary }}>
                     <Text style={{ fontWeight: '700', color: colors.yellow[700] }}>
                       ⏰ Опозд. &lt;1ч ({s.lateMinor}):{' '}
                     </Text>
@@ -1936,7 +1961,7 @@ function RatingTab() {
                   </Text>
                 )}
                 {s.lateMajorDates.length > 0 && (
-                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                  <Text style={{ fontSize: 11, color: palette.text.secondary }}>
                     <Text style={{ fontWeight: '700', color: colors.orange[600] }}>
                       ⚠ Опозд. &gt;1ч ({s.lateMajor}):{' '}
                     </Text>
@@ -1944,25 +1969,25 @@ function RatingTab() {
                   </Text>
                 )}
                 {s.absentDates.length > 0 && (
-                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                  <Text style={{ fontSize: 11, color: palette.text.secondary }}>
                     <Text style={{ fontWeight: '700', color: colors.red[700] }}>❌ Прогул ({s.absent}): </Text>
                     {s.absentDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.sickDates.length > 0 && (
-                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
+                  <Text style={{ fontSize: 11, color: palette.text.secondary }}>
                     <Text style={{ fontWeight: '700', color: colors.rose[600] }}>🏥 Больничный ({s.sick}): </Text>
                     {s.sickDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.dayOffDates.length > 0 && (
-                  <Text style={{ fontSize: 11, color: colors.gray[700] }}>
-                    <Text style={{ fontWeight: '700', color: colors.gray[500] }}>🌙 Выходной ({s.dayOff}): </Text>
+                  <Text style={{ fontSize: 11, color: palette.text.secondary }}>
+                    <Text style={{ fontWeight: '700', color: palette.text.secondary }}>🌙 Выходной ({s.dayOff}): </Text>
                     {s.dayOffDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.total === 0 && s.sick === 0 && s.dayOff === 0 && (
-                  <Text style={{ fontSize: 11, color: colors.gray[400], textAlign: 'center' }}>Нет данных</Text>
+                  <Text style={{ fontSize: 11, color: palette.text.tertiary, textAlign: 'center' }}>Нет данных</Text>
                 )}
               </View>
             )}
@@ -2355,8 +2380,8 @@ export default function ScheduleScreen() {
         <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
 
         {/* Tab bar */}
-        <View style={styles.tabBar}>
-          <View style={styles.tabBarInner}>
+        <View style={[styles.tabBar, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}>
+          <View style={[styles.tabBarInner, { backgroundColor: palette.bg.muted }]}>
             {tabConfig.map((t) => {
               const isActive = tab === t.key;
               return (
@@ -2380,8 +2405,12 @@ export default function ScheduleScreen() {
                     </LinearGradient>
                   ) : (
                     <View style={styles.tabItemInner}>
-                      <Ionicons name={t.icon} size={16} color={colors.gray[400]} />
-                      <Text style={styles.tabItemText} numberOfLines={1} adjustsFontSizeToFit>
+                      <Ionicons name={t.icon} size={16} color={palette.text.tertiary} />
+                      <Text
+                        style={[styles.tabItemText, { color: palette.text.secondary }]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                      >
                         {t.label}
                       </Text>
                     </View>

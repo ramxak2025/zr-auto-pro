@@ -790,10 +790,10 @@ export default function CheckCreateScreen() {
       {isStackScreen && (
         <TouchableOpacity
           onPress={() => navigation.goBack()}
-          style={[styles.floatingBack, { top: insetsTop + spacing[1] }]}
+          style={[styles.floatingBack, { backgroundColor: palette.bg.card, top: insetsTop + spacing[1] }]}
           hitSlop={10}
         >
-          <Ionicons name="chevron-back" size={22} color={colors.gray[800]} />
+          <Ionicons name="chevron-back" size={22} color={palette.text.primary} />
         </TouchableOpacity>
       )}
 
@@ -808,10 +808,10 @@ export default function CheckCreateScreen() {
           keyboardShouldPersistTaps="handled"
         >
           {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
-          <View style={styles.sectionClient}>
+          <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <Ionicons name="person-circle-outline" size={18} color={colors.blue[600]} />
-              <Text style={styles.sectionLabel}>Информация о клиенте</Text>
+              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Информация о клиенте</Text>
             </View>
 
             {/* Date/Time — only when editing an existing check.
@@ -821,13 +821,19 @@ export default function CheckCreateScreen() {
                 the client, the car, the line items, the payment. */}
             {editId && (
               <View style={styles.dateTimeCard}>
-                <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(true)}>
+                <TouchableOpacity
+                  style={[styles.dateBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                  onPress={() => setShowDatePicker(true)}
+                >
                   <Ionicons name="calendar-outline" size={16} color={colors.blue[600]} />
-                  <Text style={styles.dateBtnText}>{dateStr}</Text>
+                  <Text style={[styles.dateBtnText, { color: palette.text.primary }]}>{dateStr}</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.timeBtn} onPress={() => setShowTimePicker(true)}>
+                <TouchableOpacity
+                  style={[styles.timeBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                  onPress={() => setShowTimePicker(true)}
+                >
                   <Ionicons name="time-outline" size={16} color={colors.blue[600]} />
-                  <Text style={styles.timeBtnText}>{timeStr}</Text>
+                  <Text style={[styles.timeBtnText, { color: palette.text.primary }]}>{timeStr}</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -872,18 +878,23 @@ export default function CheckCreateScreen() {
                  The car gets its own labeled section ("АВТОМОБИЛЬ") so
                  it's structurally tied to the card instead of floating
                  as random text under the plate. */
-              <View style={styles.selectedCard}>
+              <View
+                style={[
+                  styles.selectedCard,
+                  { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                ]}
+              >
                 {/* — Section 1: client header — */}
                 <View style={styles.selectedCardTop}>
                   <View style={styles.selectedCardAvatar}>
                     <Ionicons name="person" size={22} color={colors.primary[700]} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.selectedCardName} numberOfLines={1}>
+                    <Text style={[styles.selectedCardName, { color: palette.text.primary }]} numberOfLines={1}>
                       {selectedClient.fullName}
                     </Text>
                     {!!selectedClient.phone && (
-                      <Text style={styles.selectedCardPhone} numberOfLines={1}>
+                      <Text style={[styles.selectedCardPhone, { color: palette.text.tertiary }]} numberOfLines={1}>
                         {formatPhone(selectedClient.phone)}
                       </Text>
                     )}
@@ -896,10 +907,10 @@ export default function CheckCreateScreen() {
                       setPlateSearch('');
                     }}
                     hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                    style={styles.selectedCardClose}
+                    style={[styles.selectedCardClose, { backgroundColor: palette.bg.muted }]}
                     accessibilityLabel="Сбросить клиента"
                   >
-                    <Ionicons name="close" size={18} color={colors.gray[600]} />
+                    <Ionicons name="close" size={18} color={palette.text.secondary} />
                   </TouchableOpacity>
                 </View>
 
@@ -909,14 +920,14 @@ export default function CheckCreateScreen() {
                        preset gives ГОСТ digit/flag/RUS room to breathe
                        inside the right strip without the cramped 48pt
                        look reported on physical iPhones. */
-                  <View style={styles.selectedCarStack}>
+                  <View style={[styles.selectedCarStack, { borderTopColor: palette.border.subtle }]}>
                     <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="medium" />
-                    <Text style={styles.selectedCarLabel} numberOfLines={1}>
-                      <Text style={styles.selectedCarLabelKey}>Автомобиль: </Text>
+                    <Text style={[styles.selectedCarLabel, { color: palette.text.primary }]} numberOfLines={1}>
+                      <Text style={[styles.selectedCarLabelKey, { color: palette.text.tertiary }]}>Автомобиль: </Text>
                       {selectedCar.makeModel || '—'}
                     </Text>
                     {selectedCar.comment && (
-                      <Text style={styles.selectedCarComment} numberOfLines={1}>
+                      <Text style={[styles.selectedCarComment, { color: palette.text.tertiary }]} numberOfLines={1}>
                         {selectedCar.comment}
                       </Text>
                     )}
@@ -933,7 +944,7 @@ export default function CheckCreateScreen() {
               <>
                 {/* ═══ ПОИСК ПО ГОСНОМЕРУ ═══ */}
                 <View style={styles.plateLabelRow}>
-                  <Text style={styles.sectionSubLabel}>ПОИСК ПО ГОСНОМЕРУ</Text>
+                  <Text style={[styles.sectionSubLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
                   <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
                 </View>
 
@@ -947,11 +958,16 @@ export default function CheckCreateScreen() {
 
                 {/* Inline search results — appear right below the plate */}
                 {normalizedSearch.length >= 2 && plateResults.length > 0 && (
-                  <View style={styles.inlineResults}>
+                  <View
+                    style={[
+                      styles.inlineResults,
+                      { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                    ]}
+                  >
                     {plateResults.slice(0, 5).map(({ client, car }) => (
                       <TouchableOpacity
                         key={`${client.id}-${car.id}`}
-                        style={styles.inlineResultItem}
+                        style={[styles.inlineResultItem, { borderBottomColor: palette.border.subtle }]}
                         onPress={() => {
                           animateClientToggle();
                           setClientId(client.id);
@@ -966,28 +982,30 @@ export default function CheckCreateScreen() {
                           </View>
                         )}
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.inlineResultName} numberOfLines={1}>
+                          <Text style={[styles.inlineResultName, { color: palette.text.primary }]} numberOfLines={1}>
                             {car.makeModel}
                           </Text>
-                          <Text style={styles.inlineResultSub} numberOfLines={1}>
+                          <Text style={[styles.inlineResultSub, { color: palette.text.tertiary }]} numberOfLines={1}>
                             {client.fullName}
                           </Text>
                         </View>
-                        <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                        <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
                       </TouchableOpacity>
                     ))}
                   </View>
                 )}
                 {/* Show "not found" only after search completed (no flash on partial input) */}
                 {normalizedSearch.length >= 2 && plateResults.length === 0 && !isFetchingPlate && (
-                  <Text style={styles.inlineNoResults}>Клиент не найден</Text>
+                  <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
                 )}
 
-                <View style={styles.retailDefault}>
+                <View style={[styles.retailDefault, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
                   <Ionicons name="storefront-outline" size={16} color={colors.blue[500]} />
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.retailDefaultText}>Розничный покупатель</Text>
-                    <Text style={styles.retailDefaultHint}>Наберите госномер чтобы привязать клиента</Text>
+                    <Text style={[styles.retailDefaultText, { color: palette.text.primary }]}>Розничный покупатель</Text>
+                    <Text style={[styles.retailDefaultHint, { color: palette.text.tertiary }]}>
+                      Наберите госномер чтобы привязать клиента
+                    </Text>
                   </View>
                 </View>
               </>
@@ -1016,7 +1034,7 @@ export default function CheckCreateScreen() {
                         style={{
                           fontSize: 11,
                           fontWeight: active ? '600' : '500',
-                          color: active ? colors.gray[900] : colors.gray[500],
+                          color: active ? palette.text.primary : palette.text.tertiary,
                           maxWidth: 140,
                         }}
                         numberOfLines={1}
@@ -1030,15 +1048,15 @@ export default function CheckCreateScreen() {
             )}
 
             {/* Mileage */}
-            <View style={styles.mileageRow}>
+            <View style={[styles.mileageRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
               <Ionicons name="speedometer-outline" size={16} color={colors.blue[400]} />
               <TextInput
                 value={mileage}
                 onChangeText={setMileage}
-                style={styles.mileageInput}
+                style={[styles.mileageInput, { color: palette.text.primary }]}
                 keyboardType="numeric"
                 placeholder="Пробег, км"
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
             </View>
           </View>
@@ -1048,36 +1066,39 @@ export default function CheckCreateScreen() {
               comment is about what the masters did / warned the client
               about, so it belongs to the receipt as a whole — not nested
               inside client info. */}
-          <View style={styles.sectionComment}>
+          <View style={[styles.sectionComment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.purple[600]} />
-              <Text style={styles.sectionLabel}>Комментарий</Text>
+              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Комментарий</Text>
             </View>
             <TextInput
               value={comment}
               onChangeText={setComment}
-              style={styles.commentInput}
+              style={[
+                styles.commentInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
               multiline
               placeholder="Введите сюда ваш коментарий..."
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
 
           {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
-          <View style={styles.sectionItems}>
+          <View style={[styles.sectionItems, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <Ionicons name="receipt-outline" size={18} color={colors.orange[600]} />
-              <Text style={styles.sectionLabel}>Товары и услуги</Text>
+              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Товары и услуги</Text>
             </View>
 
             {/* Services */}
-            <View style={styles.linesSection}>
+            <View style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
               <View style={styles.linesSectionHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                   <View style={[styles.sectionIcon, { backgroundColor: colors.orange[50] }]}>
                     <Ionicons name="build-outline" size={14} color={colors.orange[500]} />
                   </View>
-                  <Text style={styles.linesSectionTitle}>Услуги</Text>
+                  <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Услуги</Text>
                   {serviceLines.length > 0 && (
                     <View style={styles.lineBadge}>
                       <Text style={styles.lineBadgeText}>{serviceLines.length}</Text>
@@ -1095,9 +1116,12 @@ export default function CheckCreateScreen() {
                 </TouchableOpacity>
               </View>
               {serviceLines.map((line, idx) => (
-                <View key={idx} style={styles.lineItem}>
+                <View
+                  key={idx}
+                  style={[styles.lineItem, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+                >
                   <View style={styles.lineTop}>
-                    <Text style={styles.lineName} numberOfLines={1}>
+                    <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
                       {line.name}
                     </Text>
                     <TouchableOpacity
@@ -1110,53 +1134,61 @@ export default function CheckCreateScreen() {
                   <TouchableOpacity style={styles.lineMasterRow} onPress={() => setShowMasterPicker(idx)}>
                     <Ionicons name="person-outline" size={12} color={colors.primary[500]} />
                     <Text style={styles.lineMasterText}>{getMasterName(line.lineMasterId || line.masterId)}</Text>
-                    <Ionicons name="chevron-down" size={10} color={colors.gray[400]} />
+                    <Ionicons name="chevron-down" size={10} color={palette.text.tertiary} />
                   </TouchableOpacity>
                   <View style={styles.lineInputs}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.lineInputLabel}>Цена</Text>
+                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
                       <TextInput
                         value={String(line.price)}
                         onChangeText={(v) => updateServiceLine(idx, 'price', Number(v) || 0)}
-                        style={styles.lineInput}
+                        style={[
+                          styles.lineInput,
+                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                        ]}
                         keyboardType="numeric"
                       />
                     </View>
                     <View style={{ width: 60 }}>
-                      <Text style={styles.lineInputLabel}>Кол.</Text>
+                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
                       <TextInput
                         value={String(line.quantity)}
                         onChangeText={(v) => updateServiceLine(idx, 'quantity', Number(v) || 1)}
-                        style={styles.lineInput}
+                        style={[
+                          styles.lineInput,
+                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                        ]}
                         keyboardType="numeric"
                       />
                     </View>
-                    <Text style={styles.lineTotal}>{formatMoney(line.price * line.quantity)}</Text>
+                    <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
+                      {formatMoney(line.price * line.quantity)}
+                    </Text>
                   </View>
                 </View>
               ))}
               {serviceLines.length === 0 && (
                 <TouchableOpacity
-                  style={styles.emptyAddBtn}
+                  style={[styles.emptyAddBtn, { borderColor: palette.border.subtle }]}
                   onPress={() => {
                     setServiceSearch('');
                     setShowServicePicker(true);
                   }}
                 >
-                  <Ionicons name="add-circle-outline" size={18} color={colors.gray[400]} />
-                  <Text style={styles.emptyAddText}>Добавить услугу</Text>
+                  <Ionicons name="add-circle-outline" size={18} color={palette.text.tertiary} />
+                  <Text style={[styles.emptyAddText, { color: palette.text.tertiary }]}>Добавить услугу</Text>
                 </TouchableOpacity>
               )}
             </View>
 
             {/* Products */}
-            <View style={styles.linesSection}>
+            <View style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
               <View style={styles.linesSectionHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                   <View style={[styles.sectionIcon, { backgroundColor: colors.blue[50] }]}>
                     <Ionicons name="cube-outline" size={14} color={colors.blue[600]} />
                   </View>
-                  <Text style={styles.linesSectionTitle}>Товары</Text>
+                  <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Товары</Text>
                   {productLines.length > 0 && (
                     <View style={styles.lineBadge}>
                       <Text style={styles.lineBadgeText}>{productLines.length}</Text>
@@ -1168,9 +1200,12 @@ export default function CheckCreateScreen() {
                 </TouchableOpacity>
               </View>
               {productLines.map((line, idx) => (
-                <View key={idx} style={styles.lineItem}>
+                <View
+                  key={idx}
+                  style={[styles.lineItem, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+                >
                   <View style={styles.lineTop}>
-                    <Text style={styles.lineName} numberOfLines={1}>
+                    <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
                       {line.name}
                     </Text>
                     <TouchableOpacity
@@ -1182,48 +1217,59 @@ export default function CheckCreateScreen() {
                   </View>
                   <View style={styles.lineInputs}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.lineInputLabel}>Цена</Text>
+                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
                       <TextInput
                         value={String(line.sellPrice)}
                         onChangeText={(v) => updateProductLine(idx, 'sellPrice', Number(v) || 0)}
-                        style={styles.lineInput}
+                        style={[
+                          styles.lineInput,
+                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                        ]}
                         keyboardType="numeric"
                       />
                     </View>
                     <View style={{ width: 60 }}>
-                      <Text style={styles.lineInputLabel}>Кол.</Text>
+                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
                       <TextInput
                         value={String(line.quantity)}
                         onChangeText={(v) => updateProductLine(idx, 'quantity', Number(v) || 1)}
-                        style={styles.lineInput}
+                        style={[
+                          styles.lineInput,
+                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                        ]}
                         keyboardType="numeric"
                       />
                     </View>
-                    <Text style={styles.lineTotal}>{formatMoney(line.sellPrice * line.quantity)}</Text>
+                    <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
+                      {formatMoney(line.sellPrice * line.quantity)}
+                    </Text>
                   </View>
                 </View>
               ))}
               {productLines.length === 0 && (
-                <TouchableOpacity style={styles.emptyAddBtn} onPress={() => setShowProductPicker(true)}>
-                  <Ionicons name="add-circle-outline" size={18} color={colors.gray[400]} />
-                  <Text style={styles.emptyAddText}>Добавить товар</Text>
+                <TouchableOpacity
+                  style={[styles.emptyAddBtn, { borderColor: palette.border.subtle }]}
+                  onPress={() => setShowProductPicker(true)}
+                >
+                  <Ionicons name="add-circle-outline" size={18} color={palette.text.tertiary} />
+                  <Text style={[styles.emptyAddText, { color: palette.text.tertiary }]}>Добавить товар</Text>
                 </TouchableOpacity>
               )}
             </View>
 
             {/* Discount */}
-            <View style={styles.discountRow}>
+            <View style={[styles.discountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
               <Ionicons name="pricetag-outline" size={16} color={colors.orange[500]} />
-              <Text style={styles.discountLabel}>Скидка</Text>
+              <Text style={[styles.discountLabel, { color: palette.text.secondary }]}>Скидка</Text>
               <TextInput
                 value={discount}
                 onChangeText={setDiscount}
-                style={styles.discountInput}
+                style={[styles.discountInput, { color: palette.text.primary }]}
                 keyboardType="numeric"
                 placeholder="0"
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
-              <Text style={styles.discountCurrency}>₽</Text>
+              <Text style={[styles.discountCurrency, { color: palette.text.tertiary }]}>₽</Text>
             </View>
           </View>
 
@@ -1231,32 +1277,36 @@ export default function CheckCreateScreen() {
 
           {/* ═══ SECTION 4: SUMMARY — special card ═══ */}
           {(serviceLines.length > 0 || productLines.length > 0) && (
-            <View style={styles.summaryCard}>
-              <Text style={styles.summaryTitle}>ИТОГО</Text>
+            <View style={[styles.summaryCard, { backgroundColor: palette.bg.card, borderColor: palette.accent.primarySoft }]}>
+              <Text style={[styles.summaryTitle, { color: palette.text.tertiary }]}>ИТОГО</Text>
               {serviceLines.length > 0 && (
                 <View style={styles.summaryRow}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Ionicons name="build-outline" size={14} color={colors.gray[400]} />
-                    <Text style={styles.summaryLabel}>Услуги ({serviceLines.length})</Text>
+                    <Ionicons name="build-outline" size={14} color={palette.text.tertiary} />
+                    <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>
+                      Услуги ({serviceLines.length})
+                    </Text>
                   </View>
-                  <Text style={styles.summaryValue}>{formatMoney(serviceTotal)}</Text>
+                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(serviceTotal)}</Text>
                 </View>
               )}
               {productLines.length > 0 && (
                 <View style={styles.summaryRow}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Ionicons name="cube-outline" size={14} color={colors.gray[400]} />
-                    <Text style={styles.summaryLabel}>Товары ({productLines.length})</Text>
+                    <Ionicons name="cube-outline" size={14} color={palette.text.tertiary} />
+                    <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>
+                      Товары ({productLines.length})
+                    </Text>
                   </View>
-                  <Text style={styles.summaryValue}>{formatMoney(productTotal)}</Text>
+                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(productTotal)}</Text>
                 </View>
               )}
               {serviceLines.length > 0 && productLines.length > 0 && (
                 <>
-                  <View style={styles.summaryDivider} />
+                  <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Подитог</Text>
-                    <Text style={styles.summaryValue}>{formatMoney(subtotal)}</Text>
+                    <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>Подитог</Text>
+                    <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(subtotal)}</Text>
                   </View>
                 </>
               )}
@@ -1269,19 +1319,19 @@ export default function CheckCreateScreen() {
                   <Text style={[styles.summaryValue, { color: colors.orange[600] }]}>-{formatMoney(discountNum)}</Text>
                 </View>
               )}
-              <View style={styles.summaryDivider} />
+              <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
               <View style={styles.summaryRow}>
-                <Text style={styles.summaryTotalLabel}>К оплате</Text>
+                <Text style={[styles.summaryTotalLabel, { color: palette.text.primary }]}>К оплате</Text>
                 <Text style={styles.summaryTotalValue}>{formatMoney(total)}</Text>
               </View>
             </View>
           )}
 
           {/* ═══ SECTION 5: PAYMENT — green tint ═══ */}
-          <View style={styles.sectionPayment}>
+          <View style={[styles.sectionPayment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <Ionicons name="wallet-outline" size={18} color={colors.green[600]} />
-              <Text style={styles.sectionLabel}>Оплата</Text>
+              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
             </View>
 
             <View style={styles.paymentRow}>
@@ -1290,11 +1340,21 @@ export default function CheckCreateScreen() {
                 return (
                   <TouchableOpacity
                     key={pm.key}
-                    style={[styles.paymentBtn, active && { borderColor: pm.color, backgroundColor: pm.bg }]}
+                    style={[
+                      styles.paymentBtn,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      active && { borderColor: pm.color, backgroundColor: pm.bg },
+                    ]}
                     onPress={() => setPaymentMethod(pm.key)}
                   >
-                    <Ionicons name={pm.icon as any} size={20} color={active ? pm.color : colors.gray[400]} />
-                    <Text style={[styles.paymentBtnText, active && { color: pm.color, fontWeight: fontWeight.bold }]}>
+                    <Ionicons name={pm.icon as any} size={20} color={active ? pm.color : palette.text.tertiary} />
+                    <Text
+                      style={[
+                        styles.paymentBtnText,
+                        { color: palette.text.secondary },
+                        active && { color: pm.color, fontWeight: fontWeight.bold },
+                      ]}
+                    >
                       {pm.label}
                     </Text>
                   </TouchableOpacity>
@@ -1303,28 +1363,33 @@ export default function CheckCreateScreen() {
             </View>
 
             {paymentMethod === ('cash' as PaymentMethod) && (
-              <View style={styles.splitWrap}>
+              <View style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
                 <View style={styles.splitRow}>
                   <View style={styles.splitIconRow}>
                     <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                    <Text style={styles.splitLabel}>Клиент дал</Text>
+                    <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Клиент дал</Text>
                   </View>
                   <TextInput
                     value={cashGiven}
                     onChangeText={setCashGiven}
-                    style={styles.splitInput}
+                    style={[
+                      styles.splitInput,
+                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, color: palette.text.primary },
+                    ]}
                     keyboardType="numeric"
                     placeholder="0"
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={palette.text.tertiary}
                   />
                 </View>
                 {Number(cashGiven) > total && (
                   <>
-                    <View style={styles.splitDivider} />
+                    <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
                     <View style={styles.splitRow}>
                       <View style={styles.splitIconRow}>
                         <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
-                        <Text style={[styles.splitLabel, { fontWeight: fontWeight.bold }]}>Сдача</Text>
+                        <Text style={[styles.splitLabel, { color: palette.text.secondary, fontWeight: fontWeight.bold }]}>
+                          Сдача
+                        </Text>
                       </View>
                       <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}>
                         {formatMoney(Number(cashGiven) - total)}
@@ -1336,26 +1401,29 @@ export default function CheckCreateScreen() {
             )}
 
             {paymentMethod === ('cash_card' as PaymentMethod) && (
-              <View style={styles.splitWrap}>
+              <View style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
                 <View style={styles.splitRow}>
                   <View style={styles.splitIconRow}>
                     <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                    <Text style={styles.splitLabel}>Наличные</Text>
+                    <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Наличные</Text>
                   </View>
                   <TextInput
                     value={cashAmount}
                     onChangeText={setCashAmount}
-                    style={styles.splitInput}
+                    style={[
+                      styles.splitInput,
+                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, color: palette.text.primary },
+                    ]}
                     keyboardType="numeric"
                     placeholder="0"
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={palette.text.tertiary}
                   />
                 </View>
-                <View style={styles.splitDivider} />
+                <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
                 <View style={styles.splitRow}>
                   <View style={styles.splitIconRow}>
                     <Ionicons name="card-outline" size={16} color={colors.blue[600]} />
-                    <Text style={styles.splitLabel}>Карта</Text>
+                    <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Карта</Text>
                   </View>
                   <Text style={styles.splitCardAmount}>{formatMoney(cardAmountCalc)}</Text>
                 </View>
@@ -1364,17 +1432,29 @@ export default function CheckCreateScreen() {
 
             {/* Deferred toggle */}
             <TouchableOpacity
-              style={[styles.deferToggle, isDeferred && styles.deferToggleActive]}
+              style={[
+                styles.deferToggle,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                isDeferred && styles.deferToggleActive,
+              ]}
               onPress={() => setIsDeferred(!isDeferred)}
             >
               <Ionicons
                 name={isDeferred ? 'checkbox' : 'square-outline'}
                 size={20}
-                color={isDeferred ? colors.amber[600] : colors.gray[400]}
+                color={isDeferred ? colors.amber[600] : palette.text.tertiary}
               />
               <View style={{ flex: 1 }}>
-                <Text style={[styles.deferLabel, isDeferred && { color: colors.amber[600] }]}>Отложить чек</Text>
-                <Text style={styles.deferHint}>Сохранить как черновик</Text>
+                <Text
+                  style={[
+                    styles.deferLabel,
+                    { color: palette.text.secondary },
+                    isDeferred && { color: colors.amber[600] },
+                  ]}
+                >
+                  Отложить чек
+                </Text>
+                <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
               </View>
             </TouchableOpacity>
           </View>
@@ -1419,7 +1499,11 @@ export default function CheckCreateScreen() {
             return (
               <TouchableOpacity
                 key={m.id}
-                style={[styles.pickerItem, isSelected && { backgroundColor: colors.primary[50] }]}
+                style={[
+                  styles.pickerItem,
+                  { borderBottomColor: palette.border.subtle },
+                  isSelected && { backgroundColor: palette.accent.primarySoft },
+                ]}
                 onPress={() => {
                   if (showMasterPicker !== null) {
                     updateServiceLine(showMasterPicker, 'lineMasterId', m.id);
@@ -1429,10 +1513,28 @@ export default function CheckCreateScreen() {
                 }}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <View style={[styles.masterCircle, isSelected && { backgroundColor: colors.primary[100] }]}>
-                    <Ionicons name="person" size={14} color={isSelected ? colors.primary[600] : colors.gray[400]} />
+                  <View
+                    style={[
+                      styles.masterCircle,
+                      { backgroundColor: palette.bg.muted },
+                      isSelected && { backgroundColor: colors.primary[100] },
+                    ]}
+                  >
+                    <Ionicons
+                      name="person"
+                      size={14}
+                      color={isSelected ? colors.primary[600] : palette.text.tertiary}
+                    />
                   </View>
-                  <Text style={[styles.pickerName, isSelected && { color: colors.primary[700] }]}>{m.fullName}</Text>
+                  <Text
+                    style={[
+                      styles.pickerName,
+                      { color: palette.text.primary },
+                      isSelected && { color: colors.primary[700] },
+                    ]}
+                  >
+                    {m.fullName}
+                  </Text>
                 </View>
                 {isSelected && <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />}
               </TouchableOpacity>
@@ -1446,22 +1548,29 @@ export default function CheckCreateScreen() {
         <TextInput
           value={serviceSearch}
           onChangeText={setServiceSearch}
-          style={[styles.formInput, { marginBottom: spacing[3] }]}
+          style={[
+            styles.formInput,
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary, marginBottom: spacing[3] },
+          ]}
           placeholder="Поиск услуги..."
-          placeholderTextColor={colors.gray[400]}
+          placeholderTextColor={palette.text.tertiary}
           autoFocus
         />
         <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
           {filteredServices.map((service) => (
-            <TouchableOpacity key={service.id} style={styles.pickerItem} onPress={() => addServiceLine(service)}>
+            <TouchableOpacity
+              key={service.id}
+              style={[styles.pickerItem, { borderBottomColor: palette.border.subtle }]}
+              onPress={() => addServiceLine(service)}
+            >
               <View style={{ flex: 1 }}>
-                <Text style={styles.pickerName}>{service.name}</Text>
+                <Text style={[styles.pickerName, { color: palette.text.primary }]}>{service.name}</Text>
               </View>
               <Text style={styles.pickerPrice}>{formatMoney(service.defaultPrice)}</Text>
             </TouchableOpacity>
           ))}
           {serviceSearch && filteredServices.length === 0 && (
-            <Text style={{ textAlign: 'center', color: colors.gray[400], paddingVertical: spacing[4] }}>
+            <Text style={{ textAlign: 'center', color: palette.text.tertiary, paddingVertical: spacing[4] }}>
               Ничего не найдено
             </Text>
           )}
@@ -1484,16 +1593,16 @@ export default function CheckCreateScreen() {
         warehouseSwitcher={{
           value: pickerWarehouseId,
           label: warehouseChipLabel,
-          onPress: () => setShowWarehouseSheet(true),
+          options: (warehouses || []).map((w) => ({ id: w.id, name: w.name, kind: w.kind })),
+          onChange: (id) => setPickerWarehouseId(id),
         }}
       />
 
-      {/* Warehouse selector sheet — exactly three options (main / defect
-          / used). Owner ask: "там нет все склады! там конкретно должны
-          переключаться не смешиваясь." The virtual "Все склады" pooled
-          option is removed so a check is always scoped to a single
-          warehouse. State is local to this screen so a brak/used
-          selection never leaks into the standalone Warehouse screen. */}
+      {/* Legacy bottom-sheet kept dormant — replaced by the inline
+          dropdown inside ProductPickerModal. iOS would freeze when
+          presenting this RNModal on top of the picker RNModal during
+          the warehouse switch. */}
+      {false && (
       <Modal
         visible={showWarehouseSheet}
         onClose={() => setShowWarehouseSheet(false)}
@@ -1535,6 +1644,7 @@ export default function CheckCreateScreen() {
           );
         })}
       </Modal>
+      )}
     </View>
   );
 }

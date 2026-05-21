@@ -344,12 +344,13 @@ function SegmentedTabs({
   value: Tab;
   onChange: (v: Tab) => void;
 }) {
+  const palette = useColors();
   const items: { k: Tab; l: string }[] = [
     { k: 'employees', l: 'Сотрудники' },
     { k: 'storage', l: 'Подсобка' },
   ];
   return (
-    <View style={styles.segmentTrack}>
+    <View style={[styles.segmentTrack, { backgroundColor: palette.bg.muted }]}>
       {items.map((it) => {
         const active = value === it.k;
         return (
@@ -360,12 +361,13 @@ function SegmentedTabs({
               onChange(it.k);
             }}
             activeOpacity={0.85}
-            style={[styles.segmentBtn, active && styles.segmentBtnActive]}
+            style={[styles.segmentBtn, active && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }]]}
           >
             <Text
               style={[
                 styles.segmentText,
-                active && styles.segmentTextActive,
+                { color: palette.text.secondary },
+                active && [styles.segmentTextActive, { color: palette.text.primary }],
               ]}
               numberOfLines={1}
             >
@@ -523,13 +525,16 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
           }}
         >
           <Ionicons name={iconName} size={14} color={color} />
-          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: palette.text.primary }}>
             {title}
           </Text>
-          <Text style={{ fontSize: fontSize.xs, color: colors.gray[400] }}>{list.length}</Text>
+          <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary }}>{list.length}</Text>
         </View>
         {list.map((item: any) => (
-          <View key={item.id} style={styles.equipItem}>
+          <View
+            key={item.id}
+            style={[styles.equipItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
             {item.photo ? (
               <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
                 <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
@@ -538,27 +543,33 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
               <View
                 style={[
                   styles.equipPhoto,
-                  { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
+                  { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
                 ]}
               >
-                <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
+                <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
               </View>
             )}
             <View style={{ flex: 1 }}>
-              <Text style={styles.equipName} numberOfLines={1}>
+              <Text style={[styles.equipName, { color: palette.text.primary }]} numberOfLines={1}>
                 {item.name}
               </Text>
               <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
               {item.serviceLifeMonths && (
-                <Text style={styles.equipMeta}>Срок: {item.serviceLifeMonths} мес.</Text>
+                <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>Срок: {item.serviceLifeMonths} мес.</Text>
               )}
             </View>
             {canEdit && (
               <View style={{ flexDirection: 'row', gap: spacing[1] }}>
-                <TouchableOpacity onPress={() => returnMut.mutate(item.id)} style={styles.equipBtn}>
+                <TouchableOpacity
+                  onPress={() => returnMut.mutate(item.id)}
+                  style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
+                >
                   <Ionicons name="arrow-undo" size={14} color={colors.blue[500]} />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => trashMut.mutate(item.id)} style={styles.equipBtn}>
+                <TouchableOpacity
+                  onPress={() => trashMut.mutate(item.id)}
+                  style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
+                >
                   <Ionicons name="trash-outline" size={14} color={colors.red[400]} />
                 </TouchableOpacity>
               </View>
@@ -613,8 +624,8 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
 
       {active.length === 0 ? (
         <View style={{ alignItems: 'center', paddingVertical: spacing[12] }}>
-          <Ionicons name="cube-outline" size={40} color={colors.gray[200]} />
-          <Text style={{ fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] }}>
+          <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
+          <Text style={{ fontSize: fontSize.sm, color: palette.text.tertiary, marginTop: spacing[2] }}>
             Нет выданного имущества
           </Text>
         </View>
@@ -1112,6 +1123,7 @@ function StorageTab({
   canEdit: boolean;
   fabOffsetBottom: number;
 }) {
+  const palette = useColors();
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [showCreateFolder, setShowCreateFolder] = useState(false);
@@ -1166,12 +1178,12 @@ function StorageTab({
         <View style={{ gap: spacing[2] }}>
           {categories.length === 0 ? (
             <View style={{ alignItems: 'center', paddingVertical: spacing[10] }}>
-              <Ionicons name="folder-open-outline" size={40} color={colors.gray[200]} />
-              <Text style={{ fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] }}>
+              <Ionicons name="folder-open-outline" size={40} color={palette.text.tertiary} />
+              <Text style={{ fontSize: fontSize.sm, color: palette.text.tertiary, marginTop: spacing[2] }}>
                 Нет папок
               </Text>
               {canEdit && (
-                <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginTop: 4 }}>
+                <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary, marginTop: 4 }}>
                   Нажмите «+» внизу, чтобы создать первую
                 </Text>
               )}
@@ -1184,16 +1196,16 @@ function StorageTab({
                   haptic('tap');
                   setSelectedCat(c.id);
                 }}
-                style={styles.folderCard}
+                style={[styles.folderCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               >
                 <View style={styles.folderIcon}>
                   <Ionicons name="folder" size={20} color={colors.amber[600]} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.folderName}>{c.name}</Text>
-                  <Text style={styles.folderCount}>{catCounts[c.id] || 0} предметов</Text>
+                  <Text style={[styles.folderName, { color: palette.text.primary }]}>{c.name}</Text>
+                  <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>{catCounts[c.id] || 0} предметов</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
               </TouchableOpacity>
             ))
           )}
@@ -1214,24 +1226,27 @@ function StorageTab({
           onPress={() => setSelectedCat(null)}
           style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginBottom: spacing[3] }}
         >
-          <Ionicons name="chevron-back" size={16} color={colors.gray[500]} />
-          <Text style={{ fontSize: fontSize.xs, color: colors.gray[500] }}>Назад к папкам</Text>
+          <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
+          <Text style={{ fontSize: fontSize.xs, color: palette.text.secondary }}>Назад к папкам</Text>
         </TouchableOpacity>
         {items.length === 0 ? (
           <View style={{ alignItems: 'center', paddingVertical: spacing[10] }}>
-            <Ionicons name="cube-outline" size={40} color={colors.gray[200]} />
-            <Text style={{ fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] }}>
+            <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
+            <Text style={{ fontSize: fontSize.sm, color: palette.text.tertiary, marginTop: spacing[2] }}>
               Пусто
             </Text>
             {canEdit && (
-              <Text style={{ fontSize: fontSize.xs, color: colors.gray[400], marginTop: 4 }}>
+              <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary, marginTop: 4 }}>
                 Нажмите «+» внизу, чтобы добавить предмет
               </Text>
             )}
           </View>
         ) : (
           items.map((item: any) => (
-            <View key={item.id} style={styles.equipItem}>
+            <View
+              key={item.id}
+              style={[styles.equipItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
               {item.photo ? (
                 <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
                   <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
@@ -1240,16 +1255,16 @@ function StorageTab({
                 <View
                   style={[
                     styles.equipPhoto,
-                    { backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
+                    { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
                   ]}
                 >
-                  <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
+                  <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
                 </View>
               )}
               <View style={{ flex: 1 }}>
-                <Text style={styles.equipName}>{item.name}</Text>
+                <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
                 <Text style={styles.equipCost}>{formatMoney(item.purchasePrice)}</Text>
-                <Text style={styles.equipMeta}>
+                <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
                   В наличии: {item.quantity} {item.unit}
                 </Text>
               </View>
@@ -1308,14 +1323,14 @@ export default function EquipmentScreen() {
           setShowTrash(true);
         }}
         hitSlop={10}
-        style={styles.headerTrailingBtn}
+        style={[styles.headerTrailingBtn, { backgroundColor: palette.bg.muted }]}
         accessibilityRole="button"
         accessibilityLabel="Корзина"
       >
-        <Ionicons name="trash-outline" size={22} color={colors.gray[700]} />
+        <Ionicons name="trash-outline" size={22} color={palette.text.primary} />
       </TouchableOpacity>
     );
-  }, [canEdit]);
+  }, [canEdit, palette.bg.muted, palette.text.primary]);
 
   // ── Master view ──
   if (isMaster) {
@@ -1382,7 +1397,7 @@ export default function EquipmentScreen() {
         {tab === 'employees' && (
           <View style={styles.grid}>
             {summary.length === 0 ? (
-              <Text style={[styles.emptyText, { width: '100%' }]}>Нет сотрудников</Text>
+              <Text style={[styles.emptyText, { width: '100%', color: palette.text.tertiary }]}>Нет сотрудников</Text>
             ) : (
               summary.map((emp: any) => (
                 <EmployeeCard

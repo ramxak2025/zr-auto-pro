@@ -259,6 +259,10 @@ export interface Supplier {
   totalPurchases: number;
   totalPaid: number;
   currentDebt: number;
+  /** System-managed row — uneditable and undeletable. Currently used for the pinned "Покупка б/у товара" supplier. */
+  isSystem?: boolean;
+  /** Well-known marker. `'used_purchase'` is the inbound second-hand purchase channel; null for normal suppliers. */
+  kind?: 'used_purchase' | null;
   createdAt: string;
 }
 
@@ -322,6 +326,8 @@ export interface StockMovement {
   /** True when a writeoff also booked an `expenses` row. */
   recordAsExpense?: boolean;
   linkedExpenseId?: string | null;
+  /** True when this movement is the inbound leg of a "Покупка б/у товара" — rendered specially in the journal. */
+  isUsedPurchase?: boolean;
   createdAt: string;
 }
 

@@ -419,9 +419,14 @@ export default function CheckDetailScreen() {
 
         {/* Comment */}
         {check.comment && (
-          <View style={styles.commentCard}>
+          <View
+            style={[
+              styles.commentCard,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+            ]}
+          >
             <Ionicons name="chatbubble-ellipses" size={15} color={colors.primary[400]} />
-            <Text style={styles.commentText}>{check.comment}</Text>
+            <Text style={[styles.commentText, { color: palette.text.secondary }]}>{check.comment}</Text>
           </View>
         )}
 
@@ -431,7 +436,7 @@ export default function CheckDetailScreen() {
           <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <LinearGradient
-                colors={[colors.orange[50], '#fff']}
+                colors={[colors.orange[50], palette.bg.card]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.sectionGradient}
@@ -439,18 +444,25 @@ export default function CheckDetailScreen() {
                 <Ionicons name="build" size={15} color={colors.orange[500]} />
                 <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Услуги</Text>
               </LinearGradient>
-              <View style={styles.sectionBadge}>
-                <Text style={styles.sectionBadgeText}>{services.length}</Text>
+              <View style={[styles.sectionBadge, { backgroundColor: palette.bg.muted }]}>
+                <Text style={[styles.sectionBadgeText, { color: palette.text.secondary }]}>{services.length}</Text>
               </View>
             </View>
             {services.map((line, idx) => (
-              <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
+              <View
+                key={idx}
+                style={[styles.lineItem, idx > 0 && [styles.lineItemBorder, { borderTopColor: palette.border.subtle }]]}
+              >
                 <View style={styles.lineItemLeft}>
                   <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
                   <View style={styles.lineItemMeta}>
-                    {line.master && <Text style={styles.lineItemMetaText}>{line.master.fullName}</Text>}
+                    {line.master && (
+                      <Text style={[styles.lineItemMetaText, { color: palette.text.tertiary }]}>
+                        {line.master.fullName}
+                      </Text>
+                    )}
                     {line.quantity > 1 && (
-                      <Text style={styles.lineItemMetaText}>
+                      <Text style={[styles.lineItemMetaText, { color: palette.text.tertiary }]}>
                         {line.quantity} x {formatMoney(line.price)}
                       </Text>
                     )}
@@ -459,9 +471,16 @@ export default function CheckDetailScreen() {
                 <Text style={[styles.lineItemPrice, { color: palette.text.primary }]}>{formatMoney(line.total)}</Text>
               </View>
             ))}
-            <View style={styles.sectionSubtotal}>
-              <Text style={styles.subtotalLabel}>Итого услуги</Text>
-              <Text style={styles.subtotalValue}>{formatMoney(check.serviceTotal)}</Text>
+            <View
+              style={[
+                styles.sectionSubtotal,
+                { backgroundColor: palette.bg.muted, borderTopColor: palette.border.subtle },
+              ]}
+            >
+              <Text style={[styles.subtotalLabel, { color: palette.text.secondary }]}>Итого услуги</Text>
+              <Text style={[styles.subtotalValue, { color: palette.text.primary }]}>
+                {formatMoney(check.serviceTotal)}
+              </Text>
             </View>
           </View>
         )}
@@ -471,7 +490,7 @@ export default function CheckDetailScreen() {
           <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.sectionHeader}>
               <LinearGradient
-                colors={[colors.blue[50], '#fff']}
+                colors={[colors.blue[50], palette.bg.card]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.sectionGradient}
@@ -479,28 +498,40 @@ export default function CheckDetailScreen() {
                 <Ionicons name="cube" size={15} color={colors.blue[600]} />
                 <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Товары</Text>
               </LinearGradient>
-              <View style={styles.sectionBadge}>
-                <Text style={styles.sectionBadgeText}>{products.length}</Text>
+              <View style={[styles.sectionBadge, { backgroundColor: palette.bg.muted }]}>
+                <Text style={[styles.sectionBadgeText, { color: palette.text.secondary }]}>{products.length}</Text>
               </View>
             </View>
             {products.map((line, idx) => (
-              <View key={idx} style={[styles.lineItem, idx > 0 && styles.lineItemBorder]}>
+              <View
+                key={idx}
+                style={[styles.lineItem, idx > 0 && [styles.lineItemBorder, { borderTopColor: palette.border.subtle }]]}
+              >
                 <View style={styles.lineItemLeft}>
                   <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
                   {line.quantity > 1 && (
                     <View style={styles.lineItemMeta}>
-                      <Text style={styles.lineItemMetaText}>
+                      <Text style={[styles.lineItemMetaText, { color: palette.text.tertiary }]}>
                         {line.quantity} x {formatMoney(line.sellPrice)}
                       </Text>
                     </View>
                   )}
                 </View>
-                <Text style={[styles.lineItemPrice, { color: palette.text.primary }]}>{formatMoney(line.totalSell)}</Text>
+                <Text style={[styles.lineItemPrice, { color: palette.text.primary }]}>
+                  {formatMoney(line.totalSell)}
+                </Text>
               </View>
             ))}
-            <View style={styles.sectionSubtotal}>
-              <Text style={styles.subtotalLabel}>Итого товары</Text>
-              <Text style={styles.subtotalValue}>{formatMoney(check.productTotal)}</Text>
+            <View
+              style={[
+                styles.sectionSubtotal,
+                { backgroundColor: palette.bg.muted, borderTopColor: palette.border.subtle },
+              ]}
+            >
+              <Text style={[styles.subtotalLabel, { color: palette.text.secondary }]}>Итого товары</Text>
+              <Text style={[styles.subtotalValue, { color: palette.text.primary }]}>
+                {formatMoney(check.productTotal)}
+              </Text>
             </View>
           </View>
         )}
@@ -540,7 +571,13 @@ export default function CheckDetailScreen() {
               const expiry = new Date(claim.expiresAt);
               const expiryLabel = `${String(expiry.getDate()).padStart(2, '0')}.${String(expiry.getMonth() + 1).padStart(2, '0')}.${expiry.getFullYear()}`;
               return (
-                <View key={claim.id ?? idx} style={[styles.warrantyRow, idx > 0 && styles.warrantyRowBorder]}>
+                <View
+                  key={claim.id ?? idx}
+                  style={[
+                    styles.warrantyRow,
+                    idx > 0 && [styles.warrantyRowBorder, { borderTopColor: palette.border.subtle }],
+                  ]}
+                >
                   <View style={styles.warrantyRowLeft}>
                     <Ionicons
                       name={claim.kind === 'product' ? 'cube-outline' : 'build-outline'}
@@ -585,14 +622,14 @@ export default function CheckDetailScreen() {
           </LinearGradient>
 
           {canViewProfit && (
-            <View style={styles.profitRow}>
+            <View style={[styles.profitRow, { backgroundColor: palette.bg.card }]}>
               <View style={styles.profitLeft}>
                 <Ionicons
                   name="trending-up"
                   size={16}
                   color={check.profit >= 0 ? colors.green[600] : colors.red[500]}
                 />
-                <Text style={styles.profitLabel}>Прибыль</Text>
+                <Text style={[styles.profitLabel, { color: palette.text.secondary }]}>Прибыль</Text>
               </View>
               <Text
                 style={[

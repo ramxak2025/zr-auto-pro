@@ -1,7 +1,8 @@
-import { Injectable, Inject, NotFoundException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
+import { WarehousesService } from '../warehouses/warehouses.service';
 
 @Injectable()
 export class SuppliersService {
@@ -10,6 +11,7 @@ export class SuppliersService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private stockMovements: StockMovementsService,
+    private warehouses: WarehousesService,
   ) {}
 
   /**
@@ -46,6 +48,11 @@ export class SuppliersService {
       totalPurchases: parseFloat(row.total_purchases) || 0,
       totalPaid: parseFloat(row.total_paid) || 0,
       currentDebt: parseFloat(row.current_debt) || 0,
+      // System rows are pinned + uneditable. The FE relies on these two
+      // fields to render the special "Покупка б/у товара" row at the top
+      // of the suppliers list and to swap actions on the detail screen.
+      isSystem: !!row.is_system,
+      kind: (row.kind as string | null) ?? null,
       createdAt: row.created_at,
     };
   }
@@ -73,8 +80,13 @@ export class SuppliersService {
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
+    // ORDER: system rows first (is_system DESC puts true above false),
+    // then alphabetical. The FE renders the system row as a pinned
+    // header card; this keeps the order stable across pagination.
     const { rows } = await this.pool.query(
-      `SELECT * FROM suppliers WHERE ${where} ORDER BY name LIMIT $${idx} OFFSET $${idx + 1}`,
+      `SELECT * FROM suppliers WHERE ${where}
+        ORDER BY is_system DESC, name
+        LIMIT $${idx} OFFSET $${idx + 1}`,
       params,
     );
 
@@ -100,6 +112,20 @@ export class SuppliersService {
   }
 
   async update(id: string, tenantID: string, dto: any) {
+    // System rows (e.g. "Покупка б/у товара") have a fixed name + are
+    // not editable. Phone / contact / comment make no sense for them
+    // either since the "supplier" is just the act of buying second-hand
+    // from a client. Reject the whole update with 403 to give the FE a
+    // clear signal that this row is read-only.
+    const { rows: sysRows } = await this.pool.query(
+      'SELECT is_system FROM suppliers WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+      [id, tenantID],
+    );
+    if (sysRows.length === 0) throw new NotFoundException({ message: 'Поставщик не найден' });
+    if (sysRows[0].is_system) {
+      throw new ForbiddenException({ message: 'Системного поставщика нельзя редактировать' });
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -121,8 +147,196 @@ export class SuppliersService {
   }
 
   async remove(id: string, tenantID: string) {
+    // Block destructive ops on system rows — the pinned "Покупка б/у
+    // товара" supplier must survive every tenant lifetime. Stock
+    // movements + deliveries reference it, so removing the row would
+    // break the journal anyway.
+    const { rows: sysRows } = await this.pool.query(
+      'SELECT is_system FROM suppliers WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+      [id, tenantID],
+    );
+    if (sysRows.length === 0) throw new NotFoundException({ message: 'Поставщик не найден' });
+    if (sysRows[0].is_system) {
+      throw new ForbiddenException({ message: 'Системного поставщика нельзя удалить' });
+    }
     await this.pool.query('DELETE FROM suppliers WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     return { message: 'Удалено' };
+  }
+
+  /**
+   * "Покупка б/у товара" — buy a second-hand item from the client. The
+   * supplier represents the inbound side of the transaction (we owe the
+   * client `qty * purchasePrice`). One transaction does:
+   *
+   *   1. Resolve / insert the product on the Б/У warehouse with the
+   *      given name, category, and purchase price. If a matching product
+   *      already lives in Б/У with the same (name, category), bump its
+   *      stock instead of creating a duplicate.
+   *   2. Create a delivery + delivery_item so the supplier ledger
+   *      (total_purchases / current_debt) tracks the obligation. This
+   *      mirrors how a normal delivery would increase debt — the user
+   *      can later pay this off through the existing payment flow.
+   *   3. Insert a stock_movement of type 'income' with
+   *      `is_used_purchase = true` so the journal can render it
+   *      specially.
+   *
+   * Cross-tenant guarded — supplier must belong to the caller and must
+   * be the system used_purchase row to avoid mis-routing a normal
+   * supplier's inbound delivery to the Б/У warehouse.
+   */
+  async usedPurchase(
+    tenantID: string,
+    userID: string | null,
+    supplierId: string,
+    dto: { productName?: string; qty?: number; purchasePrice?: number; category?: string; note?: string },
+  ) {
+    const productName = String(dto?.productName ?? '').trim();
+    const qty = parseFloat(String(dto?.qty ?? ''));
+    const purchasePrice = parseFloat(String(dto?.purchasePrice ?? ''));
+    if (!productName) {
+      throw new BadRequestException({ message: 'Название товара обязательно' });
+    }
+    if (!isFinite(qty) || qty <= 0) {
+      throw new BadRequestException({ message: 'Количество должно быть положительным' });
+    }
+    if (!isFinite(purchasePrice) || purchasePrice < 0) {
+      throw new BadRequestException({ message: 'Закупочная цена должна быть неотрицательной' });
+    }
+    const category = dto?.category ? String(dto.category).trim() || null : null;
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Verify the supplier is (a) in our tenant and (b) the system
+      // used_purchase row — this endpoint must never run against a
+      // normal supplier. Without the kind check a director could
+      // mis-route the purchase to e.g. "ООО Запчасти" and corrupt
+      // their balance.
+      const { rows: supRows } = await client.query(
+        'SELECT id, kind, is_system FROM suppliers WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+        [supplierId, tenantID],
+      );
+      if (supRows.length === 0) {
+        throw new BadRequestException({ message: 'Поставщик не найден' });
+      }
+      if (supRows[0].kind !== 'used_purchase' || !supRows[0].is_system) {
+        throw new BadRequestException({
+          message: 'Этот endpoint доступен только для системного поставщика «Покупка б/у товара»',
+        });
+      }
+
+      const usedWarehouse = await this.warehouses.resolveByKind(tenantID, 'used');
+
+      // Find an existing product with the same (name, category,
+      // warehouse) so we bump stock instead of forking duplicates.
+      // category compare is NULL-safe (IS NOT DISTINCT FROM).
+      const { rows: existingRows } = await client.query(
+        `SELECT id, stock, cost_price FROM products
+          WHERE tenant_id = $1
+            AND warehouse_id = $2
+            AND lower(name) = lower($3)
+            AND (category IS NOT DISTINCT FROM $4)
+            AND deleted_at IS NULL
+          LIMIT 1`,
+        [tenantID, usedWarehouse.id, productName, category],
+      );
+
+      let productId: string;
+      const stockBefore = existingRows.length > 0 ? parseFloat(existingRows[0].stock) || 0 : 0;
+      const stockAfter = stockBefore + qty;
+
+      if (existingRows.length > 0) {
+        productId = existingRows[0].id;
+        // Bump stock; keep the existing cost_price (user might have
+        // bought the same SKU at a different price previously). The
+        // current purchase price is logged on the stock_movement row
+        // for audit / cost basis recomputation.
+        await client.query(
+          'UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3',
+          [stockAfter, productId, tenantID],
+        );
+      } else {
+        // Create a fresh Б/У product. sale_price defaults to
+        // purchasePrice (owner can edit later). warehouseId is locked
+        // to the tenant's used warehouse.
+        const { rows: insRows } = await client.query(
+          `INSERT INTO products
+             (name, category, cost_price, sell_price, stock, min_stock, unit,
+              tenant_id, warehouse_id)
+           VALUES ($1, $2, $3, $4, $5, 0, 'pcs', $6, $7)
+           RETURNING id`,
+          [productName, category, purchasePrice, purchasePrice, qty, tenantID, usedWarehouse.id],
+        );
+        productId = insRows[0].id;
+      }
+
+      // Insert a delivery so the supplier ledger reflects the debt.
+      // Status = 'unpaid' matches the normal delivery flow: user
+      // settles via supplier_payments later.
+      const totalAmount = qty * purchasePrice;
+      const { rows: delRows } = await client.query(
+        `INSERT INTO deliveries (supplier_id, date, total_amount, payment_status, comment, tenant_id)
+         VALUES ($1, now(), $2, 'unpaid', $3, $4) RETURNING id`,
+        [supplierId, totalAmount, dto?.note ?? null, tenantID],
+      );
+      const deliveryId = delRows[0].id;
+
+      await client.query(
+        `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [deliveryId, productId, qty, purchasePrice, totalAmount],
+      );
+
+      // Mirror the normal delivery flow: supplier debt rises by the
+      // purchase amount. Tenant-scoped UPDATE to defend against any
+      // future refactor that drops the cross-tenant guard above.
+      await client.query(
+        `UPDATE suppliers
+            SET total_purchases = total_purchases + $1,
+                current_debt    = current_debt + $1
+          WHERE id = $2 AND tenant_id = $3`,
+        [totalAmount, supplierId, tenantID],
+      );
+
+      // Log the stock movement. type='income' (legitimate inbound),
+      // is_used_purchase=true so the journal renders it as "Покупка Б/У".
+      const { rows: mvRows } = await client.query(
+        `INSERT INTO stock_movements (
+           product_id, type, quantity, stock_before, stock_after, reason,
+           tenant_id, user_id, warehouse_id, supplier_id, is_used_purchase
+         ) VALUES ($1, 'income', $2, $3, $4, $5, $6, $7, $8, $9, true)
+         RETURNING id`,
+        [
+          productId,
+          qty,
+          stockBefore,
+          stockAfter,
+          dto?.note ?? null,
+          tenantID,
+          userID,
+          usedWarehouse.id,
+          supplierId,
+        ],
+      );
+
+      await client.query('COMMIT');
+      return {
+        id: mvRows[0].id,
+        productId,
+        deliveryId,
+        warehouseId: usedWarehouse.id,
+        stockAfter,
+        debtIncrease: totalAmount,
+      };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      this.logger.error(`Used-purchase error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
   }
 
   // Deliveries

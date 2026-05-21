@@ -110,6 +110,7 @@ interface EmployeeRowProps {
   todayChecks?: number;
   showFinancials: boolean;
   onPress: (id: string) => void;
+  palette: ReturnType<typeof useColors>;
 }
 const EmployeeRow = React.memo(function EmployeeRow({
   user,
@@ -119,6 +120,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
   todayChecks,
   showFinancials,
   onPress,
+  palette,
 }: EmployeeRowProps) {
   const role = ROLE_BADGE[user.role] || ROLE_BADGE.master;
   const avatarColors = getAvatarColors(user.fullName);
@@ -127,14 +129,18 @@ const EmployeeRow = React.memo(function EmployeeRow({
   const hasMetrics = isMaster && showFinancials && (todayChecks !== undefined || todayRevenue !== undefined);
 
   return (
-    <AnimatedCard index={index} style={styles.row} onPress={() => onPress(user.id)}>
+    <AnimatedCard
+      index={index}
+      style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={() => onPress(user.id)}
+    >
       <View style={styles.rowMain}>
         <LinearGradient colors={avatarColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.avatar}>
           <Text style={styles.avatarText}>{getInitials(user.fullName)}</Text>
         </LinearGradient>
 
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.name} numberOfLines={1}>
+          <Text style={[styles.name, { color: palette.text.primary }]} numberOfLines={1}>
             {user.fullName}
           </Text>
           <View style={styles.subRow}>
@@ -150,21 +156,21 @@ const EmployeeRow = React.memo(function EmployeeRow({
           </View>
         </View>
 
-        <Ionicons name="chevron-forward" size={18} color={colors.gray[300]} />
+        <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
       </View>
 
       {hasMetrics && (
-        <View style={styles.metricsRow}>
+        <View style={[styles.metricsRow, { borderTopColor: palette.border.subtle }]}>
           <View style={styles.metricItem}>
-            <Ionicons name="receipt-outline" size={11} color={colors.gray[400]} />
-            <Text style={styles.metricLabel}>Чеков сегодня</Text>
-            <Text style={styles.metricValue}>{todayChecks ?? 0}</Text>
+            <Ionicons name="receipt-outline" size={11} color={palette.text.tertiary} />
+            <Text style={[styles.metricLabel, { color: palette.text.secondary }]}>Чеков сегодня</Text>
+            <Text style={[styles.metricValue, { color: palette.text.primary }]}>{todayChecks ?? 0}</Text>
           </View>
-          <View style={styles.metricDivider} />
+          <View style={[styles.metricDivider, { backgroundColor: palette.border.subtle }]} />
           <View style={styles.metricItem}>
-            <Ionicons name="cash-outline" size={11} color={colors.gray[400]} />
-            <Text style={styles.metricLabel}>Выручка</Text>
-            <Text style={styles.metricValue}>{formatMoney(todayRevenue ?? 0)}</Text>
+            <Ionicons name="cash-outline" size={11} color={palette.text.tertiary} />
+            <Text style={[styles.metricLabel, { color: palette.text.secondary }]}>Выручка</Text>
+            <Text style={[styles.metricValue, { color: palette.text.primary }]}>{formatMoney(todayRevenue ?? 0)}</Text>
           </View>
         </View>
       )}
@@ -309,10 +315,11 @@ export default function EmployeesScreen() {
           todayRevenue={r?.revenue}
           showFinancials={showFinancials}
           onPress={onOpen}
+          palette={palette}
         />
       );
     },
-    [rankingMap, todayMap, showFinancials, onOpen],
+    [rankingMap, todayMap, showFinancials, onOpen, palette],
   );
 
   return (

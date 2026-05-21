@@ -148,17 +148,33 @@ export default function SuppliersPage() {
               <div
                 key={supplier.id}
                 onClick={() => navigate(`/suppliers/${supplier.id}`)}
-                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
+                className={`rounded-xl border shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer ${
+                  supplier.isSystem
+                    ? 'bg-primary-50/30 border-primary-200'
+                    : 'bg-white border-gray-100'
+                }`}
               >
                 <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold text-gray-900 text-sm">{supplier.name}</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-semibold text-gray-900 text-sm truncate">{supplier.name}</span>
+                    {supplier.isSystem ? (
+                      <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-primary-100 text-primary-700 flex-shrink-0">
+                        Системный
+                      </span>
+                    ) : null}
+                  </div>
                   {supplier.currentDebt > 0 && (
-                    <span className="text-xs font-medium text-red-600">{formatMoney(supplier.currentDebt)}</span>
+                    <span className="text-xs font-medium text-red-600 flex-shrink-0">
+                      {formatMoney(supplier.currentDebt)}
+                    </span>
                   )}
                 </div>
-                {supplier.contactPerson && (
+                {supplier.contactPerson && !supplier.isSystem && (
                   <p className="text-xs text-gray-500 mb-1">{supplier.contactPerson}</p>
                 )}
+                {supplier.isSystem ? (
+                  <p className="text-xs text-gray-500 mb-1">Покупка б/у у клиентов</p>
+                ) : null}
                 <div className="flex items-center gap-4 text-xs text-gray-500">
                   <span>Закупки: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPurchases)}</span></span>
                   <span>Оплачено: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPaid)}</span></span>
@@ -184,15 +200,26 @@ export default function SuppliersPage() {
                 {suppliers.map((supplier) => (
                   <tr
                     key={supplier.id}
-                    className="cursor-pointer hover:bg-gray-50"
+                    className={`cursor-pointer hover:bg-gray-50 ${
+                      supplier.isSystem ? 'bg-primary-50/30' : ''
+                    }`}
                     onClick={() => navigate(`/suppliers/${supplier.id}`)}
                   >
-                    <td className="font-medium text-gray-900">{supplier.name}</td>
-                    <td className="text-gray-600">
-                      {supplier.contactPerson || '\u2014'}
+                    <td className="font-medium text-gray-900">
+                      <div className="flex items-center gap-2">
+                        <span>{supplier.name}</span>
+                        {supplier.isSystem ? (
+                          <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-primary-100 text-primary-700">
+                            \u0421\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0439
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="text-gray-600">
-                      {supplier.phone || '\u2014'}
+                      {supplier.isSystem ? '\u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u0431/\u0443 \u0443 \u043a\u043b\u0438\u0435\u043d\u0442\u043e\u0432' : supplier.contactPerson || '\u2014'}
+                    </td>
+                    <td className="text-gray-600">
+                      {supplier.isSystem ? '\u2014' : supplier.phone || '\u2014'}
                     </td>
                     <td className="text-right text-gray-900">
                       {formatMoney(supplier.totalPurchases)}

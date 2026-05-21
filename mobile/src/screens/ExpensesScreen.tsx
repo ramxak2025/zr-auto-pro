@@ -78,10 +78,14 @@ interface ExpenseRowProps {
   catColor: { bg: string; light: string; text: string };
   isDirector: boolean;
   onDelete: (id: string) => void;
+  palette: ReturnType<typeof useColors>;
 }
-const ExpenseRow = React.memo(function ExpenseRow({ item, index, catColor, isDirector, onDelete }: ExpenseRowProps) {
+const ExpenseRow = React.memo(function ExpenseRow({ item, index, catColor, isDirector, onDelete, palette }: ExpenseRowProps) {
   return (
-    <AnimatedCard style={styles.card} index={index}>
+    <AnimatedCard
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      index={index}
+    >
       <View style={styles.cardInner}>
         {/* Left accent bar */}
         <View style={[styles.accentBar, { backgroundColor: catColor.bg }]} />
@@ -89,7 +93,7 @@ const ExpenseRow = React.memo(function ExpenseRow({ item, index, catColor, isDir
         <View style={styles.cardContent}>
           {/* Top row: amount + category badge */}
           <View style={styles.cardTopRow}>
-            <Text style={styles.cardAmount}>{formatMoney(item.amount)}</Text>
+            <Text style={[styles.cardAmount, { color: palette.text.primary }]}>{formatMoney(item.amount)}</Text>
             {item.categoryName && (
               <View style={[styles.catBadge, { backgroundColor: catColor.light }]}>
                 <Text style={[styles.catBadgeText, { color: catColor.text }]}>{item.categoryName}</Text>
@@ -98,17 +102,19 @@ const ExpenseRow = React.memo(function ExpenseRow({ item, index, catColor, isDir
           </View>
 
           {/* Description */}
-          {item.description && <Text style={styles.cardDesc}>{item.description}</Text>}
+          {item.description && (
+            <Text style={[styles.cardDesc, { color: palette.text.secondary }]}>{item.description}</Text>
+          )}
 
           {/* Bottom row: date, user, trash icon */}
-          <View style={styles.cardBottomRow}>
+          <View style={[styles.cardBottomRow, { borderTopColor: palette.border.subtle }]}>
             <View style={styles.cardMeta}>
-              <Ionicons name="calendar-outline" size={11} color={colors.gray[400]} />
-              <Text style={styles.cardDate}>{formatDate(item.date)}</Text>
+              <Ionicons name="calendar-outline" size={11} color={palette.text.tertiary} />
+              <Text style={[styles.cardDate, { color: palette.text.tertiary }]}>{formatDate(item.date)}</Text>
               {item.userName && (
                 <>
-                  <Ionicons name="person-outline" size={11} color={colors.gray[400]} style={{ marginLeft: 8 }} />
-                  <Text style={styles.cardUser}>{item.userName}</Text>
+                  <Ionicons name="person-outline" size={11} color={palette.text.tertiary} style={{ marginLeft: 8 }} />
+                  <Text style={[styles.cardUser, { color: palette.text.tertiary }]}>{item.userName}</Text>
                 </>
               )}
             </View>
@@ -118,7 +124,7 @@ const ExpenseRow = React.memo(function ExpenseRow({ item, index, catColor, isDir
                 style={styles.deleteBtn}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Ionicons name="trash-outline" size={15} color={colors.gray[300]} />
+                <Ionicons name="trash-outline" size={15} color={palette.text.tertiary} />
               </TouchableOpacity>
             )}
           </View>
@@ -283,10 +289,17 @@ export default function ExpensesScreen() {
       const catName = item.categoryName || 'Без категории';
       const catColor = colorByName.get(catName) || getCategoryColor(0);
       return (
-        <ExpenseRow item={item} index={index} catColor={catColor} isDirector={isDirector} onDelete={handleDeleteExpense} />
+        <ExpenseRow
+          item={item}
+          index={index}
+          catColor={catColor}
+          isDirector={isDirector}
+          onDelete={handleDeleteExpense}
+          palette={palette}
+        />
       );
     },
-    [colorByName, isDirector, handleDeleteExpense],
+    [colorByName, isDirector, handleDeleteExpense, palette],
   );
 
   return (
@@ -313,20 +326,34 @@ export default function ExpensesScreen() {
 
       {/* Period selector */}
       <View style={styles.periodWrapper}>
-        <View style={styles.periodContainer}>
+        <View style={[styles.periodContainer, { backgroundColor: palette.bg.muted }]}>
           {PERIODS.map((p) => (
             <TouchableOpacity
               key={p.key}
-              style={[styles.periodChip, period === p.key && styles.periodChipActive]}
+              style={[
+                styles.periodChip,
+                period === p.key && [styles.periodChipActive, { backgroundColor: palette.bg.card }],
+              ]}
               onPress={() => handlePeriodChange(p.key)}
               activeOpacity={0.7}
             >
-              <Text style={[styles.periodText, period === p.key && styles.periodTextActive]}>{p.label}</Text>
+              <Text
+                style={[
+                  styles.periodText,
+                  { color: palette.text.secondary },
+                  period === p.key && [styles.periodTextActive, { color: palette.text.primary }],
+                ]}
+              >
+                {p.label}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
         {isDirector && (
-          <TouchableOpacity style={styles.catBtn} onPress={() => setCatModalOpen(true)}>
+          <TouchableOpacity
+            style={[styles.catBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            onPress={() => setCatModalOpen(true)}
+          >
             <Ionicons name="pricetag-outline" size={16} color={colors.primary[600]} />
           </TouchableOpacity>
         )}
@@ -338,19 +365,19 @@ export default function ExpensesScreen() {
           accent on the label communicates the negative direction
           without flooding the screen with red. */}
       <View style={styles.totalCardWrapper}>
-        <View style={styles.totalCard}>
+        <View style={[styles.totalCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.totalLabelRow}>
             <Ionicons name="trending-down-outline" size={14} color={colors.rose[500]} />
             <Text style={[iosSectionLabel, { marginBottom: 0, color: colors.rose[500] }]}>Итого расходов</Text>
           </View>
-          <Text style={styles.totalValue}>{formatMoney(totalExpenses)}</Text>
+          <Text style={[styles.totalValue, { color: palette.text.primary }]}>{formatMoney(totalExpenses)}</Text>
         </View>
       </View>
 
       {/* Category breakdown with progress bars */}
       {categoryBreakdown.length > 0 && (
-        <View style={styles.breakdownCard}>
-          <Text style={[iosSectionLabel, styles.breakdownTitle]}>По категориям</Text>
+        <View style={[styles.breakdownCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <Text style={[iosSectionLabel, styles.breakdownTitle, { color: palette.text.tertiary }]}>По категориям</Text>
           {categoryBreakdown.map((cat, idx) => {
             const percentage = totalExpenses > 0 ? (cat.total / totalExpenses) * 100 : 0;
             const catColor = getCategoryColor(idx);
@@ -359,11 +386,13 @@ export default function ExpensesScreen() {
                 <View style={styles.breakdownRowTop}>
                   <View style={styles.breakdownNameRow}>
                     <View style={[styles.breakdownDot, { backgroundColor: catColor.bg }]} />
-                    <Text style={styles.breakdownName}>{cat.name}</Text>
+                    <Text style={[styles.breakdownName, { color: palette.text.primary }]}>{cat.name}</Text>
                   </View>
-                  <Text style={styles.breakdownAmount}>{formatMoney(cat.total)}</Text>
+                  <Text style={[styles.breakdownAmount, { color: palette.text.primary }]}>
+                    {formatMoney(cat.total)}
+                  </Text>
                 </View>
-                <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarBg, { backgroundColor: palette.bg.muted }]}>
                   <View
                     style={[
                       styles.progressBarFill,
@@ -374,7 +403,9 @@ export default function ExpensesScreen() {
                     ]}
                   />
                 </View>
-                <Text style={styles.breakdownPercent}>{percentage.toFixed(1)}%</Text>
+                <Text style={[styles.breakdownPercent, { color: palette.text.tertiary }]}>
+                  {percentage.toFixed(1)}%
+                </Text>
               </View>
             );
           })}
@@ -404,23 +435,43 @@ export default function ExpensesScreen() {
       {/* Add expense modal */}
       <Modal visible={modalOpen} onClose={() => setModalOpen(false)} title="Новый расход">
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Категория</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Категория</Text>
           <View style={styles.catPicker}>
             <TouchableOpacity
-              style={[styles.catPickerItem, !selectedCategoryId && styles.catPickerItemActive]}
+              style={[
+                styles.catPickerItem,
+                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                !selectedCategoryId && styles.catPickerItemActive,
+              ]}
               onPress={() => setSelectedCategoryId('')}
             >
-              <Text style={[styles.catPickerText, !selectedCategoryId && styles.catPickerTextActive]}>
+              <Text
+                style={[
+                  styles.catPickerText,
+                  { color: palette.text.secondary },
+                  !selectedCategoryId && styles.catPickerTextActive,
+                ]}
+              >
                 Без категории
               </Text>
             </TouchableOpacity>
             {categories.map((c: any) => (
               <TouchableOpacity
                 key={c.id}
-                style={[styles.catPickerItem, selectedCategoryId === c.id && styles.catPickerItemActive]}
+                style={[
+                  styles.catPickerItem,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  selectedCategoryId === c.id && styles.catPickerItemActive,
+                ]}
                 onPress={() => setSelectedCategoryId(c.id)}
               >
-                <Text style={[styles.catPickerText, selectedCategoryId === c.id && styles.catPickerTextActive]}>
+                <Text
+                  style={[
+                    styles.catPickerText,
+                    { color: palette.text.secondary },
+                    selectedCategoryId === c.id && styles.catPickerTextActive,
+                  ]}
+                >
                   {c.name}
                 </Text>
               </TouchableOpacity>
@@ -428,35 +479,51 @@ export default function ExpensesScreen() {
           </View>
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Сумма *</Text>
-          <View style={styles.amountInputWrapper}>
-            <Text style={styles.amountCurrency}>₽</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сумма *</Text>
+          <View
+            style={[
+              styles.amountInputWrapper,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+            ]}
+          >
+            <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>₽</Text>
             <TextInput
               value={amount}
               onChangeText={setAmount}
-              style={styles.amountInput}
+              style={[styles.amountInput, { color: palette.text.primary }]}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[300]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Описание</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Описание</Text>
           <TextInput
             value={description}
             onChangeText={setDescription}
-            style={[styles.formInput, styles.formTextarea]}
+            style={[
+              styles.formInput,
+              styles.formTextarea,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             multiline
             placeholder="Например: Аренда офиса за январь"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setModalOpen(false)}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            onPress={() => setModalOpen(false)}
+          >
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
+            onPress={handleSubmit}
+            activeOpacity={0.8}
+          >
             {createMutation.isPending ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
@@ -472,9 +539,12 @@ export default function ExpensesScreen() {
           <TextInput
             value={newCatName}
             onChangeText={setNewCatName}
-            style={[styles.formInput, { flex: 1 }]}
+            style={[
+              styles.formInput,
+              { flex: 1, backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="Новая категория..."
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
           <TouchableOpacity
             style={[styles.catAddBtn, !newCatName.trim() && styles.catAddBtnDisabled]}
@@ -488,18 +558,18 @@ export default function ExpensesScreen() {
         </View>
         {categories.length === 0 ? (
           <View style={styles.catEmptyState}>
-            <Ionicons name="pricetag-outline" size={32} color={colors.gray[300]} />
-            <Text style={styles.catEmptyText}>Нет категорий</Text>
+            <Ionicons name="pricetag-outline" size={32} color={palette.text.tertiary} />
+            <Text style={[styles.catEmptyText, { color: palette.text.tertiary }]}>Нет категорий</Text>
           </View>
         ) : (
           categories.map((c: any) => (
-            <View key={c.id} style={styles.catListRow}>
+            <View key={c.id} style={[styles.catListRow, { borderBottomColor: palette.border.subtle }]}>
               <View style={styles.catListLeft}>
                 <View style={styles.catListDot} />
-                <Text style={styles.catListName}>{c.name}</Text>
+                <Text style={[styles.catListName, { color: palette.text.primary }]}>{c.name}</Text>
               </View>
               <TouchableOpacity onPress={() => deleteCatMutation.mutate(c.id)} style={styles.catListDeleteBtn}>
-                <Ionicons name="close-circle" size={20} color={colors.gray[300]} />
+                <Ionicons name="close-circle" size={20} color={palette.text.tertiary} />
               </TouchableOpacity>
             </View>
           ))

@@ -39,13 +39,25 @@ export interface FolderAnnotation {
   color: string;
 }
 
-interface WarehouseSwitcherProps {
-  /** Currently selected warehouse id (matches Warehouse.id). */
+/**
+ * Inline warehouse switcher — owner-shape so the picker renders the
+ * options as an INLINE dropdown WITHIN its own modal, not a second
+ * nested RNModal. Nested RNModal-over-RNModal froze iOS during the
+ * sheet present transition; an inline overlay is rock-solid.
+ *
+ * Parent (CheckCreateScreen) hands us the list of warehouses + the
+ * currently-selected id + a setter; the modal owns the open/close
+ * state of the dropdown internally.
+ */
+export interface WarehouseSwitcherInline {
+  /** Currently selected warehouse id. */
   value: string | null;
-  /** Open the warehouse picker sheet (parent owns the sheet UI). */
-  onPress: () => void;
-  /** Label shown next to the switcher icon — name of the active warehouse. */
+  /** Active label shown on the chip. */
   label: string;
+  /** Full warehouse list to render inside the dropdown. */
+  options: Array<{ id: string; name: string; kind: 'main' | 'defect' | 'used' }>;
+  /** Called when the user picks a warehouse. */
+  onChange: (id: string) => void;
 }
 
 interface ProductPickerModalProps {
@@ -62,8 +74,8 @@ interface ProductPickerModalProps {
    * distinct caches. State lives in the parent (CheckCreateScreen).
    */
   warehouseId?: string | null;
-  /** Compact switcher rendered above the search input. Optional. */
-  warehouseSwitcher?: WarehouseSwitcherProps;
+  /** Inline warehouse switcher (rendered as an in-modal dropdown). */
+  warehouseSwitcher?: WarehouseSwitcherInline;
 }
 
 /**
@@ -204,6 +216,11 @@ export default function ProductPickerModal({
   warehouseSwitcher,
 }: ProductPickerModalProps) {
   const [productPath, setProductPath] = useState<string[]>([]);
+  // Inline warehouse-switcher dropdown — local state. NOT a nested
+  // RNModal: an RNModal-inside-an-RNModal froze the iOS app during the
+  // present transition. An absolute-positioned dropdown sitting inside
+  // the picker's own modal container avoids that entirely.
+  const [showWarehouseDropdown, setShowWarehouseDropdown] = useState(false);
   // `localSearch` is what the input renders (every keystroke), `productSearch`
   // is the debounced value that drives the heavy filter+folder useMemo. The
   // 200 ms debounce keeps the FlashList stable while the user is still
@@ -389,7 +406,7 @@ export default function ProductPickerModal({
             <Text style={styles.headerTitle}>{title}</Text>
             {warehouseSwitcher ? (
               <TouchableOpacity
-                onPress={warehouseSwitcher.onPress}
+                onPress={() => setShowWarehouseDropdown((v) => !v)}
                 style={styles.headerWarehouseChip}
                 activeOpacity={0.7}
                 accessibilityLabel="Выбрать склад"
@@ -397,12 +414,58 @@ export default function ProductPickerModal({
                 <Text style={styles.headerWarehouseChipText} numberOfLines={1}>
                   {warehouseSwitcher.label}
                 </Text>
-                <Ionicons name="chevron-down" size={14} color={colors.primary[700]} />
+                <Ionicons
+                  name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={colors.primary[700]}
+                />
               </TouchableOpacity>
             ) : (
               <View style={{ width: 36 }} />
             )}
           </View>
+
+          {/* Inline warehouse-switcher dropdown. Absolute-positioned
+              overlay covering only the body region so the user can
+              still tap the chip again to dismiss. Lives INSIDE the
+              picker's RNModal — no nested modal, no iOS freeze. */}
+          {warehouseSwitcher && showWarehouseDropdown ? (
+            <View style={styles.warehouseDropdown}>
+              {warehouseSwitcher.options.map((w) => {
+                const iconName =
+                  w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
+                const sub =
+                  w.kind === 'defect'
+                    ? 'Брак'
+                    : w.kind === 'used'
+                      ? 'Б/У — подержанные детали'
+                      : 'Основной склад';
+                const active = warehouseSwitcher.value === w.id;
+                return (
+                  <TouchableOpacity
+                    key={w.id}
+                    style={styles.warehouseDropdownRow}
+                    onPress={() => {
+                      warehouseSwitcher.onChange(w.id);
+                      setShowWarehouseDropdown(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name={iconName as never} size={18} color={colors.primary[600]} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.warehouseDropdownName}>{w.name}</Text>
+                      <Text style={styles.warehouseDropdownSub}>{sub}</Text>
+                    </View>
+                    {active ? (
+                      <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />
+                    ) : (
+                      <View style={{ width: 20 }} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
 
           {/* Search */}
           <View style={styles.searchWrap}>
@@ -554,6 +617,44 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.semibold,
     color: colors.primary[700],
     letterSpacing: -0.1,
+  },
+  // Inline dropdown surface — anchored just below the header. Renders
+  // INSIDE the picker's RNModal so iOS doesn't need to coordinate a
+  // second modal present transition. Soft drop shadow + hairline rim
+  // so it floats above the search row.
+  warehouseDropdown: {
+    marginHorizontal: spacing[4],
+    marginTop: 4,
+    marginBottom: spacing[2],
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  warehouseDropdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[100],
+  },
+  warehouseDropdownName: {
+    fontSize: 15,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+  },
+  warehouseDropdownSub: {
+    fontSize: 12,
+    color: colors.gray[500],
+    marginTop: 1,
   },
   breadcrumbRow: {
     flexDirection: 'row',

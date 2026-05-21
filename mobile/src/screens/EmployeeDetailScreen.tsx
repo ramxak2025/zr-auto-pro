@@ -387,22 +387,22 @@ export default function EmployeeDetailScreen() {
             мастерам с правами на финансовые данные (формулы используют
             salary + ranking — не показываем коллегам без `profit_view`). */}
         {tierScores && (
-          <View style={styles.tierCard}>
+          <View style={[styles.tierCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.tierRow}>
-              <TierScore label="Эффективность" score={tierScores.effectiveness} hint="Средний чек" />
-              <View style={styles.tierDivider} />
-              <TierScore label="Дисциплина" score={tierScores.discipline} hint="Сегодня" />
-              <View style={styles.tierDivider} />
-              <TierScore label="Активность" score={tierScores.activity} hint="Месяц" />
+              <TierScore label="Эффективность" score={tierScores.effectiveness} hint="Средний чек" palette={palette} />
+              <View style={[styles.tierDivider, { backgroundColor: palette.border.subtle }]} />
+              <TierScore label="Дисциплина" score={tierScores.discipline} hint="Сегодня" palette={palette} />
+              <View style={[styles.tierDivider, { backgroundColor: palette.border.subtle }]} />
+              <TierScore label="Активность" score={tierScores.activity} hint="Месяц" palette={palette} />
             </View>
-            <Text style={styles.tierFootnote}>
+            <Text style={[styles.tierFootnote, { color: palette.text.tertiary }]}>
               Считается из реальных метрик: средний чек, статус сегодня, ранг в команде. Прочерк — данных недостаточно.
             </Text>
           </View>
         )}
 
         {/* Today */}
-        <Section icon="time-outline" title="Сегодня">
+        <Section icon="time-outline" title="Сегодня" palette={palette}>
           <View style={styles.tilesRow}>
             <Tile
               label="Смена"
@@ -413,9 +413,10 @@ export default function EmployeeDetailScreen() {
                     ? 'Выходной'
                     : '—'
               }
+              palette={palette}
             />
-            <Tile label="Пришёл" value={today?.actualArrival ? formatTime(today.actualArrival) : '—'} />
-            <Tile label="Опоздание" value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'} />
+            <Tile label="Пришёл" value={today?.actualArrival ? formatTime(today.actualArrival) : '—'} palette={palette} />
+            <Tile label="Опоздание" value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'} palette={palette} />
           </View>
           {today?.note ? (
             <View style={styles.note}>
@@ -426,18 +427,18 @@ export default function EmployeeDetailScreen() {
 
         {/* Salary — только для viewer'ов с финансовыми правами либо для самого сотрудника */}
         {user.role === 'master' && salary && showFinancials && (
-          <Section icon="wallet-outline" title="Заработок (период)">
+          <Section icon="wallet-outline" title="Заработок (период)" palette={palette}>
             <View style={styles.tilesGrid}>
-              <Tile label="Заработано" value={formatMoney(salary.totalEarnings ?? 0)} highlight />
-              <Tile label="Выручка" value={formatMoney(salary.totalRevenue ?? 0)} highlight />
-              <Tile label="Чеков" value={String(salary.checkCount ?? 0)} />
-              <Tile label="К выплате" value={formatMoney(salary.remainingAmount ?? 0)} />
+              <Tile label="Заработано" value={formatMoney(salary.totalEarnings ?? 0)} highlight palette={palette} />
+              <Tile label="Выручка" value={formatMoney(salary.totalRevenue ?? 0)} highlight palette={palette} />
+              <Tile label="Чеков" value={String(salary.checkCount ?? 0)} palette={palette} />
+              <Tile label="К выплате" value={formatMoney(salary.remainingAmount ?? 0)} palette={palette} />
             </View>
             {(salary.serviceEarnings != null || salary.productEarnings != null) && (
               <View style={[styles.tilesGrid, { marginTop: spacing[2] }]}>
-                {salary.serviceEarnings != null && <Tile label="С услуг" value={formatMoney(salary.serviceEarnings)} />}
+                {salary.serviceEarnings != null && <Tile label="С услуг" value={formatMoney(salary.serviceEarnings)} palette={palette} />}
                 {salary.productEarnings != null && (
-                  <Tile label="С товаров" value={formatMoney(salary.productEarnings)} />
+                  <Tile label="С товаров" value={formatMoney(salary.productEarnings)} palette={palette} />
                 )}
               </View>
             )}
@@ -446,24 +447,24 @@ export default function EmployeeDetailScreen() {
 
         {/* Ranking — финансовая инфа, тоже под gate */}
         {user.role === 'master' && showFinancials && rank && (rank.monthPlace || rank.todayPlace) && (
-          <Section icon="trophy-outline" title="Рейтинг">
+          <Section icon="trophy-outline" title="Рейтинг" palette={palette}>
             <View style={styles.tilesGrid}>
               {rank.todayPlace ? (
-                <Tile label="Сегодня" value={`${rank.todayPlace} / ${rank.todayTotal}`} hint={medal(rank.todayPlace)} />
+                <Tile label="Сегодня" value={`${rank.todayPlace} / ${rank.todayTotal}`} hint={medal(rank.todayPlace)} palette={palette} />
               ) : (
                 <View style={{ flex: 1 }} />
               )}
               {rank.monthPlace ? (
-                <Tile label="Месяц" value={`${rank.monthPlace} / ${rank.monthTotal}`} hint={medal(rank.monthPlace)} />
+                <Tile label="Месяц" value={`${rank.monthPlace} / ${rank.monthTotal}`} hint={medal(rank.monthPlace)} palette={palette} />
               ) : (
                 <View style={{ flex: 1 }} />
               )}
             </View>
             {rank.monthPlace ? (
-              <Text style={styles.rankSub}>
-                Выручка за месяц: <Text style={styles.rankNum}>{formatMoney(rank.monthRevenue)}</Text>
+              <Text style={[styles.rankSub, { color: palette.text.secondary }]}>
+                Выручка за месяц: <Text style={[styles.rankNum, { color: palette.text.primary }]}>{formatMoney(rank.monthRevenue)}</Text>
                 {'   ·   '}
-                Чеков: <Text style={styles.rankNum}>{rank.monthChecks}</Text>
+                Чеков: <Text style={[styles.rankNum, { color: palette.text.primary }]}>{rank.monthChecks}</Text>
               </Text>
             ) : null}
           </Section>
@@ -473,15 +474,15 @@ export default function EmployeeDetailScreen() {
             Если ни сильных, ни зон роста не насчитали — секция вообще не
             рисуется, чтобы не было пустого «—». */}
         {user.role === 'master' && showFinancials && (insights.strengths.length > 0 || insights.growth.length > 0) && (
-          <Section icon="sparkles-outline" title="Performance">
+          <Section icon="sparkles-outline" title="Performance" palette={palette}>
             {insights.strengths.length > 0 && (
               <View style={{ marginBottom: insights.growth.length > 0 ? spacing[3] : 0 }}>
-                <Text style={styles.insightHeader}>Сильные стороны</Text>
+                <Text style={[styles.insightHeader, { color: palette.text.tertiary }]}>Сильные стороны</Text>
                 <View style={styles.insightList}>
                   {insights.strengths.map((s, i) => (
                     <View key={`s-${i}`} style={styles.insightRow}>
                       <Ionicons name="checkmark-circle" size={14} color={colors.green[500]} />
-                      <Text style={styles.insightText}>{s}</Text>
+                      <Text style={[styles.insightText, { color: palette.text.primary }]}>{s}</Text>
                     </View>
                   ))}
                 </View>
@@ -489,18 +490,18 @@ export default function EmployeeDetailScreen() {
             )}
             {insights.growth.length > 0 && (
               <View>
-                <Text style={styles.insightHeader}>Зоны роста</Text>
+                <Text style={[styles.insightHeader, { color: palette.text.tertiary }]}>Зоны роста</Text>
                 <View style={styles.insightList}>
                   {insights.growth.map((g, i) => (
                     <View key={`g-${i}`} style={styles.insightRow}>
                       <Ionicons name="trending-up" size={14} color={colors.amber[600]} />
-                      <Text style={styles.insightText}>{g}</Text>
+                      <Text style={[styles.insightText, { color: palette.text.primary }]}>{g}</Text>
                     </View>
                   ))}
                 </View>
               </View>
             )}
-            <Text style={styles.insightFootnote}>
+            <Text style={[styles.insightFootnote, { color: palette.text.tertiary }]}>
               Автоматически из ваших данных: ранг, дисциплина, средний чек. Ручные заметки владельца здесь пока не
               отображаются — потребуется отдельный endpoint для tenant-специфичных заметок.
             </Text>
@@ -512,12 +513,12 @@ export default function EmployeeDetailScreen() {
             ничего не сделано) — секция не рисуется, чтобы не плодить
             пустых блоков. */}
         {user.role === 'master' && showFinancials && recentChecks.length > 0 && (
-          <Section icon="receipt-outline" title="Недавние чеки">
+          <Section icon="receipt-outline" title="Недавние чеки" palette={palette}>
             <View style={styles.recentList}>
               {recentChecks.map((c) => (
                 <TouchableOpacity
                   key={c.id}
-                  style={styles.recentRow}
+                  style={[styles.recentRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
                   activeOpacity={0.7}
                   onPress={() => {
                     queryClient.setQueryData(['check', c.id], (existing: Check | undefined) => existing ?? c);
@@ -531,11 +532,11 @@ export default function EmployeeDetailScreen() {
                     <Ionicons name="receipt" size={14} color={colors.primary[600]} />
                   </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.recentTitle} numberOfLines={1}>
+                    <Text style={[styles.recentTitle, { color: palette.text.primary }]} numberOfLines={1}>
                       {`#${c.number}`}
                       {c.client?.fullName ? ` · ${c.client.fullName}` : ''}
                     </Text>
-                    <Text style={styles.recentSub} numberOfLines={1}>
+                    <Text style={[styles.recentSub, { color: palette.text.secondary }]} numberOfLines={1}>
                       {new Date(c.date).toLocaleDateString('ru-RU', {
                         day: '2-digit',
                         month: '2-digit',
@@ -544,8 +545,8 @@ export default function EmployeeDetailScreen() {
                       {c.car?.makeModel ? ` · ${c.car.makeModel}` : ''}
                     </Text>
                   </View>
-                  <Text style={styles.recentAmount}>{formatMoney(c.totalRevenue)}</Text>
-                  <Ionicons name="chevron-forward" size={14} color={colors.gray[300]} />
+                  <Text style={[styles.recentAmount, { color: palette.text.primary }]}>{formatMoney(c.totalRevenue)}</Text>
+                  <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
                 </TouchableOpacity>
               ))}
             </View>
@@ -556,21 +557,22 @@ export default function EmployeeDetailScreen() {
             Условия работы (доли с услуг/товаров) — приватная информация.
             Показываем только владельцу/директору/админу либо самому
             сотруднику. Обычный коллега-мастер видит только базовый контакт. */}
-        <Section icon="call-outline" title={showWorkConditions ? 'Контакт и условия' : 'Контакт'}>
-          <View style={styles.contactCard}>
-            <ContactRow icon="call-outline" label="Телефон" value={user.phone || '—'} />
-            {!!user.username && <ContactRow icon="at-outline" label="Логин" value={user.username} />}
+        <Section icon="call-outline" title={showWorkConditions ? 'Контакт и условия' : 'Контакт'} palette={palette}>
+          <View style={[styles.contactCard, { borderColor: palette.border.subtle }]}>
+            <ContactRow icon="call-outline" label="Телефон" value={user.phone || '—'} palette={palette} />
+            {!!user.username && <ContactRow icon="at-outline" label="Логин" value={user.username} palette={palette} />}
             {showWorkConditions && (
               <>
-                <ContactRow icon="shield-outline" label="Доля с услуг" value={`${user.salaryPercent || 0}%`} />
+                <ContactRow icon="shield-outline" label="Доля с услуг" value={`${user.salaryPercent || 0}%`} palette={palette} />
                 {typeof user.productSalaryPercent === 'number' && (
-                  <ContactRow icon="shield-outline" label="Доля с товаров" value={`${user.productSalaryPercent}%`} />
+                  <ContactRow icon="shield-outline" label="Доля с товаров" value={`${user.productSalaryPercent}%`} palette={palette} />
                 )}
                 {user.daysOff && user.daysOff.length > 0 && (
                   <ContactRow
                     icon="calendar-outline"
                     label="Выходные"
                     value={user.daysOff.map((d) => ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][d] || '?').join(', ')}
+                    palette={palette}
                   />
                 )}
               </>
@@ -584,23 +586,61 @@ export default function EmployeeDetailScreen() {
 
 // ── Section primitives ─────────────────────────────────────────────────────
 
-function Section({ icon, title, children }: { icon: any; title: string; children: React.ReactNode }) {
+type Palette = ReturnType<typeof useColors>;
+
+function Section({
+  icon,
+  title,
+  children,
+  palette,
+}: {
+  icon: any;
+  title: string;
+  children: React.ReactNode;
+  palette: Palette;
+}) {
   return (
-    <View style={styles.section}>
+    <View style={[styles.section, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
       <View style={styles.sectionHeader}>
-        <Ionicons name={icon} size={14} color={colors.gray[400]} />
-        <Text style={styles.sectionTitle}>{title}</Text>
+        <Ionicons name={icon} size={14} color={palette.text.tertiary} />
+        <Text style={[styles.sectionTitle, { color: palette.text.tertiary }]}>{title}</Text>
       </View>
       {children}
     </View>
   );
 }
 
-function Tile({ label, value, highlight, hint }: { label: string; value: string; highlight?: boolean; hint?: string }) {
+function Tile({
+  label,
+  value,
+  highlight,
+  hint,
+  palette,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+  hint?: string;
+  palette: Palette;
+}) {
   return (
-    <View style={[styles.tile, highlight ? styles.tileHighlight : styles.tileBase]}>
-      <Text style={styles.tileLabel}>{label}</Text>
-      <Text style={[styles.tileValue, highlight ? styles.tileValueHighlight : null]} numberOfLines={1}>
+    <View
+      style={[
+        styles.tile,
+        highlight
+          ? styles.tileHighlight
+          : [styles.tileBase, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }],
+      ]}
+    >
+      <Text style={[styles.tileLabel, { color: palette.text.tertiary }]}>{label}</Text>
+      <Text
+        style={[
+          styles.tileValue,
+          { color: palette.text.primary },
+          highlight ? styles.tileValueHighlight : null,
+        ]}
+        numberOfLines={1}
+      >
         {value}
         {hint ? `  ${hint}` : ''}
       </Text>
@@ -608,12 +648,12 @@ function Tile({ label, value, highlight, hint }: { label: string; value: string;
   );
 }
 
-function ContactRow({ icon, label, value }: { icon: any; label: string; value: string }) {
+function ContactRow({ icon, label, value, palette }: { icon: any; label: string; value: string; palette: Palette }) {
   return (
-    <View style={styles.contactRow}>
-      <Ionicons name={icon} size={16} color={colors.gray[400]} />
-      <Text style={styles.contactLabel}>{label}</Text>
-      <Text style={styles.contactValue}>{value}</Text>
+    <View style={[styles.contactRow, { borderTopColor: palette.border.subtle }]}>
+      <Ionicons name={icon} size={16} color={palette.text.tertiary} />
+      <Text style={[styles.contactLabel, { color: palette.text.secondary }]}>{label}</Text>
+      <Text style={[styles.contactValue, { color: palette.text.primary }]}>{value}</Text>
     </View>
   );
 }
@@ -623,9 +663,19 @@ function ContactRow({ icon, label, value }: { icon: any; label: string; value: s
 // Это компактный «iOS Health»-style индикатор. Нечего делать — просто
 // чистая цифра, без анимации. Кружок с тонкой рамкой и тонкой заливкой
 // фона того же тона.
-function TierScore({ label, score, hint }: { label: string; score: number | null; hint?: string }) {
+function TierScore({
+  label,
+  score,
+  hint,
+  palette,
+}: {
+  label: string;
+  score: number | null;
+  hint?: string;
+  palette: Palette;
+}) {
   let tone: { bg: string; ring: string; fg: string };
-  if (score === null) tone = { bg: colors.gray[100], ring: colors.gray[200], fg: colors.gray[500] };
+  if (score === null) tone = { bg: palette.bg.muted, ring: palette.border.subtle, fg: palette.text.tertiary };
   else if (score >= 80) tone = { bg: colors.green[50], ring: colors.green[200], fg: colors.green[700] };
   else if (score >= 60) tone = { bg: colors.blue[50], ring: colors.blue[200], fg: colors.blue[700] };
   else if (score >= 40) tone = { bg: colors.amber[50], ring: colors.amber[200], fg: colors.amber[700] };
@@ -636,8 +686,8 @@ function TierScore({ label, score, hint }: { label: string; score: number | null
       <View style={[styles.tierCircle, { backgroundColor: tone.bg, borderColor: tone.ring }]}>
         <Text style={[styles.tierScoreText, { color: tone.fg }]}>{score === null ? '—' : score}</Text>
       </View>
-      <Text style={styles.tierLabel}>{label}</Text>
-      {hint && <Text style={styles.tierHint}>{hint}</Text>}
+      <Text style={[styles.tierLabel, { color: palette.text.secondary }]}>{label}</Text>
+      {hint && <Text style={[styles.tierHint, { color: palette.text.tertiary }]}>{hint}</Text>}
     </View>
   );
 }

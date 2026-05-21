@@ -45,25 +45,32 @@ interface ServiceRowProps {
   item: Service;
   index: number;
   onOpen: (s: Service) => void;
+  palette: ReturnType<typeof useColors>;
 }
-const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen }: ServiceRowProps) {
+const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen, palette }: ServiceRowProps) {
   return (
-    <AnimatedCard style={styles.serviceCard} index={index} onPress={() => onOpen(item)}>
+    <AnimatedCard
+      style={[styles.serviceCard, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
+      index={index}
+      onPress={() => onOpen(item)}
+    >
       <View style={styles.serviceRow}>
         <View style={styles.serviceIconCircle}>
           <Ionicons name="construct-outline" size={16} color={colors.primary[500]} />
         </View>
         <View style={styles.serviceInfo}>
-          <Text style={styles.serviceName} numberOfLines={1}>
+          <Text style={[styles.serviceName, { color: palette.text.primary }]} numberOfLines={1}>
             {item.name}
           </Text>
           {item.category && (
-            <Text style={styles.serviceCategory} numberOfLines={1}>
+            <Text style={[styles.serviceCategory, { color: palette.text.tertiary }]} numberOfLines={1}>
               {item.category.split('/').pop()}
             </Text>
           )}
         </View>
-        <Text style={styles.servicePrice}>{formatMoney(item.defaultPrice)}</Text>
+        <Text style={[styles.servicePrice, { color: palette.accent.primaryText }]}>
+          {formatMoney(item.defaultPrice)}
+        </Text>
       </View>
     </AnimatedCard>
   );
@@ -219,9 +226,9 @@ export default function ServicesScreen() {
 
   const renderService = useCallback(
     ({ item, index }: { item: Service; index: number }) => (
-      <ServiceRow item={item} index={index} onOpen={openEdit} />
+      <ServiceRow item={item} index={index} onOpen={openEdit} palette={palette} />
     ),
-    [openEdit],
+    [openEdit, palette],
   );
 
   return (
@@ -304,11 +311,11 @@ export default function ServicesScreen() {
           onEndReachedThreshold={0.5}
           ListHeaderComponent={
             !search && folders.length > 0 ? (
-              <View style={styles.foldersList}>
+              <View style={[styles.foldersList, { backgroundColor: palette.bg.card }]}>
                 {folders.map(([folderName, count]) => (
                   <TouchableOpacity
                     key={folderName}
-                    style={styles.folderRow}
+                    style={[styles.folderRow, { borderBottomColor: palette.border.subtle }]}
                     onPress={() => setActivePath((prev) => [...prev, folderName])}
                     activeOpacity={0.6}
                   >
@@ -316,14 +323,14 @@ export default function ServicesScreen() {
                       <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
                     </View>
                     <View style={styles.folderInfo}>
-                      <Text style={styles.folderName} numberOfLines={1}>
+                      <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={1}>
                         {folderName}
                       </Text>
-                      <Text style={styles.folderCount}>
+                      <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
                         {count} {count === 1 ? 'услуга' : count < 5 ? 'услуги' : 'услуг'}
                       </Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
                   </TouchableOpacity>
                 ))}
               </View>
@@ -334,50 +341,62 @@ export default function ServicesScreen() {
 
       <Modal visible={modalOpen} onClose={closeModal} title={editingService ? 'Редактировать услугу' : 'Новая услуга'}>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Название</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Название</Text>
           <TextInput
             value={name}
             onChangeText={setName}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="Замена масла..."
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Категория</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Категория</Text>
           <TextInput
             value={category}
             onChangeText={setCategory}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="ТО, кузов..."
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Цена по умолчанию</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Цена по умолчанию</Text>
           <TextInput
             value={defaultPrice}
             onChangeText={setDefaultPrice}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             keyboardType="numeric"
             placeholder="0"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Срок гарантии (дней)</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Срок гарантии (дней)</Text>
           <TextInput
             value={warrantyDays}
             onChangeText={setWarrantyDays}
-            style={styles.formInput}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             keyboardType="number-pad"
             placeholder="напр. 30 (необязательно)"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeModal}>
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
           {editingService && (
             <TouchableOpacity
@@ -390,7 +409,7 @@ export default function ServicesScreen() {
               <Text style={styles.deleteFormBtnText}>Удалить</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
+          <TouchableOpacity style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]} onPress={handleSubmit}>
             {createMutation.isPending || updateMutation.isPending ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (

@@ -224,16 +224,27 @@ export default function SalaryScreen() {
       <IosScreenHeader title="Зарплата" onBack={() => navigation.goBack()} />
 
       {/* Month Navigation */}
-      <View style={styles.monthNav}>
-        <TouchableOpacity onPress={prevMonthNav} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
+      <View
+        style={[
+          styles.monthNav,
+          { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle },
+        ]}
+      >
+        <TouchableOpacity
+          onPress={prevMonthNav}
+          style={[styles.monthNavBtn, { backgroundColor: palette.accent.primarySoft }]}
+        >
+          <Ionicons name="chevron-back" size={20} color={palette.accent.primary} />
         </TouchableOpacity>
         <TouchableOpacity onPress={goToToday} style={styles.monthCenter} activeOpacity={0.7}>
-          <Text style={styles.monthTitle}>{MONTH_NAMES[month]}</Text>
-          <Text style={styles.monthYear}>{year}</Text>
+          <Text style={[styles.monthTitle, { color: palette.text.primary }]}>{MONTH_NAMES[month]}</Text>
+          <Text style={[styles.monthYear, { color: palette.text.tertiary }]}>{year}</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={nextMonthNav} style={styles.monthNavBtn}>
-          <Ionicons name="chevron-forward" size={20} color={colors.primary[600]} />
+        <TouchableOpacity
+          onPress={nextMonthNav}
+          style={[styles.monthNavBtn, { backgroundColor: palette.accent.primarySoft }]}
+        >
+          <Ionicons name="chevron-forward" size={20} color={palette.accent.primary} />
         </TouchableOpacity>
       </View>
 
@@ -302,11 +313,15 @@ export default function SalaryScreen() {
                 NOT mid-fetch. Avoids "пусто" flash on month swipe. */}
             {salaries.length === 0 && !isLoading && (
               <View style={styles.emptyState}>
-                <View style={styles.emptyIcon}>
-                  <Ionicons name="wallet-outline" size={36} color={colors.gray[300]} />
+                <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="wallet-outline" size={36} color={palette.text.tertiary} />
                 </View>
-                <Text style={styles.emptyTitle}>Нет данных за этот месяц</Text>
-                <Text style={styles.emptySubtitle}>Зарплата рассчитывается на основе закрытых чеков</Text>
+                <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>
+                  Нет данных за этот месяц
+                </Text>
+                <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>
+                  Зарплата рассчитывается на основе закрытых чеков
+                </Text>
               </View>
             )}
 
@@ -320,7 +335,11 @@ export default function SalaryScreen() {
               const payments = master.payments || [];
 
               return (
-                <AnimatedCard key={master.masterId} style={styles.masterCard} index={idx + 1}>
+                <AnimatedCard
+                  key={master.masterId}
+                  style={[styles.masterCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  index={idx + 1}
+                >
                   {/* Master header row */}
                   <TouchableOpacity
                     style={styles.masterTop}
@@ -336,11 +355,13 @@ export default function SalaryScreen() {
                       <Text style={styles.masterInitials}>{initials}</Text>
                     </LinearGradient>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.masterName}>{master.masterName}</Text>
+                      <Text style={[styles.masterName, { color: palette.text.primary }]}>{master.masterName}</Text>
                       <View style={styles.percentRow}>
-                        <View style={styles.percentBadge}>
-                          <Ionicons name="cut-outline" size={10} color={colors.primary[600]} />
-                          <Text style={styles.percentText}>{master.salaryPercent}%</Text>
+                        <View style={[styles.percentBadge, { backgroundColor: palette.accent.primarySoft }]}>
+                          <Ionicons name="cut-outline" size={10} color={palette.accent.primary} />
+                          <Text style={[styles.percentText, { color: palette.accent.primaryText }]}>
+                            {master.salaryPercent}%
+                          </Text>
                         </View>
                         {master.productSalaryPercent ? (
                           <View style={[styles.percentBadge, { backgroundColor: colors.amber[50] }]}>
@@ -352,16 +373,22 @@ export default function SalaryScreen() {
                         ) : null}
                       </View>
                     </View>
-                    <Ionicons name={isExpanded ? 'chevron-up' : 'chevron-down'} size={18} color={colors.gray[400]} />
+                    <Ionicons
+                      name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={18}
+                      color={palette.text.tertiary}
+                    />
                   </TouchableOpacity>
 
                   {/* Earnings breakdown */}
                   {master.serviceEarnings || master.productEarnings ? (
                     <View style={styles.earningsRow}>
                       {master.serviceEarnings ? (
-                        <View style={styles.earningsPill}>
-                          <Ionicons name="cut-outline" size={11} color={colors.primary[600]} />
-                          <Text style={styles.earningsPillText}>Услуги: {formatMoney(master.serviceEarnings)}</Text>
+                        <View style={[styles.earningsPill, { backgroundColor: palette.accent.primarySoft }]}>
+                          <Ionicons name="cut-outline" size={11} color={palette.accent.primary} />
+                          <Text style={[styles.earningsPillText, { color: palette.accent.primaryText }]}>
+                            Услуги: {formatMoney(master.serviceEarnings)}
+                          </Text>
                         </View>
                       ) : null}
                       {master.productEarnings ? (
@@ -377,33 +404,37 @@ export default function SalaryScreen() {
 
                   {/* Stats badges */}
                   <View style={styles.masterStats}>
-                    <View style={styles.statBadge}>
+                    <View style={[styles.statBadge, { backgroundColor: palette.bg.muted }]}>
                       <Ionicons name="trending-up-outline" size={13} color={colors.blue[600]} />
-                      <Text style={styles.statBadgeLabel}>Выручка</Text>
-                      <Text style={styles.statBadgeValue}>{formatMoney(master.totalRevenue)}</Text>
+                      <Text style={[styles.statBadgeLabel, { color: palette.text.tertiary }]}>Выручка</Text>
+                      <Text style={[styles.statBadgeValue, { color: palette.text.primary }]}>
+                        {formatMoney(master.totalRevenue)}
+                      </Text>
                     </View>
-                    <View style={styles.statBadge}>
+                    <View style={[styles.statBadge, { backgroundColor: palette.bg.muted }]}>
                       <Ionicons name="receipt-outline" size={13} color={colors.purple[700]} />
-                      <Text style={styles.statBadgeLabel}>Чеков</Text>
-                      <Text style={styles.statBadgeValue}>{master.checkCount}</Text>
+                      <Text style={[styles.statBadgeLabel, { color: palette.text.tertiary }]}>Чеков</Text>
+                      <Text style={[styles.statBadgeValue, { color: palette.text.primary }]}>{master.checkCount}</Text>
                     </View>
                   </View>
 
                   {/* Paid / Remaining with progress */}
-                  <View style={styles.paymentSection}>
+                  <View style={[styles.paymentSection, { borderTopColor: palette.border.subtle }]}>
                     <View style={styles.paymentRow}>
                       <View style={styles.paymentItem}>
-                        <Text style={styles.paymentLabel}>Начислено</Text>
+                        <Text style={[styles.paymentLabel, { color: palette.text.tertiary }]}>Начислено</Text>
                         <Text style={[styles.paymentValue, { color: colors.green[600] }]}>
                           {formatMoney(master.totalEarnings)}
                         </Text>
                       </View>
                       <View style={styles.paymentItem}>
-                        <Text style={styles.paymentLabel}>Выплачено</Text>
-                        <Text style={styles.paymentValue}>{formatMoney(master.paidAmount)}</Text>
+                        <Text style={[styles.paymentLabel, { color: palette.text.tertiary }]}>Выплачено</Text>
+                        <Text style={[styles.paymentValue, { color: palette.text.primary }]}>
+                          {formatMoney(master.paidAmount)}
+                        </Text>
                       </View>
                       <View style={styles.paymentItem}>
-                        <Text style={styles.paymentLabel}>Остаток</Text>
+                        <Text style={[styles.paymentLabel, { color: palette.text.tertiary }]}>Остаток</Text>
                         <Text
                           style={[
                             styles.paymentValue,
@@ -414,7 +445,7 @@ export default function SalaryScreen() {
                         </Text>
                       </View>
                     </View>
-                    <View style={styles.progressTrack}>
+                    <View style={[styles.progressTrack, { backgroundColor: palette.bg.muted }]}>
                       <LinearGradient
                         colors={[colors.green[400], colors.green[600]] as [string, string]}
                         style={[styles.progressBar, { width: `${paidPercent}%` }]}
@@ -422,26 +453,33 @@ export default function SalaryScreen() {
                         end={{ x: 1, y: 0 }}
                       />
                     </View>
-                    <Text style={styles.progressLabel}>{Math.round(paidPercent)}% выплачено</Text>
+                    <Text style={[styles.progressLabel, { color: palette.text.tertiary }]}>
+                      {Math.round(paidPercent)}% выплачено
+                    </Text>
                   </View>
 
                   {/* Expanded section */}
                   {isExpanded && (
-                    <View style={styles.expandedSection}>
+                    <View style={[styles.expandedSection, { borderTopColor: palette.border.subtle }]}>
                       {/* Payment history */}
                       <View style={styles.historyHeader}>
-                        <Ionicons name="time-outline" size={14} color={colors.gray[500]} />
-                        <Text style={styles.historyTitle}>История выплат</Text>
+                        <Ionicons name="time-outline" size={14} color={palette.text.tertiary} />
+                        <Text style={[styles.historyTitle, { color: palette.text.secondary }]}>История выплат</Text>
                       </View>
 
                       {payments.length === 0 ? (
                         <View style={styles.noPayments}>
-                          <Ionicons name="document-text-outline" size={20} color={colors.gray[300]} />
-                          <Text style={styles.noPaymentsText}>Выплат пока нет</Text>
+                          <Ionicons name="document-text-outline" size={20} color={palette.text.tertiary} />
+                          <Text style={[styles.noPaymentsText, { color: palette.text.tertiary }]}>
+                            Выплат пока нет
+                          </Text>
                         </View>
                       ) : (
                         payments.map((p: SalaryPayment) => (
-                          <View key={p.id} style={styles.paymentHistoryItem}>
+                          <View
+                            key={p.id}
+                            style={[styles.paymentHistoryItem, { borderBottomColor: palette.border.subtle }]}
+                          >
                             <View style={styles.paymentHistoryLeft}>
                               <View
                                 style={[
@@ -458,10 +496,18 @@ export default function SalaryScreen() {
                                   {p.type === 'salary' ? 'Зарплата' : 'Аванс'}
                                 </Text>
                               </View>
-                              <Text style={styles.paymentHistoryDate}>{formatPaymentDate(p.date)}</Text>
-                              {p.comment ? <Text style={styles.paymentHistoryComment}>{p.comment}</Text> : null}
+                              <Text style={[styles.paymentHistoryDate, { color: palette.text.tertiary }]}>
+                                {formatPaymentDate(p.date)}
+                              </Text>
+                              {p.comment ? (
+                                <Text style={[styles.paymentHistoryComment, { color: palette.text.tertiary }]}>
+                                  {p.comment}
+                                </Text>
+                              ) : null}
                             </View>
-                            <Text style={styles.paymentHistoryAmount}>{formatMoney(p.amount)}</Text>
+                            <Text style={[styles.paymentHistoryAmount, { color: palette.text.primary }]}>
+                              {formatMoney(p.amount)}
+                            </Text>
                           </View>
                         ))
                       )}
@@ -497,40 +543,74 @@ export default function SalaryScreen() {
       <Modal visible={payModalVisible} onClose={() => setPayModalVisible(false)} title={`Выплата — ${payUserName}`}>
         {/* Amount */}
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Сумма</Text>
-          <View style={styles.formInputRow}>
-            <Ionicons name="cash-outline" size={16} color={colors.gray[400]} />
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сумма</Text>
+          <View
+            style={[
+              styles.formInputRow,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+            ]}
+          >
+            <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
             <TextInput
-              style={styles.formTextInput}
+              style={[styles.formTextInput, { color: palette.text.primary }]}
               value={payAmount}
               onChangeText={setPayAmount}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[300]}
+              placeholderTextColor={palette.text.tertiary}
             />
-            <Text style={styles.formCurrency}>{'\u20BD'}</Text>
+            <Text style={[styles.formCurrency, { color: palette.text.tertiary }]}>{'\u20BD'}</Text>
           </View>
         </View>
 
         {/* Month selector */}
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Месяц</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Месяц</Text>
           <View style={styles.monthSelectorRow}>
             <TouchableOpacity
-              style={[styles.monthChip, payMonthYear === monthYear && styles.monthChipActive]}
+              style={[
+                styles.monthChip,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                payMonthYear === monthYear && {
+                  backgroundColor: palette.accent.primarySoft,
+                  borderColor: palette.accent.primary,
+                },
+              ]}
               onPress={() => setPayMonthYear(monthYear)}
               activeOpacity={0.7}
             >
-              <Text style={[styles.monthChipText, payMonthYear === monthYear && styles.monthChipTextActive]}>
+              <Text
+                style={[
+                  styles.monthChipText,
+                  { color: palette.text.secondary },
+                  payMonthYear === monthYear && { color: palette.accent.primaryText, fontWeight: fontWeight.semibold },
+                ]}
+              >
                 {MONTH_NAMES[month]} {year}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.monthChip, payMonthYear === prevMonthYear && styles.monthChipActive]}
+              style={[
+                styles.monthChip,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                payMonthYear === prevMonthYear && {
+                  backgroundColor: palette.accent.primarySoft,
+                  borderColor: palette.accent.primary,
+                },
+              ]}
               onPress={() => setPayMonthYear(prevMonthYear)}
               activeOpacity={0.7}
             >
-              <Text style={[styles.monthChipText, payMonthYear === prevMonthYear && styles.monthChipTextActive]}>
+              <Text
+                style={[
+                  styles.monthChipText,
+                  { color: palette.text.secondary },
+                  payMonthYear === prevMonthYear && {
+                    color: palette.accent.primaryText,
+                    fontWeight: fontWeight.semibold,
+                  },
+                ]}
+              >
                 {MONTH_NAMES[prevMonth.getMonth()]} {prevMonth.getFullYear()}
               </Text>
             </TouchableOpacity>
@@ -539,8 +619,8 @@ export default function SalaryScreen() {
 
         {/* Type toggle */}
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Тип</Text>
-          <View style={styles.typeToggleRow}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Тип</Text>
+          <View style={[styles.typeToggleRow, { backgroundColor: palette.bg.muted }]}>
             <TouchableOpacity
               style={[styles.typeToggle, payType === 'salary' && styles.typeToggleActive]}
               onPress={() => setPayType('salary')}
@@ -558,8 +638,8 @@ export default function SalaryScreen() {
                 </LinearGradient>
               ) : (
                 <View style={styles.typeToggleInner}>
-                  <Ionicons name="wallet-outline" size={14} color={colors.gray[500]} />
-                  <Text style={styles.typeToggleText}>Зарплата</Text>
+                  <Ionicons name="wallet-outline" size={14} color={palette.text.tertiary} />
+                  <Text style={[styles.typeToggleText, { color: palette.text.secondary }]}>Зарплата</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -580,8 +660,8 @@ export default function SalaryScreen() {
                 </LinearGradient>
               ) : (
                 <View style={styles.typeToggleInner}>
-                  <Ionicons name="flash-outline" size={14} color={colors.gray[500]} />
-                  <Text style={styles.typeToggleText}>Аванс</Text>
+                  <Ionicons name="flash-outline" size={14} color={palette.text.tertiary} />
+                  <Text style={[styles.typeToggleText, { color: palette.text.secondary }]}>Аванс</Text>
                 </View>
               )}
             </TouchableOpacity>
@@ -590,15 +670,20 @@ export default function SalaryScreen() {
 
         {/* Comment */}
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Комментарий (необязательно)</Text>
-          <View style={styles.formInputRow}>
-            <Ionicons name="chatbubble-outline" size={14} color={colors.gray[400]} />
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий (необязательно)</Text>
+          <View
+            style={[
+              styles.formInputRow,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+            ]}
+          >
+            <Ionicons name="chatbubble-outline" size={14} color={palette.text.tertiary} />
             <TextInput
-              style={styles.formTextInput}
+              style={[styles.formTextInput, { color: palette.text.primary }]}
               value={payComment}
               onChangeText={setPayComment}
               placeholder="Добавить комментарий..."
-              placeholderTextColor={colors.gray[300]}
+              placeholderTextColor={palette.text.tertiary}
               multiline
             />
           </View>
@@ -606,8 +691,11 @@ export default function SalaryScreen() {
 
         {/* Actions */}
         <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setPayModalVisible(false)}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { backgroundColor: palette.bg.muted }]}
+            onPress={() => setPayModalVisible(false)}
+          >
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.submitBtn} onPress={submitPayment} activeOpacity={0.7}>
             {paymentMutation.isPending ? (

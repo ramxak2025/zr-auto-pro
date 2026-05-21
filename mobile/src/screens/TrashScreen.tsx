@@ -115,14 +115,14 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
         </Text>
       </View>
       <TouchableOpacity
-        style={styles.actionBtn}
+        style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}
         onPress={() => restoreMut.mutate(item.id)}
         disabled={restoreMut.isPending}
       >
         <Ionicons name="arrow-undo-outline" size={18} color={colors.green[600]} />
       </TouchableOpacity>
       <TouchableOpacity
-        style={styles.actionBtn}
+        style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}
         onPress={() => confirmHardDelete(item)}
         disabled={hardDeleteMut.isPending}
       >

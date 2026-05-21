@@ -36,8 +36,9 @@ interface MasterPickerRowProps {
   fullName: string;
   active: boolean;
   onPick: (id: string, fullName: string) => void;
+  palette: ReturnType<typeof useColors>;
 }
-const MasterPickerRow = React.memo(function MasterPickerRow({ id, fullName, active, onPick }: MasterPickerRowProps) {
+const MasterPickerRow = React.memo(function MasterPickerRow({ id, fullName, active, onPick, palette }: MasterPickerRowProps) {
   return (
     <TouchableOpacity
       style={[styles.masterOption, active && styles.masterOptionActive]}
@@ -46,7 +47,13 @@ const MasterPickerRow = React.memo(function MasterPickerRow({ id, fullName, acti
       <View style={styles.masterAvatar}>
         <Text style={styles.masterAvatarText}>{fullName?.charAt(0) || '?'}</Text>
       </View>
-      <Text style={[styles.masterOptionText, active && { color: colors.primary[600], fontWeight: fontWeight.bold }]}>
+      <Text
+        style={[
+          styles.masterOptionText,
+          { color: palette.text.secondary },
+          active && { color: colors.primary[600], fontWeight: fontWeight.bold },
+        ]}
+      >
         {fullName}
       </Text>
       {active && <Ionicons name="checkmark-circle" size={18} color={colors.primary[600]} />}
@@ -176,7 +183,12 @@ export default function CashFlowScreen() {
   // before the first response, instead of a generic dimmed spinner.
   const renderColdStart = () => (
     <View style={{ gap: spacing[3] }}>
-      <View style={[styles.totalsCard, { gap: spacing[3] }]}>
+      <View
+        style={[
+          styles.totalsCard,
+          { gap: spacing[3], backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+        ]}
+      >
         <Skeleton width={140} height={11} radius={4} />
         <Skeleton width={180} height={32} radius={6} />
         <View style={{ gap: spacing[2.5], marginTop: spacing[2] }}>
@@ -188,7 +200,13 @@ export default function CashFlowScreen() {
       <View style={{ height: spacing[2] }} />
       <Skeleton width={100} height={11} radius={4} style={{ marginLeft: spacing[3] }} />
       {[0, 1, 2].map((i) => (
-        <View key={i} style={[styles.dayCard, { gap: spacing[2] }]}>
+        <View
+          key={i}
+          style={[
+            styles.dayCard,
+            { gap: spacing[2], backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          ]}
+        >
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <Skeleton width={110} height={14} radius={4} />
             <Skeleton width={80} height={14} radius={4} />
@@ -225,11 +243,11 @@ export default function CashFlowScreen() {
           ].map((p) => (
             <TouchableOpacity
               key={p.key}
-              style={styles.quickBtn}
+              style={[styles.quickBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => setQuickPeriod(p.key)}
               activeOpacity={0.7}
             >
-              <Text style={styles.quickBtnText}>{p.label}</Text>
+              <Text style={[styles.quickBtnText, { color: palette.text.secondary }]}>{p.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -237,34 +255,40 @@ export default function CashFlowScreen() {
         {/* Date range selector */}
         <View style={styles.dateRow}>
           <TouchableOpacity
-            style={styles.dateBtn}
+            style={[styles.dateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             onPress={() => {
               setDateInput('');
               setShowDatePicker('from');
             }}
           >
             <Ionicons name="calendar-outline" size={14} color={colors.primary[600]} />
-            <Text style={styles.dateBtnText}>{formatDateLabel(dateFrom)}</Text>
+            <Text style={[styles.dateBtnText, { color: palette.text.secondary }]}>{formatDateLabel(dateFrom)}</Text>
           </TouchableOpacity>
-          <Text style={styles.dateSep}>—</Text>
+          <Text style={[styles.dateSep, { color: palette.text.tertiary }]}>—</Text>
           <TouchableOpacity
-            style={styles.dateBtn}
+            style={[styles.dateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             onPress={() => {
               setDateInput('');
               setShowDatePicker('to');
             }}
           >
             <Ionicons name="calendar-outline" size={14} color={colors.primary[600]} />
-            <Text style={styles.dateBtnText}>{formatDateLabel(dateTo)}</Text>
+            <Text style={[styles.dateBtnText, { color: palette.text.secondary }]}>{formatDateLabel(dateTo)}</Text>
           </TouchableOpacity>
         </View>
 
         {/* Master filter */}
         {canFilterByMaster && (
-          <TouchableOpacity style={styles.masterFilter} onPress={() => setShowMasterPicker(true)} activeOpacity={0.7}>
+          <TouchableOpacity
+            style={[styles.masterFilter, { backgroundColor: palette.bg.card }]}
+            onPress={() => setShowMasterPicker(true)}
+            activeOpacity={0.7}
+          >
             <Ionicons name="person-outline" size={16} color={colors.primary[600]} />
-            <Text style={styles.masterFilterText}>{masterName || 'Все мастера'}</Text>
-            <Ionicons name="chevron-down" size={14} color={colors.gray[400]} />
+            <Text style={[styles.masterFilterText, { color: palette.text.secondary }]}>
+              {masterName || 'Все мастера'}
+            </Text>
+            <Ionicons name="chevron-down" size={14} color={palette.text.tertiary} />
           </TouchableOpacity>
         )}
 
@@ -286,9 +310,12 @@ export default function CashFlowScreen() {
                 Bottom: 3 channel rows (Нал / Карта / Гарантия) with money
                 and tiny share-of-total caption. Single visual unit reads
                 an order of magnitude cleaner than the previous 4-tile grid. */}
-            <AnimatedCard index={0} style={styles.totalsCard}>
-              <Text style={[iosSectionLabel, { marginBottom: 4 }]}>Итого за период</Text>
-              <Text style={styles.totalsHero}>{formatMoney(totals.total)}</Text>
+            <AnimatedCard
+              index={0}
+              style={[styles.totalsCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <Text style={[iosSectionLabel, { marginBottom: 4, color: palette.text.tertiary }]}>Итого за период</Text>
+              <Text style={[styles.totalsHero, { color: palette.text.primary }]}>{formatMoney(totals.total)}</Text>
               <View style={styles.totalsBreakdown}>
                 <ChannelRow
                   iconName="cash-outline"
@@ -297,8 +324,9 @@ export default function CashFlowScreen() {
                   label="Наличные"
                   amount={totals.cash}
                   total={totals.total}
+                  palette={palette}
                 />
-                <View style={styles.totalsDivider} />
+                <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
                 <ChannelRow
                   iconName="card-outline"
                   iconBg={colors.blue[50]}
@@ -306,8 +334,9 @@ export default function CashFlowScreen() {
                   label="Карта"
                   amount={totals.card}
                   total={totals.total}
+                  palette={palette}
                 />
-                <View style={styles.totalsDivider} />
+                <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
                 <ChannelRow
                   iconName="shield-checkmark-outline"
                   iconBg={colors.yellow[50]}
@@ -315,12 +344,13 @@ export default function CashFlowScreen() {
                   label="Гарантия"
                   amount={totals.warranty}
                   total={totals.total}
+                  palette={palette}
                 />
               </View>
             </AnimatedCard>
 
             {/* Daily breakdown */}
-            <Text style={[iosSectionLabel, styles.sectionLabel]}>По дням</Text>
+            <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.tertiary }]}>По дням</Text>
             {days.length === 0 ? (
               <EmptyState
                 title="Нет операций"
@@ -329,34 +359,44 @@ export default function CashFlowScreen() {
               />
             ) : (
               days.map((day: any, idx: number) => (
-                <AnimatedCard key={day.date} style={styles.dayCard} index={idx + 1}>
+                <AnimatedCard
+                  key={day.date}
+                  style={[styles.dayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  index={idx + 1}
+                >
                   <View style={styles.dayHeader}>
-                    <Text style={styles.dayDate}>
+                    <Text style={[styles.dayDate, { color: palette.text.secondary }]}>
                       {new Date(day.date).toLocaleDateString('ru-RU', {
                         weekday: 'short',
                         day: 'numeric',
                         month: 'short',
                       })}
                     </Text>
-                    <Text style={styles.dayTotal}>{formatMoney(day.total)}</Text>
+                    <Text style={[styles.dayTotal, { color: palette.text.primary }]}>{formatMoney(day.total)}</Text>
                   </View>
-                  <View style={styles.dayDetails}>
+                  <View style={[styles.dayDetails, { borderTopColor: palette.border.subtle }]}>
                     {day.cash > 0 && (
                       <View style={styles.dayDetailItem}>
                         <View style={[styles.dayDot, { backgroundColor: colors.green[500] }]} />
-                        <Text style={styles.dayDetailText}>Нал: {formatMoney(day.cash)}</Text>
+                        <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                          Нал: {formatMoney(day.cash)}
+                        </Text>
                       </View>
                     )}
                     {day.card > 0 && (
                       <View style={styles.dayDetailItem}>
                         <View style={[styles.dayDot, { backgroundColor: colors.blue[500] }]} />
-                        <Text style={styles.dayDetailText}>Карта: {formatMoney(day.card)}</Text>
+                        <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                          Карта: {formatMoney(day.card)}
+                        </Text>
                       </View>
                     )}
                     {day.warranty > 0 && (
                       <View style={styles.dayDetailItem}>
                         <View style={[styles.dayDot, { backgroundColor: colors.yellow[500] }]} />
-                        <Text style={styles.dayDetailText}>Гарант: {formatMoney(day.warranty)}</Text>
+                        <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                          Гарант: {formatMoney(day.warranty)}
+                        </Text>
                       </View>
                     )}
                   </View>
@@ -370,11 +410,11 @@ export default function CashFlowScreen() {
       {/* Master picker modal */}
       <Modal visible={showMasterPicker} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Выберите мастера</Text>
+          <View style={[styles.modalContent, { backgroundColor: palette.bg.card }]}>
+            <View style={[styles.modalHeader, { borderBottomColor: palette.border.subtle }]}>
+              <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Выберите мастера</Text>
               <TouchableOpacity onPress={() => setShowMasterPicker(false)}>
-                <Ionicons name="close" size={22} color={colors.gray[500]} />
+                <Ionicons name="close" size={22} color={palette.text.secondary} />
               </TouchableOpacity>
             </View>
             <TouchableOpacity
@@ -385,10 +425,11 @@ export default function CashFlowScreen() {
                 setShowMasterPicker(false);
               }}
             >
-              <Ionicons name="people-outline" size={18} color={!masterId ? colors.primary[600] : colors.gray[500]} />
+              <Ionicons name="people-outline" size={18} color={!masterId ? colors.primary[600] : palette.text.secondary} />
               <Text
                 style={[
                   styles.masterOptionText,
+                  { color: palette.text.secondary },
                   !masterId && { color: colors.primary[600], fontWeight: fontWeight.bold },
                 ]}
               >
@@ -405,6 +446,7 @@ export default function CashFlowScreen() {
                   fullName={item.fullName}
                   active={masterId === item.id}
                   onPick={pickMaster}
+                  palette={palette}
                 />
               )}
             />
@@ -415,12 +457,14 @@ export default function CashFlowScreen() {
       {/* Date input modal */}
       <Modal visible={showDatePicker !== null} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowDatePicker(null)}>
-          <TouchableOpacity activeOpacity={1} style={styles.dateModal}>
-            <Text style={styles.modalTitle}>{showDatePicker === 'from' ? 'Дата начала' : 'Дата окончания'}</Text>
+          <TouchableOpacity activeOpacity={1} style={[styles.dateModal, { backgroundColor: palette.bg.card }]}>
+            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>
+              {showDatePicker === 'from' ? 'Дата начала' : 'Дата окончания'}
+            </Text>
             <TextInput
-              style={styles.dateInput}
+              style={[styles.dateInput, { borderColor: palette.border.subtle, color: palette.text.primary }]}
               placeholder="ДД.ММ.ГГГГ"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
               value={dateInput}
               onChangeText={setDateInput}
               keyboardType="numeric"
@@ -428,10 +472,16 @@ export default function CashFlowScreen() {
               onSubmitEditing={handleDateConfirm}
             />
             <View style={styles.dateModalBtns}>
-              <TouchableOpacity style={styles.dateModalCancel} onPress={() => setShowDatePicker(null)}>
-                <Text style={styles.dateModalCancelText}>Отмена</Text>
+              <TouchableOpacity
+                style={[styles.dateModalCancel, { backgroundColor: palette.bg.muted }]}
+                onPress={() => setShowDatePicker(null)}
+              >
+                <Text style={[styles.dateModalCancelText, { color: palette.text.secondary }]}>Отмена</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.dateModalConfirm} onPress={handleDateConfirm}>
+              <TouchableOpacity
+                style={[styles.dateModalConfirm, { backgroundColor: palette.accent.primary }]}
+                onPress={handleDateConfirm}
+              >
                 <Text style={styles.dateModalConfirmText}>ОК</Text>
               </TouchableOpacity>
             </View>
@@ -453,6 +503,7 @@ function ChannelRow({
   label,
   amount,
   total,
+  palette,
 }: {
   iconName: keyof typeof Ionicons.glyphMap;
   iconBg: string;
@@ -460,6 +511,7 @@ function ChannelRow({
   label: string;
   amount: number;
   total: number;
+  palette: ReturnType<typeof useColors>;
 }) {
   const pct = total > 0 ? ((amount / total) * 100).toFixed(0) : '0';
   return (
@@ -468,10 +520,12 @@ function ChannelRow({
         <Ionicons name={iconName} size={16} color={iconColor} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={styles.channelLabel}>{label}</Text>
-        {total > 0 && amount > 0 && <Text style={styles.channelShare}>{pct}% от итого</Text>}
+        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>{label}</Text>
+        {total > 0 && amount > 0 && (
+          <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>{pct}% от итого</Text>
+        )}
       </View>
-      <Text style={styles.channelAmount}>{formatMoney(amount)}</Text>
+      <Text style={[styles.channelAmount, { color: palette.text.primary }]}>{formatMoney(amount)}</Text>
     </View>
   );
 }

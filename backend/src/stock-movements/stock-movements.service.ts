@@ -528,6 +528,9 @@ export class StockMovementsService {
       supplierName: row.supplier_name ?? null,
       recordAsExpense: !!row.record_as_expense,
       linkedExpenseId: row.linked_expense_id ?? null,
+      // 034_used_purchase_movement_flag.sql adds this column. The journal
+      // (mobile + web) keys off it to render "Покупка Б/У" specially.
+      isUsedPurchase: !!row.is_used_purchase,
       createdAt: row.created_at,
     }));
   }

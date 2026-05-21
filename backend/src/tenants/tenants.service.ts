@@ -153,6 +153,20 @@ export class TenantsService {
         [tenant.id],
       );
 
+      // Seed the pinned "Покупка б/у товара" system supplier. Same
+      // idempotency story: the partial unique index on (tenant_id, kind)
+      // catches a duplicate insert if 033 ran during creation. The
+      // WHERE NOT EXISTS is belt + suspenders for the unlikely race.
+      await client.query(
+        `INSERT INTO suppliers (tenant_id, name, is_system, kind)
+           SELECT $1, 'Покупка б/у товара', true, 'used_purchase'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM suppliers
+                 WHERE tenant_id = $1 AND kind = 'used_purchase'
+            )`,
+        [tenant.id],
+      );
+
       // Create director user if provided
       if (dto.directorPhone && dto.directorPassword && dto.directorName) {
         const directorPhone = normalizePhone(dto.directorPhone);

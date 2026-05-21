@@ -221,6 +221,27 @@ export function createSuppliersApi(api: HttpClient) {
       id: string,
       body: { productId: string; qty: number; purchasePrice?: number; note?: string },
     ) => api.post<{ id: string }>(`/suppliers/${id}/return-defect`, body),
+    /**
+     * "Покупка б/у товара" — buy a second-hand item from a client through
+     * the pinned system supplier. Only callable against the supplier with
+     * `kind === 'used_purchase'`. The product (looked up by name +
+     * category in the Б/У warehouse) is auto-created or its stock is
+     * incremented; a delivery row goes onto the supplier ledger; a
+     * stock_movement with `isUsedPurchase=true` is written for the
+     * journal.
+     */
+    usedPurchase: (
+      id: string,
+      body: { productName: string; qty: number; purchasePrice: number; category?: string; note?: string },
+    ) =>
+      api.post<{
+        id: string;
+        productId: string;
+        deliveryId: string;
+        warehouseId: string;
+        stockAfter: number;
+        debtIncrease: number;
+      }>(`/suppliers/${id}/used-purchase`, body),
   };
 }
 

@@ -84,20 +84,42 @@ interface FolderRowProps {
   hasLow: boolean;
   lastCheckIso?: string;
   onOpen: (name: string) => void;
+  /** Palette tokens \u2014 passed in so the memoised row picks up dark mode
+   *  without subscribing to the theme context itself. */
+  rowBg: string;
+  separatorColor: string;
+  textPrimary: string;
+  textTertiary: string;
+  iconBoxBg: string;
 }
 
-const FolderRow = React.memo(function FolderRow({ folderName, count, hasLow, lastCheckIso, onOpen }: FolderRowProps) {
+const FolderRow = React.memo(function FolderRow({
+  folderName,
+  count,
+  hasLow,
+  lastCheckIso,
+  onOpen,
+  rowBg,
+  separatorColor,
+  textPrimary,
+  textTertiary,
+  iconBoxBg,
+}: FolderRowProps) {
   return (
-    <TouchableOpacity onPress={() => onOpen(folderName)} activeOpacity={0.6} style={styles.folderRow}>
-      <View style={styles.folderIconBox}>
+    <TouchableOpacity
+      onPress={() => onOpen(folderName)}
+      activeOpacity={0.6}
+      style={[styles.folderRow, { backgroundColor: rowBg, borderBottomColor: separatorColor }]}
+    >
+      <View style={[styles.folderIconBox, { backgroundColor: iconBoxBg }]}>
         <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
       </View>
       <View style={styles.folderRowInfo}>
-        <Text style={styles.folderRowName} numberOfLines={1}>
+        <Text style={[styles.folderRowName, { color: textPrimary }]} numberOfLines={1}>
           {folderName}
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-          <Text style={styles.folderRowCount}>
+          <Text style={[styles.folderRowCount, { color: textTertiary }]}>
             {count} {'\u0448\u0442'}
           </Text>
           {lastCheckIso && (
@@ -117,7 +139,7 @@ const FolderRow = React.memo(function FolderRow({ folderName, count, hasLow, las
           <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
         </View>
       )}
-      <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+      <Ionicons name="chevron-forward" size={16} color={textTertiary} />
     </TouchableOpacity>
   );
 });
@@ -138,6 +160,13 @@ interface ProductRowProps {
    *  Used by ProductsScreen to open the per-product action sheet (move to
    *  defect / Б-У) when viewing the main warehouse. */
   onLongPress?: (product: Product) => void;
+  /** Palette tokens — passed in so the memoised row picks up dark mode
+   *  without subscribing to the theme context itself. */
+  rowBg: string;
+  separatorColor: string;
+  textPrimary: string;
+  textTertiary: string;
+  photoPlaceholderBg: string;
 }
 const ProductRow = React.memo(function ProductRow({
   item,
@@ -147,13 +176,18 @@ const ProductRow = React.memo(function ProductRow({
   onOpenEdit,
   onOpenPhoto,
   onLongPress,
+  rowBg,
+  separatorColor,
+  textPrimary,
+  textTertiary,
+  photoPlaceholderBg,
 }: ProductRowProps) {
   const lowStock = item.stock <= item.minStock && item.minStock > 0;
   const pUri = getImageUrl(item.photo);
   return (
     <AnimatedCard
       index={index}
-      style={styles.productCard}
+      style={[styles.productCard, { backgroundColor: rowBg, borderBottomColor: separatorColor }]}
       onPress={() => onOpenEdit(item)}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
     >
@@ -166,29 +200,39 @@ const ProductRow = React.memo(function ProductRow({
           {pUri ? (
             <CachedImage source={{ uri: pUri }} style={styles.productPhoto} resizeMode="cover" />
           ) : (
-            <View style={styles.productPhotoPlaceholder}>
-              <Ionicons name="cube-outline" size={22} color={colors.gray[300]} />
+            <View style={[styles.productPhotoPlaceholder, { backgroundColor: photoPlaceholderBg }]}>
+              <Ionicons name="cube-outline" size={22} color={textTertiary} />
             </View>
           )}
         </TouchableOpacity>
         <View style={styles.productInfo}>
-          <Text style={styles.productName} numberOfLines={2}>
+          <Text style={[styles.productName, { color: textPrimary }]} numberOfLines={2}>
             {item.name}
           </Text>
           {item.category && !hideCategory && (
-            <Text style={styles.productCategory}>{item.category.split('/').pop()}</Text>
+            <Text style={[styles.productCategory, { color: textTertiary }]}>
+              {item.category.split('/').pop()}
+            </Text>
           )}
           <View style={styles.productPrices}>
             <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
-            {canSeeCostPrice && <Text style={styles.productCostPrice}>Себест. {formatMoney(item.costPrice)}</Text>}
+            {canSeeCostPrice && (
+              <Text style={[styles.productCostPrice, { color: textTertiary }]}>
+                Себест. {formatMoney(item.costPrice)}
+              </Text>
+            )}
           </View>
         </View>
         <View style={styles.productStockWrap}>
           {lowStock && (
             <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
           )}
-          <Text style={[styles.productStock, lowStock && styles.productStockLow]}>{item.stock}</Text>
-          <Text style={styles.productStockLabel}>шт</Text>
+          <Text
+            style={[styles.productStock, { color: textPrimary }, lowStock && styles.productStockLow]}
+          >
+            {item.stock}
+          </Text>
+          <Text style={[styles.productStockLabel, { color: textTertiary }]}>шт</Text>
         </View>
       </View>
     </AnimatedCard>
@@ -1107,7 +1151,7 @@ export default function ProductsScreen() {
   const ListHeader = useMemo(() => {
     if (search || sortedFolders.length === 0) return null;
     return (
-      <View style={styles.foldersList}>
+      <View style={[styles.foldersList, { backgroundColor: palette.bg.card }]}>
         {sortedFolders.map(([folderName, info]) => (
           <FolderRow
             key={folderName}
@@ -1116,12 +1160,26 @@ export default function ProductsScreen() {
             hasLow={info.hasLow}
             lastCheckIso={folderLastCheck.get(folderName)}
             onOpen={enterFolder}
+            rowBg={palette.bg.card}
+            separatorColor={palette.border.subtle}
+            textPrimary={palette.text.primary}
+            textTertiary={palette.text.tertiary}
+            iconBoxBg={palette.accent.primarySoft}
           />
         ))}
       </View>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, sortedFolders, folderLastCheck]);
+  }, [
+    search,
+    sortedFolders,
+    folderLastCheck,
+    palette.bg.card,
+    palette.border.subtle,
+    palette.text.primary,
+    palette.text.tertiary,
+    palette.accent.primarySoft,
+  ]);
 
   // Stable references for the warehouse FlashList — keys and render
   // function. The renderItem indirection lets the memoised ProductRow
@@ -1148,12 +1206,29 @@ export default function ProductsScreen() {
         // Long-press only enabled on the main warehouse — moving FROM
         // defect/used isn't a defined movement type yet.
         onLongPress={isMainWarehouse && canManageWarehouse ? openActionsForProduct : undefined}
+        rowBg={palette.bg.card}
+        separatorColor={palette.border.subtle}
+        textPrimary={palette.text.primary}
+        textTertiary={palette.text.tertiary}
+        photoPlaceholderBg={palette.bg.muted}
       />
     ),
     // openEdit is recreated each render (uses local state), and search
     // changes drive `hideCategory`. canSeeCostPrice is a stable bool.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [search, canSeeCostPrice, openEdit, isMainWarehouse, canManageWarehouse, openActionsForProduct],
+    [
+      search,
+      canSeeCostPrice,
+      openEdit,
+      isMainWarehouse,
+      canManageWarehouse,
+      openActionsForProduct,
+      palette.bg.card,
+      palette.bg.muted,
+      palette.border.subtle,
+      palette.text.primary,
+      palette.text.tertiary,
+    ],
   );
 
   return (
@@ -1219,14 +1294,20 @@ export default function ProductsScreen() {
       {activePath.length > 0 && !search && (
         <View style={styles.breadcrumb}>
           <TouchableOpacity onPress={() => goToLevel(0)} style={styles.breadcrumbItem}>
-            <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
-            <Text style={styles.breadcrumbText}>{'\u0412\u0441\u0435'}</Text>
+            <Ionicons name="home-outline" size={14} color={palette.accent.primary} />
+            <Text style={[styles.breadcrumbText, { color: palette.accent.primary }]}>{'\u0412\u0441\u0435'}</Text>
           </TouchableOpacity>
           {activePath.map((seg, i) => (
             <React.Fragment key={i}>
-              <Ionicons name="chevron-forward" size={12} color={colors.gray[300]} />
+              <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
               <TouchableOpacity onPress={() => goToLevel(i + 1)} style={styles.breadcrumbItem}>
-                <Text style={[styles.breadcrumbText, i === activePath.length - 1 && styles.breadcrumbTextActive]}>
+                <Text
+                  style={[
+                    styles.breadcrumbText,
+                    { color: palette.accent.primary },
+                    i === activePath.length - 1 && [styles.breadcrumbTextActive, { color: palette.text.primary }],
+                  ]}
+                >
                   {seg}
                 </Text>
               </TouchableOpacity>
@@ -1464,7 +1545,10 @@ export default function ProductsScreen() {
           '\u0421\u043A\u043B\u0430\u0434\u0441\u043A\u0438\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438'
         }
       >
-        <TouchableOpacity style={styles.opsItem} onPress={openInventory}>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={openInventory}
+        >
           <View style={[styles.opsIcon, { backgroundColor: colors.blue[50] }]}>
             <Ionicons name="clipboard-outline" size={22} color={colors.blue[600]} />
           </View>
@@ -1480,7 +1564,10 @@ export default function ProductsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.opsItem} onPress={openWriteoff}>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={openWriteoff}
+        >
           <View style={[styles.opsIcon, { backgroundColor: colors.red[50] }]}>
             <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
           </View>
@@ -1494,7 +1581,10 @@ export default function ProductsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.opsItem} onPress={openCorrection}>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={openCorrection}
+        >
           <View style={[styles.opsIcon, { backgroundColor: colors.purple[50] }]}>
             <Ionicons name="create-outline" size={22} color={colors.purple[600]} />
           </View>
@@ -1509,7 +1599,7 @@ export default function ProductsScreen() {
             "Ещё") because it's a warehouse-only concern. */}
         {canManageWarehouse && (
           <TouchableOpacity
-            style={styles.opsItem}
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
             onPress={() => {
               setShowOpsModal(false);
               setShowTrashModal(true);
@@ -1533,8 +1623,24 @@ export default function ProductsScreen() {
         <TrashScreen onClose={() => setShowTrashModal(false)} />
       </RNModal>
 
-      {/* Full-screen Inventory Modal */}
-      <RNModal visible={showInventoryModal} animationType="slide" onRequestClose={() => setShowInventoryModal(false)}>
+      {/* Inventory modal — pageSheet on iOS so the sheet drops in from
+          the top of the screen leaving the previous content visible
+          underneath (the iOS Mail-attachment / Files-share idiom). This
+          guarantees the header buttons sit inside the working area:
+          the system handle bar at the top is OUR top inset, so the
+          "Назад" / "Провести" controls never slide under the Dynamic
+          Island or the status bar.
+
+          Android: RNModal ignores `presentationStyle` so the modal
+          stays full-bleed there — Android doesn't have the Dynamic
+          Island problem and SafeAreaView's top edge handles the
+          status bar inset cleanly. */}
+      <RNModal
+        visible={showInventoryModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowInventoryModal(false)}
+      >
         <SafeAreaView style={styles.invFullSafe} edges={['top', 'bottom']}>
           {/* Header */}
           <View style={styles.invFullHeader}>

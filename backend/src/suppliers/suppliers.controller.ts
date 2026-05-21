@@ -65,6 +65,21 @@ export class SuppliersController {
     return this.suppliersService.returnDefect(user.tenantID, user.userID, id, dto);
   }
 
+  // Used-purchase: buy a second-hand item from a client through the
+  // pinned "Покупка б/у товара" system supplier. Auto-creates (or
+  // increments) the matching product on the Б/У warehouse, logs the
+  // delivery + supplier debt, and writes a stock_movement marked with
+  // is_used_purchase=true for journal rendering.
+  @Roles('director', 'admin', 'superadmin')
+  @Post(':id/used-purchase')
+  usedPurchase(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { productName: string; qty: number; purchasePrice: number; category?: string; note?: string },
+  ) {
+    return this.suppliersService.usedPurchase(user.tenantID, user.userID, id, dto);
+  }
+
   @Roles('director', 'admin', 'superadmin')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {

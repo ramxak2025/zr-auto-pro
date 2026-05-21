@@ -41,7 +41,8 @@ import {
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { useThemeMode } from '../contexts/ThemeContext';
+import { useThemeMode, useColors } from '../contexts/ThemeContext';
+import type { SemanticPalette } from '../theme/palette';
 import { ThemeToggle } from '../components/ThemeToggle';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
@@ -334,6 +335,7 @@ interface KpiTileSpec {
 
 function KpiStrip() {
   const navigation = useNavigation<any>();
+  const palette = useColors();
   const week = useQuery({
     queryKey: ['dashboard-chart', 'week', 0],
     queryFn: async () => (await checksApi.getDashboardChart('week', 0)).data,
@@ -393,7 +395,7 @@ function KpiStrip() {
 
   return (
     <View>
-      <Text style={styles.sectionLabel}>ЗА 7 ДНЕЙ</Text>
+      <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>ЗА 7 ДНЕЙ</Text>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -445,6 +447,7 @@ function KpiStrip() {
                       ? 'violet'
                       : 'primary'
               }
+              palette={palette}
             />
           );
         })}
@@ -461,6 +464,7 @@ interface KpiTileProps {
   delta: { text: string; tone: 'up' | 'down' | 'flat' };
   onPress: () => void;
   tone: 'primary' | 'emerald' | 'sky' | 'violet';
+  palette: SemanticPalette;
 }
 
 const KpiTile = React.memo(function KpiTile({
@@ -471,8 +475,9 @@ const KpiTile = React.memo(function KpiTile({
   delta,
   onPress,
   tone,
+  palette,
 }: KpiTileProps) {
-  const palette = {
+  const tonePalette = {
     primary: { line: colors.primary[600], glow: colors.primary[200] },
     emerald: { line: colors.green[600], glow: colors.green[200] },
     sky: { line: colors.cyan[600], glow: colors.cyan[400] },
@@ -485,9 +490,17 @@ const KpiTile = React.memo(function KpiTile({
   const areaPath = useMemo(() => buildSparkAreaPath(series, W, H), [series, W, H]);
 
   return (
-    <AnimatedCard index={index} style={styles.kpiTile} onPress={onPress}>
-      <Text style={styles.kpiTileTitle}>{title}</Text>
-      <Text style={styles.kpiTileValue} numberOfLines={1} adjustsFontSizeToFit>
+    <AnimatedCard
+      index={index}
+      style={[styles.kpiTile, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={onPress}
+    >
+      <Text style={[styles.kpiTileTitle, { color: palette.text.secondary }]}>{title}</Text>
+      <Text
+        style={[styles.kpiTileValue, { color: palette.text.primary }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
         {value}
       </Text>
       <View style={styles.kpiTileSparkWrap}>
@@ -495,12 +508,12 @@ const KpiTile = React.memo(function KpiTile({
           <Svg width={W} height={H}>
             <Defs>
               <SvgGrad id={`sparkGrad-${tone}`} x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0%" stopColor={palette.glow} stopOpacity={0.55} />
-                <Stop offset="100%" stopColor={palette.glow} stopOpacity={0} />
+                <Stop offset="0%" stopColor={tonePalette.glow} stopOpacity={0.55} />
+                <Stop offset="100%" stopColor={tonePalette.glow} stopOpacity={0} />
               </SvgGrad>
             </Defs>
             <Path d={areaPath} fill={`url(#sparkGrad-${tone})`} />
-            <Path d={path} stroke={palette.line} strokeWidth={1.8} fill="none" strokeLinecap="round" />
+            <Path d={path} stroke={tonePalette.line} strokeWidth={1.8} fill="none" strokeLinecap="round" />
           </Svg>
         ) : (
           <View style={{ width: W, height: H }} />
@@ -509,6 +522,7 @@ const KpiTile = React.memo(function KpiTile({
       <View
         style={[
           styles.kpiDeltaPill,
+          { backgroundColor: palette.bg.muted },
           delta.tone === 'up' && { backgroundColor: colors.green[50] },
           delta.tone === 'down' && { backgroundColor: colors.red[50] },
         ]}
@@ -521,7 +535,7 @@ const KpiTile = React.memo(function KpiTile({
               ? colors.green[700]
               : delta.tone === 'down'
                 ? colors.red[700]
-                : colors.gray[500]
+                : palette.text.tertiary
           }
         />
         <Text
@@ -533,7 +547,7 @@ const KpiTile = React.memo(function KpiTile({
                   ? colors.green[700]
                   : delta.tone === 'down'
                     ? colors.red[700]
-                    : colors.gray[500],
+                    : palette.text.tertiary,
             },
           ]}
         >
@@ -578,6 +592,7 @@ function OwnerAnalyticsChart() {
   const [offset, setOffset] = useState(0);
   const animWidth = useRef(new Animated.Value(0)).current;
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const palette = useColors();
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-chart', period, offset],
@@ -761,39 +776,64 @@ function OwnerAnalyticsChart() {
   };
 
   return (
-    <AnimatedCard index={2} style={styles.chartCardLight}>
+    <AnimatedCard
+      index={2}
+      style={[styles.chartCardLight, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
       <View style={styles.chartHeaderRow}>
         <View>
-          <Text style={styles.chartHeaderTitle}>Аналитика</Text>
-          <Text style={styles.chartHeaderSub}>{getOffsetLabel(period, offset)}</Text>
+          <Text style={[styles.chartHeaderTitle, { color: palette.text.primary }]}>Аналитика</Text>
+          <Text style={[styles.chartHeaderSub, { color: palette.text.secondary }]}>
+            {getOffsetLabel(period, offset)}
+          </Text>
         </View>
         <View style={styles.chartNavRow}>
-          <TouchableOpacity style={styles.chartNavBtn} onPress={() => setOffset((o) => o - 1)} hitSlop={6}>
-            <Ionicons name="chevron-back" size={16} color={colors.gray[600]} />
+          <TouchableOpacity
+            style={[styles.chartNavBtn, { backgroundColor: palette.bg.muted }]}
+            onPress={() => setOffset((o) => o - 1)}
+            hitSlop={6}
+          >
+            <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.chartNavBtn, offset >= 0 && styles.chartNavBtnDisabled]}
+            style={[
+              styles.chartNavBtn,
+              { backgroundColor: palette.bg.muted },
+              offset >= 0 && styles.chartNavBtnDisabled,
+            ]}
             onPress={() => setOffset((o) => (o < 0 ? o + 1 : 0))}
             disabled={offset >= 0}
             hitSlop={6}
           >
-            <Ionicons name="chevron-forward" size={16} color={offset >= 0 ? colors.gray[300] : colors.gray[600]} />
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={offset >= 0 ? palette.text.tertiary : palette.text.secondary}
+            />
           </TouchableOpacity>
         </View>
       </View>
 
       {/* iOS-segmented pill control */}
-      <View style={styles.segCtl}>
+      <View style={[styles.segCtl, { backgroundColor: palette.bg.muted }]}>
         {(Object.keys(periodLabels) as ChartPeriod[]).map((p) => {
           const active = period === p;
           return (
             <TouchableOpacity
               key={p}
-              style={[styles.segCtlBtn, active && styles.segCtlBtnActive]}
+              style={[styles.segCtlBtn, active && [styles.segCtlBtnActive, { backgroundColor: palette.bg.card }]]}
               onPress={() => handlePeriodChange(p)}
               activeOpacity={0.7}
             >
-              <Text style={[styles.segCtlText, active && styles.segCtlTextActive]}>{periodLabels[p]}</Text>
+              <Text
+                style={[
+                  styles.segCtlText,
+                  { color: palette.text.secondary },
+                  active && [styles.segCtlTextActive, { color: palette.text.primary }],
+                ]}
+              >
+                {periodLabels[p]}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -824,7 +864,7 @@ function OwnerAnalyticsChart() {
                   y1={svgH * (1 - pct)}
                   x2={svgW}
                   y2={svgH * (1 - pct)}
-                  stroke={colors.gray[100]}
+                  stroke={palette.border.subtle}
                   strokeWidth={1}
                 />
               ))}
@@ -886,7 +926,7 @@ function OwnerAnalyticsChart() {
               return (
                 <Text
                   key={idx}
-                  style={[styles.xAxisLabelLight, { left: x - X_AXIS_LABEL_W / 2 }]}
+                  style={[styles.xAxisLabelLight, { color: palette.text.tertiary, left: x - X_AXIS_LABEL_W / 2 }]}
                   numberOfLines={1}
                 >
                   {label}
@@ -895,21 +935,25 @@ function OwnerAnalyticsChart() {
             })}
           </View>
 
-          {selPoint === null && <Text style={styles.scrubHintLight}>Проведите по графику для деталей</Text>}
+          {selPoint === null && (
+            <Text style={[styles.scrubHintLight, { color: palette.text.tertiary }]}>
+              Проведите по графику для деталей
+            </Text>
+          )}
         </View>
       ) : points.length === 1 ? (
         <View style={styles.todayStatLight}>
-          <Text style={styles.todayStatValueLight}>{formatMoney(totalRevenue)}</Text>
-          <Text style={styles.todayStatSubLight}>Выручка за период</Text>
+          <Text style={[styles.todayStatValueLight, { color: palette.text.primary }]}>{formatMoney(totalRevenue)}</Text>
+          <Text style={[styles.todayStatSubLight, { color: palette.text.tertiary }]}>Выручка за период</Text>
         </View>
       ) : (
-        <Text style={styles.chartEmptyLight}>Нет данных за период</Text>
+        <Text style={[styles.chartEmptyLight, { color: palette.text.tertiary }]}>Нет данных за период</Text>
       )}
 
       {data && (
         <>
           <View style={styles.scopeBarLight}>
-            <Text style={styles.scopeBarLabelLight}>
+            <Text style={[styles.scopeBarLabelLight, { color: palette.text.secondary }]}>
               {selPoint ? formatPointDate(selPoint.date).toUpperCase() : 'ИТОГО ЗА ПЕРИОД'}
             </Text>
             {selPoint !== null && (
@@ -918,27 +962,45 @@ function OwnerAnalyticsChart() {
               </TouchableOpacity>
             )}
           </View>
-          <View style={styles.chartStatsLight}>
+          <View style={[styles.chartStatsLight, { backgroundColor: palette.bg.muted }]}>
             <View style={styles.chartStatItemLight}>
-              <Text style={styles.chartStatLabelLight}>Оборот</Text>
-              <Text style={styles.chartStatValueLight}>{formatMoney(displayRevenue)}</Text>
+              <Text style={[styles.chartStatLabelLight, { color: palette.text.secondary }]}>Оборот</Text>
+              <Text style={[styles.chartStatValueLight, { color: palette.text.primary }]}>
+                {formatMoney(displayRevenue)}
+              </Text>
             </View>
-            <View style={[styles.chartStatItemLight, styles.chartStatBorderLight]}>
-              <Text style={styles.chartStatLabelLight}>Прибыль</Text>
+            <View
+              style={[
+                styles.chartStatItemLight,
+                styles.chartStatBorderLight,
+                { borderLeftColor: palette.border.subtle },
+              ]}
+            >
+              <Text style={[styles.chartStatLabelLight, { color: palette.text.secondary }]}>Прибыль</Text>
               <Text style={[styles.chartStatValueLight, { color: colors.cyan[600] }]}>
                 {formatMoney(displayProfit)}
               </Text>
             </View>
-            <View style={[styles.chartStatItemLight, styles.chartStatBorderLight]}>
-              <Text style={styles.chartStatLabelLight}>Чеков</Text>
-              <Text style={styles.chartStatValueLight}>{displayChecks || '—'}</Text>
+            <View
+              style={[
+                styles.chartStatItemLight,
+                styles.chartStatBorderLight,
+                { borderLeftColor: palette.border.subtle },
+              ]}
+            >
+              <Text style={[styles.chartStatLabelLight, { color: palette.text.secondary }]}>Чеков</Text>
+              <Text style={[styles.chartStatValueLight, { color: palette.text.primary }]}>
+                {displayChecks || '—'}
+              </Text>
             </View>
           </View>
           {selPoint !== null && displayAvg !== null && (
-            <View style={styles.chartStatsExtraLight}>
+            <View style={[styles.chartStatsExtraLight, { backgroundColor: palette.bg.muted }]}>
               <View style={styles.chartStatExtraItemLight}>
-                <Text style={styles.chartStatLabelLight}>Средний чек</Text>
-                <Text style={styles.chartStatValueLightSm}>{formatMoney(displayAvg)}</Text>
+                <Text style={[styles.chartStatLabelLight, { color: palette.text.secondary }]}>Средний чек</Text>
+                <Text style={[styles.chartStatValueLightSm, { color: palette.text.primary }]}>
+                  {formatMoney(displayAvg)}
+                </Text>
               </View>
             </View>
           )}
@@ -964,6 +1026,7 @@ function TodaySnapshotRow() {
 
 function OnShiftSnapshot() {
   const navigation = useNavigation<any>();
+  const palette = useColors();
   const { data: todayData, isLoading } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
     queryFn: async () => (await scheduleApi.getToday()).data,
@@ -989,19 +1052,19 @@ function OnShiftSnapshot() {
   return (
     <AnimatedCard
       index={3}
-      style={[styles.snapshotCard]}
+      style={[styles.snapshotCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } })}
     >
       <View style={styles.snapshotHeaderRow}>
         <View style={[styles.snapshotIconBox, { backgroundColor: colors.green[50] }]}>
           <Ionicons name="people-outline" size={14} color={colors.green[600]} />
         </View>
-        <Text style={styles.snapshotLabel}>На смене</Text>
+        <Text style={[styles.snapshotLabel, { color: palette.text.secondary }]}>На смене</Text>
       </View>
       {isLoading ? (
         <Skeleton width={36} height={28} radius={6} />
       ) : (
-        <Text style={styles.snapshotValue}>{onShift.length}</Text>
+        <Text style={[styles.snapshotValue, { color: palette.text.primary }]}>{onShift.length}</Text>
       )}
       <View style={styles.avatarsRow}>
         {visible.map((s, idx) => (
@@ -1009,7 +1072,12 @@ function OnShiftSnapshot() {
             key={s.userId}
             style={[
               styles.miniAvatar,
-              { backgroundColor: colors.primary[100], marginLeft: idx === 0 ? 0 : -6, zIndex: 10 - idx },
+              {
+                backgroundColor: colors.primary[100],
+                borderColor: palette.bg.card,
+                marginLeft: idx === 0 ? 0 : -6,
+                zIndex: 10 - idx,
+              },
             ]}
           >
             <Text style={styles.miniAvatarText}>
@@ -1031,13 +1099,15 @@ function OnShiftSnapshot() {
             style={[
               styles.miniAvatar,
               styles.miniAvatarMore,
-              { marginLeft: visible.length === 0 ? 0 : -6 },
+              { backgroundColor: palette.bg.muted, borderColor: palette.bg.card, marginLeft: visible.length === 0 ? 0 : -6 },
             ]}
           >
-            <Text style={styles.miniAvatarMoreText}>+{more}</Text>
+            <Text style={[styles.miniAvatarMoreText, { color: palette.text.secondary }]}>+{more}</Text>
           </View>
         )}
-        {visible.length === 0 && !isLoading && <Text style={styles.snapshotEmpty}>—</Text>}
+        {visible.length === 0 && !isLoading && (
+          <Text style={[styles.snapshotEmpty, { color: palette.text.tertiary }]}>—</Text>
+        )}
       </View>
     </AnimatedCard>
   );
@@ -1045,6 +1115,7 @@ function OnShiftSnapshot() {
 
 function CallsSnapshot() {
   const navigation = useNavigation<any>();
+  const palette = useColors();
   const today = new Date().toISOString().slice(0, 10);
   const { data, isLoading } = useQuery({
     queryKey: ['calls-summary', today],
@@ -1064,19 +1135,19 @@ function CallsSnapshot() {
   return (
     <AnimatedCard
       index={4}
-      style={[styles.snapshotCard]}
+      style={[styles.snapshotCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Calls' } })}
     >
       <View style={styles.snapshotHeaderRow}>
         <View style={[styles.snapshotIconBox, { backgroundColor: colors.purple[50] }]}>
           <Ionicons name="call-outline" size={14} color={colors.purple[600]} />
         </View>
-        <Text style={styles.snapshotLabel}>Звонки сегодня</Text>
+        <Text style={[styles.snapshotLabel, { color: palette.text.secondary }]}>Звонки сегодня</Text>
       </View>
       {isLoading ? (
         <Skeleton width={36} height={28} radius={6} />
       ) : (
-        <Text style={styles.snapshotValue}>{total}</Text>
+        <Text style={[styles.snapshotValue, { color: palette.text.primary }]}>{total}</Text>
       )}
       <View style={styles.callsMiniRow}>
         <Svg width={W} height={H}>
@@ -1098,10 +1169,10 @@ function CallsSnapshot() {
           )}
         </Svg>
         <View style={{ marginLeft: spacing[2] }}>
-          <Text style={styles.callsMiniText}>
+          <Text style={[styles.callsMiniText, { color: palette.text.secondary }]}>
             <Text style={{ color: colors.green[600], fontWeight: '700' }}>{incoming}</Text> входящих
           </Text>
-          <Text style={styles.callsMiniText}>
+          <Text style={[styles.callsMiniText, { color: palette.text.secondary }]}>
             <Text style={{ color: colors.red[600], fontWeight: '700' }}>{missed}</Text> пропущ.
           </Text>
         </View>
@@ -1124,6 +1195,7 @@ interface QuickAction {
 function OwnerQuickActions() {
   const navigation = useNavigation<any>();
   const { hasPermission } = useAuth();
+  const palette = useColors();
 
   const actions: QuickAction[] = useMemo(
     () => [
@@ -1189,10 +1261,16 @@ function OwnerQuickActions() {
 
   return (
     <View>
-      <Text style={styles.sectionLabel}>БЫСТРЫЕ ДЕЙСТВИЯ</Text>
+      <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>БЫСТРЫЕ ДЕЙСТВИЯ</Text>
       <View style={styles.quickGrid2x2}>
         {allowed.map((a, idx) => (
-          <QuickActionTile key={a.key} action={a} index={idx} onPress={tilePressMap.get(a.key)!} />
+          <QuickActionTile
+            key={a.key}
+            action={a}
+            index={idx}
+            onPress={tilePressMap.get(a.key)!}
+            palette={palette}
+          />
         ))}
       </View>
     </View>
@@ -1203,17 +1281,23 @@ const QuickActionTile = React.memo(function QuickActionTile({
   action,
   index,
   onPress,
+  palette,
 }: {
   action: QuickAction;
   index: number;
   onPress: () => void;
+  palette: SemanticPalette;
 }) {
   return (
-    <AnimatedCard index={index} style={styles.quickActionTile} onPress={onPress}>
+    <AnimatedCard
+      index={index}
+      style={[styles.quickActionTile, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={onPress}
+    >
       <View style={[styles.quickActionIconBox, { backgroundColor: action.tintBg }]}>
         <Ionicons name={action.icon} size={22} color={action.tint} />
       </View>
-      <Text style={styles.quickActionLabel} numberOfLines={2}>
+      <Text style={[styles.quickActionLabel, { color: palette.text.primary }]} numberOfLines={2}>
         {action.label}
       </Text>
     </AnimatedCard>
@@ -1224,6 +1308,7 @@ const QuickActionTile = React.memo(function QuickActionTile({
 // Top 3 masters by month revenue. Skeleton while loading. Tap → EmployeeDetail.
 function TopPerformers() {
   const navigation = useNavigation<any>();
+  const palette = useColors();
   const { data: ranking, isLoading } = useQuery<EmployeeRanking>({
     queryKey: ['employee-ranking'],
     queryFn: async () => (await checksApi.getRanking()).data,
@@ -1245,9 +1330,11 @@ function TopPerformers() {
   return (
     <View>
       <View style={styles.sectionHeaderRow}>
-        <Text style={styles.sectionLabel}>ТОП МАСТЕРОВ МЕСЯЦА</Text>
+        <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>ТОП МАСТЕРОВ МЕСЯЦА</Text>
       </View>
-      <View style={styles.topPerformersCard}>
+      <View
+        style={[styles.topPerformersCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
         {isLoading && !ranking ? (
           <View style={{ gap: spacing[3] }}>
             {[0, 1, 2].map((i) => (
@@ -1263,8 +1350,8 @@ function TopPerformers() {
           </View>
         ) : top3.length === 0 ? (
           <View style={styles.topPerfEmpty}>
-            <Ionicons name="trophy-outline" size={28} color={colors.gray[300]} />
-            <Text style={styles.topPerfEmptyText}>Пока нет данных за месяц</Text>
+            <Ionicons name="trophy-outline" size={28} color={palette.text.tertiary} />
+            <Text style={[styles.topPerfEmptyText, { color: palette.text.tertiary }]}>Пока нет данных за месяц</Text>
           </View>
         ) : (
           top3.map((emp, idx) => (
@@ -1276,6 +1363,7 @@ function TopPerformers() {
               checkCount={emp.checkCount}
               onPress={() => handleOpenEmployee(emp.masterId)}
               showDivider={idx < top3.length - 1}
+              palette={palette}
             />
           ))
         )}
@@ -1291,6 +1379,7 @@ const TopPerformerRow = React.memo(function TopPerformerRow({
   checkCount,
   onPress,
   showDivider,
+  palette,
 }: {
   rank: number;
   name: string;
@@ -1298,6 +1387,7 @@ const TopPerformerRow = React.memo(function TopPerformerRow({
   checkCount: number;
   onPress: () => void;
   showDivider: boolean;
+  palette: SemanticPalette;
 }) {
   const medals: Record<number, { bg: string; fg: string; ring: string }> = {
     1: { bg: '#FEF3C7', fg: '#92400E', ring: '#FCD34D' },
@@ -1324,17 +1414,22 @@ const TopPerformerRow = React.memo(function TopPerformerRow({
               <Text style={[styles.topPerfRank, { color: m.fg }]}>{rank}</Text>
             </View>
             <View style={{ flex: 1, minWidth: 0, marginLeft: spacing[3] }}>
-              <Text style={styles.topPerfName} numberOfLines={1}>
+              <Text style={[styles.topPerfName, { color: palette.text.primary }]} numberOfLines={1}>
                 {name}
               </Text>
-              <Text style={styles.topPerfSub}>
+              <Text style={[styles.topPerfSub, { color: palette.text.tertiary }]}>
                 {initials} · {checkCount} {checkCount === 1 ? 'заказ' : 'заказов'}
               </Text>
             </View>
-            <Text style={styles.topPerfRevenue}>{formatMoney(revenue)}</Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} style={{ marginLeft: spacing[2] }} />
+            <Text style={[styles.topPerfRevenue, { color: palette.text.primary }]}>{formatMoney(revenue)}</Text>
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={palette.text.tertiary}
+              style={{ marginLeft: spacing[2] }}
+            />
           </View>
-          {showDivider && <View style={styles.topPerfDivider} />}
+          {showDivider && <View style={[styles.topPerfDivider, { backgroundColor: palette.border.subtle }]} />}
         </>
       )}
     </Pressable>
