@@ -15,6 +15,7 @@ import { PressableScale } from '../platform/PressableScale';
 import { shadow } from '../platform/shadow';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 
 interface EmptyStateProps {
   title: string;
@@ -27,21 +28,22 @@ interface EmptyStateProps {
 }
 
 export default function EmptyState({ title, description, icon, action }: EmptyStateProps) {
+  const palette = useColors();
   return (
     <Animated.View
       entering={FadeInDown.duration(380).springify().damping(18)}
       style={styles.container}
     >
       {icon && (
-        <View style={styles.iconWrap}>
-          <Icon name={icon} size={28} color={colors.gray[400]} />
+        <View style={[styles.iconWrap, { backgroundColor: palette.bg.muted }]}>
+          <Icon name={icon} size={28} color={palette.text.tertiary} />
         </View>
       )}
-      <Text variant="title2" color={colors.gray[900]} style={styles.title}>
+      <Text variant="title2" color={palette.text.primary} style={styles.title}>
         {title}
       </Text>
       {description && (
-        <Text variant="footnote" color={colors.gray[500]} style={styles.description}>
+        <Text variant="footnote" color={palette.text.secondary} style={styles.description}>
           {description}
         </Text>
       )}
@@ -51,7 +53,7 @@ export default function EmptyState({ title, description, icon, action }: EmptySt
             haptic('tap');
             action.onPress();
           }}
-          style={[styles.button, shadow('sm', colors.primary[700])]}
+          style={[styles.button, { backgroundColor: palette.accent.primary }, shadow('sm', colors.primary[700])]}
         >
           <Text variant="callout" color={colors.white}>
             {action.label}

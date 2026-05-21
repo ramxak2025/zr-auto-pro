@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -23,6 +24,7 @@ interface ModalProps {
 }
 
 export default function Modal({ visible, onClose, title, children }: ModalProps) {
+  const palette = useColors();
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView
@@ -30,12 +32,15 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
         style={styles.overlay}
       >
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
-        <View style={styles.sheet}>
-          <View style={styles.handle} />
-          <View style={styles.header}>
-            <Text style={styles.title}>{title}</Text>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Ionicons name="close" size={20} color={colors.gray[400]} />
+        <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
+          <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
+          <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+            <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
+            <TouchableOpacity
+              onPress={onClose}
+              style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
+            >
+              <Ionicons name="close" size={20} color={palette.text.tertiary} />
             </TouchableOpacity>
           </View>
           <ScrollView

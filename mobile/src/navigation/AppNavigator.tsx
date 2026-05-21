@@ -250,7 +250,44 @@ function TabNavigator() {
       <Tab.Screen name="Products" component={ProductsStackNavigator} />
       <Tab.Screen name="NewCheck" component={CheckCreateScreen} />
       <Tab.Screen name="Checks" component={ChecksStackNavigator} />
-      <Tab.Screen name="MoreTab" component={MoreStackNavigator} />
+      {/*
+        MoreTab — fires `popToTop` on the embedded MoreStack whenever
+        the tab LOSES focus.
+
+        Why: previously, if the user navigated Dashboard → MoreTab
+        → Звонки (push) → Dashboard tab → MoreTab again, the MoreStack
+        was still parked on `Calls`, so re-entering "Ещё" landed on
+        Calls instead of the menu list. Owner-reported bug.
+
+        Resetting on blur means:
+          • Going AWAY from MoreTab pops the inner stack to MoreHome,
+          • Coming BACK lands cleanly on MoreHome.
+        That matches the iOS Settings-app convention.
+
+        We use `blur` rather than `tabPress` because tabPress fires on
+        the tab the user IS pressing — using it here would only catch
+        users tapping MoreTab itself, not the case where they tap any
+        OTHER tab while inside MoreStack/Calls.
+      */}
+      <Tab.Screen
+        name="MoreTab"
+        component={MoreStackNavigator}
+        listeners={({ navigation }) => ({
+          blur: () => {
+            // Pop nested MoreStack back to its first screen (MoreHome).
+            // `navigation` here is the BottomTab navigation; we drill into
+            // the focused MoreTab route's nested state.
+            const parentState = navigation.getState();
+            const moreTabRoute = parentState.routes.find((r) => r.name === 'MoreTab');
+            const innerIndex = moreTabRoute?.state?.index ?? 0;
+            if (innerIndex > 0) {
+              navigation.navigate('MoreTab', {
+                screen: 'MoreHome',
+              } as never);
+            }
+          },
+        })}
+      />
     </Tab.Navigator>
   );
 }

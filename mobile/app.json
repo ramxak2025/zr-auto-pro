@@ -33,7 +33,7 @@
         "backgroundColor": "#2563eb"
       },
       "package": "com.autexa.mobile",
-      "versionCode": 10,
+      "versionCode": 11,
       "softwareKeyboardLayoutMode": "pan",
       "splash": {
         "image": "./assets/splash-blank.png",
@@ -68,33 +68,6 @@
       "expo-updates",
       "./plugins/withDisableUserScriptSandboxing.js",
       "./plugins/withAndroidPredictiveBack.js",
-      [
-        "expo-font",
-        {
-          "fonts": [
-            {
-              "fontFamily": "ionicons",
-              "fontDefinitions": [
-                {
-                  "path": "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/Ionicons.ttf",
-                  "weight": 400,
-                  "style": "normal"
-                }
-              ]
-            },
-            {
-              "fontFamily": "material-community",
-              "fontDefinitions": [
-                {
-                  "path": "./node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf",
-                  "weight": 400,
-                  "style": "normal"
-                }
-              ]
-            }
-          ]
-        }
-      ],
       [
         "expo-build-properties",
         {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, TextInput, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, borderRadius, spacing } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 
 interface SearchInputProps {
   value: string;
@@ -10,6 +11,7 @@ interface SearchInputProps {
 }
 
 export default function SearchInput({ value, onChange, placeholder = 'Поиск...' }: SearchInputProps) {
+  const palette = useColors();
   const [localValue, setLocalValue] = useState(value);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -46,14 +48,19 @@ export default function SearchInput({ value, onChange, placeholder = 'Поиск
 
   return (
     <View style={styles.container}>
-      <View style={styles.searchWrap}>
-        <Ionicons name="search" size={16} color={colors.gray[400]} style={styles.leadingIcon} />
+      <View
+        style={[
+          styles.searchWrap,
+          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+        ]}
+      >
+        <Ionicons name="search" size={16} color={palette.text.tertiary} style={styles.leadingIcon} />
         <TextInput
           value={localValue}
           onChangeText={handleChange}
           placeholder={placeholder}
-          placeholderTextColor={colors.gray[400]}
-          style={styles.input}
+          placeholderTextColor={palette.text.tertiary}
+          style={[styles.input, { color: palette.text.primary }]}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
@@ -67,7 +74,7 @@ export default function SearchInput({ value, onChange, placeholder = 'Поиск
             accessibilityRole="button"
             accessibilityLabel="Очистить поиск"
           >
-            <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
+            <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
           </Pressable>
         )}
       </View>
