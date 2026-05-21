@@ -144,6 +144,10 @@ export interface Product {
   bundleItems?: BundleItem[];
   supplierId?: string;
   supplier?: Supplier;
+  /** Warehouse the product currently lives in. Null only for legacy rows that pre-date 028_warehouses.sql. */
+  warehouseId: string | null;
+  /** Default warranty period (in days) applied to lines that reference this product. Null = no warranty. */
+  warrantyDays: number | null;
   createdAt: string;
 }
 
@@ -154,7 +158,35 @@ export interface Service {
   defaultPrice: number;
   /** Custom master commission percent (overrides user.salaryPercent when set) */
   masterPercent?: number | null;
+  /** Default warranty period (in days) applied to lines that reference this service. Null = no warranty. */
+  warrantyDays: number | null;
   createdAt: string;
+}
+
+export interface Warehouse {
+  id: string;
+  tenantId: string;
+  name: string;
+  kind: 'main' | 'defect' | 'used';
+  sortOrder: number;
+}
+
+export interface WarrantyClaim {
+  id: string;
+  tenantId: string;
+  checkId: string;
+  clientId?: string | null;
+  carId?: string | null;
+  kind: 'product' | 'service';
+  productId?: string | null;
+  serviceId?: string | null;
+  itemName?: string | null;
+  warrantyDays: number;
+  startedAt: string;
+  expiresAt: string;
+  usedAt?: string | null;
+  usedCheckId?: string | null;
+  createdAt?: string;
 }
 
 export interface CheckServiceLine {
@@ -213,6 +245,8 @@ export interface Check {
   productSalaryTotal?: number;
   totalCost: number;
   profit: number;
+  /** Warranties spawned by this check (only populated by /checks/:id). */
+  warrantyClaims?: WarrantyClaim[];
   createdAt: string;
 }
 
@@ -256,17 +290,38 @@ export interface SupplierPayment {
   comment?: string;
 }
 
+export type StockMovementType =
+  | 'income'
+  | 'expense'
+  | 'writeoff'
+  | 'inventory'
+  | 'defect_transfer'
+  | 'used_transfer'
+  | 'defect_return_to_supplier';
+
 export interface StockMovement {
   id: string;
   productId: string;
   product?: Product;
-  type: 'income' | 'expense' | 'writeoff' | 'inventory';
+  type: StockMovementType;
   quantity: number;
   stockBefore: number;
   stockAfter: number;
   reason?: string;
   userId?: string;
   user?: { id: string; fullName: string } | null;
+  /** Warehouse the movement applies to (target on transfers). */
+  warehouseId?: string | null;
+  warehouseName?: string | null;
+  sourceWarehouseId?: string | null;
+  sourceWarehouseName?: string | null;
+  targetWarehouseId?: string | null;
+  targetWarehouseName?: string | null;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  /** True when a writeoff also booked an `expenses` row. */
+  recordAsExpense?: boolean;
+  linkedExpenseId?: string | null;
   createdAt: string;
 }
 

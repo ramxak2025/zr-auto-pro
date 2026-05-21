@@ -24,6 +24,9 @@ import { MarketingModule } from './marketing/marketing.module';
 import { CallsModule } from './calls/calls.module';
 import { EquipmentModule } from './equipment/equipment.module';
 import { ImportsModule } from './imports/imports.module';
+import { WarehousesModule } from './warehouses/warehouses.module';
+import { WarrantyModule } from './warranty/warranty.module';
+import { StockMovementsModule } from './stock-movements/stock-movements.module';
 
 @Module({
   imports: [
@@ -45,6 +48,9 @@ import { ImportsModule } from './imports/imports.module';
     ScheduleModule,
     UploadsModule,
     WarehouseModule,
+    WarehousesModule,
+    WarrantyModule,
+    StockMovementsModule,
     HealthModule,
     ExpensesModule,
     MarketingModule,

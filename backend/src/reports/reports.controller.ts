@@ -24,4 +24,13 @@ export class ReportsController {
   getCashFlow(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.reportsService.getCashFlow(user.tenantID, query);
   }
+
+  /**
+   * Aggregates for the defect + writeoff dashboard. `from`/`to` are ISO
+   * date strings; tenant scoping handled inside the service via tenantID.
+   */
+  @Get('defect-writeoff')
+  getDefectWriteoff(@CurrentUser() user: JwtPayload, @Query() query: { from?: string; to?: string }) {
+    return this.reportsService.getDefectWriteoffReport(user.tenantID, query);
+  }
 }

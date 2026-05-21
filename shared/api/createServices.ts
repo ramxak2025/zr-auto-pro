@@ -23,6 +23,7 @@ import type {
   WorkMode, StockMovement, PaginatedResponse, SubscriptionInfo, PlatformStats,
   TodayEmployeeStatus, MarketingDashboard, ReviewResponse, ReviewAlert,
   MessagingIntegration, ReviewPlatformLink, ReviewSettings, PublicReviewData,
+  Warehouse, WarrantyClaim,
 } from '../types';
 import type {
   LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams,
@@ -136,7 +137,7 @@ export function createCarsApi(api: HttpClient) {
 
 export function createProductsApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Product>>('/products', { params }),
+    getAll: (params?: PaginationParams & { warehouseId?: string }) => api.get<PaginatedResponse<Product>>('/products', { params }),
     getLowStock: () => api.get<Product[]>('/products/low-stock'),
     getMovements: (params?: PaginationParams) => api.get<StockMovement[]>('/products/movements', { params }),
     getWarehouseStats: () => api.get<{ totalCostValue: number; totalSellValue: number; totalItems: number; monthProductCost: number; lastMonthProductCost: number }>('/products/warehouse-stats'),
@@ -211,6 +212,15 @@ export function createSuppliersApi(api: HttpClient) {
     getDeliveryById: (id: string) => api.get<Delivery>(`/suppliers/deliveries/${id}`),
     getPayments: (params?: { supplierId?: string }) => api.get<SupplierPayment[]>('/suppliers/payments', { params }),
     createPayment: (data: CreatePaymentRequest) => api.post<{ id: string }>('/suppliers/payments', data),
+    /**
+     * Return defective stock to the supplier. Server decrements defect
+     * warehouse stock, lowers supplier debt by qty*purchasePrice, and
+     * logs the audit row in stock_movements.
+     */
+    returnDefect: (
+      id: string,
+      body: { productId: string; qty: number; purchasePrice?: number; note?: string },
+    ) => api.post<{ id: string }>(`/suppliers/${id}/return-defect`, body),
   };
 }
 
@@ -227,6 +237,67 @@ export function createReportsApi(api: HttpClient) {
   return {
     getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
     getCashFlow: (params: CashFlowParams) => api.get<{ days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>; totals: { cash: number; card: number; warranty: number; total: number } }>('/reports/cashflow', { params }),
+    /**
+     * Defect + writeoff aggregates for the period. Owners use this to see
+     * how much value rolled into the defect warehouse, how much was
+     * written off (with / without expense booking), and how much was
+     * returned to suppliers (with the corresponding debt reduction).
+     */
+    defectWriteoff: (params: { from?: string; to?: string }) =>
+      api.get<{
+        dateFrom: string;
+        dateTo: string;
+        defectQty: number;
+        defectValue: number;
+        writeoffQty: number;
+        writeoffValue: number;
+        writeoffExpensedQty: number;
+        writeoffExpensedValue: number;
+        returnedToSupplierQty: number;
+        returnedToSupplierValue: number;
+      }>('/reports/defect-writeoff', { params }),
+  };
+}
+
+export function createWarehousesApi(api: HttpClient) {
+  return {
+    list: () => api.get<Warehouse[]>('/warehouses'),
+    update: (id: string, body: { name?: string; sortOrder?: number }) =>
+      api.patch<Warehouse>(`/warehouses/${id}`, body),
+  };
+}
+
+export function createWarrantyApi(api: HttpClient) {
+  return {
+    /**
+     * Active (non-expired, non-used) warranties for the given client and/or car.
+     * Either filter (or both) may be supplied; without filters the API
+     * returns an empty array rather than the full tenant list.
+     */
+    activeForClient: (params: { clientId?: string; carId?: string }) =>
+      api.get<WarrantyClaim[]>('/warranty-claims/active', { params }),
+    /** Mark the warranty as used against a specific (newly-created) check. */
+    redeem: (id: string, checkId: string) =>
+      api.post<WarrantyClaim>(`/warranty-claims/${id}/redeem`, { checkId }),
+  };
+}
+
+export function createStockMovementsApi(api: HttpClient) {
+  return {
+    list: (params?: { warehouseId?: string; productId?: string; type?: string; dateFrom?: string; dateTo?: string }) =>
+      api.get<StockMovement[]>('/stock-movements', { params }),
+    create: (body: {
+      type: 'inventory' | 'income' | 'expense' | 'writeoff' | 'defect_transfer' | 'used_transfer' | 'defect_return_to_supplier';
+      productId: string;
+      quantity: number;
+      purchasePrice?: number;
+      reason?: string;
+      warehouseId?: string;
+      sourceWarehouseId?: string;
+      targetWarehouseId?: string;
+      supplierId?: string;
+      recordAsExpense?: boolean;
+    }) => api.post<{ id: string }>('/stock-movements', body),
   };
 }
 

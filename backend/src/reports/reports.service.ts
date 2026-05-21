@@ -49,6 +49,54 @@ export class ReportsService {
     };
   }
 
+  /**
+   * Aggregate stock_movements rows for the period and return totals for
+   * defect transfers (main → defect), writeoffs (with / without expense
+   * booking), and supplier returns. Powers the report screen for owners.
+   *
+   * "Value" columns use `qty * cost_price` from the linked product so we
+   * don't have to materialise per-movement amounts in stock_movements.
+   * If a product is later soft-deleted the row stays (product table is
+   * kept around, only marked deleted_at), so the join still resolves.
+   */
+  async getDefectWriteoffReport(tenantID: string, query: { from?: string; to?: string }) {
+    const dateFrom = query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const dateTo = query.to || new Date().toISOString().split('T')[0];
+
+    const { rows } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN sm.type = 'defect_transfer' THEN sm.quantity ELSE 0 END), 0) as defect_qty,
+         COALESCE(SUM(CASE WHEN sm.type = 'defect_transfer' THEN sm.quantity * p.cost_price ELSE 0 END), 0) as defect_value,
+         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' THEN sm.quantity ELSE 0 END), 0) as writeoff_qty,
+         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' THEN sm.quantity * p.cost_price ELSE 0 END), 0) as writeoff_value,
+         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' AND sm.record_as_expense = true THEN sm.quantity ELSE 0 END), 0) as writeoff_expensed_qty,
+         COALESCE(SUM(CASE WHEN sm.type = 'writeoff' AND sm.record_as_expense = true THEN sm.quantity * p.cost_price ELSE 0 END), 0) as writeoff_expensed_value,
+         COALESCE(SUM(CASE WHEN sm.type = 'defect_return_to_supplier' THEN sm.quantity ELSE 0 END), 0) as returned_qty,
+         COALESCE(SUM(CASE WHEN sm.type = 'defect_return_to_supplier' THEN sm.quantity * p.cost_price ELSE 0 END), 0) as returned_value
+       FROM stock_movements sm
+       JOIN products p ON p.id = sm.product_id
+       WHERE sm.tenant_id = $1
+         AND sm.created_at >= $2
+         AND sm.created_at <= ($3::date + 1)::timestamptz
+         AND sm.type IN ('defect_transfer','writeoff','defect_return_to_supplier')`,
+      [tenantID, dateFrom, dateTo],
+    );
+
+    const r = rows[0];
+    return {
+      dateFrom,
+      dateTo,
+      defectQty: parseFloat(r.defect_qty) || 0,
+      defectValue: parseFloat(r.defect_value) || 0,
+      writeoffQty: parseFloat(r.writeoff_qty) || 0,
+      writeoffValue: parseFloat(r.writeoff_value) || 0,
+      writeoffExpensedQty: parseFloat(r.writeoff_expensed_qty) || 0,
+      writeoffExpensedValue: parseFloat(r.writeoff_expensed_value) || 0,
+      returnedToSupplierQty: parseFloat(r.returned_qty) || 0,
+      returnedToSupplierValue: parseFloat(r.returned_value) || 0,
+    };
+  }
+
   async getCashFlow(tenantID: string, query: any) {
     const dateFrom = query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];

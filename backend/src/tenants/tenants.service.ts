@@ -141,6 +141,18 @@ export class TenantsService {
 
       const tenant = this.mapTenant(tenantRows[0]);
 
+      // Seed the three default warehouses for this tenant. Idempotent via
+      // ON CONFLICT on the (tenant_id, kind) unique constraint, so retrying
+      // tenant creation after a transient failure never duplicates.
+      await client.query(
+        `INSERT INTO warehouses (tenant_id, name, kind, sort_order) VALUES
+           ($1, 'Основной склад', 'main',   0),
+           ($1, 'Склад брака',    'defect', 1),
+           ($1, 'Склад Б/У',      'used',   2)
+         ON CONFLICT (tenant_id, kind) DO NOTHING`,
+        [tenant.id],
+      );
+
       // Create director user if provided
       if (dto.directorPhone && dto.directorPassword && dto.directorName) {
         const directorPhone = normalizePhone(dto.directorPhone);
@@ -238,6 +250,8 @@ export class TenantsService {
       await client.query('DELETE FROM services WHERE tenant_id=$1', [id]);
       await client.query('DELETE FROM products WHERE tenant_id=$1', [id]);
       await client.query('DELETE FROM warehouse_categories WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM warranty_claims WHERE tenant_id=$1', [id]);
+      await client.query('DELETE FROM warehouses WHERE tenant_id=$1', [id]);
       await client.query('DELETE FROM users WHERE tenant_id=$1', [id]);
 
       // 5. Finally delete the tenant itself

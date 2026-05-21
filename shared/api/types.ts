@@ -102,6 +102,9 @@ export interface CreateProductRequest {
   unit?: string;
   isBundle?: boolean;
   bundleItems?: Array<{ productId: string; name: string; quantity: number }>;
+  supplierId?: string;
+  warehouseId?: string;
+  warrantyDays?: number | null;
 }
 
 export interface UpdateProductRequest {
@@ -115,12 +118,17 @@ export interface UpdateProductRequest {
   unit?: string;
   isBundle?: boolean;
   bundleItems?: Array<{ productId: string; name: string; quantity: number }>;
+  supplierId?: string;
+  warehouseId?: string;
+  warrantyDays?: number | null;
 }
 
 export interface StockUpdateRequest {
   type: 'income' | 'expense' | 'writeoff' | 'inventory';
   quantity: number;
   reason?: string;
+  /** Only respected when type === 'writeoff'. Also writes an expenses row. */
+  recordAsExpense?: boolean;
 }
 
 export interface CreateServiceRequest {
@@ -128,6 +136,7 @@ export interface CreateServiceRequest {
   category?: string;
   defaultPrice: number;
   masterPercent?: number | null;
+  warrantyDays?: number | null;
 }
 
 export interface UpdateServiceRequest {
@@ -135,6 +144,7 @@ export interface UpdateServiceRequest {
   category?: string;
   defaultPrice?: number;
   masterPercent?: number | null;
+  warrantyDays?: number | null;
 }
 
 export interface CreateCheckRequest {

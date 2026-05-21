@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { WarrantyService } from '../warranty/warranty.service';
 
 // Only tables we explicitly want to allow as targets of cross-tenant
 // assertions. Keeping this as an allow-list (not a string the caller
@@ -12,7 +13,10 @@ const TENANT_OWNED_TABLES = new Set(['users', 'clients', 'cars', 'services', 'pr
 export class ChecksService {
   private readonly logger = new Logger('ChecksService');
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private warranty: WarrantyService,
+  ) {}
 
   /**
    * Throw NotFoundException unless `id` exists in `table` AND belongs to the
@@ -210,6 +214,10 @@ export class ChecksService {
       totalSell: parseFloat(p.total_sell) || 0,
       totalCost: parseFloat(p.total_cost) || 0,
     }));
+
+    // Warranty claims tied to this check (may be empty — only filled when
+    // a product/service had warranty_days set at sale time).
+    ch.warrantyClaims = await this.warranty.listForCheck(tenantID, id);
 
     return ch;
   }
@@ -418,6 +426,35 @@ export class ChecksService {
           await client.query(
             `UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2 AND tenant_id = $3`,
             [prod.quantity || 1, prod.productId, tenantID],
+          );
+        }
+      }
+
+      // Spawn warranty_claims rows for any product/service in this check
+      // whose master record has warranty_days set. Skip for deferred
+      // (drafts) checks — warranty only starts when the work is actually
+      // performed / sold.
+      if (!dto.isDeferred) {
+        const warrantyLines: Array<{
+          kind: 'product' | 'service';
+          productId?: string | null;
+          serviceId?: string | null;
+          itemName?: string | null;
+        }> = [];
+        for (const svc of serviceLines) {
+          if (svc.serviceId) {
+            warrantyLines.push({ kind: 'service', serviceId: svc.serviceId, itemName: svc.name });
+          }
+        }
+        for (const prod of productLines) {
+          if (prod.productId) {
+            warrantyLines.push({ kind: 'product', productId: prod.productId, itemName: prod.name });
+          }
+        }
+        if (warrantyLines.length > 0) {
+          await this.warranty.createFromCheckLines(
+            client, tenantID, checkId, checkDate,
+            dto.clientId || null, dto.carId || null, warrantyLines,
           );
         }
       }

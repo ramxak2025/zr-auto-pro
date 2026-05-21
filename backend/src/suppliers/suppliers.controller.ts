@@ -52,6 +52,19 @@ export class SuppliersController {
     return this.suppliersService.createPayment(user.tenantID, dto);
   }
 
+  // Defect return-to-supplier. Decrements defect-warehouse stock, lowers the
+  // supplier's outstanding debt, and logs a stock_movement of type
+  // defect_return_to_supplier. Director / admin / superadmin only.
+  @Roles('director', 'admin', 'superadmin')
+  @Post(':id/return-defect')
+  returnDefect(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { productId: string; qty: number; purchasePrice?: number; note?: string },
+  ) {
+    return this.suppliersService.returnDefect(user.tenantID, user.userID, id, dto);
+  }
+
   @Roles('director', 'admin', 'superadmin')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {

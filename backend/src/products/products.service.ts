@@ -22,12 +22,43 @@ export class ProductsService {
       isBundle: row.is_bundle || false,
       bundleItems: row.bundle_items || [],
       supplierId: row.supplier_id,
+      warehouseId: row.warehouse_id ?? null,
+      warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined
+        ? parseInt(row.warranty_days)
+        : null,
       createdAt: row.created_at,
     };
     if (row.supplier_name) {
       p.supplier = { id: row.supplier_id, name: row.supplier_name };
     }
     return p;
+  }
+
+  /**
+   * Resolve the warehouse id we should assign to a product write.
+   *
+   *   - explicit warehouseId from caller → verify it lives in tenant;
+   *   - null / undefined → fall back to the tenant's "main" warehouse.
+   *
+   * Returns the resolved id or throws BadRequest for a foreign / unknown
+   * warehouse.
+   */
+  private async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
+    if (warehouseId) {
+      const { rows } = await this.pool.query(
+        'SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+        [warehouseId, tenantID],
+      );
+      if (rows.length === 0) {
+        throw new BadRequestException({ message: 'Склад не найден' });
+      }
+      return rows[0].id;
+    }
+    const { rows } = await this.pool.query(
+      `SELECT id FROM warehouses WHERE tenant_id=$1 AND kind='main' LIMIT 1`,
+      [tenantID],
+    );
+    return rows.length > 0 ? rows[0].id : null;
   }
 
   async getAll(tenantID: string, query: any) {
@@ -44,6 +75,18 @@ export class ProductsService {
       where += ` AND p.name ILIKE $${idx}`;
       params.push(`%${search}%`);
       idx++;
+    }
+
+    // Default the product list to the "main" warehouse so existing clients
+    // (which don't pass a warehouseId yet) keep seeing the same data. The
+    // FE can opt-in to other warehouses by setting `warehouseId=...`.
+    // `warehouseId=all` short-circuits the filter entirely.
+    if (query.warehouseId && query.warehouseId !== 'all') {
+      where += ` AND p.warehouse_id = $${idx}`;
+      params.push(query.warehouseId);
+      idx++;
+    } else if (!query.warehouseId) {
+      where += ` AND p.warehouse_id = (SELECT id FROM warehouses WHERE tenant_id = $1 AND kind = 'main' LIMIT 1)`;
     }
 
     const countResult = await this.pool.query(
@@ -172,15 +215,25 @@ export class ProductsService {
     if (dto.supplierId) {
       await this.assertSupplierInTenant(dto.supplierId, tenantID);
     }
+    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId);
+    const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
     const { rows } = await this.pool.query(
-      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
       [dto.name, dto.category, dto.photo, dto.costPrice || 0, dto.sellPrice || 0,
        dto.stock || 0, dto.minStock || 0, dto.unit || 'pcs',
        dto.isBundle || false, JSON.stringify(dto.bundleItems || []),
-       dto.supplierId, tenantID],
+       dto.supplierId, tenantID, warehouseId, warrantyDays],
     );
     return this.mapProduct(rows[0]);
+  }
+
+  private normalizeWarrantyDays(value: unknown): number | null {
+    if (value === undefined || value === null || value === '') return null;
+    const n = parseInt(String(value), 10);
+    if (!Number.isFinite(n)) return null;
+    if (n <= 0) return null;
+    return Math.min(n, 36500); // ~100 years guard
   }
 
   private async assertSupplierInTenant(supplierId: string, tenantID: string): Promise<void> {
@@ -219,6 +272,15 @@ export class ProductsService {
     if (dto.isBundle !== undefined) { sets.push(`is_bundle=$${idx++}`); vals.push(dto.isBundle); }
     if (dto.bundleItems !== undefined) { sets.push(`bundle_items=$${idx++}`); vals.push(JSON.stringify(dto.bundleItems)); }
     if (dto.supplierId !== undefined) { sets.push(`supplier_id=$${idx++}`); vals.push(dto.supplierId); }
+    if (dto.warehouseId !== undefined) {
+      const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId);
+      sets.push(`warehouse_id=$${idx++}`);
+      vals.push(resolved);
+    }
+    if (dto.warrantyDays !== undefined) {
+      sets.push(`warranty_days=$${idx++}`);
+      vals.push(this.normalizeWarrantyDays(dto.warrantyDays));
+    }
 
     if (sets.length === 0) return this.getById(id, tenantID);
 
@@ -507,7 +569,7 @@ export class ProductsService {
   }
 
   async updateStock(id: string, tenantID: string, dto: any, userId?: string) {
-    const { type, quantity, reason } = dto;
+    const { type, quantity, reason, recordAsExpense } = dto;
     if (!type || quantity === undefined) {
       throw new BadRequestException({ message: 'Тип и количество обязательны' });
     }
@@ -517,7 +579,7 @@ export class ProductsService {
       await client.query('BEGIN');
 
       const { rows } = await client.query(
-        'SELECT stock FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        'SELECT stock, warehouse_id, cost_price FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
         [id, tenantID],
       );
       if (rows.length === 0) {
@@ -526,6 +588,8 @@ export class ProductsService {
       }
 
       const stockBefore = parseFloat(rows[0].stock) || 0;
+      const productWarehouseId = (rows[0].warehouse_id as string | null) ?? null;
+      const purchasePrice = parseFloat(rows[0].cost_price) || 0;
       let stockAfter: number;
 
       switch (type) {
@@ -546,14 +610,48 @@ export class ProductsService {
 
       await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [stockAfter, id, tenantID]);
 
+      // For writeoff with recordAsExpense, also insert an expense row and
+      // link it back via stock_movements.linked_expense_id. Mirrors the
+      // logic in StockMovementsService so the simple /stock endpoint
+      // delivers the same audit trail.
+      let linkedExpenseId: string | null = null;
+      const writeAsExpense = type === 'writeoff' && !!recordAsExpense;
+      if (writeAsExpense) {
+        const catRes = await client.query(
+          'SELECT id FROM expense_categories WHERE tenant_id=$1 AND name=$2 LIMIT 1',
+          [tenantID, 'Списание со склада'],
+        );
+        let categoryId = catRes.rows[0]?.id as string | undefined;
+        if (!categoryId) {
+          const ins = await client.query(
+            'INSERT INTO expense_categories (name, tenant_id) VALUES ($1, $2) RETURNING id',
+            ['Списание со склада', tenantID],
+          );
+          categoryId = ins.rows[0].id;
+        }
+        const amount = quantity * purchasePrice;
+        const expIns = await client.query(
+          `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
+           VALUES ($1, $2, $3, now(), $4, $5) RETURNING id`,
+          [categoryId, amount, reason ?? 'Списание со склада', userId || null, tenantID],
+        );
+        linkedExpenseId = expIns.rows[0].id;
+      }
+
       await client.query(
-        `INSERT INTO stock_movements (product_id, type, quantity, stock_before, stock_after, reason, tenant_id, user_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [id, type, quantity, stockBefore, stockAfter, reason, tenantID, userId || null],
+        `INSERT INTO stock_movements (
+           product_id, type, quantity, stock_before, stock_after, reason,
+           tenant_id, user_id, warehouse_id, record_as_expense, linked_expense_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+        [
+          id, type, quantity, stockBefore, stockAfter, reason,
+          tenantID, userId || null, productWarehouseId,
+          writeAsExpense, linkedExpenseId,
+        ],
       );
 
       await client.query('COMMIT');
-      return { stock: stockAfter };
+      return { stock: stockAfter, linkedExpenseId };
     } catch (err) {
       await client.query('ROLLBACK');
       if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;

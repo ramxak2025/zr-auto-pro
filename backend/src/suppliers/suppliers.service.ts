@@ -1,12 +1,40 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { StockMovementsService } from '../stock-movements/stock-movements.service';
 
 @Injectable()
 export class SuppliersService {
   private readonly logger = new Logger('SuppliersService');
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private stockMovements: StockMovementsService,
+  ) {}
+
+  /**
+   * Defect return endpoint — supplier-facing. Delegates to StockMovementsService
+   * which handles the stock decrement, debt adjustment, and audit row in one
+   * transaction. Cross-tenant guarded inside the service.
+   */
+  async returnDefect(
+    tenantID: string,
+    userID: string | null,
+    supplierId: string,
+    dto: { productId: string; qty: number; purchasePrice?: number; note?: string },
+  ) {
+    if (!dto || !dto.productId) {
+      throw new BadRequestException({ message: 'Товар обязателен' });
+    }
+    return this.stockMovements.create(tenantID, userID, {
+      type: 'defect_return_to_supplier',
+      productId: dto.productId,
+      quantity: dto.qty,
+      purchasePrice: dto.purchasePrice,
+      supplierId,
+      reason: dto.note,
+    });
+  }
 
   private mapSupplier(row: any) {
     return {
