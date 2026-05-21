@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import UIKit
 
 public class AutexaLiquidGlassModule: Module {
   public func definition() -> ModuleDefinition {
@@ -15,6 +16,36 @@ public class AutexaLiquidGlassModule: Module {
       }
       Prop("topRim") { (view: AutexaLiquidGlassView, value: Bool) in
         view.setTopRim(visible: value)
+      }
+    }
+
+    // Force the entire app's interface style. Called from JS whenever the
+    // user toggles dark/light mode in the React Native context. This
+    // makes `UIVisualEffectView`s using `.systemThinMaterial` and friends
+    // re-render in the right tone (light glass for light mode, dark
+    // glass for dark mode), and also fixes the SF-Symbol weight / vibrancy
+    // tinting on every view that uses the system trait collection.
+    //
+    // We walk every connected scene's windows (iOS 13+ multi-scene model)
+    // rather than the deprecated `UIApplication.shared.keyWindow`, so the
+    // override applies even if the app is split-screened.
+    Function("setAppearance") { (mode: String) in
+      DispatchQueue.main.async {
+        let style: UIUserInterfaceStyle
+        switch mode {
+        case "dark":
+          style = .dark
+        case "light":
+          style = .light
+        default:
+          style = .unspecified
+        }
+        for scene in UIApplication.shared.connectedScenes {
+          guard let windowScene = scene as? UIWindowScene else { continue }
+          for window in windowScene.windows {
+            window.overrideUserInterfaceStyle = style
+          }
+        }
       }
     }
   }

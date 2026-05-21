@@ -21,7 +21,8 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
-import { Appearance } from 'react-native';
+import { Appearance, Platform } from 'react-native';
+import { setIosAppearance } from 'autexa-liquid-glass';
 import { getPalette, type SemanticPalette, type ThemeMode } from '../theme/palette';
 
 interface ThemeContextValue {
@@ -57,18 +58,39 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       });
   }, []);
 
-  const setMode = React.useCallback((next: ThemeMode) => {
-    setModeState(next);
-    AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {});
+  // Push the mode into the iOS native glass module so
+  // UIVisualEffectView (used inside the tab bar, Kassa CTA, schedule
+  // grid header etc.) re-tints to dark / light. No-op on Android.
+  const applyNativeAppearance = React.useCallback((next: ThemeMode) => {
+    if (Platform.OS === 'ios') {
+      setIosAppearance(next);
+    }
   }, []);
+
+  const setMode = React.useCallback(
+    (next: ThemeMode) => {
+      setModeState(next);
+      AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {});
+      applyNativeAppearance(next);
+    },
+    [applyNativeAppearance],
+  );
 
   const toggle = React.useCallback(() => {
     setModeState((prev) => {
       const next: ThemeMode = prev === 'dark' ? 'light' : 'dark';
       AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {});
+      applyNativeAppearance(next);
       return next;
     });
-  }, []);
+  }, [applyNativeAppearance]);
+
+  // Apply the initial appearance once the mode is hydrated. Two-step:
+  // first useEffect hydrates from AsyncStorage; this one mirrors the
+  // resolved value into the native module.
+  React.useEffect(() => {
+    applyNativeAppearance(mode);
+  }, [mode, applyNativeAppearance]);
 
   const palette = React.useMemo(() => getPalette(mode), [mode]);
 

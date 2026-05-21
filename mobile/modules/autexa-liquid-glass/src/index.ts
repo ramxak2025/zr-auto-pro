@@ -13,3 +13,32 @@ export type {
   AutexaScheduleStatus,
   AutexaScheduleGridProps,
 } from './AutexaScheduleGrid';
+
+/**
+ * Force the iOS app's interface style at runtime.
+ *
+ * Bridges to UIWindow.overrideUserInterfaceStyle so the system glass
+ * material (UIVisualEffectView with `systemThinMaterial` etc.) renders
+ * in the right tone, and SF-Symbol vibrancy adapts correctly.
+ *
+ * On Android the function is a no-op — Android dark mode is handled
+ * entirely on the JS side via the BlurView's `tint` prop.
+ *
+ * Pass:
+ *   • 'dark' → forces dark trait
+ *   • 'light' → forces light trait
+ *   • 'system' → release back to the system default (clears the override)
+ */
+export function setIosAppearance(mode: 'dark' | 'light' | 'system'): void {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).expo) {
+    try {
+      // Late-import so non-iOS bundles don't fail to load the module.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { requireNativeModule } = require('expo-modules-core');
+      const mod = requireNativeModule('AutexaLiquidGlass');
+      mod.setAppearance(mode);
+    } catch {
+      // Module missing (Android / unit tests) — silently no-op.
+    }
+  }
+}

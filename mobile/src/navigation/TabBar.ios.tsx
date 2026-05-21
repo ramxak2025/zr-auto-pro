@@ -34,7 +34,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-na
 import { Icon } from '../platform/Icon';
 import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
-import { colors } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
 // Floating island geometry — owner explicitly wants the bar to read as
@@ -54,6 +54,12 @@ const CORNER_RADIUS = BAR_HEIGHT / 2;
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 8);
+  // Theme-aware icon / label tint. Native glass surface itself is
+  // rendered by the Swift module and adapts to the system trait
+  // (UITraitCollection.userInterfaceStyle) automatically — we don't
+  // need to thread a colour scheme through the bridge. We only re-tint
+  // the JS-side icons / labels that overlay the glass.
+  const palette = useColors();
 
   const focusedIndex = TAB_DEFINITIONS.findIndex(
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
@@ -134,7 +140,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
               return <View key={tab.routeName} style={styles.item} />;
             }
 
-            return <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} />;
+            return <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} palette={palette} />;
           })}
         </View>
 
@@ -158,16 +164,17 @@ interface TabItemProps {
   focused: boolean;
   label: string;
   icon: (typeof TAB_DEFINITIONS)[number]['icon'];
+  palette: ReturnType<typeof useColors>;
 }
 
-function TabItem({ focused, label, icon }: TabItemProps) {
+function TabItem({ focused, label, icon, palette }: TabItemProps) {
   const scale = useSharedValue(focused ? 1.06 : 1);
   React.useEffect(() => {
     scale.value = withSpring(focused ? 1.06 : 1, SPRING_TIGHT);
   }, [focused, scale]);
   const iconStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
-  const tint = focused ? colors.primary[700] : colors.gray[500];
+  const tint = focused ? palette.accent.primaryText : palette.text.secondary;
 
   return (
     <View style={styles.item}>
