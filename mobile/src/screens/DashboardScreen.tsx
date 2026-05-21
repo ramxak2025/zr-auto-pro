@@ -41,6 +41,8 @@ import {
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useThemeMode } from '../contexts/ThemeContext';
+import { ThemeToggle } from '../components/ThemeToggle';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import type {
@@ -221,10 +223,17 @@ function OwnerHero({ name }: { name: string }) {
   const delta = useMemo(() => formatDeltaPct(todayRevenue, ydayRevenue), [todayRevenue, ydayRevenue]);
   const isLoading = today.data === undefined && today.isLoading;
 
+  // Theme-aware hero gradient. Light mode keeps the brand-blue look
+  // already shipped; dark mode swaps in a deep indigo→near-black ramp
+  // tuned in `theme/palette.ts`. Owner-requested sun/moon toggle is
+  // tucked into the hero's top-right corner.
+  const { palette } = useThemeMode();
+  const heroColors = palette.heroGradient;
+
   return (
     <AnimatedCard index={0} style={styles.heroCard}>
       <LinearGradient
-        colors={[colors.primary[700], colors.primary[800], colors.primary[900]]}
+        colors={heroColors as unknown as readonly [string, string, ...string[]]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={styles.heroGradient}
@@ -250,7 +259,7 @@ function OwnerHero({ name }: { name: string }) {
             </Text>
             <Text style={styles.heroDate}>{getTodayLongRu()}</Text>
           </View>
-          <View style={styles.heroAvatarDot} />
+          <ThemeToggle />
         </View>
 
         <View style={styles.heroValueBlock}>

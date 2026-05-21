@@ -33,7 +33,7 @@
         "backgroundColor": "#2563eb"
       },
       "package": "com.autexa.mobile",
-      "versionCode": 7,
+      "versionCode": 9,
       "softwareKeyboardLayoutMode": "pan",
       "splash": {
         "image": "./assets/splash-blank.png",

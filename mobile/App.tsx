@@ -7,6 +7,7 @@ import * as Font from 'expo-font';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { AuthProvider } from './src/contexts/AuthContext';
+import { ThemeProvider, useThemeMode } from './src/contexts/ThemeContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
@@ -43,7 +44,6 @@ export default function App() {
     let cancelled = false;
     hydrateCache(queryClient).finally(() => {
       if (cancelled) return;
-      // Attach AFTER hydration so we don't immediately re-write what we read.
       persistenceCleanup.current = attachPersistence(queryClient);
       setCacheReady(true);
     });
@@ -54,25 +54,16 @@ export default function App() {
     };
   }, []);
 
-  // Pre-load vector-icon font families. The default `@expo/vector-icons`
-  // wrapper renders an empty `<Text />` until each font finishes its own
-  // lazy `Font.loadAsync` on mount. On Android (especially with Hermes +
-  // New Architecture and on production builds where the async load can
-  // race the first paint or silently no-op), that meant chevrons and
-  // every other glyph rendered as blank squares — i.e. "icons gone".
-  // Loading the fonts once at startup makes `Font.isLoaded(name)` true
-  // for every Icon's first render — they appear immediately.
+  // Pre-load icon fonts even though icons render as SVG. This stays
+  // as a no-op safety net for any legacy code path that still emits
+  // a Text-based glyph — they won't render as empty boxes.
   useEffect(() => {
     let cancelled = false;
     Font.loadAsync({
       ...(Ionicons as any).font,
       ...(MaterialCommunityIcons as any).font,
     })
-      .catch(() => {
-        // Even if a single family fails, let the app continue rendering
-        // rather than blocking the splash forever — individual icons
-        // will retry their own load on mount.
-      })
+      .catch(() => {})
       .finally(() => {
         if (!cancelled) setFontsReady(true);
       });
@@ -81,58 +72,75 @@ export default function App() {
     };
   }, []);
 
-  // Show the branded splash while either (a) the cache is still hydrating
-  // or (b) the AuthProvider is still verifying the stored token, or (c)
-  // the icon fonts haven't finished loading yet. Both windows are short
-  // (~50 ms cache + 200–600 ms /me + ~50 ms fonts).
   const showSplash = !cacheReady || !authResolved || !fontsReady;
 
   return (
     <ErrorBoundary>
-      <SafeAreaProvider style={{ backgroundColor: colors.gray[50] }}>
-        <QueryClientProvider client={queryClient}>
-          <AuthProvider queryClient={queryClient} onAuthResolve={() => setAuthResolved(true)}>
-            <NavigationContainer
-              theme={{
-                dark: false,
-                colors: {
-                  // Make every navigator's scene background match the
-                  // screens' canvas — gray-50. This is the final fix for
-                  // the "boxed app" effect: the underlying NativeStack /
-                  // BottomTab containers stop drawing white behind each
-                  // screen, so the visual surface is one continuous
-                  // gray-50 from the status bar all the way under the
-                  // floating glass tab bar. Per-screen `<View>` with
-                  // gray-50 then layers harmlessly on top.
-                  primary: colors.primary[600],
-                  background: colors.gray[50],
-                  card: 'transparent',
-                  text: colors.gray[900],
-                  border: colors.gray[200],
-                  notification: colors.primary[600],
-                },
-                fonts: {
-                  regular: { fontFamily: 'System', fontWeight: '400' },
-                  medium: { fontFamily: 'System', fontWeight: '500' },
-                  bold: { fontFamily: 'System', fontWeight: '700' },
-                  heavy: { fontFamily: 'System', fontWeight: '900' },
-                },
-              }}
-            >
-              {/* Translucent status bar — on Android removes the default
-                  opaque strip, so the SafeAreaProvider's gray-50 shows
-                  underneath; on iOS this prop is a no-op (status bar
-                  is always translucent over content). */}
-              <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-              {/* Render the navigator immediately so its scene is mounted
-                  and ready to display the moment the splash unmounts —
-                  no second-pass layout flash. */}
-              {cacheReady && fontsReady && <AppNavigator />}
-              {showSplash && <SplashOverlay />}
-            </NavigationContainer>
-          </AuthProvider>
-        </QueryClientProvider>
-      </SafeAreaProvider>
+      <ThemeProvider>
+        <ThemedRoot
+          cacheReady={cacheReady}
+          fontsReady={fontsReady}
+          showSplash={showSplash}
+          onAuthResolve={() => setAuthResolved(true)}
+        />
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }
+
+interface ThemedRootProps {
+  cacheReady: boolean;
+  fontsReady: boolean;
+  showSplash: boolean;
+  onAuthResolve: () => void;
+}
+
+/**
+ * ThemedRoot — pulls the active palette out of ThemeContext so the
+ * SafeAreaProvider background, NavigationContainer theme, and StatusBar
+ * style all flip with the dark-mode toggle. Living one level inside
+ * <ThemeProvider> is the cleanest way to subscribe.
+ */
+function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: ThemedRootProps) {
+  const { mode, palette } = useThemeMode();
+  return (
+    <SafeAreaProvider style={{ backgroundColor: palette.bg.canvas }}>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider queryClient={queryClient} onAuthResolve={onAuthResolve}>
+          <NavigationContainer
+            theme={{
+              dark: mode === 'dark',
+              colors: {
+                primary: palette.accent.primary,
+                background: palette.bg.canvas,
+                card: 'transparent',
+                text: palette.text.primary,
+                border: palette.border.subtle,
+                notification: palette.accent.primary,
+              },
+              fonts: {
+                regular: { fontFamily: 'System', fontWeight: '400' },
+                medium: { fontFamily: 'System', fontWeight: '500' },
+                bold: { fontFamily: 'System', fontWeight: '700' },
+                heavy: { fontFamily: 'System', fontWeight: '900' },
+              },
+            }}
+          >
+            <StatusBar
+              barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
+              backgroundColor="transparent"
+              translucent
+            />
+            {cacheReady && fontsReady && <AppNavigator />}
+            {showSplash && <SplashOverlay />}
+          </NavigationContainer>
+        </AuthProvider>
+      </QueryClientProvider>
+    </SafeAreaProvider>
+  );
+}
+
+// Silence unused-warning for the legacy import path that App.tsx
+// re-exports indirectly (kept here so tree-shaking of `colors` stays
+// referenced for tooling that scans named exports).
+void colors;

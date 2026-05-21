@@ -1,20 +1,26 @@
 /**
- * KassaButton — central CTA inside the floating tab bar.
+ * KassaButton — centre CTA inside the floating tab bar.
  *
- * Visual brief (per owner feedback after seeing the previous JS-side
- * "liquid blob" version on Android):
- *   • Calm, premium gradient circle. NO animated blobs — the bar should
- *     read as a serious utility, not a neon UFO.
- *   • Soft inner highlight at the top-left for a subtle "glass" feel.
- *   • Crisp bag glyph inside, matching the iOS variant which uses the
- *     SF Symbol `bag.fill` for the same role.
- *   • Sits inside the floating tab bar slot — popped up 28pt so the
- *     button breaches the rim and reads as the primary action.
+ * Visual spec mirrors the native iOS AutexaKassaButtonView (see
+ * `mobile/modules/autexa-liquid-glass/ios/AutexaKassaButtonView.swift`):
  *
- * iOS uses `AutexaKassaButton` (native Swift, AutexaLiquidGlass module)
- * for the FAB so this JS implementation is effectively Android-only,
- * but kept in a platform-neutral file because the legacy build flow
- * still imports it on both sides.
+ *   • Squircle, NOT a circle — continuous-corner rounded rectangle,
+ *     radius 18 on a 52×52 surface. The pill-circle the previous build
+ *     used read as a foreign UFO blob; the squircle visually carves
+ *     out of the bar's own pill geometry.
+ *   • Solid brand gradient (primary-500 → primary-700) at 92 % opacity.
+ *     No animated "blob" overlay — the previous one looked busy and
+ *     unprofessional on Android. Just a calm diagonal gradient.
+ *   • White hairline rim (0.65 alpha) — the same edge highlight the
+ *     native iOS variant draws.
+ *   • Soft primary-tinted shadow underneath — premium glow without
+ *     going neon.
+ *   • White Lucide `ShoppingBag` icon, semibold stroke, matches the
+ *     iOS `bag.fill` SF Symbol intent.
+ *   • Sits INSIDE the bar pill (no -28pt lift). The previous huge
+ *     lift made the CTA look detached and gave the bar's bottom edge
+ *     a "weird semicircle" cutout per owner. Now it stays inside the
+ *     island geometry, like iOS.
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import { ShoppingBag } from 'lucide-react-native';
@@ -22,24 +28,23 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { colors } from '../theme';
 
-const KASSA_SIZE = 56;
+const KASSA_SIZE = 48;
+const RADIUS = 16;
 
 export function KassaButton() {
   return (
     <View style={s.outer}>
       <View style={s.body}>
         <LinearGradient
-          colors={[colors.primary[400], colors.primary[600], colors.primary[800]]}
-          start={{ x: 0.1, y: 0 }}
+          colors={[colors.primary[500], colors.primary[600], colors.primary[700]]}
+          start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={StyleSheet.absoluteFill}
         />
-        {/* Soft inner highlight — sells the "glass" feel without the
-            noisy blob animation. Pure CSS-style overlay. */}
-        <View style={s.highlight} pointerEvents="none" />
-        {/* Single hairline rim — the same one iOS Glass borders draw. */}
+        {/* Hairline rim — same edge highlight the iOS native button
+            draws (0.65 alpha white). */}
         <View style={s.rim} pointerEvents="none" />
-        <ShoppingBag size={24} color={colors.white} strokeWidth={2.2} />
+        <ShoppingBag size={22} color={colors.white} strokeWidth={2.2} />
       </View>
     </View>
   );
@@ -51,36 +56,25 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     width: KASSA_SIZE + 4,
     height: KASSA_SIZE + 4,
-    // Pop UP 28pt out of the slim 60pt floating bar so the CTA breaches
-    // the rim and reads as the primary action on both platforms.
-    marginTop: -28,
   },
   body: {
     width: KASSA_SIZE,
     height: KASSA_SIZE,
-    borderRadius: KASSA_SIZE / 2,
+    borderRadius: RADIUS,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 10,
+    // Soft, primary-tinted shadow — premium glow without neon.
+    elevation: 8,
     shadowColor: colors.primary[800],
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.32,
+    shadowOpacity: 0.28,
     shadowRadius: 10,
-  },
-  highlight: {
-    position: 'absolute',
-    top: 4,
-    left: 4,
-    right: 4,
-    height: KASSA_SIZE * 0.45,
-    borderRadius: KASSA_SIZE * 0.35,
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
   },
   rim: {
     ...StyleSheet.absoluteFillObject,
-    borderRadius: KASSA_SIZE / 2,
+    borderRadius: RADIUS,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255, 255, 255, 0.45)',
+    borderColor: 'rgba(255, 255, 255, 0.55)',
   },
 });

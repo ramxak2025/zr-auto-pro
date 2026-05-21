@@ -4,7 +4,7 @@ import { FlashList } from '@shopify/flash-list';
 import { ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import IosScreenHeader from '../components/IosScreenHeader';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -533,11 +533,16 @@ export default function ChecksScreen() {
   );
 
   const isWarehouseLoading = movementsLoading || deliveriesLoading;
+  // No IosScreenHeader on this screen — the tab bar already names it
+  // «Журнал», so we just reserve the top safe-area inset ourselves so
+  // the search bar doesn't slide under the Dynamic Island / status bar.
+  const insets = useSafeAreaInsets();
 
   return (
-    <View style={styles.safe}>
-      {/* Unified iOS header */}
-      <IosScreenHeader title="Журнал" subtitle={total > 0 && activeTab === 'checks' ? `Чеков: ${total}` : undefined} />
+    <View style={[styles.safe, { paddingTop: insets.top + 8 }]}>
+      {/* Header removed per owner — the screen reads as Журнал from the
+          tab-bar label already, and the count duplicates info shown at
+          the bottom of the list (pagination). Less chrome → more list. */}
 
       {/* Search + Filter */}
       <View style={styles.searchRow}>
