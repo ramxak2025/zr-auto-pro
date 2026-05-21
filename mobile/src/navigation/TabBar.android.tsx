@@ -189,15 +189,22 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
         <View style={[styles.surfaceTint, { backgroundColor: surfaceTint }]} pointerEvents="none" />
         <View style={[styles.topRim, { backgroundColor: rim }]} pointerEvents="none" />
 
-        {/* Selection capsule behind icons. */}
+        {/* Selection capsule behind icons. In DARK mode we use a
+            subdued slate fill instead of the light-blue tint that
+            read as "white pill" on the dark canvas. */}
         <Animated.View
           style={[
             styles.capsule,
             capsuleStyle,
-            {
-              backgroundColor: palette.accent.primarySoft,
-              borderColor: palette.bg.canvas === '#0a0d14' ? 'rgba(96, 165, 250, 0.25)' : 'rgba(37, 99, 235, 0.15)',
-            },
+            palette.bg.canvas === '#0a0d14'
+              ? {
+                  backgroundColor: 'rgba(96, 165, 250, 0.14)',
+                  borderColor: 'rgba(96, 165, 250, 0.22)',
+                }
+              : {
+                  backgroundColor: palette.accent.primarySoft,
+                  borderColor: 'rgba(37, 99, 235, 0.15)',
+                },
           ]}
           pointerEvents="none"
         />

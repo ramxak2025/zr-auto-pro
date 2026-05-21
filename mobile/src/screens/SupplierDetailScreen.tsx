@@ -85,7 +85,12 @@ export default function SupplierDetailScreen() {
     queryKey: ['supplier-deliveries', id],
     queryFn: async () => {
       const res = await suppliersApi.getDeliveries({ supplierId: id });
-      return res.data;
+      const body = res.data as unknown;
+      return Array.isArray(body)
+        ? (body as Delivery[])
+        : Array.isArray((body as { data?: unknown })?.data)
+          ? ((body as { data: Delivery[] }).data)
+          : [];
     },
   });
 
@@ -93,7 +98,12 @@ export default function SupplierDetailScreen() {
     queryKey: ['supplier-payments', id],
     queryFn: async () => {
       const res = await suppliersApi.getPayments({ supplierId: id });
-      return res.data;
+      const body = res.data as unknown;
+      return Array.isArray(body)
+        ? (body as SupplierPayment[])
+        : Array.isArray((body as { data?: unknown })?.data)
+          ? ((body as { data: SupplierPayment[] }).data)
+          : [];
     },
   });
 
@@ -104,7 +114,11 @@ export default function SupplierDetailScreen() {
     queryFn: async () => (await warehousesApi.list()).data,
     staleTime: 10 * 60_000,
   });
-  const defectWarehouse = (warehouses || []).find((w) => w.kind === 'defect') || null;
+  // Defensive: persisted-cache rehydration can deliver any shape if a
+  // prior app version stored a different one. Guard against `.find` on
+  // a non-array so a stale cache entry can't crash the detail screen.
+  const warehouseList: Warehouse[] = Array.isArray(warehouses) ? warehouses : [];
+  const defectWarehouse = warehouseList.find((w) => w.kind === 'defect') || null;
 
   // Products currently sitting in the defect warehouse. Only fetched when
   // we know the warehouse id — query stays disabled until then so React
@@ -118,7 +132,12 @@ export default function SupplierDetailScreen() {
     enabled: !!defectWarehouse?.id,
     staleTime: 60_000,
   });
-  const defectProducts: Product[] = defectProductsPage?.data || [];
+  // Defensive coercion (see warehouseList rationale above).
+  const defectProducts: Product[] = Array.isArray(defectProductsPage?.data)
+    ? defectProductsPage!.data
+    : Array.isArray(defectProductsPage as any)
+      ? (defectProductsPage as unknown as Product[])
+      : [];
 
   // Past defect-returns for this supplier — populates the "Возвраты брака"
   // tab. Backend's /stock-movements list endpoint only filters by
@@ -132,7 +151,13 @@ export default function SupplierDetailScreen() {
     queryKey: ['supplier-defect-returns', id],
     queryFn: async () => {
       const res = await stockMovementsApi.list({ type: 'defect_return_to_supplier' });
-      return (res.data || []).filter((m) => m.supplierId === id);
+      const body = res.data as unknown;
+      const list: StockMovement[] = Array.isArray(body)
+        ? (body as StockMovement[])
+        : Array.isArray((body as { data?: unknown })?.data)
+          ? ((body as { data: StockMovement[] }).data)
+          : [];
+      return list.filter((m) => m.supplierId === id);
     },
     staleTime: 30_000,
   });

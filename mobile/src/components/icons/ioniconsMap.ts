@@ -143,7 +143,7 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
 
   // ── ui / time / system ────────────────────────────────────────────────
   'calendar-outline': { lucide: 'Calendar' },
-  'today-outline': { lucide: 'CalendarDays' },
+  'today-outline': { lucide: 'CalendarCheck' },
   'time-outline': { lucide: 'Clock' },
   'hourglass-outline': { lucide: 'Hourglass' },
   'globe-outline': { lucide: 'Globe' },
@@ -184,6 +184,7 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   calendar: { lucide: 'Calendar', solid: true },
   'chatbox-outline': { lucide: 'MessageSquare' },
   'grid-outline': { lucide: 'LayoutGrid' },
+  grid: { lucide: 'LayoutGrid', solid: true, fill: true },
   'help-circle-outline': { lucide: 'HelpCircle' },
   home: { lucide: 'Home', solid: true, fill: true },
   journal: { lucide: 'BookOpen', solid: true },
@@ -199,4 +200,24 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'send-outline': { lucide: 'Send' },
   'stats-chart-outline': { lucide: 'BarChart3' },
   warehouse: { lucide: 'Warehouse' },
+
+  // ── owner-reported gaps (icons that previously fell back to Circle) ────
+  // Schedule tabs: filled / active glyphs paired with their outline variants.
+  today: { lucide: 'CalendarCheck', solid: true, fill: false },
+  settings: { lucide: 'Settings', solid: true },
+  // CheckCreateScreen "Отложить чек": checkbox toggle + submit pause icon.
+  checkbox: { lucide: 'SquareCheck', solid: true },
+  'checkbox-outline': { lucide: 'Square' },
+  'square-outline': { lucide: 'Square' },
+  square: { lucide: 'Square', solid: true },
+  'pause-circle': { lucide: 'Pause', solid: true, fill: true },
+  'pause-circle-outline': { lucide: 'Pause' },
+  // ChecksScreen filter button (funnel) + sync (reload).
+  funnel: { lucide: 'Funnel', solid: true, fill: true },
+  'funnel-outline': { lucide: 'Funnel' },
+  // Verified-status / trust glyphs (e.g. user list, supplier card).
+  'shield-checkmark': { lucide: 'ShieldCheck', solid: true, fill: true },
+  // Sync / pull-to-refresh affordances rendered as text icons in some lists.
+  sync: { lucide: 'RotateCw', solid: true },
+  'sync-outline': { lucide: 'RotateCw' },
 };

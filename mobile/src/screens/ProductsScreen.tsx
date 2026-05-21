@@ -340,12 +340,20 @@ export default function ProductsScreen() {
     enabled: !!activeWarehouseId || warehouses === undefined,
   });
 
+  // Per-warehouse folders (migration 032). Each warehouse owns its own
+  // tree — switching warehouse changes the visible folder list, no
+  // bleed-through. We still gate by `activeWarehouseId` so the first
+  // render (before the warehouses query resolves) doesn't fire an
+  // un-scoped categories request that would later be discarded.
   const { data: extraFolders } = useQuery({
-    queryKey: ['warehouse-categories'],
+    queryKey: activeWarehouseId
+      ? ['warehouse-categories', { warehouseId: activeWarehouseId }]
+      : ['warehouse-categories'],
     queryFn: async () => {
-      const res = await warehouseCategoriesApi.getAll();
+      const res = await warehouseCategoriesApi.getAll(activeWarehouseId || undefined);
       return res.data;
     },
+    enabled: !!activeWarehouseId,
   });
 
   // Fetch inventory movements for folder annotations (always enabled)
@@ -2040,7 +2048,18 @@ export default function ProductsScreen() {
               itself doesn't dismiss the preview — only the backdrop does. */}
           {fullscreenPhoto && (
             <Pressable style={styles.fullscreenImageWrap} onPress={(e) => e.stopPropagation?.()}>
-              <CachedImage source={{ uri: fullscreenPhoto }} style={styles.fullscreenImage} resizeMode="contain" />
+              {/*
+                resizeMode='cover' so the photo fills the rounded
+                rectangle uniformly — no transparent letterbox stripes
+                that would make the rounded corners look wrong. The
+                wrap has overflow:hidden (defence in depth) AND the
+                image carries `borderRadius: 24` directly, so the
+                rounded corners are clipped on the GPU on both
+                platforms. Black bg below the image colour so any
+                stretch artefact reads as a solid background, not the
+                blurred backdrop.
+              */}
+              <CachedImage source={{ uri: fullscreenPhoto }} style={styles.fullscreenImage} resizeMode="cover" />
             </Pressable>
           )}
           <Pressable
@@ -2591,8 +2610,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
   fullscreenImageWrap: {
-    borderRadius: 24,
-    overflow: 'hidden',
+    // The wrap doesn't clip — `overflow: hidden` on a wrapper around an
+    // Image with resizeMode='contain' wouldn't visibly round the image
+    // corners because the image's transparent letterboxing extends to
+    // the wrap edges. Instead we apply `borderRadius` directly to the
+    // image style below, which RN's <Image> honours natively at the
+    // GPU level on both platforms.
     shadowColor: '#000',
     shadowOpacity: 0.4,
     shadowRadius: 24,
@@ -2610,7 +2633,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fullscreenImage: { width: SCREEN_WIDTH - 40, height: SCREEN_HEIGHT * 0.7 },
+  fullscreenImage: {
+    width: SCREEN_WIDTH - 40,
+    height: SCREEN_HEIGHT * 0.7,
+    borderRadius: 24,
+    backgroundColor: '#000',
+  },
   // Full-screen Inventory
   invFullSafe: { flex: 1, backgroundColor: colors.white },
   invFullHeader: {

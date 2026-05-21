@@ -184,7 +184,7 @@ const UserCard = React.memo(function UserCard({
               onPress={() => onAvatarChange(user.id)}
               activeOpacity={0.7}
             >
-              <Ionicons name="camera" size={12} color={colors.white} />
+              <Ionicons name="camera-outline" size={14} color={colors.white} />
             </TouchableOpacity>
           )}
         </View>

@@ -376,36 +376,33 @@ export default function ProductPickerModal({
             <View style={styles.handleBar} />
           </View>
 
-          {/* Header */}
+          {/* Header — close button on the left, title centered, warehouse
+              switcher pill on the right. Owner ask: "не просто над поиском
+              справа в шапке этого окна справа от Товары и там нет все
+              склады! там конкретно должны переключаться не смешиваясь."
+              The pill is presentational; tapping it opens the parent's
+              bottom-sheet so this component stays dumb. */}
           <View style={styles.header}>
             <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
               <Ionicons name="close" size={22} color={colors.gray[600]} />
             </TouchableOpacity>
             <Text style={styles.headerTitle}>{title}</Text>
-            <View style={{ width: 36 }} />
-          </View>
-
-          {/* Warehouse switcher — small chip on the right above the search.
-              Parent owns the warehouse picker sheet (so the modal stays
-              dumb / presentational) and passes the current label + an
-              onPress that opens that sheet. */}
-          {warehouseSwitcher ? (
-            <View style={styles.warehouseRow}>
-              <View style={{ flex: 1 }} />
+            {warehouseSwitcher ? (
               <TouchableOpacity
                 onPress={warehouseSwitcher.onPress}
-                style={styles.warehouseChip}
+                style={styles.headerWarehouseChip}
                 activeOpacity={0.7}
                 accessibilityLabel="Выбрать склад"
               >
-                <Ionicons name="layers-outline" size={14} color={colors.primary[600]} />
-                <Text style={styles.warehouseChipText} numberOfLines={1}>
+                <Text style={styles.headerWarehouseChipText} numberOfLines={1}>
                   {warehouseSwitcher.label}
                 </Text>
-                <Ionicons name="chevron-down" size={12} color={colors.primary[600]} />
+                <Ionicons name="chevron-down" size={14} color={colors.primary[700]} />
               </TouchableOpacity>
-            </View>
-          ) : null}
+            ) : (
+              <View style={{ width: 36 }} />
+            )}
+          </View>
 
           {/* Search */}
           <View style={styles.searchWrap}>
@@ -536,16 +533,11 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
   },
   searchInput: { flex: 1, fontSize: fontSize.sm, color: colors.gray[900], paddingVertical: 0 },
-  // Warehouse switcher chip — sits in its own row right above the search
-  // input, right-aligned. Compact (24-pt tall) so it never pushes the
-  // search down enough to feel heavy.
-  warehouseRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[1],
-  },
-  warehouseChip: {
+  // Warehouse switcher pill — lives in the modal HEADER on the right
+  // of the title (owner ask: "справа в шапке этого окна справа от
+  // Товары"). Compact iosPill-family chip: pale primary fill,
+  // hairline tint border, chevron-down icon hinting the bottom-sheet.
+  headerWarehouseChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[1],
@@ -553,14 +545,15 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.primary[100],
     borderRadius: borderRadius.full,
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: 4,
-    maxWidth: 180,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 6,
+    maxWidth: 160,
   },
-  warehouseChipText: {
+  headerWarehouseChipText: {
     fontSize: 12,
     fontWeight: fontWeight.semibold,
     color: colors.primary[700],
+    letterSpacing: -0.1,
   },
   breadcrumbRow: {
     flexDirection: 'row',

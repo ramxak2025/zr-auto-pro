@@ -16,13 +16,17 @@ import { Button } from '../components/Button';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
-import { useColors } from '../contexts/ThemeContext';
+import { getPalette } from '../theme/palette';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { formatPhone } from '../../../shared/validation/phone';
 
 export default function LoginScreen() {
   const { login } = useAuth();
-  const palette = useColors();
+  // Login screen is intentionally LOCKED to the light palette regardless
+  // of the user's preferred theme mode. The owner wants the brand entry
+  // screen — logo on near-white — to always read as "Autexa", not flip
+  // to a dark slate. Theme toggle lives on Dashboard hero anyway.
+  const palette = getPalette('light');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);

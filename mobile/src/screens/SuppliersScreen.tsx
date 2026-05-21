@@ -13,14 +13,12 @@ import { FlashList } from '@shopify/flash-list';
 import { Swipeable } from 'react-native-gesture-handler';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import SearchInput from '../components/SearchInput';
-import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
@@ -150,16 +148,33 @@ export default function SuppliersScreen() {
   const [contactPerson, setContactPerson] = useState('');
   const [comment, setComment] = useState('');
 
-  const { data: suppliers, isLoading } = useQuery<Supplier[]>({
+  const { data: suppliersRaw, isLoading } = useQuery<Supplier[] | { data: Supplier[] }>({
     queryKey: ['suppliers', search],
     queryFn: async () => {
       const res = await suppliersApi.getAll({ search });
-      return res.data?.data || res.data;
+      // Backend's PaginatedResponse<Supplier> shape is `{ data, total, page, limit }`.
+      // Always unwrap to a flat array — keeps `suppliers` typed as `Supplier[]`
+      // for the FlashList renderer below.
+      const body = res.data as any;
+      return Array.isArray(body) ? body : (body?.data ?? []);
     },
     // SWR: when `search` mutates the key, keep the previous results
     // visible until the new ones arrive. No empty flash mid-typing.
     placeholderData: (prev) => prev,
   });
+
+  // Defensive coercion: older app versions persisted the raw paginated
+  // wrapper into AsyncStorage. On cold-start that hydrated value lands
+  // here before the new queryFn runs. Pass non-array data to FlashList
+  // and iOS hangs/crashes (it walks `.length` then indexes). Normalise
+  // here so the renderer always sees `Supplier[]`.
+  const suppliers: Supplier[] | undefined = Array.isArray(suppliersRaw)
+    ? suppliersRaw
+    : suppliersRaw && typeof suppliersRaw === 'object' && 'data' in suppliersRaw
+      ? (suppliersRaw as { data: Supplier[] }).data
+      : suppliersRaw === undefined
+        ? undefined
+        : [];
 
   const createMutation = useMutation({
     mutationFn: (d: any) => suppliersApi.create(d),

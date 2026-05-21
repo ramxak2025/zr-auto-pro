@@ -78,6 +78,9 @@ function prefetchAfterLogin(qc: QueryClient): void {
     staleTime: 5 * 60_000,
   }).catch(() => {});
 
+  // Legacy / fallback cache slot — server falls back to main warehouse
+  // when no warehouseId is provided, so this prefetch covers callers
+  // that haven't migrated to the warehouse-scoped key yet.
   qc.prefetchQuery({
     queryKey: ['warehouse-categories'],
     queryFn: async () => (await warehouseCategoriesApi.getAll()).data,
@@ -86,12 +89,26 @@ function prefetchAfterLogin(qc: QueryClient): void {
 
   // Warehouses (3 rows: main/defect/used). Warehouse switcher in
   // ProductsScreen reads this — prefetch so the picker can render
-  // synchronously even on a cold start.
+  // synchronously even on a cold start. Once the warehouses list
+  // resolves we also pre-warm the main-warehouse categories key so
+  // `ProductsScreen` / `CheckCreateScreen` hit cache on first render.
   qc.prefetchQuery({
     queryKey: ['warehouses'],
     queryFn: async () => (await warehousesApi.list()).data,
     staleTime: 10 * 60_000,
-  }).catch(() => {});
+  })
+    .then(() => {
+      const warehouses = qc.getQueryData<Array<{ id: string; kind: 'main' | 'defect' | 'used' }>>(['warehouses']);
+      const main = warehouses?.find((w) => w.kind === 'main');
+      if (main?.id) {
+        qc.prefetchQuery({
+          queryKey: ['warehouse-categories', { warehouseId: main.id }],
+          queryFn: async () => (await warehouseCategoriesApi.getAll(main.id)).data,
+          staleTime: 10 * 60_000,
+        }).catch(() => {});
+      }
+    })
+    .catch(() => {});
 
   qc.prefetchQuery({
     queryKey: ['all-services'],

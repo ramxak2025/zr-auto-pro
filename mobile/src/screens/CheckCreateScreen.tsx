@@ -397,10 +397,12 @@ export default function CheckCreateScreen() {
   const [showServicePicker, setShowServicePicker] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [showMasterPicker, setShowMasterPicker] = useState<number | null>(null);
-  // Warehouse selection for the in-cash product picker. Null = «Все
-  // склады» (legacy behaviour — the picker shows main+brak+used pooled,
-  // same as before warehouses landed). State lives here so it survives
-  // a picker close/reopen during the same check.
+  // Warehouse selection for the in-cash product picker. Null on first
+  // mount, resolved to the tenant's "main" warehouse as soon as the
+  // warehouses list arrives (see effect below). Owner ask: "не
+  // смешиваясь" — the picker must always be scoped to exactly one
+  // warehouse, no "Все склады" virtual option. State lives on the
+  // screen so it survives a picker close/reopen during the same check.
   const [pickerWarehouseId, setPickerWarehouseId] = useState<string | null>(null);
   const [showWarehouseSheet, setShowWarehouseSheet] = useState(false);
 
@@ -478,19 +480,35 @@ export default function CheckCreateScreen() {
     placeholderData: (prev) => prev,
   });
 
-  // Build a stable label for the warehouse switcher chip. When nothing is
-  // selected we still want a friendly hint ("Все склады") instead of an
-  // empty pill that would visually collapse.
+  // Default the picker to the tenant's "main" warehouse as soon as the
+  // warehouses list arrives. We can't seed this in `useState` because
+  // the warehouses list is a query that resolves a tick or two later.
+  // Once the user explicitly picks brak / used the choice sticks for
+  // the rest of the screen's lifetime — we only seed the default when
+  // `pickerWarehouseId` is still null.
+  useEffect(() => {
+    if (pickerWarehouseId || !warehouses || warehouses.length === 0) return;
+    const main = warehouses.find((w) => w.kind === 'main') ?? warehouses[0];
+    if (main) setPickerWarehouseId(main.id);
+  }, [warehouses, pickerWarehouseId]);
+
+  // Build a stable label for the warehouse switcher chip. While the
+  // default is still being resolved we show the main name from the
+  // list so the pill never collapses to an empty width.
   const activeWarehouse = useMemo(
-    () => (pickerWarehouseId ? (warehouses || []).find((w) => w.id === pickerWarehouseId) : null),
+    () =>
+      pickerWarehouseId
+        ? (warehouses || []).find((w) => w.id === pickerWarehouseId)
+        : (warehouses || []).find((w) => w.kind === 'main'),
     [warehouses, pickerWarehouseId],
   );
-  const warehouseChipLabel = activeWarehouse?.name || 'Все склады';
+  const warehouseChipLabel = activeWarehouse?.name || 'Основной склад';
 
   // Pre-warm the products + categories cache as soon as the screen
   // mounts (rather than waiting for the picker to open). Net effect on
   // physical iPhone: tap "+" → picker is cache-hit, opens within one
-  // frame, no "товаров нет" flash.
+  // frame, no "товаров нет" flash. Categories are scoped by the
+  // currently-active warehouse so folders never leak across warehouses.
   useEffect(() => {
     queryClient.prefetchQuery({
       queryKey: ['all-products-check'],
@@ -500,12 +518,13 @@ export default function CheckCreateScreen() {
       },
       staleTime: 5 * 60_000,
     });
+    const wid = pickerWarehouseId || activeWarehouse?.id;
     queryClient.prefetchQuery({
-      queryKey: ['warehouse-categories'],
-      queryFn: async () => (await warehouseCategoriesApi.getAll()).data,
+      queryKey: wid ? ['warehouse-categories', { warehouseId: wid }] : ['warehouse-categories'],
+      queryFn: async () => (await warehouseCategoriesApi.getAll(wid || undefined)).data,
       staleTime: 10 * 60_000,
     });
-  }, [queryClient]);
+  }, [queryClient, pickerWarehouseId, activeWarehouse?.id]);
 
   // Plate search results — match normalized plate substring or fullName loose match
   const plateResults = useMemo(() => {
@@ -1469,32 +1488,17 @@ export default function CheckCreateScreen() {
         }}
       />
 
-      {/* Warehouse selector sheet — three options + "Все склады" fallback.
-          Used only by the cash product picker; state is local to this
-          screen so a brak/used selection doesn't leak into the standalone
-          Warehouse screen. */}
+      {/* Warehouse selector sheet — exactly three options (main / defect
+          / used). Owner ask: "там нет все склады! там конкретно должны
+          переключаться не смешиваясь." The virtual "Все склады" pooled
+          option is removed so a check is always scoped to a single
+          warehouse. State is local to this screen so a brak/used
+          selection never leaks into the standalone Warehouse screen. */}
       <Modal
         visible={showWarehouseSheet}
         onClose={() => setShowWarehouseSheet(false)}
         title="Выбрать склад"
       >
-        <TouchableOpacity
-          style={styles.warehouseOption}
-          onPress={() => {
-            setPickerWarehouseId(null);
-            setShowWarehouseSheet(false);
-          }}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="layers-outline" size={18} color={colors.primary[600]} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.warehouseOptionName}>Все склады</Text>
-            <Text style={styles.warehouseOptionSub}>Сводный список товаров</Text>
-          </View>
-          {pickerWarehouseId === null ? (
-            <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />
-          ) : null}
-        </TouchableOpacity>
         {(warehouses || []).map((w) => {
           const iconName: keyof typeof Ionicons.glyphMap =
             w.kind === 'defect'

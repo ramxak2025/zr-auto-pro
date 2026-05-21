@@ -338,8 +338,20 @@ export function createExpensesApi(api: HttpClient) {
 
 export function createWarehouseCategoriesApi(api: HttpClient) {
   return {
-    getAll: () => api.get<Array<{ id: string; path: string; sort_order: number }>>('/warehouse/categories'),
-    create: (path: string) => api.post<{ id: string; path: string }>('/warehouse/categories', { path }),
+    // After migration 032 every category belongs to a specific
+    // warehouse. The optional `warehouseId` filter scopes the read to
+    // that warehouse; omitting it falls back to the tenant's main
+    // warehouse on the server (legacy behaviour).
+    getAll: (warehouseId?: string) =>
+      api.get<Array<{ id: string; path: string; sort_order: number }>>(
+        '/warehouse/categories',
+        warehouseId ? { params: { warehouseId } } : undefined,
+      ),
+    create: (path: string, warehouseId?: string) =>
+      api.post<{ id: string; path: string }>(
+        '/warehouse/categories',
+        warehouseId ? { path, warehouseId } : { path },
+      ),
     remove: (id: string, opts?: { moveTo?: string; deleteContents?: boolean }) => {
       const params = new URLSearchParams();
       if (opts?.moveTo !== undefined) params.set('moveTo', opts.moveTo);

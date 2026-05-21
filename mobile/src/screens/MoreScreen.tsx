@@ -11,8 +11,8 @@ import {
   Platform,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
-import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
@@ -283,6 +283,7 @@ export default function MoreScreen() {
   const { user, logout, hasPermission, refreshUser } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
+  const insets = useSafeAreaInsets();
   const [uploading, setUploading] = useState(false);
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
@@ -347,8 +348,7 @@ export default function MoreScreen() {
   }, [cardFade, cardTranslate]);
 
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Ещё" />
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas, paddingTop: insets.top + spacing[2] }]}>
       <ScrollView
         contentContainerStyle={[
           styles.scrollContent,
@@ -391,7 +391,7 @@ export default function MoreScreen() {
                 {uploading ? (
                   <ActivityIndicator size="small" color={colors.gray[500]} />
                 ) : (
-                  <Ionicons name="camera" size={12} color={colors.gray[500]} />
+                  <Ionicons name="camera-outline" size={14} color={colors.gray[500]} />
                 )}
               </TouchableOpacity>
             </View>

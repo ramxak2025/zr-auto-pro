@@ -12,15 +12,24 @@ export class WarehouseController {
   // Reading the category tree is fine for any authenticated user — the cash
   // screen / product picker needs it. Writes (create / rename / reorder /
   // delete with bulk soft-delete or move) are admin / director only.
+  //
+  // After 032_warehouse_categories_per_warehouse.sql the tree is
+  // warehouse-scoped: omitting `warehouseId` falls back to the tenant's
+  // main warehouse (preserves legacy callers); passing `warehouseId=…`
+  // returns only that warehouse's folders.
   @Get('categories')
-  getCategories(@CurrentUser() user: JwtPayload) {
-    return this.warehouseService.getCategories(user.tenantID);
+  getCategories(@CurrentUser() user: JwtPayload, @Query('warehouseId') warehouseId?: string) {
+    return this.warehouseService.getCategories(user.tenantID, warehouseId);
   }
 
   @Roles('director', 'admin', 'superadmin')
   @Post('categories')
-  createCategory(@CurrentUser() user: JwtPayload, @Body('path') path: string) {
-    return this.warehouseService.createCategory(user.tenantID, path);
+  createCategory(
+    @CurrentUser() user: JwtPayload,
+    @Body('path') path: string,
+    @Body('warehouseId') warehouseId?: string,
+  ) {
+    return this.warehouseService.createCategory(user.tenantID, path, warehouseId);
   }
 
   @Roles('director', 'admin', 'superadmin')
