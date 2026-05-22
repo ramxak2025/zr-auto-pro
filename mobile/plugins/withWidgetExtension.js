@@ -102,20 +102,29 @@ const withWidgetTarget = (config) =>
       return mod;
     }
 
-    // 3. Add Xcode group for the widget folder
-    //    addPbxGroup(children, name, path, sourceTree)
+    // 3. Create the widget target FIRST — addSourceFile needs the target to
+    //    already exist in pbxNativeTargetSection so it can find it by name.
+    const widgetTarget = proj.addTarget(
+      WIDGET_TARGET,
+      'app_extension',
+      WIDGET_TARGET,
+      WIDGET_BUNDLE_ID
+    );
+    const widgetTargetUuid = widgetTarget.uuid;
+
+    // 4. Add Xcode group for the widget folder
     const widgetGroupResult = proj.addPbxGroup([], WIDGET_TARGET, WIDGET_TARGET, '"<group>"');
     const widgetGroupKey = widgetGroupResult.uuid;
 
-    // Add the group as a child of the root "Autexa" project group so it
-    // appears in the Xcode navigator.
+    // Add the group as a child of the root project group so it appears in navigator.
     const mainGroupKey = proj.getFirstProject().firstProject.mainGroup;
     const mainGroup = proj.getPBXGroupByKey(mainGroupKey);
     if (mainGroup && Array.isArray(mainGroup.children)) {
       mainGroup.children.push({ value: widgetGroupKey, comment: WIDGET_TARGET });
     }
 
-    // 4. Add Swift files + Info.plist + entitlements to the group
+    // 5. Add Swift files + Info.plist + entitlements to the group.
+    //    Target now exists so addSourceFile can attach to its Sources build phase.
     const swiftFiles = fs
       .readdirSync(path.join(iosRoot, WIDGET_TARGET))
       .filter((f) => f.endsWith('.swift'));
@@ -130,18 +139,7 @@ const withWidgetTarget = (config) =>
     proj.addFile(`${WIDGET_TARGET}/Info.plist`, widgetGroupKey, {});
     proj.addFile(`${WIDGET_TARGET}/${WIDGET_TARGET}.entitlements`, widgetGroupKey, {});
 
-    // 5. Create the widget app-extension target
-    //    addTarget(name, type, subfolder, bundleId)
-    //    'subfolder' determines where Xcode looks for the INFOPLIST_FILE
-    const widgetTarget = proj.addTarget(
-      WIDGET_TARGET,
-      'app_extension',
-      WIDGET_TARGET,
-      WIDGET_BUNDLE_ID
-    );
-    const widgetTargetUuid = widgetTarget.uuid;
-
-    // 6. Fix build settings on both Debug and Release configs for the widget
+    // 6. Patch build settings for Debug + Release configs of the widget target
     const allBuildConfigs = proj.pbxXCBuildConfigurationSection();
     for (const key of Object.keys(allBuildConfigs)) {
       const config = allBuildConfigs[key];
