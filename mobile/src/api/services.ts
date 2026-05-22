@@ -28,6 +28,9 @@ import {
   createCheckPhotosApi,
   createCheckTemplatesApi,
   createPushApi,
+  createReturnsApi,
+  createScheduleSettingsApi,
+  createEmployeesApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -59,6 +62,9 @@ export const stockMovementsApi = createStockMovementsApi(api);
 export const checkPhotosApi = createCheckPhotosApi(api);
 export const checkTemplatesApi = createCheckTemplatesApi(api);
 export const pushApi = createPushApi(api);
+export const returnsApi = createReturnsApi(api);
+export const scheduleSettingsApi = createScheduleSettingsApi(api);
+export const employeesApi = createEmployeesApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {
