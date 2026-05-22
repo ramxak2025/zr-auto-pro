@@ -590,9 +590,16 @@ export default function CheckCreateScreen() {
     setCheckDate(new Date());
   };
 
+  // Guard against double-fire: TouchableOpacity can occasionally deliver
+  // two onPress events on some older iPhones when the user taps quickly.
+  // isPending alone is not enough because there's a micro-gap between the
+  // press and the mutation entering its pending state. The ref closes it.
+  const submittingRef = useRef(false);
+
   const createMutation = useMutation({
     mutationFn: (data: any) => (editId ? checksApi.update(editId, data) : checksApi.create(data)),
     onSuccess: () => {
+      submittingRef.current = false;
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       if (isStackScreen) {
@@ -602,7 +609,15 @@ export default function CheckCreateScreen() {
         Alert.alert('Готово', 'Чек успешно создан');
       }
     },
-    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить чек'),
+    onError: (err: any) => {
+      submittingRef.current = false;
+      Alert.alert(
+        'Ошибка',
+        err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          'Не удалось сохранить чек',
+      );
+    },
   });
 
   // Calculations
@@ -719,6 +734,10 @@ export default function CheckCreateScreen() {
   };
 
   const handleSubmit = (deferred?: boolean) => {
+    // Double-fire guard: bail out immediately if a submission is already
+    // in-flight, regardless of whether isPending has propagated yet.
+    if (submittingRef.current || createMutation.isPending) return;
+
     const shouldDefer = deferred !== undefined ? deferred : isDeferred;
     if (!shouldDefer && serviceLines.length === 0 && productLines.length === 0) {
       Alert.alert('Ошибка', 'Добавьте хотя бы одну услугу или товар');
@@ -763,6 +782,7 @@ export default function CheckCreateScreen() {
         quantity: l.quantity,
       })),
     };
+    submittingRef.current = true;
     createMutation.mutate(payload);
   };
 

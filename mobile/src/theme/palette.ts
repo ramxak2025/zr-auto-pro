@@ -32,6 +32,8 @@ import { colors as light } from './index';
 export type ThemeMode = 'light' | 'dark';
 
 export interface SemanticPalette {
+  /** The theme mode this palette was built for. Useful for inline conditional colours. */
+  mode: ThemeMode;
   bg: {
     /** Screen-level background (under everything). */
     canvas: string;
@@ -65,6 +67,7 @@ export interface SemanticPalette {
 
 const PALETTES: Record<ThemeMode, SemanticPalette> = {
   light: {
+    mode: 'light',
     bg: {
       canvas: light.gray[50],
       card: light.white,
@@ -89,6 +92,7 @@ const PALETTES: Record<ThemeMode, SemanticPalette> = {
     heroGradient: [light.primary[700], light.primary[800], light.primary[900]] as const,
   },
   dark: {
+    mode: 'dark',
     bg: {
       // Deep slate / near-black — Apple-grade dark surface, not pure
       // black so OLED still shows depth between cards.

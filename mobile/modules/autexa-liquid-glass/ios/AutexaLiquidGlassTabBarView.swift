@@ -99,6 +99,8 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     // Three-stop gradient: bright top highlight → mid translucent →
     // slight bottom shadow. Reads as a real glass capsule on every iOS
     // version, regardless of whether UIGlassEffect is available.
+    // Colors are set dynamically in updateDropletAppearance() so the
+    // capsule adapts correctly between light and dark mode.
     self.dropletGradient = CAGradientLayer()
     self.dropletGradient.colors = [
       UIColor(white: 1.0, alpha: 0.95).cgColor,
@@ -155,6 +157,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     impactFeedback.prepare()
 
     upgradeToGlassIfAvailable()
+    updateDropletAppearance()
   }
 
   // MARK: - JS-exposed event
@@ -179,6 +182,41 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     if !isPanning {
       dropletView.frame = dropletFrame(forIndex: activeIndex)
       dropletGradient.frame = dropletView.bounds
+    }
+    updateDropletAppearance()
+  }
+
+  // MARK: - Trait collection (light / dark mode)
+
+  /// Updates the droplet gradient colors and border color to match the
+  /// current user interface style. Called from init, layoutSubviews, and
+  /// traitCollectionDidChange so the capsule always matches the system theme.
+  private func updateDropletAppearance() {
+    let isDark = traitCollection.userInterfaceStyle == .dark
+    if isDark {
+      // Subtle blue-tinted glass capsule — sits naturally on the dark
+      // frosted-glass surface without being the jarring white blob.
+      dropletGradient.colors = [
+        UIColor(red: 0.37, green: 0.55, blue: 0.98, alpha: 0.22).cgColor,
+        UIColor(red: 0.25, green: 0.40, blue: 0.90, alpha: 0.12).cgColor,
+        UIColor(red: 0.37, green: 0.55, blue: 0.98, alpha: 0.18).cgColor,
+      ]
+      dropletView.layer.borderColor = UIColor(white: 1.0, alpha: 0.15).cgColor
+    } else {
+      // Bright white glass capsule — classic light-mode look.
+      dropletGradient.colors = [
+        UIColor(white: 1.0, alpha: 0.95).cgColor,
+        UIColor(white: 1.0, alpha: 0.70).cgColor,
+        UIColor(white: 1.0, alpha: 0.85).cgColor,
+      ]
+      dropletView.layer.borderColor = UIColor(white: 1.0, alpha: 0.9).cgColor
+    }
+  }
+
+  public override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+    super.traitCollectionDidChange(previousTraitCollection)
+    if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) {
+      updateDropletAppearance()
     }
   }
 

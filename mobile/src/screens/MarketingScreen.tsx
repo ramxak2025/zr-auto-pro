@@ -434,7 +434,7 @@ function IntegrationsTab() {
           <Ionicons name="paper-plane-outline" size={16} color={palette.text.tertiary} />
         </View>
         {providers.map((p, idx) => {
-          const active = activeIntegrations.find((i: any) => i.provider === p.key);
+          const active = activeIntegrations.find((i: any) => i.providerType === p.key);
           return (
             <TouchableOpacity
               key={p.key}

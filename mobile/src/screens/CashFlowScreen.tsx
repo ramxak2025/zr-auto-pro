@@ -408,9 +408,13 @@ export default function CashFlowScreen() {
       </ScrollView>
 
       {/* Master picker modal */}
-      <Modal visible={showMasterPicker} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: palette.bg.card }]}>
+      <Modal visible={showMasterPicker} transparent animationType="fade">
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowMasterPicker(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={[styles.modalContent, { backgroundColor: palette.bg.card }]}>
             <View style={[styles.modalHeader, { borderBottomColor: palette.border.subtle }]}>
               <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Выберите мастера</Text>
               <TouchableOpacity onPress={() => setShowMasterPicker(false)}>
@@ -436,22 +440,24 @@ export default function CashFlowScreen() {
                 Все мастера
               </Text>
             </TouchableOpacity>
-            <FlashList
-              data={masters || []}
-              keyExtractor={(item: any) => item.id}
-              extraData={masterId}
-              renderItem={({ item }: { item: any }) => (
-                <MasterPickerRow
-                  id={item.id}
-                  fullName={item.fullName}
-                  active={masterId === item.id}
-                  onPick={pickMaster}
-                  palette={palette}
-                />
-              )}
-            />
-          </View>
-        </View>
+            <View style={{ maxHeight: 280 }}>
+              <FlashList
+                data={masters || []}
+                keyExtractor={(item: any) => item.id}
+                extraData={masterId}
+                renderItem={({ item }: { item: any }) => (
+                  <MasterPickerRow
+                    id={item.id}
+                    fullName={item.fullName}
+                    active={masterId === item.id}
+                    onPick={pickMaster}
+                    palette={palette}
+                  />
+                )}
+              />
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
 
       {/* Date input modal */}
@@ -638,13 +644,18 @@ const styles = StyleSheet.create({
   dayDetailText: { fontSize: fontSize.xs, color: colors.gray[500] },
 
   // Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
   modalContent: {
-    backgroundColor: colors.white,
-    borderTopLeftRadius: borderRadius['2xl'],
-    borderTopRightRadius: borderRadius['2xl'],
-    maxHeight: '60%',
-    paddingBottom: spacing[8],
+    width: '100%',
+    maxHeight: 400,
+    borderRadius: 20,
+    overflow: 'hidden',
   },
   modalHeader: {
     flexDirection: 'row',

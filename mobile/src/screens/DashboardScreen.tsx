@@ -1774,7 +1774,7 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
   return (
     <AnimatedCard index={6}>
       <TouchableOpacity
-        onPress={() => navigation.navigate('Schedule')}
+        onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } })}
         activeOpacity={0.8}
         style={{
           backgroundColor: colors.white,

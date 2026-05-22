@@ -176,7 +176,14 @@ const CheckRow = React.memo(function CheckRow({
       <TouchableOpacity
         style={[
           styles.checkCard,
-          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          {
+            backgroundColor: palette.bg.card,
+            borderColor: check.isDeferred
+              ? palette.mode === 'dark'
+                ? 'rgba(239,68,68,0.3)'
+                : colors.red[100]
+              : palette.border.subtle,
+          },
           check.isDeferred && styles.checkCardDeferred,
         ]}
         onPress={() => onOpen(check.id)}
@@ -193,7 +200,15 @@ const CheckRow = React.memo(function CheckRow({
             <View style={styles.checkHeaderLeft}>
               <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
               {check.isDeferred && (
-                <View style={styles.deferredBadge}>
+                <View
+                  style={[
+                    styles.deferredBadge,
+                    {
+                      backgroundColor:
+                        palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100],
+                    },
+                  ]}
+                >
                   <Text style={styles.deferredText}>Отложен</Text>
                 </View>
               )}
@@ -1270,11 +1285,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
     marginTop: spacing[1],
   },
-  dateGroupLine: { flex: 1, height: 1, backgroundColor: colors.gray[200] },
+  dateGroupLine: { flex: 1, height: 1 },
   dateGroupText: {
     fontSize: fontSize.xs,
     fontWeight: fontWeight.semibold,
-    color: colors.gray[400],
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -1282,7 +1296,6 @@ const styles = StyleSheet.create({
   // Check card -- compact with left accent
   checkCard: {
     flexDirection: 'row',
-    backgroundColor: colors.white,
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
     shadowColor: colors.black,
@@ -1291,9 +1304,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 2,
     borderWidth: 1,
-    borderColor: colors.gray[100],
   },
-  checkCardDeferred: { backgroundColor: '#fef8f8', borderColor: colors.red[100] },
+  checkCardDeferred: {},
   accentBar: { width: 3.5 },
   checkContent: { flex: 1, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
 
@@ -1305,9 +1317,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing[1.5],
   },
   checkHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: 1 },
-  checkNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  checkNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   deferredBadge: {
-    backgroundColor: colors.red[100],
     paddingHorizontal: spacing[1.5],
     paddingVertical: 1,
     borderRadius: borderRadius.full,
@@ -1315,7 +1326,7 @@ const styles = StyleSheet.create({
   deferredText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.red[700] },
   paymentBadge: { paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: borderRadius.full },
   paymentBadgeText: { fontSize: 10, fontWeight: fontWeight.medium },
-  checkTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  checkTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   deleteBtn: { padding: 2 },
 
   // Info chips row
