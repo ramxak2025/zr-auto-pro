@@ -321,14 +321,14 @@ export default function CheckDetailScreen() {
               <Text style={{ fontSize: 11, color: colors.green[600], fontWeight: fontWeight.semibold }}>
                 {formatMoney(check.cashAmount || 0)}
               </Text>
-              <Text style={{ fontSize: 11, color: colors.gray[300] }}>/</Text>
+              <Text style={{ fontSize: 11, color: palette.text.tertiary }}>/</Text>
               <Ionicons name="card-outline" size={12} color={colors.blue[600]} />
               <Text style={{ fontSize: 11, color: colors.blue[600], fontWeight: fontWeight.semibold }}>
                 {formatMoney(check.cardAmount || 0)}
               </Text>
             </View>
           )}
-          <Text style={styles.timeChip}>{formatTime(check.date)}</Text>
+          <Text style={[styles.timeChip, { color: palette.text.tertiary }]}>{formatTime(check.date)}</Text>
         </View>
 
         {/* Client & info — modern glassmorphism style card */}
@@ -349,7 +349,7 @@ export default function CheckDetailScreen() {
                   '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}
               </Text>
             </View>
-            {check.clientId ? <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} /> : null}
+            {check.clientId ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
           </TouchableOpacity>
 
           {check.car && (
@@ -375,7 +375,7 @@ export default function CheckDetailScreen() {
                     )}
                   </View>
                 </View>
-                {check.clientId ? <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} /> : null}
+                {check.clientId ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
               </TouchableOpacity>
             </>
           )}
@@ -396,7 +396,7 @@ export default function CheckDetailScreen() {
                   <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Мастер</Text>
                   <Text style={[styles.infoValue, { color: palette.text.primary }]}>{check.master.fullName}</Text>
                 </View>
-                {check.masterId ? <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} /> : null}
+                {check.masterId ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
               </TouchableOpacity>
             </>
           )}
@@ -649,7 +649,7 @@ export default function CheckDetailScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.gray[50] },
+  safe: { flex: 1 },
 
   // Header
   header: {
@@ -658,9 +658,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2.5],
-    backgroundColor: colors.white,
     borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
   },
   backBtn: {
     width: 38,
@@ -671,14 +669,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerCenter: { flex: 1, marginHorizontal: spacing[3] },
-  headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  headerDate: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+  headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
+  headerDate: { fontSize: 11, marginTop: 1 },
   headerActions: { flexDirection: 'row', gap: spacing[1.5], alignItems: 'center' },
   actionBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.gray[50],
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -710,14 +707,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   paymentChipText: { fontSize: 12, fontWeight: fontWeight.medium },
-  timeChip: { fontSize: 12, color: colors.gray[400], marginLeft: 'auto' },
+  timeChip: { fontSize: 12, marginLeft: 'auto' },
 
   // Info card
   infoCard: {
-    backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
-    borderColor: colors.gray[100],
     padding: spacing[4],
     shadowColor: colors.black,
     shadowOpacity: 0.03,
@@ -734,9 +729,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   infoContent: { flex: 1 },
-  infoLabel: { fontSize: 11, color: colors.gray[400], marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
-  infoValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  infoDivider: { height: 1, backgroundColor: colors.gray[50], marginVertical: spacing[3], marginLeft: spacing[4] + 40 },
+  infoLabel: { fontSize: 11, marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
+  infoValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  infoDivider: { height: 1, marginVertical: spacing[3], marginLeft: spacing[4] + 40 },
   carRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flexWrap: 'wrap' },
   plateTag: {
     backgroundColor: colors.primary[50],
@@ -759,14 +754,12 @@ const styles = StyleSheet.create({
     borderColor: colors.primary[100],
     padding: spacing[3.5],
   },
-  commentText: { fontSize: fontSize.sm, color: colors.gray[700], flex: 1, lineHeight: 20 },
+  commentText: { fontSize: fontSize.sm, flex: 1, lineHeight: 20 },
 
   // Section card
   sectionCard: {
-    backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
-    borderColor: colors.gray[100],
     overflow: 'hidden',
     shadowColor: colors.black,
     shadowOpacity: 0.03,
@@ -788,16 +781,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3],
     flex: 1,
   },
-  sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   sectionBadge: {
-    backgroundColor: colors.gray[100],
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: borderRadius.full,
     minWidth: 24,
     alignItems: 'center',
   },
-  sectionBadgeText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.gray[500] },
+  sectionBadgeText: { fontSize: 11, fontWeight: fontWeight.bold },
 
   // Line items
   lineItem: {
@@ -807,12 +799,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
   },
-  lineItemBorder: { borderTopWidth: 1, borderTopColor: colors.gray[50] },
+  lineItemBorder: { borderTopWidth: 1 },
   lineItemLeft: { flex: 1, marginRight: spacing[3] },
-  lineItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  lineItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   lineItemMeta: { flexDirection: 'row', gap: spacing[2], marginTop: 3 },
-  lineItemMetaText: { fontSize: 11, color: colors.gray[400] },
-  lineItemPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  lineItemMetaText: { fontSize: 11 },
+  lineItemPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 
   // Subtotal
   sectionSubtotal: {
@@ -821,20 +813,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderTopWidth: 1,
-    borderTopColor: colors.gray[100],
-    backgroundColor: colors.gray[50],
   },
-  subtotalLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[500] },
-  subtotalValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  subtotalLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  subtotalValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 
   // Warranty issued card — compact iosCard style (matches other section
   // cards on the screen). No gradient header; the green shield icon is
   // enough signal that this is a guarantee block.
   warrantyCard: {
-    backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
-    borderColor: colors.gray[100],
     overflow: 'hidden',
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
@@ -853,7 +841,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  warrantyTitle: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  warrantyTitle: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   warrantyBadge: {
     backgroundColor: colors.green[50],
     paddingHorizontal: 8,
@@ -870,10 +858,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2],
     gap: spacing[2],
   },
-  warrantyRowBorder: { borderTopWidth: 1, borderTopColor: colors.gray[50] },
+  warrantyRowBorder: { borderTopWidth: 1 },
   warrantyRowLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: 1, minWidth: 0 },
-  warrantyItemName: { fontSize: 13, fontWeight: fontWeight.medium, color: colors.gray[900], flexShrink: 1 },
-  warrantyMeta: { fontSize: 11, color: colors.gray[500], fontWeight: fontWeight.medium },
+  warrantyItemName: { fontSize: 13, fontWeight: fontWeight.medium, flexShrink: 1 },
+  warrantyMeta: { fontSize: 11, fontWeight: fontWeight.medium },
 
   // Total card
   totalCard: {
@@ -938,9 +926,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: spacing[5],
     paddingVertical: spacing[3.5],
-    backgroundColor: colors.white,
   },
   profitLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  profitLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
+  profitLabel: { fontSize: fontSize.sm },
   profitValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold },
 });

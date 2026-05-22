@@ -1460,6 +1460,7 @@ function AdminDashboard({ name }: { name: string }) {
 
 // ── Shift Control (master only) ──
 function ShiftControl() {
+  const palette = useColors();
   const queryClient = useQueryClient();
   const { data: myShifts } = useQuery<Shift[]>({
     queryKey: ['shifts', 'my'],
@@ -1490,20 +1491,20 @@ function ShiftControl() {
   const isLoading = openShift.isPending || closeShift.isPending;
 
   return (
-    <AnimatedCard index={1} style={styles.card}>
+    <AnimatedCard index={1} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
       <View style={styles.shiftRow}>
         <View style={styles.shiftLeft}>
-          <View style={[styles.shiftIcon, currentShift ? styles.shiftIconOpen : styles.shiftIconClosed]}>
+          <View style={[styles.shiftIcon, currentShift ? styles.shiftIconOpen : { backgroundColor: palette.bg.muted }]}>
             <Ionicons
               name={currentShift ? 'time' : 'time-outline'}
               size={20}
-              color={currentShift ? colors.green[600] : colors.gray[400]}
+              color={currentShift ? colors.green[600] : palette.text.tertiary}
             />
           </View>
           <View>
-            <Text style={styles.shiftTitle}>{currentShift ? 'Смена открыта' : 'Смена закрыта'}</Text>
+            <Text style={[styles.shiftTitle, { color: palette.text.primary }]}>{currentShift ? 'Смена открыта' : 'Смена закрыта'}</Text>
             {currentShift && (
-              <Text style={styles.shiftSince}>
+              <Text style={[styles.shiftSince, { color: palette.text.tertiary }]}>
                 с{' '}
                 {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
               </Text>
@@ -1537,6 +1538,7 @@ function ShiftControl() {
 }
 
 function MasterRatingCard({ userId }: { userId?: string }) {
+  const palette = useColors();
   const { data } = useQuery({
     queryKey: ['marketing-dashboard'],
     queryFn: async () => {
@@ -1564,14 +1566,14 @@ function MasterRatingCard({ userId }: { userId?: string }) {
   const stars = Math.round(myRating.avgRating);
 
   return (
-    <AnimatedCard index={5} style={styles.card}>
+    <AnimatedCard index={5} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
         <View
           style={{
             width: 44,
             height: 44,
             borderRadius: 22,
-            backgroundColor: rank <= 3 ? colors.amber[50] : colors.gray[50],
+            backgroundColor: rank <= 3 ? colors.amber[50] : palette.bg.muted,
             alignItems: 'center',
             justifyContent: 'center',
           }}
@@ -1579,11 +1581,11 @@ function MasterRatingCard({ userId }: { userId?: string }) {
           <Ionicons
             name={rank === 1 ? 'trophy' : rank <= 3 ? 'medal' : 'star'}
             size={22}
-            color={rank === 1 ? colors.amber[600] : rank <= 3 ? colors.gray[500] : colors.primary[500]}
+            color={rank === 1 ? colors.amber[600] : rank <= 3 ? palette.text.secondary : colors.primary[500]}
           />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] }}>
+          <Text style={{ fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: palette.text.primary }}>
             Мой рейтинг
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginTop: 2 }}>
@@ -1592,7 +1594,7 @@ function MasterRatingCard({ userId }: { userId?: string }) {
                 key={i}
                 name={i <= stars ? 'star' : 'star-outline'}
                 size={14}
-                color={i <= stars ? colors.yellow[400] : colors.gray[200]}
+                color={i <= stars ? colors.yellow[400] : palette.border.subtle}
               />
             ))}
             <Text
@@ -1612,12 +1614,12 @@ function MasterRatingCard({ userId }: { userId?: string }) {
             style={{
               fontSize: fontSize['2xl'],
               fontWeight: fontWeight.bold,
-              color: rank <= 3 ? colors.amber[600] : colors.gray[700],
+              color: rank <= 3 ? colors.amber[600] : palette.text.primary,
             }}
           >
             #{rank}
           </Text>
-          <Text style={{ fontSize: 10, color: colors.gray[400] }}>из {data.employeeRatings.length}</Text>
+          <Text style={{ fontSize: 10, color: palette.text.tertiary }}>из {data.employeeRatings.length}</Text>
         </View>
       </View>
       <View
@@ -1627,20 +1629,20 @@ function MasterRatingCard({ userId }: { userId?: string }) {
           marginTop: spacing[3],
           paddingTop: spacing[3],
           borderTopWidth: 1,
-          borderTopColor: colors.gray[100],
+          borderTopColor: palette.border.subtle,
         }}
       >
         <View style={{ alignItems: 'center' }}>
-          <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] }}>
+          <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: palette.text.primary }}>
             {myRating.reviewCount}
           </Text>
-          <Text style={{ fontSize: 10, color: colors.gray[400] }}>отзывов</Text>
+          <Text style={{ fontSize: 10, color: palette.text.tertiary }}>отзывов</Text>
         </View>
         <View style={{ alignItems: 'center' }}>
           <Text style={{ fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.green[600] }}>
             {Math.round(100 - myRating.negativeRate)}%
           </Text>
-          <Text style={{ fontSize: 10, color: colors.gray[400] }}>положит.</Text>
+          <Text style={{ fontSize: 10, color: palette.text.tertiary }}>положит.</Text>
         </View>
       </View>
     </AnimatedCard>
@@ -1648,6 +1650,7 @@ function MasterRatingCard({ userId }: { userId?: string }) {
 }
 
 function MasterRecentChecks() {
+  const palette = useColors();
   const navigation = useNavigation<any>();
   const { data: checks } = useQuery({
     queryKey: ['checks', 'recent-master'],
@@ -1662,8 +1665,8 @@ function MasterRecentChecks() {
   if (!Array.isArray(items) || items.length === 0) return null;
 
   return (
-    <AnimatedCard index={6} style={styles.card}>
-      <Text style={styles.cashTitle}>ПОСЛЕДНИЕ ЧЕКИ</Text>
+    <AnimatedCard index={6} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+      <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>ПОСЛЕДНИЕ ЧЕКИ</Text>
       <View style={{ gap: spacing[1.5] }}>
         {items.slice(0, 5).map((check: any) => (
           <TouchableOpacity
@@ -1674,7 +1677,7 @@ function MasterRecentChecks() {
               paddingVertical: spacing[2],
               paddingHorizontal: spacing[1],
               borderBottomWidth: 1,
-              borderBottomColor: colors.gray[50],
+              borderBottomColor: palette.border.subtle,
             }}
             onPress={() =>
               navigation.navigate('Main', {
@@ -1702,12 +1705,12 @@ function MasterRecentChecks() {
             </View>
             <View style={{ flex: 1 }}>
               <Text
-                style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] }}
+                style={{ fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: palette.text.primary }}
                 numberOfLines={1}
               >
                 {check.client?.fullName || 'Розничный'}
               </Text>
-              <Text style={{ fontSize: 11, color: colors.gray[400] }}>
+              <Text style={{ fontSize: 11, color: palette.text.tertiary }}>
                 {new Date(check.date).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' })}
                 {check.car?.makeModel ? ` · ${check.car.makeModel}` : ''}
               </Text>
@@ -1723,6 +1726,7 @@ function MasterRecentChecks() {
 }
 
 function MyAttendanceRankWidget({ userId }: { userId?: string }) {
+  const palette = useColors();
   const navigation = useNavigation<any>();
   const [selectedMonth] = useState(() => {
     const d = new Date();
@@ -1777,11 +1781,11 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
         onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } })}
         activeOpacity={0.8}
         style={{
-          backgroundColor: colors.white,
+          backgroundColor: palette.bg.card,
           borderRadius: borderRadius['2xl'],
           padding: spacing[4],
           borderWidth: 1,
-          borderColor: colors.gray[100],
+          borderColor: palette.border.subtle,
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
@@ -1790,11 +1794,11 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
               width: 56,
               height: 56,
               borderRadius: 28,
-              backgroundColor: myRank <= 3 ? colors.amber[50] : colors.gray[50],
+              backgroundColor: myRank <= 3 ? colors.amber[50] : palette.bg.muted,
               alignItems: 'center',
               justifyContent: 'center',
               borderWidth: 2,
-              borderColor: myRank <= 3 ? colors.amber[200] : colors.gray[200],
+              borderColor: myRank <= 3 ? colors.amber[200] : palette.border.subtle,
             }}
           >
             <Text style={{ fontSize: 26 }}>{medal || `#${myRank}`}</Text>
@@ -1804,7 +1808,7 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
               style={{
                 fontSize: 11,
                 fontWeight: '700',
-                color: colors.gray[400],
+                color: palette.text.tertiary,
                 textTransform: 'uppercase' as const,
                 letterSpacing: 0.5,
               }}
@@ -1815,19 +1819,19 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
               style={{
                 fontSize: fontSize.base,
                 fontWeight: fontWeight.bold,
-                color: colors.gray[900],
+                color: palette.text.primary,
                 marginTop: 2,
                 textTransform: 'capitalize' as const,
               }}
             >
               {monthName}
             </Text>
-            <Text style={{ fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 }}>
+            <Text style={{ fontSize: fontSize.xs, color: palette.text.secondary, marginTop: 2 }}>
               <Text style={{ color: scoreColor, fontWeight: '700' }}>{me.score}%</Text> посещаемость · {me.full}/
               {me.total} смен
             </Text>
           </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.gray[300]} />
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
         </View>
       </TouchableOpacity>
     </AnimatedCard>
@@ -1835,6 +1839,7 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
 }
 
 function MasterDashboard() {
+  const palette = useColors();
   const { user } = useAuth();
   const { data, isLoading } = useQuery<SalarySummary>({
     queryKey: ['salary', 'my-summary'],
@@ -1878,27 +1883,27 @@ function MasterDashboard() {
       </AnimatedCard>
 
       <View style={styles.statsRow}>
-        <AnimatedCard index={1} style={styles.statCard}>
+        <AnimatedCard index={1} style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <Ionicons
             name="document-text-outline"
             size={18}
             color={colors.primary[600]}
             style={{ marginBottom: spacing[2] }}
           />
-          <Text style={styles.statLabel}>Заказов сегодня</Text>
-          <Text style={styles.statValue}>{data.todayChecks || '—'}</Text>
-          <Text style={styles.statSub}>За месяц: {data.monthChecks ?? 0}</Text>
+          <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>Заказов сегодня</Text>
+          <Text style={[styles.statValue, { color: palette.text.primary }]}>{data.todayChecks || '—'}</Text>
+          <Text style={[styles.statSub, { color: palette.text.tertiary }]}>За месяц: {data.monthChecks ?? 0}</Text>
         </AnimatedCard>
-        <AnimatedCard index={2} style={styles.statCard}>
+        <AnimatedCard index={2} style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <Ionicons name="cash-outline" size={18} color={colors.green[600]} style={{ marginBottom: spacing[2] }} />
-          <Text style={styles.statLabel}>Сегодня</Text>
-          <Text style={styles.statValue}>{data.today ? formatMoney(data.today) : '—'}</Text>
-          <Text style={styles.statSub}>За месяц: {formatMoney(data.month)}</Text>
+          <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>Сегодня</Text>
+          <Text style={[styles.statValue, { color: palette.text.primary }]}>{data.today ? formatMoney(data.today) : '—'}</Text>
+          <Text style={[styles.statSub, { color: palette.text.tertiary }]}>За месяц: {formatMoney(data.month)}</Text>
         </AnimatedCard>
       </View>
 
-      <AnimatedCard index={3} style={styles.cashSection}>
-        <Text style={styles.cashTitle}>КАССА СЕГОДНЯ</Text>
+      <AnimatedCard index={3} style={[styles.cashSection, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}>
+        <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>КАССА СЕГОДНЯ</Text>
         <View style={styles.cashGrid}>
           {[
             {
@@ -1923,30 +1928,30 @@ function MasterDashboard() {
               type: 'Гарантия',
             },
           ].map((item) => (
-            <View key={item.type} style={styles.cashItem}>
+            <View key={item.type} style={[styles.cashItem, { backgroundColor: palette.bg.card }]}>
               <View style={[styles.cashIconBox, { backgroundColor: item.bg }]}>
                 <Ionicons name={item.icon} size={16} color={item.color} />
               </View>
-              <Text style={styles.cashAmount}>{formatMoney(item.amount)}</Text>
-              <Text style={styles.cashType}>{item.type}</Text>
+              <Text style={[styles.cashAmount, { color: palette.text.primary }]}>{formatMoney(item.amount)}</Text>
+              <Text style={[styles.cashType, { color: palette.text.tertiary }]}>{item.type}</Text>
             </View>
           ))}
         </View>
       </AnimatedCard>
 
       {data.todayService || data.todayProduct ? (
-        <AnimatedCard index={4} style={styles.card}>
-          <Text style={styles.cashTitle}>СТРУКТУРА ЗАРАБОТКА СЕГОДНЯ</Text>
+        <AnimatedCard index={4} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>СТРУКТУРА ЗАРАБОТКА СЕГОДНЯ</Text>
           <View style={styles.earningsRow}>
             <View style={[styles.earningBox, { backgroundColor: colors.blue[50] }]}>
               <Ionicons name="build-outline" size={16} color={colors.blue[600]} />
               <Text style={[styles.earningLabel, { color: colors.blue[600] }]}>С услуг</Text>
-              <Text style={styles.earningValue}>{formatMoney(data.todayService ?? 0)}</Text>
+              <Text style={[styles.earningValue, { color: palette.text.primary }]}>{formatMoney(data.todayService ?? 0)}</Text>
             </View>
             <View style={[styles.earningBox, { backgroundColor: colors.green[50] }]}>
               <Ionicons name="cube-outline" size={16} color={colors.green[600]} />
               <Text style={[styles.earningLabel, { color: colors.green[600] }]}>С товаров</Text>
-              <Text style={styles.earningValue}>{formatMoney(data.todayProduct ?? 0)}</Text>
+              <Text style={[styles.earningValue, { color: palette.text.primary }]}>{formatMoney(data.todayProduct ?? 0)}</Text>
             </View>
           </View>
         </AnimatedCard>
@@ -1964,8 +1969,8 @@ function MasterDashboard() {
                 <Ionicons name="gift-outline" size={22} color={colors.green[600]} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.promoTitle}>Бонус с товаров</Text>
-                <Text style={styles.promoSub}>Продавай эти товары и получай % с прибыли</Text>
+                <Text style={[styles.promoTitle, { color: palette.text.primary }]}>Бонус с товаров</Text>
+                <Text style={[styles.promoSub, { color: palette.text.secondary }]}>Продавай эти товары и получай % с прибыли</Text>
               </View>
             </View>
             <View style={{ paddingHorizontal: spacing[3], paddingBottom: spacing[3], gap: spacing[2] }}>
@@ -1974,23 +1979,23 @@ function MasterDashboard() {
                 .map((promo) => {
                   const photoUrl = promo.photo ? getImageUrl(promo.photo) : null;
                   return (
-                    <View key={promo.productId} style={styles.promoItem}>
+                    <View key={promo.productId} style={[styles.promoItem, { backgroundColor: palette.bg.card }]}>
                       {photoUrl ? (
                         <CachedImage source={{ uri: photoUrl }} style={styles.promoPhoto} />
                       ) : (
-                        <View style={[styles.promoPhoto, styles.promoPhotoPlaceholder]}>
-                          <Ionicons name="cube-outline" size={18} color={colors.gray[300]} />
+                        <View style={[styles.promoPhoto, styles.promoPhotoPlaceholder, { backgroundColor: palette.bg.muted }]}>
+                          <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
                         </View>
                       )}
                       <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.promoName} numberOfLines={1}>
+                        <Text style={[styles.promoName, { color: palette.text.primary }]} numberOfLines={1}>
                           {promo.productName}
                         </Text>
-                        <Text style={styles.promoPrice}>Цена: {formatMoney(promo.sellPrice)}</Text>
+                        <Text style={[styles.promoPrice, { color: palette.text.tertiary }]}>Цена: {formatMoney(promo.sellPrice)}</Text>
                       </View>
                       <View style={{ alignItems: 'flex-end', flexShrink: 0 }}>
                         <Text style={styles.promoBonus}>+{formatMoney(promo.estimatedBonus)}</Text>
-                        <Text style={styles.promoPercent}>{promo.percent}% с прибыли</Text>
+                        <Text style={[styles.promoPercent, { color: palette.text.tertiary }]}>{promo.percent}% с прибыли</Text>
                       </View>
                     </View>
                   );
@@ -2091,10 +2096,10 @@ export default function DashboardScreen() {
         {isMaster ? (
           <>
             <View style={styles.headerSection}>
-              <Text style={styles.headerTitle}>
+              <Text style={[styles.headerTitle, { color: palette.text.primary }]}>
                 {greeting}, {displayName}!
               </Text>
-              <Text style={styles.headerSub}>Обзор показателей автосервиса</Text>
+              <Text style={[styles.headerSub, { color: palette.text.tertiary }]}>Обзор показателей автосервиса</Text>
             </View>
             <ShiftControl />
             <MasterDashboard />
