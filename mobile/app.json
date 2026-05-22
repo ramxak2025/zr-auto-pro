@@ -85,7 +85,7 @@
           }
         }
       ],
-      "expo-barcode-scanner",
+      ["expo-camera", { "cameraPermission": "Приложению нужен доступ к камере для сканирования штрих-кодов товаров" }],
       ["expo-notifications", { "icon": "./assets/icon.png", "color": "#2563eb" }],
       "./plugins/withWidgetExtension"
     ]

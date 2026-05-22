@@ -1,23 +1,16 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 /**
- * withWidgetExtension
- * --------------------------------------------------------------------------
- * Expo config plugin that injects the AuTexaWidget WidgetKit extension into
- * the generated ios/ Xcode project.
- *
- * What it does
- *   1. Copies ios-extensions/AuTexaWidget/*.swift + Info.plist into
- *      ios/AuTexaWidget/ at prebuild time.
- *   2. Creates a new Xcode target (app_extension) for the widget.
- *   3. Adds WidgetKit.framework and SwiftUI.framework to the widget target.
- *   4. Adds a "Embed App Extensions" CopyFiles build phase to the main app
- *      target so the widget is bundled inside the .app at build time.
- *   5. Adds App Groups entitlement (group.com.autexa.mobile) to the main
- *      app target via withEntitlementsPlist.
- *   6. Writes ios/AuTexaWidget/AuTexaWidget.entitlements so the widget
- *      shares the same App Group.
- *
- * Survives prebuild --clean: yes — runs on every prebuild.
+ * withWidgetExtension — injects AuTexaWidget into the prebuild-generated
+ * Xcode project. The `xcode` npm library used by config-plugins has two
+ * gotchas this plugin works around:
+ *   • Target lookups use the UUID as the dict key, not the human name —
+ *     `{ target: 'AuTexaWidget' }` throws "Invalid target", but
+ *     `{ target: <UUID> }` works.
+ *   • `addTarget` stores the name quoted (`"AuTexaWidget"`) and creates
+ *     ONLY a Copy Files phase in the FIRST target (the embed for the
+ *     extension). It does NOT create Sources/Frameworks/Resources phases
+ *     for the new target — we have to create them manually before any
+ *     `addSourceFile` / `addFramework` will work.
  */
 const { withXcodeProject, withEntitlementsPlist } = require('@expo/config-plugins');
 const path = require('path');
@@ -26,15 +19,9 @@ const fs = require('fs');
 const WIDGET_TARGET = 'AuTexaWidget';
 const APP_GROUP = 'group.com.autexa.mobile';
 const WIDGET_BUNDLE_ID = 'com.autexa.mobile.widget';
-const DEPLOYMENT_TARGET = '16.0';
+const DEPLOYMENT_TARGET = '17.0';
 const SRC_DIR = path.join(__dirname, '..', 'ios-extensions', 'AuTexaWidget');
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Copy the committed widget source files from ios-extensions/ into ios/AuTexaWidget/
- * so Xcode can find them during the build.
- */
 function copyWidgetFiles(iosRoot) {
   const dest = path.join(iosRoot, WIDGET_TARGET);
   if (!fs.existsSync(dest)) {
@@ -45,9 +32,6 @@ function copyWidgetFiles(iosRoot) {
   }
 }
 
-/**
- * Write the widget's entitlements file granting access to the shared App Group.
- */
 function writeWidgetEntitlements(iosRoot) {
   const content = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,7 +50,7 @@ function writeWidgetEntitlements(iosRoot) {
   );
 }
 
-// ── Step A: add App Groups to main app entitlements ──────────────────────────
+// ── A) App Groups entitlement on main app ─────────────────────────────────────
 
 const withAppGroups = (config) =>
   withEntitlementsPlist(config, (mod) => {
@@ -80,30 +64,33 @@ const withAppGroups = (config) =>
     return mod;
   });
 
-// ── Step B: add widget target to Xcode project ───────────────────────────────
+// ── B) Add widget target to Xcode project ─────────────────────────────────────
 
 const withWidgetTarget = (config) =>
   withXcodeProject(config, (mod) => {
     const projectRoot = mod.modRequest.projectRoot;
     const iosRoot = path.join(projectRoot, 'ios');
 
-    // 1. Copy source files into ios/AuTexaWidget/
     copyWidgetFiles(iosRoot);
     writeWidgetEntitlements(iosRoot);
 
     const proj = mod.modResults;
 
-    // 2. Guard: skip if target already registered (idempotent)
+    // Idempotent guard. xcode lib stores target name quoted, so match both.
     const existingTargets = proj.pbxNativeTargetSection();
-    const alreadyAdded = Object.values(existingTargets).some(
-      (t) => t && typeof t === 'object' && t.name === WIDGET_TARGET
-    );
+    const alreadyAdded = Object.values(existingTargets).some((t) => {
+      if (!t || typeof t !== 'object') return false;
+      const name = (t.name || '').replace(/^"|"$/g, '');
+      return name === WIDGET_TARGET;
+    });
     if (alreadyAdded) {
       return mod;
     }
 
-    // 3. Create the widget target FIRST — addSourceFile needs the target to
-    //    already exist in pbxNativeTargetSection so it can find it by name.
+    // 1. Create the target. For 'app_extension' addTarget ALSO creates a
+    //    Copy Files build phase in the first (main) target that embeds the
+    //    widget .appex. So we DO NOT add an "Embed App Extensions" phase
+    //    ourselves — that would create a duplicate.
     const widgetTarget = proj.addTarget(
       WIDGET_TARGET,
       'app_extension',
@@ -112,95 +99,98 @@ const withWidgetTarget = (config) =>
     );
     const widgetTargetUuid = widgetTarget.uuid;
 
-    // 4. Add Xcode group for the widget folder
+    // 2. addTarget leaves buildPhases empty on the new target. Source files,
+    //    frameworks, and resources all need their phases to exist BEFORE they
+    //    can be attached. Create them with empty file lists.
+    proj.addBuildPhase([], 'PBXSourcesBuildPhase', 'Sources', widgetTargetUuid);
+    proj.addBuildPhase([], 'PBXResourcesBuildPhase', 'Resources', widgetTargetUuid);
+    proj.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', widgetTargetUuid);
+
+    // 3. Create a PBXGroup for the widget folder so the files show up in the
+    //    Xcode navigator under "AuTexaWidget".
     const widgetGroupResult = proj.addPbxGroup([], WIDGET_TARGET, WIDGET_TARGET, '"<group>"');
     const widgetGroupKey = widgetGroupResult.uuid;
 
-    // Add the group as a child of the root project group so it appears in navigator.
     const mainGroupKey = proj.getFirstProject().firstProject.mainGroup;
     const mainGroup = proj.getPBXGroupByKey(mainGroupKey);
     if (mainGroup && Array.isArray(mainGroup.children)) {
       mainGroup.children.push({ value: widgetGroupKey, comment: WIDGET_TARGET });
     }
 
-    // 5. Add Swift files + Info.plist + entitlements to the group.
-    //    Target now exists so addSourceFile can attach to its Sources build phase.
+    // 4. Add the Swift source files. Pass the target UUID, NOT the target
+    //    name string. The xcode lib looks up the target with
+    //    `nativeTargets[opt.target]` which is a UUID-keyed dict.
+    //
+    //    Path semantics: the group above was created with `path: 'AuTexaWidget'`,
+    //    so any file added to it inherits that prefix. We pass BARE filenames
+    //    here — otherwise we'd get the double `AuTexaWidget/AuTexaWidget/...`
+    //    that fails the build.
     const swiftFiles = fs
       .readdirSync(path.join(iosRoot, WIDGET_TARGET))
       .filter((f) => f.endsWith('.swift'));
 
     for (const file of swiftFiles) {
       proj.addSourceFile(
-        `${WIDGET_TARGET}/${file}`,
-        { target: WIDGET_TARGET },
+        file,
+        { target: widgetTargetUuid },
         widgetGroupKey
       );
     }
-    proj.addFile(`${WIDGET_TARGET}/Info.plist`, widgetGroupKey, {});
-    proj.addFile(`${WIDGET_TARGET}/${WIDGET_TARGET}.entitlements`, widgetGroupKey, {});
 
-    // 6. Patch build settings for Debug + Release configs of the widget target
+    // Info.plist and entitlements: file refs only (no build phase).
+    proj.addFile('Info.plist', widgetGroupKey, {});
+    proj.addFile(`${WIDGET_TARGET}.entitlements`, widgetGroupKey, {});
+
+    // 5. Patch the widget target's Debug + Release build configs.
+    //    addTarget assigns each XCBuildConfiguration entry a *_comment that
+    //    starts with the target's quoted name, e.g.:
+    //      ABCD1234_comment = "Build configuration list for PBXNativeTarget \"AuTexaWidget\""
     const allBuildConfigs = proj.pbxXCBuildConfigurationSection();
     for (const key of Object.keys(allBuildConfigs)) {
-      const config = allBuildConfigs[key];
-      if (!config || typeof config !== 'object' || !config.buildSettings) continue;
-      if (config.name !== 'Debug' && config.name !== 'Release') continue;
+      const cfg = allBuildConfigs[key];
+      if (!cfg || typeof cfg !== 'object' || !cfg.buildSettings) continue;
+      if (cfg.name !== 'Debug' && cfg.name !== 'Release') continue;
 
-      // Only patch configs that belong to our new widget target.
-      // The xcode lib attaches the target uuid to the config comment.
-      const commentKey = `${key}_comment`;
-      const comment = allBuildConfigs[commentKey] || '';
-      if (
-        typeof comment !== 'string' ||
-        !comment.includes(WIDGET_TARGET)
-      ) {
-        continue;
-      }
+      // We need to figure out if this config belongs to our widget. The
+      // XCConfigurationList for our target is referenced by widgetTarget's
+      // pbxNativeTarget.buildConfigurationList; that list's `buildConfigurations`
+      // array contains UUIDs that match keys in this section.
+      const targetCfgList = proj.hash.project.objects.XCConfigurationList[
+        widgetTarget.pbxNativeTarget.buildConfigurationList
+      ];
+      if (!targetCfgList || !Array.isArray(targetCfgList.buildConfigurations)) continue;
+      const ourConfigUuids = targetCfgList.buildConfigurations.map((c) => c.value);
+      if (!ourConfigUuids.includes(key)) continue;
 
-      const bs = config.buildSettings;
-      bs['SWIFT_VERSION'] = '5.0';
-      bs['IPHONEOS_DEPLOYMENT_TARGET'] = DEPLOYMENT_TARGET;
-      bs['INFOPLIST_FILE'] = `"${WIDGET_TARGET}/Info.plist"`;
-      bs['CODE_SIGN_ENTITLEMENTS'] = `"${WIDGET_TARGET}/${WIDGET_TARGET}.entitlements"`;
-      bs['PRODUCT_NAME'] = `"${WIDGET_TARGET}"`;
-      bs['PRODUCT_BUNDLE_IDENTIFIER'] = `"${WIDGET_BUNDLE_ID}"`;
-      bs['SKIP_INSTALL'] = 'YES';
-      bs['TARGETED_DEVICE_FAMILY'] = '"1,2"';
-      // New Architecture compatibility
-      bs['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO';
+      const bs = cfg.buildSettings;
+      bs.SWIFT_VERSION = '5.0';
+      bs.IPHONEOS_DEPLOYMENT_TARGET = DEPLOYMENT_TARGET;
+      bs.INFOPLIST_FILE = `"${WIDGET_TARGET}/Info.plist"`;
+      bs.CODE_SIGN_ENTITLEMENTS = `"${WIDGET_TARGET}/${WIDGET_TARGET}.entitlements"`;
+      bs.PRODUCT_NAME = `"${WIDGET_TARGET}"`;
+      bs.PRODUCT_BUNDLE_IDENTIFIER = `"${WIDGET_BUNDLE_ID}"`;
+      bs.SKIP_INSTALL = 'YES';
+      bs.TARGETED_DEVICE_FAMILY = '"1,2"';
+      bs.ENABLE_USER_SCRIPT_SANDBOXING = 'NO';
+      bs.CLANG_ENABLE_MODULES = 'YES';
+      bs.SWIFT_EMIT_LOC_STRINGS = 'YES';
+      bs.GENERATE_INFOPLIST_FILE = 'NO';
+      bs.MARKETING_VERSION = '1.0';
+      bs.CURRENT_PROJECT_VERSION = '1';
     }
 
-    // 7. Add WidgetKit and SwiftUI frameworks to the widget target
-    proj.addFramework('WidgetKit.framework', {
-      weak: false,
-      target: widgetTargetUuid,
-    });
-    proj.addFramework('SwiftUI.framework', {
-      weak: false,
-      target: widgetTargetUuid,
-    });
+    // 6. Link WidgetKit + SwiftUI (target UUID, not name).
+    proj.addFramework('WidgetKit.framework', { target: widgetTargetUuid });
+    proj.addFramework('SwiftUI.framework', { target: widgetTargetUuid });
 
-    // 8. Add a dependency from the main app target → widget target so Xcode
-    //    builds the widget when building the app.
+    // 7. Main target depends on widget target so Xcode builds them in order.
     const mainTarget = proj.getFirstTarget();
     if (mainTarget && mainTarget.uuid) {
       proj.addTargetDependency(mainTarget.uuid, [widgetTargetUuid]);
-
-      // 9. Add "Embed App Extensions" CopyFiles build phase to the main target
-      //    so the widget .appex is copied into the .app bundle at archive time.
-      proj.addBuildPhase(
-        [`${WIDGET_TARGET}.appex`],
-        'PBXCopyFilesBuildPhase',
-        'Embed App Extensions',
-        mainTarget.uuid,
-        'app_extension'
-      );
     }
 
     return mod;
   });
-
-// ── Compose ──────────────────────────────────────────────────────────────────
 
 module.exports = (config) => {
   config = withAppGroups(config);

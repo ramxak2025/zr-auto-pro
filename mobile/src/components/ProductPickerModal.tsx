@@ -15,7 +15,7 @@ import {
 import { FlashList } from '@shopify/flash-list';
 import CachedImage from './CachedImage';
 import { Ionicons } from '@expo/vector-icons';
-import { BarCodeScanner } from 'expo-barcode-scanner';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQuery } from '@tanstack/react-query';
 import { productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
@@ -231,22 +231,23 @@ export default function ProductPickerModal({
   const [productSearch, setProductSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Barcode scanner ────────────────────────────────────────────────────────
+  // ── Barcode scanner (expo-camera CameraView with barcode hint) ────────────
   const [showScanner, setShowScanner] = useState(false);
-  const [scannerPermission, setScannerPermission] = useState<boolean | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const openScanner = useCallback(async () => {
-    const { status } = await BarCodeScanner.requestPermissionsAsync();
-    const granted = status === 'granted';
-    setScannerPermission(granted);
-    if (granted) {
+    let perm = cameraPermission;
+    if (!perm?.granted) {
+      perm = await requestCameraPermission();
+    }
+    if (perm?.granted) {
       setShowScanner(true);
     } else {
       Alert.alert('Нет доступа к камере', 'Разрешите доступ к камере в настройках устройства');
     }
-  }, []);
+  }, [cameraPermission, requestCameraPermission]);
 
-  const handleBarCodeScanned = useCallback(({ data }: { type: string; data: string }) => {
+  const handleBarCodeScanned = useCallback(({ data }: { data: string }) => {
     setShowScanner(false);
     setLocalSearch(data);
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -518,8 +519,15 @@ export default function ProductPickerModal({
           {/* Full-screen barcode scanner modal */}
           <RNModal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}>
             <View style={styles.scannerContainer}>
-              {showScanner && scannerPermission ? (
-                <BarCodeScanner onBarCodeScanned={handleBarCodeScanned} style={StyleSheet.absoluteFillObject} />
+              {showScanner && cameraPermission?.granted ? (
+                <CameraView
+                  style={StyleSheet.absoluteFillObject}
+                  facing="back"
+                  barcodeScannerSettings={{
+                    barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'qr'],
+                  }}
+                  onBarcodeScanned={handleBarCodeScanned}
+                />
               ) : null}
               <View style={styles.scannerOverlay} pointerEvents="box-none">
                 <View style={styles.scannerCornerBox} />
