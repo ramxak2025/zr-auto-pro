@@ -20,11 +20,11 @@ const WIDGET_TARGET = 'AuTexaWidget';
 const APP_GROUP = 'group.com.autexa.mobile';
 const WIDGET_BUNDLE_ID = 'com.autexa.mobile.widget';
 const DEPLOYMENT_TARGET = '17.0';
-// Apple Developer Team — same as main app, configured in eas.json.
-// Setting this on the widget target via the plugin avoids the
-// "Signing for AuTexaWidget requires a development team" error in
-// Xcode after every prebuild --clean.
-const DEVELOPMENT_TEAM = '98SHYK65HQ';
+// Apple Developer Team for owner Ramazan Shamsudinov, matches the
+// cert installed in the keychain. Setting on the widget target via
+// the plugin avoids the "Signing for AuTexaWidget requires a
+// development team" error after every prebuild --clean.
+const DEVELOPMENT_TEAM = 'XHTQCBD2K4';
 const SRC_DIR = path.join(__dirname, '..', 'ios-extensions', 'AuTexaWidget');
 
 function copyWidgetFiles(iosRoot) {
