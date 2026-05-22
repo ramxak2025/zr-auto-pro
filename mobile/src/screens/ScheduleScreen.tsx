@@ -12,6 +12,7 @@ import {
   AccessibilityInfo,
   Alert,
   Dimensions,
+  Switch,
 } from 'react-native';
 // Native AutexaScheduleGrid was integrated in iter#2 but disabled in
 // iter#3 — see comment near the schedule grid render. The Swift module
@@ -32,7 +33,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { openEmployee } from '../navigation/entityLinks';
-import { scheduleApi, usersApi } from '../api/services';
+import { scheduleApi, scheduleSettingsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -43,7 +44,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { TodayEmployeeStatus, ScheduleEntry, User } from '../../../shared/types';
+import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
@@ -153,28 +154,62 @@ function getAvatarColors(name?: string): string[] {
 }
 
 /**
- * Status descriptor used by BOTH the grid (heatmap-style) cells and the
- * Today tab (subtle list). Fields:
- *   bgColor   — soft tinted background, shade 50/100 — what the cell fills with
- *   tintColor — slightly darker shade-200/300 — used as a top hairline accent
- *               on the grid cell so the colour group reads as a band
- *   dotColor  — primary status colour (shade 500/600) — used for text/icons
- *   emoji     — single-glyph status indicator (✅ ⏰ 🚨 🤒 ❌ 😴 ➖)
- *   icon      — Ionicons name for the legend chip
- *   label     — optional in-cell short label (e.g. shift start "09:00")
- *   hasEntry  — true when a real entry exists for that day
+ * Status descriptor used by the grid (Apple-Fitness-style) cells.
+ *
+ * Apple Health / Apple Fitness inspired:
+ *   • cell gets a SOFT tinted background (shade-50 in light, ~15 % alpha in
+ *     dark) — no full saturated rectangles, no emojis.
+ *   • a single Ionicon sits centered in the cell, drawn in the semantic
+ *     status colour. The icon IS the status indicator.
+ *   • a tiny 9 pt "HH:MM" label appears UNDER the icon only when the
+ *     shift has a meaningful start time (i.e. the user explicitly set
+ *     a non-default start). Default "09:00" on every worked day is
+ *     suppressed to kill noise.
+ *
+ * Fields:
+ *   key       — one of 'worked' | 'dayoff' | 'sick' | 'short' | 'long' |
+ *               'absent' | null. The same keys are used by the settings
+ *               sub-tab so the owner can toggle which statuses count as
+ *               an attendance "shift".
+ *   icon      — Ionicons glyph to render centred in the cell.
+ *   dotColor  — primary status colour (semantic, kept identical in dark
+ *               mode — owner wants reds to stay red).
+ *   bgColor   — light-mode cell tint (shade 50).
+ *   bgDark    — dark-mode cell tint (rgba primary 15 % alpha equivalent).
+ *   label     — optional small "HH:MM" label rendered under the icon. Only
+ *               present for the on-time worked case AND only if the shift
+ *               start is not the implicit default "09:00".
+ *   hasEntry  — true when a real entry exists for that day.
  */
-function getCellDot(entry?: ScheduleEntry) {
-  if (!entry)
-    return {
-      dotColor: 'transparent',
-      hasEntry: false,
-      icon: null,
-      bgColor: 'transparent',
-      tintColor: 'transparent',
-      label: '',
-      emoji: '',
-    };
+type CellStatusKey = 'worked' | 'dayoff' | 'sick' | 'short' | 'long' | 'absent';
+
+interface CellDescriptor {
+  key: CellStatusKey | null;
+  hasEntry: boolean;
+  icon: keyof typeof Ionicons.glyphMap | null;
+  dotColor: string;
+  bgColor: string;
+  bgDark: string;
+  label: string;
+}
+
+const EMPTY_CELL: CellDescriptor = {
+  key: null,
+  hasEntry: false,
+  icon: null,
+  dotColor: 'transparent',
+  bgColor: 'transparent',
+  bgDark: 'transparent',
+  label: '',
+};
+
+// Default shift start time. When the entry simply mirrors this we do
+// NOT render the time label — every worked day would otherwise read
+// "09:00" and turn the grid into chatbot noise.
+const DEFAULT_SHIFT_START = '09:00';
+
+function getCellDot(entry?: ScheduleEntry): CellDescriptor {
+  if (!entry) return EMPTY_CELL;
   const note = (entry.note || '').toLowerCase();
   const lateMin = entry.lateMinutes || 0;
   // Normalise the date portion. Backend may return either a date-only
@@ -190,115 +225,117 @@ function getCellDot(entry?: ScheduleEntry) {
   // 1. Больничный
   if (note.includes('больнич'))
     return {
-      dotColor: colors.rose[600],
+      key: 'sick',
       hasEntry: true,
-      icon: 'medkit' as const,
-      bgColor: colors.rose[50],
-      tintColor: colors.rose[400],
+      icon: 'medkit-outline',
+      dotColor: colors.orange[600],
+      bgColor: colors.orange[50],
+      bgDark: 'rgba(234, 88, 12, 0.18)',
       label: '',
-      emoji: '🤒',
     };
   // 2. Прогул из note
   if (note.includes('прогул'))
     return {
-      dotColor: colors.red[600],
+      key: 'absent',
       hasEntry: true,
-      icon: 'close-circle' as const,
+      icon: 'close-circle',
+      dotColor: colors.red[600],
       bgColor: colors.red[50],
-      tintColor: colors.red[300],
+      bgDark: 'rgba(220, 38, 38, 0.18)',
       label: '',
-      emoji: '❌',
     };
   // 3. Выходной
   if (entry.isDayOff)
     return {
-      dotColor: colors.gray[500],
+      key: 'dayoff',
       hasEntry: true,
-      icon: 'moon' as const,
+      icon: 'moon-outline',
+      dotColor: colors.gray[500],
       bgColor: colors.gray[100],
-      tintColor: colors.gray[300],
+      bgDark: 'rgba(148, 163, 184, 0.15)',
       label: '',
-      emoji: '😴',
     };
   // 4. Опоздание >1ч
   if (entry.lateStatus === 'late_major' || lateMin >= 60)
     return {
-      dotColor: colors.orange[700],
+      key: 'long',
       hasEntry: true,
-      icon: 'warning' as const,
-      bgColor: colors.orange[50],
-      tintColor: colors.orange[400],
+      icon: 'alert-circle',
+      dotColor: colors.red[500],
+      bgColor: colors.red[50],
+      bgDark: 'rgba(239, 68, 68, 0.15)',
       label: '',
-      emoji: '🚨',
     };
   // 5. Опоздание <1ч
   if (entry.lateStatus === 'late_minor' || (lateMin > 0 && lateMin < 60))
     return {
-      dotColor: colors.yellow[700],
+      key: 'short',
       hasEntry: true,
-      icon: 'alarm' as const,
-      bgColor: colors.yellow[50],
-      tintColor: colors.yellow[300],
+      icon: 'time-outline',
+      dotColor: colors.amber[600],
+      bgColor: colors.amber[50],
+      bgDark: 'rgba(217, 119, 6, 0.18)',
       label: '',
-      emoji: '⏰',
     };
-  // 6. Открыл смену вовремя — показываем время
+  // 6. Открыл смену вовремя — показываем время только если оно осмысленное
   if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
+    const startHHMM = entry.shiftStart.slice(0, 5);
     return {
-      dotColor: colors.green[700],
+      key: 'worked',
       hasEntry: true,
-      icon: 'checkmark-circle' as const,
-      bgColor: colors.green[100],
-      tintColor: colors.green[400],
-      label: entry.shiftStart.slice(0, 5),
-      emoji: '✅',
+      icon: 'checkmark-circle',
+      dotColor: colors.green[600],
+      bgColor: colors.green[50],
+      bgDark: 'rgba(22, 163, 74, 0.18)',
+      label: startHHMM === DEFAULT_SHIFT_START ? '' : startHHMM,
     };
   }
   // 7. Прогул для прошедших дней без смены
   if (entry.shiftStart && !entry.isDayOff && isPast && !isToday) {
     return {
-      dotColor: colors.red[600],
+      key: 'absent',
       hasEntry: true,
-      icon: 'close-circle' as const,
+      icon: 'close-circle',
+      dotColor: colors.red[600],
       bgColor: colors.red[50],
-      tintColor: colors.red[300],
+      bgDark: 'rgba(220, 38, 38, 0.18)',
       label: '',
-      emoji: '❌',
     };
   }
   // 8. Запланирована смена (сегодня или будущее) — зелёная галочка
   if (entry.shiftStart) {
     return {
-      dotColor: colors.green[600],
+      key: 'worked',
       hasEntry: true,
-      icon: 'checkmark' as const,
+      icon: 'checkmark-circle',
+      dotColor: colors.green[600],
       bgColor: colors.green[50],
-      tintColor: colors.green[300],
+      bgDark: 'rgba(22, 163, 74, 0.15)',
       label: '',
-      emoji: '✅',
     };
   }
-  return {
-    dotColor: 'transparent',
-    hasEntry: false,
-    icon: null,
-    bgColor: 'transparent',
-    tintColor: 'transparent',
-    label: '',
-    emoji: '',
-  };
+  return EMPTY_CELL;
 }
 
 /**
- * TodayPill — the date number for "today" with an extra-soft halo pulse so
- * the eye finds it instantly when scanning the grid header. The pulse is
- * a slow ~2s opacity loop on a separate halo view (the number itself stays
- * crisp). Disabled when the user has Reduce Motion on.
+ * TodayPill — composite "Сегодня" badge + day number used in the grid
+ * header for today's column. The small uppercase label sits ABOVE the
+ * day number inside a single softly-tinted pill so the eye snaps to
+ * the current column at a glance (Apple Calendar / Apple Fitness style).
+ *
+ * No animation: the previous pulsing halo was visual noise compared to
+ * the rest of the SF-Health-inspired grid. A static pill reads better
+ * and respects Reduce Motion implicitly.
  */
 function TodayPill({ day }: { day: number; reduceMotion?: boolean }) {
   return (
     <View style={styles.gridTodayCircle}>
-      <Text style={styles.gridTodayNum}>{day}</Text>
+      <Text style={styles.gridTodayLabel} allowFontScaling={false}>
+        СЕГОДНЯ
+      </Text>
+      <Text style={styles.gridTodayNum} allowFontScaling={false}>
+        {day}
+      </Text>
     </View>
   );
 }
@@ -350,6 +387,12 @@ interface GridDayHeaderRowProps {
   CELL_W: number;
   ROW_H: number;
   reduceMotion: boolean;
+  borderColor: string;
+  weekendBg: string;
+  weekendText: string;
+  dayText: string;
+  dowText: string;
+  todayColumnBg: string;
 }
 const GridDayHeaderRow = memo(function GridDayHeaderRow({
   days,
@@ -357,6 +400,12 @@ const GridDayHeaderRow = memo(function GridDayHeaderRow({
   CELL_W,
   ROW_H,
   reduceMotion,
+  borderColor,
+  weekendBg,
+  weekendText,
+  dayText,
+  dowText,
+  todayColumnBg,
 }: GridDayHeaderRowProps) {
   return (
     <View style={{ flexDirection: 'row' }}>
@@ -370,24 +419,36 @@ const GridDayHeaderRow = memo(function GridDayHeaderRow({
             key={ds}
             style={[
               styles.gridHeaderCell,
-              { width: CELL_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: colors.gray[200] },
-              isWeekend && { backgroundColor: colors.red[50] },
-              isToday && styles.gridHeaderToday,
+              {
+                width: CELL_W,
+                height: ROW_H + 6, // header is slightly taller to fit the "Сегодня" pill
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderBottomColor: borderColor,
+              },
+              isWeekend && { backgroundColor: weekendBg },
+              isToday && { backgroundColor: todayColumnBg },
             ]}
           >
             <Text
               style={[
                 styles.gridHeaderDow,
-                isWeekend && { color: colors.red[400] },
+                { color: dowText },
+                isWeekend && { color: weekendText },
                 isToday && { color: colors.primary[600] },
               ]}
+              allowFontScaling={false}
             >
               {DAY_ABBR[dow]}
             </Text>
             {isToday ? (
               <TodayPill day={d.getDate()} reduceMotion={reduceMotion} />
             ) : (
-              <Text style={[styles.gridHeaderDay, isWeekend && { color: colors.red[400] }]}>{d.getDate()}</Text>
+              <Text
+                style={[styles.gridHeaderDay, { color: dayText }, isWeekend && { color: weekendText }]}
+                allowFontScaling={false}
+              >
+                {d.getDate()}
+              </Text>
             )}
           </View>
         );
@@ -408,6 +469,14 @@ interface GridDayRowProps {
   CELL_W: number;
   ROW_H: number;
   onCellPress: (userId: string, date: string, entry: ScheduleEntry | undefined, userName?: string) => void;
+  // palette tokens — passed down so the row can render correctly in both
+  // light and dark mode without each cell calling useColors().
+  isDark: boolean;
+  dividerColor: string;
+  rowStripBg: string;
+  todayColumnBg: string;
+  weekendColumnBg: string;
+  emptyDotColor: string;
 }
 
 const GridDayRow = memo(function GridDayRow({
@@ -421,12 +490,16 @@ const GridDayRow = memo(function GridDayRow({
   CELL_W,
   ROW_H,
   onCellPress,
+  isDark,
+  dividerColor,
+  rowStripBg,
+  todayColumnBg,
+  weekendColumnBg,
+  emptyDotColor,
 }: GridDayRowProps) {
   const firstName = userName?.split(' ')[0];
   return (
-    <View
-      style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: colors.gray[50] + '60' }]}
-    >
+    <View style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: rowStripBg }]}>
       {days.map((d) => {
         const ds = formatDate(d);
         const entry = entryMap.get(`${userId}-${ds}`);
@@ -435,16 +508,18 @@ const GridDayRow = memo(function GridDayRow({
         const isWeekend = dow >= 5;
         const isToday = ds === today;
 
-        // Heatmap-style cell: when an entry exists the WHOLE cell takes the
-        // soft tinted background (shade 50/100), with a slightly darker
-        // hairline accent on top so the colour bands read at a glance.
-        // Today's column keeps its bordered emphasis on top.
+        // SF Fitness / Apple Health style — when an entry exists the cell
+        // gets a SOFT semantic tint (shade-50 in light, ~15 % alpha in
+        // dark) and an Ionicon at its centre. No top hairline accent —
+        // it added visual noise without improving scannability.
         const cellBg = cell.hasEntry
-          ? cell.bgColor
+          ? isDark
+            ? cell.bgDark
+            : cell.bgColor
           : isToday
-            ? colors.primary[50]
+            ? todayColumnBg
             : isWeekend
-              ? colors.red[50] + '40'
+              ? weekendColumnBg
               : 'transparent';
 
         return (
@@ -452,7 +527,13 @@ const GridDayRow = memo(function GridDayRow({
             key={ds}
             style={[
               styles.gridCell,
-              { width: CELL_W, height: ROW_H, backgroundColor: cellBg },
+              {
+                width: CELL_W,
+                height: ROW_H,
+                backgroundColor: cellBg,
+                borderRightColor: dividerColor,
+                borderBottomColor: dividerColor,
+              },
               isToday && styles.gridCellToday,
             ]}
             onPress={() => {
@@ -460,16 +541,14 @@ const GridDayRow = memo(function GridDayRow({
               onCellPress(userId, ds, entry, firstName);
             }}
             activeOpacity={canEdit ? 0.5 : 1}
+            // 44pt min hit target — width is column-width but vertically
+            // each row is ROW_H ≥ 44pt; the cell already meets the iOS
+            // HIG tap-target requirement.
           >
-            {cell.hasEntry && cell.tintColor !== 'transparent' && (
-              <View style={[styles.gridCellAccent, { backgroundColor: cell.tintColor }]} pointerEvents="none" />
-            )}
-            {cell.hasEntry ? (
+            {cell.hasEntry && cell.icon ? (
               cell.label ? (
                 <View style={styles.gridCellInner}>
-                  <Text style={styles.gridCellEmoji} allowFontScaling={false}>
-                    {cell.emoji}
-                  </Text>
+                  <Ionicons name={cell.icon} size={18} color={cell.dotColor} />
                   <Text
                     style={[styles.gridCellLabel, { color: cell.dotColor }]}
                     numberOfLines={1}
@@ -479,12 +558,10 @@ const GridDayRow = memo(function GridDayRow({
                   </Text>
                 </View>
               ) : (
-                <Text style={styles.gridCellEmojiSolo} allowFontScaling={false}>
-                  {cell.emoji}
-                </Text>
+                <Ionicons name={cell.icon} size={20} color={cell.dotColor} />
               )
             ) : (
-              canEdit && <View style={styles.gridCellEmpty} />
+              canEdit && <View style={[styles.gridCellEmpty, { backgroundColor: emptyDotColor }]} />
             )}
           </TouchableOpacity>
         );
@@ -982,21 +1059,20 @@ function GridTab() {
         </View>
       )}
 
-      {/* Legend — mirrors the heatmap-style cells so the user can map
-          colours and emoji to statuses at a glance. */}
+      {/* Legend — icon-based, mirrors the SF-Health-inspired cell
+          glyphs. Emojis are intentionally absent: the grid reads as a
+          native iOS app, not a chat-bot transcript. */}
       <View style={styles.legendRow}>
         {[
-          { emoji: '✅', label: 'Смена' },
-          { emoji: '😴', label: 'Вых' },
-          { emoji: '🤒', label: 'Б/Л' },
-          { emoji: '⏰', label: '<1ч' },
-          { emoji: '🚨', label: '>1ч' },
-          { emoji: '❌', label: 'Прогул' },
+          { icon: 'checkmark-circle' as const, color: colors.green[600], label: 'Смена' },
+          { icon: 'moon-outline' as const, color: colors.gray[500], label: 'Вых' },
+          { icon: 'medkit-outline' as const, color: colors.orange[600], label: 'Б/Л' },
+          { icon: 'time-outline' as const, color: colors.amber[600], label: '<1ч' },
+          { icon: 'alert-circle' as const, color: colors.red[500], label: '>1ч' },
+          { icon: 'close-circle' as const, color: colors.red[600], label: 'Прогул' },
         ].map((item) => (
           <View key={item.label} style={styles.legendItem}>
-            <Text style={styles.legendEmoji} allowFontScaling={false}>
-              {item.emoji}
-            </Text>
+            <Ionicons name={item.icon} size={13} color={item.color} />
             <Text style={[styles.legendText, { color: palette.text.secondary }]}>{item.label}</Text>
           </View>
         ))}
@@ -1046,11 +1122,17 @@ function GridTab() {
           <View
             style={[styles.stickyColumn, { backgroundColor: palette.bg.card, borderRightColor: palette.border.subtle }]}
           >
-            {/* Header cell */}
+            {/* Header cell — matches the day-header height (ROW_H + 6) so
+                the day numbers stay vertically aligned with the names. */}
             <View
               style={[
                 styles.gridNameCell,
-                { width: NAME_W, height: ROW_H, borderBottomWidth: 0.5, borderBottomColor: palette.border.subtle },
+                {
+                  width: NAME_W,
+                  height: ROW_H + 6,
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                  borderBottomColor: palette.border.subtle,
+                },
               ]}
             >
               <Text style={[styles.gridHeaderLabel, { color: palette.text.tertiary }]}>Сотрудник</Text>
@@ -1142,7 +1224,21 @@ function GridTab() {
               {/* Day headers — memoised so the 28-31 day cells don't rebuild
                   on every QuickPopup open/close, pending-change toggle, or
                   background SWR refetch. */}
-              <GridDayHeaderRow days={days} today={today} CELL_W={CELL_W} ROW_H={ROW_H} reduceMotion={reduceMotion} />
+              <GridDayHeaderRow
+                days={days}
+                today={today}
+                CELL_W={CELL_W}
+                ROW_H={ROW_H}
+                reduceMotion={reduceMotion}
+                borderColor={palette.border.subtle}
+                weekendBg={palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.08)' : colors.red[50] + '60'}
+                weekendText={palette.mode === 'dark' ? colors.red[400] : colors.red[400]}
+                dayText={palette.text.primary}
+                dowText={palette.text.tertiary}
+                todayColumnBg={
+                  palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.15)' : colors.primary[50]
+                }
+              />
 
               {/* Day cells — Reanimated.ScrollView so the UI-thread
                   worklet handler can mirror its offset to the names
@@ -1172,6 +1268,16 @@ function GridTab() {
                     CELL_W={CELL_W}
                     ROW_H={ROW_H}
                     onCellPress={handleCellPress}
+                    isDark={palette.mode === 'dark'}
+                    dividerColor={palette.border.subtle}
+                    rowStripBg={palette.mode === 'dark' ? 'rgba(255,255,255,0.025)' : colors.gray[50] + '60'}
+                    todayColumnBg={
+                      palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.12)' : colors.primary[50]
+                    }
+                    weekendColumnBg={
+                      palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.05)' : colors.red[50] + '30'
+                    }
+                    emptyDotColor={palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : colors.gray[200]}
                   />
                 ))}
               </Reanimated.ScrollView>
@@ -1991,10 +2097,69 @@ function RatingTab() {
 }
 
 // ============== SETTINGS TAB ==============
+// Status keys used by the "Смены" sub-tab. Same set as the grid's
+// CellStatusKey — kept in sync so the toggle list matches what the
+// owner sees on the actual calendar cells.
+const SHIFT_STATUS_OPTIONS: {
+  key: 'worked' | 'dayoff' | 'sick' | 'short' | 'long' | 'absent';
+  label: string;
+  description: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+}[] = [
+  {
+    key: 'worked',
+    label: 'Смена',
+    description: 'Полная отработанная смена',
+    icon: 'checkmark-circle',
+    color: colors.green[600],
+  },
+  {
+    key: 'short',
+    label: 'Опоздание <1ч',
+    description: 'Опоздал меньше чем на 1 час',
+    icon: 'time-outline',
+    color: colors.amber[600],
+  },
+  {
+    key: 'long',
+    label: 'Опоздание >1ч',
+    description: 'Опоздал более чем на 1 час',
+    icon: 'alert-circle',
+    color: colors.red[500],
+  },
+  {
+    key: 'sick',
+    label: 'Больничный',
+    description: 'Сотрудник на больничном',
+    icon: 'medkit-outline',
+    color: colors.orange[600],
+  },
+  {
+    key: 'dayoff',
+    label: 'Выходной',
+    description: 'Плановый выходной день',
+    icon: 'moon-outline',
+    color: colors.gray[500],
+  },
+  {
+    key: 'absent',
+    label: 'Прогул',
+    description: 'Не вышел на смену без причины',
+    icon: 'close-circle',
+    color: colors.red[600],
+  },
+];
+
 function SettingsTab() {
   const queryClient = useQueryClient();
-  const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes'>('daysoff');
+  const { user } = useAuth();
+  const palette = useColors();
+  const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes' | 'shifts'>('daysoff');
   const tabBarHeight = useTabBarHeight();
+
+  const canEditSettings =
+    user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
@@ -2050,6 +2215,63 @@ function SettingsTab() {
     onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка'),
   });
 
+  // ── Schedule settings — which statuses count as a real shift ──
+  // Read the current configuration. Falls back to the project default
+  // (['worked', 'short']) — the same default the backend applies if no
+  // record has been written yet.
+  const { data: scheduleSettings } = useQuery<ScheduleSettings>({
+    queryKey: ['schedule-settings'],
+    queryFn: async () => {
+      const res = await scheduleSettingsApi.get();
+      return res.data;
+    },
+    placeholderData: (prev) => prev,
+    staleTime: 5 * 60_000,
+  });
+
+  // Local mirror of which keys are toggled on. Initialise from the
+  // fetched settings; reset every time the API view changes.
+  const [shiftKeys, setShiftKeys] = useState<Set<string>>(new Set(['worked', 'short']));
+  useEffect(() => {
+    if (scheduleSettings?.shiftStatuses) {
+      setShiftKeys(new Set(scheduleSettings.shiftStatuses));
+    }
+  }, [scheduleSettings]);
+
+  const toggleShiftKey = useCallback((key: string) => {
+    haptic('select');
+    setShiftKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const shiftSettingsMutation = useMutation({
+    mutationFn: (data: Partial<ScheduleSettings>) => scheduleSettingsApi.update(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['schedule-settings'] });
+      // Recalculations elsewhere (rating, cash-flow charts) may key off
+      // this — invalidating the schedule itself is overkill but keeps
+      // any derived views fresh on the next visit.
+      Alert.alert('Сохранено', 'Настройки смен обновлены');
+    },
+    onError: (err: any) =>
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить настройки'),
+  });
+
+  const saveShiftSettings = () => {
+    haptic('tap');
+    shiftSettingsMutation.mutate({ shiftStatuses: Array.from(shiftKeys) });
+  };
+
+  const currentList = scheduleSettings?.shiftStatuses || [];
+  const dirty =
+    currentList.length !== shiftKeys.size ||
+    currentList.some((k) => !shiftKeys.has(k)) ||
+    Array.from(shiftKeys).some((k) => !currentList.includes(k));
+
   return (
     <ScrollView contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
       {/* Segmented sub-tabs */}
@@ -2074,9 +2296,113 @@ function SettingsTab() {
           <Ionicons name="time-outline" size={15} color={settingsTab === 'modes' ? colors.white : colors.gray[500]} />
           <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>Режимы</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.subTabItem, settingsTab === 'shifts' && styles.subTabActive]}
+          onPress={() => setSettingsTab('shifts')}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="checkmark-circle-outline"
+            size={15}
+            color={settingsTab === 'shifts' ? colors.white : colors.gray[500]}
+          />
+          <Text style={[styles.subTabText, settingsTab === 'shifts' && styles.subTabTextActive]}>Смены</Text>
+        </TouchableOpacity>
       </View>
 
-      {settingsTab === 'daysoff' ? (
+      {settingsTab === 'shifts' ? (
+        <View style={{ gap: spacing[3] }}>
+          {/* Section header */}
+          <View style={{ paddingHorizontal: spacing[1] }}>
+            <Text style={[styles.shiftSectionTitle, { color: palette.text.primary }]}>
+              Какие статусы считать сменой
+            </Text>
+            <Text style={[styles.shiftSectionHint, { color: palette.text.tertiary }]}>
+              Эти статусы учитываются при расчёте рейтинга мастеров и графика выручки. Например, если «Опоздание
+              {' <1ч'}» включено — оно считается отработанной сменой и идёт в рейтинг.
+            </Text>
+          </View>
+
+          {/* Toggle list */}
+          <View
+            style={[
+              styles.shiftListCard,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
+            {SHIFT_STATUS_OPTIONS.map((opt, idx) => {
+              const on = shiftKeys.has(opt.key);
+              return (
+                <View
+                  key={opt.key}
+                  style={[
+                    styles.shiftRow,
+                    idx < SHIFT_STATUS_OPTIONS.length - 1 && {
+                      borderBottomWidth: StyleSheet.hairlineWidth,
+                      borderBottomColor: palette.border.subtle,
+                    },
+                  ]}
+                >
+                  <View style={[styles.shiftRowIcon, { backgroundColor: opt.color + '20' }]}>
+                    <Ionicons name={opt.icon} size={18} color={opt.color} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.shiftRowLabel, { color: palette.text.primary }]}>{opt.label}</Text>
+                    <Text style={[styles.shiftRowDescription, { color: palette.text.tertiary }]}>
+                      {opt.description}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={on}
+                    onValueChange={() => {
+                      if (canEditSettings) toggleShiftKey(opt.key);
+                    }}
+                    disabled={!canEditSettings}
+                    trackColor={{ false: palette.bg.muted, true: colors.green[500] }}
+                    thumbColor={colors.white}
+                    ios_backgroundColor={palette.bg.muted}
+                  />
+                </View>
+              );
+            })}
+          </View>
+
+          {canEditSettings && (
+            <TouchableOpacity
+              onPress={saveShiftSettings}
+              disabled={!dirty || shiftSettingsMutation.isPending}
+              style={[
+                styles.shiftSaveBtn,
+                {
+                  backgroundColor:
+                    !dirty || shiftSettingsMutation.isPending ? palette.bg.muted : colors.primary[600],
+                },
+              ]}
+              activeOpacity={0.85}
+            >
+              {shiftSettingsMutation.isPending ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <>
+                  <Ionicons
+                    name="save-outline"
+                    size={16}
+                    color={!dirty ? palette.text.tertiary : colors.white}
+                  />
+                  <Text
+                    style={[
+                      styles.shiftSaveBtnText,
+                      { color: !dirty ? palette.text.tertiary : colors.white },
+                    ]}
+                  >
+                    Сохранить
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+      ) : settingsTab === 'daysoff' ? (
         <View style={{ gap: spacing[3] }}>
           {activeUsers.map((u, idx) => {
             const daysOff: number[] = (u as any).daysOff || [];
@@ -2664,21 +2990,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     paddingHorizontal: spacing[4],
     paddingBottom: spacing[2.5],
-    gap: spacing[4],
+    gap: spacing[3],
+    flexWrap: 'wrap',
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1],
-  },
-  legendDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  legendEmoji: {
-    fontSize: 12,
-    lineHeight: 14,
+    gap: 4,
   },
   legendText: {
     fontSize: 11,
@@ -2705,11 +3023,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing[1],
-    borderBottomWidth: 2,
-    borderBottomColor: colors.gray[200],
-  },
-  gridHeaderToday: {
-    backgroundColor: colors.primary[50],
   },
   gridHeaderDow: {
     fontSize: 9,
@@ -2723,25 +3036,32 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
     marginTop: 1,
   },
+  // "Сегодня" pill in the header — a soft primary-tinted rounded rect
+  // holds the uppercase "СЕГОДНЯ" label stacked over the day number.
+  // Apple Calendar / Apple Fitness style — single visual unit so the
+  // current column reads at a glance.
   gridTodayCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    minWidth: 38,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    borderRadius: 8,
     backgroundColor: colors.primary[600],
     alignItems: 'center',
     justifyContent: 'center',
   },
-  gridTodayHalo: {
-    position: 'absolute',
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: colors.primary[300],
-  },
-  gridTodayNum: {
-    fontSize: 11,
+  gridTodayLabel: {
+    fontSize: 7,
     fontWeight: fontWeight.bold,
     color: colors.white,
+    letterSpacing: 0.4,
+    lineHeight: 8,
+    marginBottom: 1,
+  },
+  gridTodayNum: {
+    fontSize: 12,
+    fontWeight: fontWeight.bold,
+    color: colors.white,
+    lineHeight: 13,
   },
   gridHeaderLabel: {
     fontSize: 10,
@@ -2807,52 +3127,36 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.gray[100],
     overflow: 'hidden',
   },
-  // Today column overlay — slightly stronger outline so the today
-  // vertical band still pops even when neighbouring cells are tinted
-  // by the heatmap.
+  // Today column overlay — subtle borderLeft/Right uses the soft
+  // primary[200] hairline to lift the column slightly without the
+  // bold "boxed" feel of the previous primary[300] outline.
   gridCellToday: {
-    borderLeftWidth: 1,
-    borderLeftColor: colors.primary[300],
-    borderRightWidth: 1,
-    borderRightColor: colors.primary[300],
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: colors.primary[300] + 'AA',
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: colors.primary[300] + 'AA',
   },
-  // 2pt top hairline in the slightly-darker shade — gives each colour
-  // band a clean edge instead of a flat rectangle. Sits on top of the
-  // cell background so the band reads even when row striping is on.
-  gridCellAccent: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 2,
-  },
-  // Container for cells that include a label (e.g. "09:00" shift start).
-  // Stacks the emoji over the label so a tiny cell still fits both.
+  // Container for cells that include a tiny start-time label under
+  // the icon — Ionicon stacked over a 9 pt "HH:MM" text.
   gridCellInner: {
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 1,
   },
-  // Emoji used when the cell carries a label underneath it.
-  gridCellEmoji: {
-    fontSize: 13,
-    lineHeight: 16,
-  },
-  // Emoji used when the cell carries no label — slightly larger so it
-  // remains readable at arm's length in a ~44×52 cell.
-  gridCellEmojiSolo: {
-    fontSize: 16,
-    lineHeight: 20,
-  },
+  // Tiny "HH:MM" label rendered under the icon when the shift has a
+  // non-default start time. 9 pt so it never dominates the cell.
   gridCellLabel: {
     fontSize: 9,
     fontWeight: '700',
-    marginTop: 1,
+    lineHeight: 10,
   },
+  // Empty-day affordance — a faint 6 pt dot signals "tap to assign"
+  // for editors without ever drawing attention.
   gridCellEmpty: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.gray[200],
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    opacity: 0.7,
   },
 
   // ── Quick Actions ──
@@ -3387,5 +3691,66 @@ const styles = StyleSheet.create({
   userChipTextActive: {
     color: colors.primary[700],
     fontWeight: fontWeight.semibold,
+  },
+
+  // ── Shift-status toggle list (Settings → Смены) ──
+  shiftSectionTitle: {
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[900],
+    marginBottom: 4,
+    letterSpacing: -0.2,
+  },
+  shiftSectionHint: {
+    fontSize: 12,
+    color: colors.gray[500],
+    lineHeight: 17,
+  },
+  shiftListCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    overflow: 'hidden',
+  },
+  shiftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    minHeight: 56,
+  },
+  shiftRowIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  shiftRowLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+  },
+  shiftRowDescription: {
+    fontSize: 11,
+    color: colors.gray[500],
+    marginTop: 2,
+  },
+  shiftSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.primary[600],
+  },
+  shiftSaveBtnText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+    color: colors.white,
+    letterSpacing: -0.1,
   },
 });

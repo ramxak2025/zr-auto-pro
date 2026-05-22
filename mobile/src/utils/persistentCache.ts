@@ -56,10 +56,20 @@ const PERSISTED_KEYS = [
   'schedule-today',
   // Dashboard cards
   'dashboard-chart',
+  'dashboard-v2',
   'employee-ranking',
   'marketing-dashboard',
   'shifts',
   'salary',
+  // Owner dashboard widgets (iter#14, 2026-05-22) — owner sees them every
+  // time the app cold-starts; persisting eliminates the 100-400ms flash
+  // between Hero/KPI render and the first network response.
+  'owner-alerts',
+  'clients-new-returning',
+  'retention',
+  'best-day-week',
+  'recent-reviews',
+  'call-funnel',
   // Calls + services list
   'calls-summary',
   // Dashboard widgets (TodayQuickStats / LowStockWidget) — small payloads,

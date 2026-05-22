@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,6 @@ import {
   Dimensions,
   PanResponder,
   Platform,
-  Pressable,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -41,15 +40,17 @@ import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import type {
   SalarySummary,
-  EmployeeRanking,
   TodayEmployeeStatus,
   Shift,
   ScheduleEntry,
   User,
+  OwnerAlert,
+  RecentReview,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { updateWidgetData } from '../utils/widgetBridge';
+import { haptic } from '../platform/haptics';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -169,63 +170,62 @@ function formatDeltaPct(curr: number, prev: number): { text: string; tone: 'up' 
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  OWNER DASHBOARD — kardинально новый layout (iter#13, 2026-05-19)
+//  OWNER DASHBOARD — owner-grade analytics (iter#14, 2026-05-22)
 // ════════════════════════════════════════════════════════════════════════════
 //
-// Премиальный 2026-SaaS owner dashboard. Стек hero-блоков сверху вниз:
-//   1. Hero card (deep gradient + персональное приветствие + сегодня
-//      заработано + дельта vs вчера).
-//   2. KPI strip — 4 горизонтально-скроллируемых тайла со sparkline.
-//   3. Аналитика — большая интерактивная диаграмма (scrub + segmented).
-//   4. Сегодня — 2 horizontal-card snapshot row (На смене / Звонки).
-//   5. Quick actions — 2×2 grid.
-//   6. Топ-мастера месяца — last block.
+// 2026-grade owner dashboard. Hero показывает чистую прибыль (не оборот),
+// далее KPI за текущий месяц, далее график, и стек владельческих
+// виджетов: касса по типам, маржинальность, отложенные, алерты, new vs
+// returning клиенты, воронка звонков, retention, лучший день недели,
+// последние отзывы, личный рекорд и прогноз на конец месяца. Quick
+// Actions и Топ Мастеров — намеренно убраны.
 //
-// Все данные через существующие API-эндпоинты, без правок shared/.
+// Все данные через `reportsApi.dashboardV2` + сопутствующие endpoint'ы.
 
 // ── 1. HERO ─────────────────────────────────────────────────────────────────
-// Глубокий primary 700→900 градиент с radial-glow в правом верхнем углу.
-// Большое имя владельца, контекст-дата, hero-число выручки за сегодня и
-// дельта vs вчерашнего значения.
-//
-// Данные:
-//   • dashboard-chart('today', 0) — totalRevenue за сегодня.
-//   • dashboard-chart('today', -1) — totalRevenue за вчера для дельты.
-// Кеш-ключи совпадают с теми, что использует график ниже — переключение
-// «сегодня» в графике сразу горячий.
+// Глубокий primary градиент с radial-glow. Hero-число — netProfitToday
+// (чистая прибыль за сегодня), под ним оборот за сегодня и за месяц.
+// Дельта vs вчера. Данные — dashboardV2 + dashboard-chart для дельты.
 function OwnerHero({ name }: { name: string }) {
-  const today = useQuery({
-    queryKey: ['dashboard-chart', 'today', 0],
-    queryFn: async () => (await checksApi.getDashboardChart('today', 0)).data,
-    staleTime: 30_000,
+  // Канонический источник числа дня — dashboardV2 (netProfitToday + revenueToday).
+  const v2 = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
+  // Вчерашняя выручка/прибыль — для дельты. Используем существующий
+  // dashboard-chart, чтобы не плодить новые endpoint'ы (он уже горячий
+  // в кеше, потому что графика).
   const yday = useQuery({
     queryKey: ['dashboard-chart', 'today', -1],
     queryFn: async () => (await checksApi.getDashboardChart('today', -1)).data,
     staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
 
-  const todayRevenue = today.data?.totalRevenue ?? 0;
-  const ydayRevenue = yday.data?.totalRevenue ?? 0;
-  const delta = useMemo(() => formatDeltaPct(todayRevenue, ydayRevenue), [todayRevenue, ydayRevenue]);
-  const isLoading = today.data === undefined && today.isLoading;
-  const todayChecks = today.data?.totalChecks ?? 0;
+  const profitToday = v2.data?.netProfitToday ?? 0;
+  const revenueToday = v2.data?.revenueToday ?? 0;
+  const profitMonth = v2.data?.netProfitMonth ?? 0;
+  const checksToday = v2.data?.checksToday ?? 0;
+  const ydayProfit = yday.data?.totalProfit ?? 0;
+  const delta = useMemo(() => formatDeltaPct(profitToday, ydayProfit), [profitToday, ydayProfit]);
+  const isLoading = v2.data === undefined && v2.isLoading;
 
-  // Sync widget data whenever today's revenue changes.
+  // Sync widget data whenever today's profit/revenue changes.
   useEffect(() => {
-    if (!today.data) return;
+    if (!v2.data) return;
     updateWidgetData({
-      revenue: todayRevenue,
-      checksCount: todayChecks,
-      profitToday: today.data.totalProfit ?? 0,
+      revenue: revenueToday,
+      checksCount: checksToday,
+      profitToday,
       shiftOpen: false,
     });
-  }, [todayRevenue, todayChecks, today.data]);
+  }, [revenueToday, checksToday, profitToday, v2.data]);
 
   // Theme-aware hero gradient. Light mode keeps the brand-blue look
   // already shipped; dark mode swaps in a deep indigo→near-black ramp
-  // tuned in `theme/palette.ts`. Owner-requested sun/moon toggle is
-  // tucked into the hero's top-right corner.
+  // tuned in `theme/palette.ts`.
   const { palette } = useThemeMode();
   const heroColors = palette.heroGradient;
 
@@ -237,9 +237,7 @@ function OwnerHero({ name }: { name: string }) {
         end={{ x: 1, y: 1 }}
         style={styles.heroGradient}
       >
-        {/* Decorative radial sparkle — SVG so we get true radial gradient
-            (RN can't do radial backgrounds). Very faint, doesn't compete
-            with the typography. */}
+        {/* Decorative radial sparkle — SVG so we get true radial gradient. */}
         <Svg width={220} height={220} style={styles.heroSparkle} pointerEvents="none">
           <Defs>
             <RadialGradient id="heroGlow" cx="50%" cy="50%" r="50%">
@@ -262,12 +260,17 @@ function OwnerHero({ name }: { name: string }) {
         </View>
 
         <View style={styles.heroValueBlock}>
-          <Text style={styles.heroValueLabel}>Сегодня заработано</Text>
+          <Text style={styles.heroValueLabel}>Чистая прибыль сегодня</Text>
           {isLoading ? (
             <Skeleton width={220} height={36} radius={10} style={{ backgroundColor: 'rgba(255,255,255,0.10)' }} />
           ) : (
             <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
-              {formatMoney(todayRevenue)}
+              {formatMoney(profitToday)}
+            </Text>
+          )}
+          {!isLoading && (
+            <Text style={styles.heroSecondary}>
+              Оборот: <Text style={styles.heroSecondaryBold}>{formatMoney(revenueToday)}</Text>
             </Text>
           )}
           <View style={styles.heroDeltaRow}>
@@ -295,6 +298,14 @@ function OwnerHero({ name }: { name: string }) {
             </View>
             <Text style={styles.heroDeltaCaption}>vs вчера</Text>
           </View>
+          {!isLoading && profitMonth > 0 && (
+            <View style={styles.heroMonthRow}>
+              <Ionicons name="trending-up-outline" size={12} color="rgba(255,255,255,0.78)" />
+              <Text style={styles.heroMonthText}>
+                Прибыль за месяц: <Text style={styles.heroMonthBold}>{formatMoney(profitMonth)}</Text>
+              </Text>
+            </View>
+          )}
         </View>
       </LinearGradient>
     </AnimatedCard>
@@ -305,12 +316,14 @@ function OwnerHero({ name }: { name: string }) {
 // 4 горизонтально-скроллируемых квадратных тайла 144×144pt:
 //   tiny title (Оборот / Прибыль / Чеков / Средний чек)
 //   hero number 22pt 800
-//   mini sparkline 7 точек (SVG)
+//   mini sparkline (SVG)
 //   delta chip ↑/↓ %
 // Все 4 кликабельны → переход в соответствующий экран.
 //
-// Данные: shared query `dashboard-chart('week', 0)` (тот же ключ что и в
-// диаграмме ниже — один сетевой вызов). + `('week', -1)` для дельты.
+// Период — **текущий месяц** (month-to-date). Данные:
+//   • `dashboard-chart('month', 0)` — оборот, прибыль, чеки за этот месяц.
+//   • `dashboard-chart('month', -1)` — те же показатели за прошлый месяц,
+//     для дельты-чипа на каждом тайле.
 
 interface KpiTileSpec {
   key: 'revenue' | 'profit' | 'checks' | 'avg';
@@ -324,22 +337,24 @@ interface KpiTileSpec {
 function KpiStrip() {
   const navigation = useNavigation<any>();
   const palette = useColors();
-  const week = useQuery({
-    queryKey: ['dashboard-chart', 'week', 0],
-    queryFn: async () => (await checksApi.getDashboardChart('week', 0)).data,
+  const month = useQuery({
+    queryKey: ['dashboard-chart', 'month', 0],
+    queryFn: async () => (await checksApi.getDashboardChart('month', 0)).data,
     staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
-  const prevWeek = useQuery({
-    queryKey: ['dashboard-chart', 'week', -1],
-    queryFn: async () => (await checksApi.getDashboardChart('week', -1)).data,
+  const prevMonth = useQuery({
+    queryKey: ['dashboard-chart', 'month', -1],
+    queryFn: async () => (await checksApi.getDashboardChart('month', -1)).data,
     staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
 
-  const c = week.data;
-  const p = prevWeek.data;
+  const c = month.data;
+  const p = prevMonth.data;
   const avg = c && c.totalChecks > 0 ? c.totalRevenue / c.totalChecks : 0;
   const prevAvg = p && p.totalChecks > 0 ? p.totalRevenue / p.totalChecks : 0;
-  const isLoading = c === undefined && week.isLoading;
+  const isLoading = c === undefined && month.isLoading;
 
   const tiles: KpiTileSpec[] = useMemo(
     () => [
@@ -381,9 +396,29 @@ function KpiStrip() {
 
   const points = c?.points ?? [];
 
+  // Динамический заголовок секции — название текущего месяца.
+  const monthHeader = useMemo(() => {
+    const months = [
+      'ЯНВАРЬ',
+      'ФЕВРАЛЬ',
+      'МАРТ',
+      'АПРЕЛЬ',
+      'МАЙ',
+      'ИЮНЬ',
+      'ИЮЛЬ',
+      'АВГУСТ',
+      'СЕНТЯБРЬ',
+      'ОКТЯБРЬ',
+      'НОЯБРЬ',
+      'ДЕКАБРЬ',
+    ];
+    const now = new Date();
+    return `${months[now.getMonth()]} ${now.getFullYear()}`;
+  }, []);
+
   return (
     <View>
-      <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>ЗА 7 ДНЕЙ</Text>
+      <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>{monthHeader}</Text>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -1161,254 +1196,9 @@ function CallsSnapshot() {
   );
 }
 
-// ── 5. QUICK ACTIONS 2×2 ────────────────────────────────────────────────────
-interface QuickAction {
-  key: string;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  tint: string;
-  tintBg: string;
-  perm?: string;
-  navigate: (navigation: any) => void;
-}
-
-function OwnerQuickActions() {
-  const navigation = useNavigation<any>();
-  const { hasPermission } = useAuth();
-  const palette = useColors();
-
-  const actions: QuickAction[] = useMemo(
-    () => [
-      {
-        key: 'new-check',
-        label: 'Новый заказ-наряд',
-        icon: 'receipt-outline',
-        tint: colors.primary[600],
-        tintBg: colors.primary[50],
-        perm: 'checks_create',
-        navigate: (nav) => nav.navigate('CheckCreate'),
-      },
-      {
-        key: 'find-client',
-        label: 'Найти клиента',
-        icon: 'search-outline',
-        tint: colors.blue[600],
-        tintBg: colors.blue[50],
-        perm: 'clients_view',
-        navigate: (nav) => nav.navigate('Main', { screen: 'MoreTab', params: { screen: 'Clients' } }),
-      },
-      {
-        key: 'journal',
-        label: 'Журнал',
-        icon: 'clipboard-outline',
-        tint: colors.teal[600],
-        tintBg: colors.teal[50],
-        perm: 'checks_view',
-        navigate: (nav) => nav.navigate('Main', { screen: 'Checks' }),
-      },
-      {
-        key: 'reports',
-        label: 'Отчёты',
-        icon: 'bar-chart-outline',
-        tint: colors.purple[700],
-        tintBg: colors.purple[50],
-        perm: 'financial_reports',
-        navigate: (nav) => nav.navigate('Main', { screen: 'MoreTab', params: { screen: 'Reports' } }),
-      },
-    ],
-    [],
-  );
-
-  // Memoise the permission-filtered subset so QuickActionTile's React.memo
-  // doesn't bust on every parent re-render via a new array identity.
-  const allowed = useMemo(
-    () => actions.filter((a) => !a.perm || hasPermission(a.perm as any)),
-    [actions, hasPermission],
-  );
-
-  // Build a stable per-tile onPress map so the inline arrow `() => a.navigate(nav)`
-  // doesn't allocate a new function identity per render, which would defeat
-  // QuickActionTile.memo. Map is keyed on the action.key.
-  const tilePressMap = useMemo(() => {
-    const m = new Map<string, () => void>();
-    for (const a of allowed) {
-      m.set(a.key, () => a.navigate(navigation));
-    }
-    return m;
-  }, [allowed, navigation]);
-
-  if (allowed.length === 0) return null;
-
-  return (
-    <View>
-      <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>БЫСТРЫЕ ДЕЙСТВИЯ</Text>
-      <View style={styles.quickGrid2x2}>
-        {allowed.map((a, idx) => (
-          <QuickActionTile key={a.key} action={a} index={idx} onPress={tilePressMap.get(a.key)!} palette={palette} />
-        ))}
-      </View>
-    </View>
-  );
-}
-
-const QuickActionTile = React.memo(function QuickActionTile({
-  action,
-  index,
-  onPress,
-  palette,
-}: {
-  action: QuickAction;
-  index: number;
-  onPress: () => void;
-  palette: SemanticPalette;
-}) {
-  return (
-    <AnimatedCard
-      index={index}
-      style={[styles.quickActionTile, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      onPress={onPress}
-    >
-      <View style={[styles.quickActionIconBox, { backgroundColor: action.tintBg }]}>
-        <Ionicons name={action.icon} size={22} color={action.tint} />
-      </View>
-      <Text style={[styles.quickActionLabel, { color: palette.text.primary }]} numberOfLines={2}>
-        {action.label}
-      </Text>
-    </AnimatedCard>
-  );
-});
-
-// ── 6. TOP PERFORMERS ───────────────────────────────────────────────────────
-// Top 3 masters by month revenue. Skeleton while loading. Tap → EmployeeDetail.
-function TopPerformers() {
-  const navigation = useNavigation<any>();
-  const palette = useColors();
-  const { data: ranking, isLoading } = useQuery<EmployeeRanking>({
-    queryKey: ['employee-ranking'],
-    queryFn: async () => (await checksApi.getRanking()).data,
-    staleTime: 60_000,
-  });
-
-  const top3 = useMemo(() => (ranking?.month ?? []).slice(0, 3), [ranking?.month]);
-
-  const handleOpenEmployee = useCallback(
-    (id: string) => {
-      navigation.navigate('Main', {
-        screen: 'MoreTab',
-        params: { screen: 'EmployeeDetail', params: { id } },
-      });
-    },
-    [navigation],
-  );
-
-  return (
-    <View>
-      <View style={styles.sectionHeaderRow}>
-        <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>ТОП МАСТЕРОВ МЕСЯЦА</Text>
-      </View>
-      <View
-        style={[styles.topPerformersCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      >
-        {isLoading && !ranking ? (
-          <View style={{ gap: spacing[3] }}>
-            {[0, 1, 2].map((i) => (
-              <View key={i} style={styles.topPerfRowSkeleton}>
-                <Skeleton width={40} height={40} radius={20} />
-                <View style={{ flex: 1, gap: 6, marginLeft: spacing[3] }}>
-                  <Skeleton width={'60%'} height={14} radius={4} />
-                  <Skeleton width={'30%'} height={11} radius={4} />
-                </View>
-                <Skeleton width={80} height={14} radius={4} />
-              </View>
-            ))}
-          </View>
-        ) : top3.length === 0 ? (
-          <View style={styles.topPerfEmpty}>
-            <Ionicons name="trophy-outline" size={28} color={palette.text.tertiary} />
-            <Text style={[styles.topPerfEmptyText, { color: palette.text.tertiary }]}>Пока нет данных за месяц</Text>
-          </View>
-        ) : (
-          top3.map((emp, idx) => (
-            <TopPerformerRow
-              key={emp.masterId}
-              rank={idx + 1}
-              name={emp.masterName}
-              revenue={emp.revenue}
-              checkCount={emp.checkCount}
-              onPress={() => handleOpenEmployee(emp.masterId)}
-              showDivider={idx < top3.length - 1}
-              palette={palette}
-            />
-          ))
-        )}
-      </View>
-    </View>
-  );
-}
-
-const TopPerformerRow = React.memo(function TopPerformerRow({
-  rank,
-  name,
-  revenue,
-  checkCount,
-  onPress,
-  showDivider,
-  palette,
-}: {
-  rank: number;
-  name: string;
-  revenue: number;
-  checkCount: number;
-  onPress: () => void;
-  showDivider: boolean;
-  palette: SemanticPalette;
-}) {
-  const medals: Record<number, { bg: string; fg: string; ring: string }> = {
-    1: { bg: '#FEF3C7', fg: '#92400E', ring: '#FCD34D' },
-    2: { bg: '#E5E7EB', fg: '#374151', ring: '#9CA3AF' },
-    3: { bg: '#FED7AA', fg: '#9A3412', ring: '#FB923C' },
-  };
-  const m = medals[rank] || { bg: colors.gray[100], fg: colors.gray[500], ring: colors.gray[300] };
-  // Defensive: `masterName` is typed as required string but legacy
-  // records can return null; guard so a single bad row doesn't crash
-  // the whole TopPerformers card.
-  const initials = (name || '')
-    .split(' ')
-    .map((w) => w[0] || '')
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
-
-  return (
-    <Pressable onPress={onPress} android_ripple={{ color: colors.gray[100] }}>
-      {({ pressed }) => (
-        <>
-          <View style={[styles.topPerfRow, pressed && { opacity: 0.7 }]}>
-            <View style={[styles.topPerfAvatar, { backgroundColor: m.bg, borderColor: m.ring }]}>
-              <Text style={[styles.topPerfRank, { color: m.fg }]}>{rank}</Text>
-            </View>
-            <View style={{ flex: 1, minWidth: 0, marginLeft: spacing[3] }}>
-              <Text style={[styles.topPerfName, { color: palette.text.primary }]} numberOfLines={1}>
-                {name}
-              </Text>
-              <Text style={[styles.topPerfSub, { color: palette.text.tertiary }]}>
-                {initials} · {checkCount} {checkCount === 1 ? 'заказ' : 'заказов'}
-              </Text>
-            </View>
-            <Text style={[styles.topPerfRevenue, { color: palette.text.primary }]}>{formatMoney(revenue)}</Text>
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color={palette.text.tertiary}
-              style={{ marginLeft: spacing[2] }}
-            />
-          </View>
-          {showDivider && <View style={[styles.topPerfDivider, { backgroundColor: palette.border.subtle }]} />}
-        </>
-      )}
-    </Pressable>
-  );
-});
+// ── REMOVED: OwnerQuickActions + TopPerformers — заменены на стек
+// владельческих виджетов ниже (CashPositionCard, MarginCard, …,
+// MonthForecastCard). См. секцию "OWNER WIDGETS" ниже.
 
 // ════════════════════════════════════════════════════════════════════════════
 //  ADMIN / OWNER DASHBOARD orchestrator
@@ -1487,6 +1277,1047 @@ function CallFunnelWidget() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  OWNER WIDGETS (iter#14, 2026-05-22)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Стек владельческих виджетов, размещаемых после Hero + KPI + Chart +
+// Today Snapshot. Каждый виджет — самостоятельный компонент со своим
+// query'ом, своим period-state'ом (где применимо), своим placeholderData
+// и своим переходом по тапу. Все query staleTime 60 сек; первая выдача
+// — из persistent cache (`reports-*` префиксы в persistentCache.ts).
+
+// ── helpers (date ranges + period chips) ────────────────────────────────────
+type SimplePeriod = 'week' | 'month' | 'year';
+
+function isoDay(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+function rangeForSimplePeriod(period: SimplePeriod): { from: string; to: string } {
+  const now = new Date();
+  const to = isoDay(now);
+  if (period === 'year') {
+    const yStart = new Date(now.getFullYear(), 0, 1);
+    return { from: isoDay(yStart), to };
+  }
+  if (period === 'month') {
+    const mStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { from: isoDay(mStart), to };
+  }
+  // week — Mon → today
+  const dow = now.getDay() || 7;
+  const wStart = new Date(now);
+  wStart.setDate(now.getDate() - dow + 1);
+  return { from: isoDay(wStart), to };
+}
+
+interface PeriodChipsProps {
+  value: SimplePeriod;
+  onChange: (p: SimplePeriod) => void;
+  palette: SemanticPalette;
+}
+
+const PeriodChips = React.memo(function PeriodChips({ value, onChange, palette }: PeriodChipsProps) {
+  const items: { key: SimplePeriod; label: string }[] = [
+    { key: 'week', label: 'Неделя' },
+    { key: 'month', label: 'Месяц' },
+    { key: 'year', label: 'Год' },
+  ];
+  return (
+    <View style={[styles.periodChipsRow, { backgroundColor: palette.bg.muted }]}>
+      {items.map((it) => {
+        const active = value === it.key;
+        return (
+          <TouchableOpacity
+            key={it.key}
+            style={[styles.periodChip, active && [styles.periodChipActive, { backgroundColor: palette.bg.card }]]}
+            onPress={() => {
+              haptic('select');
+              onChange(it.key);
+            }}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.periodChipText,
+                { color: palette.text.secondary },
+                active && { color: palette.text.primary, fontWeight: '700' },
+              ]}
+            >
+              {it.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+});
+
+// ── 1. Cash Position ────────────────────────────────────────────────────────
+// 3-row breakdown (Наличные / Карта / Гарантия) + big total. Тап → CashFlow.
+function CashPositionCard() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  const { data, isLoading } = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const cash = data?.cashPosition.cash ?? 0;
+  const card = data?.cashPosition.card ?? 0;
+  const warranty = data?.cashPosition.warranty ?? 0;
+  const total = data?.cashPosition.total ?? 0;
+
+  const rows: { key: 'cash' | 'card' | 'warranty'; label: string; value: number; icon: keyof typeof Ionicons.glyphMap; color: string; bg: string }[] = [
+    { key: 'cash', label: 'Наличные', value: cash, icon: 'cash-outline', color: colors.green[600], bg: colors.green[50] },
+    { key: 'card', label: 'На карте', value: card, icon: 'card-outline', color: colors.blue[600], bg: colors.blue[50] },
+    {
+      key: 'warranty',
+      label: 'Гарантия',
+      value: warranty,
+      icon: 'shield-checkmark-outline',
+      color: colors.amber[600],
+      bg: colors.amber[50],
+    },
+  ];
+
+  return (
+    <AnimatedCard
+      index={5}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={() => {
+        haptic('tap');
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'CashFlow' } });
+      }}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.primary[50] }]}>
+          <Ionicons name="wallet-outline" size={16} color={colors.primary[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>КАССА СЕГОДНЯ</Text>
+        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 'auto' }} />
+      </View>
+      <View style={styles.cashTotalBox}>
+        <Text style={[styles.cashTotalLabel, { color: palette.text.tertiary }]}>Всего на руках</Text>
+        {isLoading ? (
+          <Skeleton width={180} height={32} radius={8} />
+        ) : (
+          <Text style={[styles.cashTotalValue, { color: colors.primary[600] }]} numberOfLines={1} adjustsFontSizeToFit>
+            {formatMoney(total)}
+          </Text>
+        )}
+      </View>
+      <View style={{ gap: spacing[2] }}>
+        {rows.map((r) => (
+          <View key={r.key} style={styles.cashRowItem}>
+            <View style={[styles.cashRowIcon, { backgroundColor: r.bg }]}>
+              <Ionicons name={r.icon} size={14} color={r.color} />
+            </View>
+            <Text style={[styles.cashRowLabel, { color: palette.text.primary }]}>{r.label}</Text>
+            <Text style={[styles.cashRowValue, { color: palette.text.primary }]}>{formatMoney(r.value)}</Text>
+          </View>
+        ))}
+      </View>
+    </AnimatedCard>
+  );
+}
+
+// ── 2. Margin % ─────────────────────────────────────────────────────────────
+// Большая цифра + delta chip + sparkline 30 точек.
+function MarginCard() {
+  const palette = useColors();
+  const { data, isLoading } = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const margin = data?.marginPct ?? 0;
+  const change = data?.marginPctChange ?? 0;
+  const spark = data?.marginSpark ?? [];
+  const W = SCREEN_WIDTH - spacing[4] * 2 - spacing[5] * 2;
+  const H = 60;
+  const path = useMemo(() => buildSparkPath(spark, W, H), [spark, W, H]);
+  const area = useMemo(() => buildSparkAreaPath(spark, W, H), [spark, W, H]);
+
+  const tone: 'up' | 'down' | 'flat' = change > 0.5 ? 'up' : change < -0.5 ? 'down' : 'flat';
+  const chipColor = tone === 'up' ? colors.green[600] : tone === 'down' ? colors.red[600] : palette.text.tertiary;
+  const chipBg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : palette.bg.muted;
+
+  return (
+    <AnimatedCard index={6} style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.green[50] }]}>
+          <Ionicons name="stats-chart-outline" size={16} color={colors.green[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>МАРЖИНАЛЬНОСТЬ</Text>
+      </View>
+      <View style={styles.marginRow}>
+        <View style={{ flex: 1 }}>
+          {isLoading ? (
+            <Skeleton width={120} height={36} radius={8} />
+          ) : (
+            <Text style={[styles.marginValue, { color: palette.text.primary }]} numberOfLines={1}>
+              {margin.toFixed(1)}%
+            </Text>
+          )}
+          <Text style={[styles.marginCaption, { color: palette.text.tertiary }]}>Чистая прибыль / Оборот</Text>
+        </View>
+        {!isLoading && (
+          <View style={[styles.marginChip, { backgroundColor: chipBg }]}>
+            <Ionicons
+              name={tone === 'up' ? 'arrow-up' : tone === 'down' ? 'arrow-down' : 'remove'}
+              size={12}
+              color={chipColor}
+            />
+            <Text style={[styles.marginChipText, { color: chipColor }]}>
+              {Math.abs(change).toFixed(0)}%
+            </Text>
+          </View>
+        )}
+      </View>
+      {spark.length > 1 && (
+        <View style={{ marginTop: spacing[3] }}>
+          <Svg width={W} height={H}>
+            <Defs>
+              <SvgGrad id="marginGrad" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0%" stopColor={colors.green[400]} stopOpacity={0.4} />
+                <Stop offset="100%" stopColor={colors.green[400]} stopOpacity={0} />
+              </SvgGrad>
+            </Defs>
+            <Path d={area} fill="url(#marginGrad)" />
+            <Path d={path} stroke={colors.green[600]} strokeWidth={2} fill="none" strokeLinecap="round" />
+          </Svg>
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── 3. Deferred (зависшие отложенные) ───────────────────────────────────────
+function DeferredCard() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  const { data, isLoading } = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const count = data?.deferredSum.count ?? 0;
+  const sum = data?.deferredSum.sum ?? 0;
+  if (!data) {
+    if (isLoading)
+      return (
+        <AnimatedCard index={7} style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <Skeleton width={'70%'} height={20} radius={6} />
+        </AnimatedCard>
+      );
+    return null;
+  }
+  if (count === 0) {
+    // Hide card entirely when no deferred — owner sees a tighter stack.
+    return null;
+  }
+
+  const isWarning = sum > 50000;
+  const accentColor = isWarning ? colors.amber[600] : colors.primary[600];
+  const accentBg = isWarning ? colors.amber[50] : colors.primary[50];
+
+  return (
+    <AnimatedCard
+      index={7}
+      style={
+        [
+          styles.ownerCard,
+          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          ...(isWarning ? [{ borderLeftWidth: 3, borderLeftColor: colors.amber[600] }] : []),
+        ] as any
+      }
+      onPress={() => {
+        haptic('tap');
+        navigation.navigate('Main', { screen: 'Checks', params: { screen: 'ChecksHome', params: { deferred: true } } });
+      }}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: accentBg }]}>
+          <Ionicons name="hourglass-outline" size={16} color={accentColor} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЗАВИСШИЕ ОТЛОЖЕННЫЕ</Text>
+        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 'auto' }} />
+      </View>
+      <Text style={[styles.deferredMain, { color: palette.text.primary }]}>
+        <Text style={[styles.deferredAccent, { color: accentColor }]}>{count}</Text> {count === 1 ? 'чек' : count < 5 ? 'чека' : 'чеков'} на{' '}
+        <Text style={[styles.deferredAccent, { color: accentColor }]}>{formatMoney(sum)}</Text>
+      </Text>
+      <Text style={[styles.deferredCaption, { color: palette.text.tertiary }]}>ждут оплаты</Text>
+    </AnimatedCard>
+  );
+}
+
+// ── 4. Owner Alerts hub ─────────────────────────────────────────────────────
+function AlertsCard() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  const [expanded, setExpanded] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ['owner-alerts'],
+    queryFn: async () => (await reportsApi.alerts()).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const alerts = data ?? [];
+  const visible = expanded ? alerts : alerts.slice(0, 5);
+
+  const typeMeta: Record<OwnerAlert['type'], { icon: keyof typeof Ionicons.glyphMap; color: string }> = {
+    low_stock: { icon: 'cube-outline', color: colors.amber[600] },
+    low_review: { icon: 'star-outline', color: colors.red[600] },
+    warranty: { icon: 'shield-outline', color: colors.purple[600] },
+    late_master: { icon: 'time-outline', color: colors.orange[600] },
+    pending_return: { icon: 'return-down-back-outline', color: colors.blue[600] },
+  };
+  const severityBar: Record<OwnerAlert['severity'], string> = {
+    info: colors.blue[400],
+    warn: colors.amber[600],
+    crit: colors.red[500],
+  };
+
+  const handlePressAlert = (a: OwnerAlert) => {
+    haptic('tap');
+    if (!a.link) return;
+    // Простой роут-парсер: link формата "/clients/:id", "/checks", "/marketing",
+    // "/products?lowStock=true" и т.п. Маппим первый сегмент на экран.
+    const path = a.link.replace(/^\//, '').split('?')[0];
+    const seg = path.split('/')[0];
+    const routeMap: Record<string, { tab: string; screen?: string }> = {
+      checks: { tab: 'Checks' },
+      products: { tab: 'Products' },
+      clients: { tab: 'MoreTab', screen: 'Clients' },
+      marketing: { tab: 'MoreTab', screen: 'Marketing' },
+      schedule: { tab: 'MoreTab', screen: 'Schedule' },
+      reports: { tab: 'MoreTab', screen: 'Reports' },
+    };
+    const target = routeMap[seg];
+    if (!target) return;
+    if (target.screen) {
+      navigation.navigate('Main', { screen: target.tab, params: { screen: target.screen } });
+    } else {
+      navigation.navigate('Main', { screen: target.tab });
+    }
+  };
+
+  return (
+    <AnimatedCard index={8} style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.red[50] }]}>
+          <Ionicons name="alert-circle-outline" size={16} color={colors.red[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ВНИМАНИЕ</Text>
+        {alerts.length > 0 && (
+          <View style={[styles.alertBadge, { backgroundColor: colors.red[600] }]}>
+            <Text style={styles.alertBadgeText}>{alerts.length}</Text>
+          </View>
+        )}
+      </View>
+      {isLoading && alerts.length === 0 ? (
+        <View style={{ gap: spacing[2] }}>
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} width={'100%'} height={42} radius={10} />
+          ))}
+        </View>
+      ) : alerts.length === 0 ? (
+        <View style={styles.alertsEmpty}>
+          <Ionicons name="checkmark-circle" size={28} color={colors.green[500]} />
+          <Text style={[styles.alertsEmptyText, { color: palette.text.tertiary }]}>Всё под контролем</Text>
+        </View>
+      ) : (
+        <View style={{ gap: spacing[1.5] }}>
+          {visible.map((a, idx) => {
+            const meta = typeMeta[a.type];
+            return (
+              <TouchableOpacity
+                key={`${a.type}-${idx}`}
+                style={[
+                  styles.alertRow,
+                  { backgroundColor: palette.bg.muted, borderLeftColor: severityBar[a.severity] },
+                ]}
+                onPress={() => handlePressAlert(a)}
+                activeOpacity={a.link ? 0.7 : 1}
+              >
+                <Ionicons name={meta.icon} size={16} color={meta.color} style={{ marginRight: spacing[2.5] }} />
+                <Text style={[styles.alertRowText, { color: palette.text.primary }]} numberOfLines={2}>
+                  {a.message}
+                </Text>
+                {a.link && <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />}
+              </TouchableOpacity>
+            );
+          })}
+          {alerts.length > 5 && (
+            <TouchableOpacity
+              style={styles.alertsExpandBtn}
+              onPress={() => {
+                haptic('tap');
+                setExpanded((e) => !e);
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.alertsExpandText, { color: colors.primary[600] }]}>
+                {expanded ? 'Свернуть' : `Показать все (${alerts.length})`}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── 5. Clients New vs Returning ─────────────────────────────────────────────
+function ClientsNewVsReturningCard() {
+  const palette = useColors();
+  // Локальный picker: today / yesterday / scrollable day window / week /
+  // month / year. Базовое состояние — month (как видит владелец дашборд по
+  // умолчанию). dayOffset нужен только при mode === 'day'.
+  type Mode = 'day' | 'week' | 'month' | 'year';
+  const [mode, setMode] = useState<Mode>('month');
+  const [dayOffset, setDayOffset] = useState(0); // 0 = сегодня, -1 = вчера, ...
+
+  const range = useMemo(() => {
+    const now = new Date();
+    if (mode === 'day') {
+      const d = new Date(now);
+      d.setDate(now.getDate() + dayOffset);
+      const day = isoDay(d);
+      return { from: day, to: day };
+    }
+    if (mode === 'week') return rangeForSimplePeriod('week');
+    if (mode === 'year') return rangeForSimplePeriod('year');
+    return rangeForSimplePeriod('month');
+  }, [mode, dayOffset]);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['clients-new-returning', range.from, range.to],
+    queryFn: async () => (await reportsApi.clientsNewVsReturning(range)).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const newCount = data?.newCount ?? 0;
+  const returningCount = data?.returningCount ?? 0;
+  const newRevenue = data?.newRevenue ?? 0;
+  const returningRevenue = data?.returningRevenue ?? 0;
+  const total = newCount + returningCount;
+  const ratioNew = total > 0 ? newCount / total : 0;
+
+  // Динамически собираем 7-day window (от -3 до +3 от текущего offset),
+  // но clamp по [-30, 0] так, чтобы окно "ползло" и не уходило в будущее.
+  const dayWindow = useMemo(() => {
+    const window: number[] = [];
+    const start = Math.max(-27, Math.min(0, dayOffset - 3));
+    for (let i = start; i < start + 7; i++) {
+      if (i > 0) break;
+      window.push(i);
+    }
+    return window;
+  }, [dayOffset]);
+
+  const formatDayLabel = (offset: number): string => {
+    if (offset === 0) return 'Сег';
+    if (offset === -1) return 'Вчр';
+    const d = new Date();
+    d.setDate(d.getDate() + offset);
+    return `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  return (
+    <AnimatedCard
+      index={9}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.purple[50] }]}>
+          <Ionicons name="people-outline" size={16} color={colors.purple[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>КЛИЕНТЫ</Text>
+      </View>
+      {/* Mode chips: Сегодня · Вчера · ← День → · Неделя · Месяц · Год */}
+      <View style={styles.clientsModeRow}>
+        <TouchableOpacity
+          style={[styles.modeChip, mode === 'day' && dayOffset === 0 && styles.modeChipActive]}
+          onPress={() => {
+            haptic('select');
+            setMode('day');
+            setDayOffset(0);
+          }}
+        >
+          <Text style={[styles.modeChipText, mode === 'day' && dayOffset === 0 && styles.modeChipTextActive]}>Сегодня</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.modeChip, mode === 'day' && dayOffset === -1 && styles.modeChipActive]}
+          onPress={() => {
+            haptic('select');
+            setMode('day');
+            setDayOffset(-1);
+          }}
+        >
+          <Text style={[styles.modeChipText, mode === 'day' && dayOffset === -1 && styles.modeChipTextActive]}>Вчера</Text>
+        </TouchableOpacity>
+        {(['week', 'month', 'year'] as const).map((m) => (
+          <TouchableOpacity
+            key={m}
+            style={[styles.modeChip, mode === m && styles.modeChipActive]}
+            onPress={() => {
+              haptic('select');
+              setMode(m);
+            }}
+          >
+            <Text style={[styles.modeChipText, mode === m && styles.modeChipTextActive]}>
+              {m === 'week' ? 'Неделя' : m === 'month' ? 'Месяц' : 'Год'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      {/* Scrollable day picker — shown only when mode === 'day'. */}
+      {mode === 'day' && (
+        <View style={styles.dayPickerRow}>
+          <TouchableOpacity
+            style={[styles.dayArrow, { backgroundColor: palette.bg.muted }]}
+            onPress={() => {
+              haptic('tap');
+              setDayOffset((o) => Math.max(o - 1, -30));
+            }}
+            hitSlop={6}
+          >
+            <Ionicons name="chevron-back" size={14} color={palette.text.secondary} />
+          </TouchableOpacity>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: spacing[1.5], paddingHorizontal: spacing[2] }}
+          >
+            {dayWindow.map((off) => {
+              const active = off === dayOffset;
+              return (
+                <TouchableOpacity
+                  key={off}
+                  style={[
+                    styles.dayChip,
+                    { backgroundColor: active ? colors.primary[600] : palette.bg.muted },
+                  ]}
+                  onPress={() => {
+                    haptic('tap');
+                    setDayOffset(off);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.dayChipText,
+                      { color: active ? colors.white : palette.text.secondary },
+                    ]}
+                  >
+                    {formatDayLabel(off)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+          <TouchableOpacity
+            style={[styles.dayArrow, { backgroundColor: palette.bg.muted }, dayOffset >= 0 && { opacity: 0.4 }]}
+            onPress={() => {
+              haptic('tap');
+              setDayOffset((o) => Math.min(o + 1, 0));
+            }}
+            disabled={dayOffset >= 0}
+            hitSlop={6}
+          >
+            <Ionicons name="chevron-forward" size={14} color={palette.text.secondary} />
+          </TouchableOpacity>
+        </View>
+      )}
+      {/* Numbers + stacked bar */}
+      {isLoading && !data ? (
+        <View style={{ gap: spacing[2] }}>
+          <Skeleton width={'100%'} height={40} radius={8} />
+          <Skeleton width={'80%'} height={12} radius={4} />
+        </View>
+      ) : (
+        <>
+          <View style={styles.clientsCountsRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.clientsCount, { color: colors.purple[700] }]}>{newCount}</Text>
+              <Text style={[styles.clientsCountLabel, { color: palette.text.tertiary }]}>новых клиентов</Text>
+            </View>
+            <View style={{ width: 1, backgroundColor: palette.border.subtle, marginHorizontal: spacing[3] }} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.clientsCount, { color: colors.primary[600] }]}>{returningCount}</Text>
+              <Text style={[styles.clientsCountLabel, { color: palette.text.tertiary }]}>вернулись</Text>
+            </View>
+          </View>
+          {total > 0 && (
+            <View style={[styles.stackedBar, { backgroundColor: palette.bg.muted }]}>
+              <View style={{ flex: ratioNew, backgroundColor: colors.purple[600] }} />
+              <View style={{ flex: 1 - ratioNew, backgroundColor: colors.primary[500] }} />
+            </View>
+          )}
+          <View style={styles.clientsRevenueRow}>
+            <Text style={[styles.clientsRevenueText, { color: palette.text.tertiary }]}>
+              Новые: <Text style={{ fontWeight: '700', color: palette.text.primary }}>{formatMoney(newRevenue)}</Text>
+            </Text>
+            <Text style={[styles.clientsRevenueText, { color: palette.text.tertiary }]}>
+              Постоянные:{' '}
+              <Text style={{ fontWeight: '700', color: palette.text.primary }}>{formatMoney(returningRevenue)}</Text>
+            </Text>
+          </View>
+        </>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── 7. Retention ────────────────────────────────────────────────────────────
+function RetentionCard() {
+  const palette = useColors();
+  const [period, setPeriod] = useState<SimplePeriod>('month');
+  const { data, isLoading } = useQuery({
+    queryKey: ['retention', period],
+    queryFn: async () => (await reportsApi.retention({ period })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const returningRate = data?.returningRate ?? 0;
+  const avgLtv = data?.avgLtv ?? 0;
+  const avgDaysBetween = data?.avgDaysBetweenVisits ?? 0;
+
+  return (
+    <AnimatedCard
+      index={11}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.teal[50] }]}>
+          <Ionicons name="repeat-outline" size={16} color={colors.teal[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>RETENTION КЛИЕНТОВ</Text>
+      </View>
+      <PeriodChips value={period} onChange={setPeriod} palette={palette} />
+      {isLoading && !data ? (
+        <View style={{ gap: spacing[2], marginTop: spacing[3] }}>
+          <Skeleton width={'100%'} height={32} radius={8} />
+          <Skeleton width={'80%'} height={16} radius={4} />
+          <Skeleton width={'60%'} height={16} radius={4} />
+        </View>
+      ) : (
+        <View style={{ marginTop: spacing[3], gap: spacing[2] }}>
+          <View style={styles.retentionRow}>
+            <Text style={[styles.retentionLabel, { color: palette.text.secondary }]}>Возвращаются</Text>
+            <Text style={[styles.retentionValue, { color: colors.teal[600] }]}>{Math.round(returningRate)}%</Text>
+          </View>
+          <View style={styles.retentionRow}>
+            <Text style={[styles.retentionLabel, { color: palette.text.secondary }]}>Средний LTV</Text>
+            <Text style={[styles.retentionValue, { color: palette.text.primary }]}>{formatMoney(avgLtv)}</Text>
+          </View>
+          <View style={styles.retentionRow}>
+            <Text style={[styles.retentionLabel, { color: palette.text.secondary }]}>Возвращаются через</Text>
+            <Text style={[styles.retentionValue, { color: palette.text.primary }]}>
+              {avgDaysBetween > 0 ? `${Math.round(avgDaysBetween)} дн.` : '—'}
+            </Text>
+          </View>
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── 8. Best / worst day of week ─────────────────────────────────────────────
+function BestDayOfWeekCard() {
+  const palette = useColors();
+  const [period, setPeriod] = useState<SimplePeriod>('month');
+  const range = useMemo(() => rangeForSimplePeriod(period), [period]);
+  const { data, isLoading } = useQuery({
+    queryKey: ['best-day-week', range.from, range.to],
+    queryFn: async () => (await reportsApi.bestDayOfWeek(range)).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const days = data?.days ?? [];
+  const best = data?.best ?? -1;
+  const worst = data?.worst ?? -1;
+  const maxRev = Math.max(...days.map((d) => d.revenue), 1);
+  const WEEKDAY_SHORT = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+  // Бар-chart рендерим в порядке Пн → Вс (хронологический), не воскр → суббота.
+  const ORDERED = [1, 2, 3, 4, 5, 6, 0];
+  const byWeekday = useMemo(() => {
+    const m = new Map<number, { weekday: number; revenue: number; count: number }>();
+    for (const d of days) m.set(d.weekday, d);
+    return m;
+  }, [days]);
+
+  const bestDay = byWeekday.get(best);
+  const worstDay = byWeekday.get(worst);
+
+  const W = SCREEN_WIDTH - spacing[4] * 2 - spacing[5] * 2;
+  const barGap = 8;
+  const barW = (W - barGap * 6) / 7;
+  const H = 90;
+
+  return (
+    <AnimatedCard
+      index={12}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.indigo[50] }]}>
+          <Ionicons name="calendar-outline" size={16} color={colors.indigo[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЛУЧШИЙ ДЕНЬ НЕДЕЛИ</Text>
+      </View>
+      <PeriodChips value={period} onChange={setPeriod} palette={palette} />
+      {isLoading && !data ? (
+        <View style={{ marginTop: spacing[3], height: H + 30 }}>
+          <Skeleton width={'100%'} height={H} radius={8} />
+        </View>
+      ) : days.length === 0 ? (
+        <Text style={[styles.emptyText, { color: palette.text.tertiary, marginTop: spacing[3] }]}>
+          Нет данных за период
+        </Text>
+      ) : (
+        <>
+          <View style={[styles.bestDayBars, { marginTop: spacing[3], width: W, height: H }]}>
+            {ORDERED.map((wd, idx) => {
+              const d = byWeekday.get(wd);
+              const rev = d?.revenue ?? 0;
+              const h = maxRev > 0 ? Math.max((rev / maxRev) * (H - 18), 2) : 2;
+              const isBest = wd === best;
+              const isWorst = wd === worst;
+              const fill = isBest
+                ? colors.green[500]
+                : isWorst
+                  ? colors.orange[500]
+                  : colors.primary[300];
+              return (
+                <View
+                  key={wd}
+                  style={{
+                    width: barW,
+                    height: H,
+                    marginLeft: idx === 0 ? 0 : barGap,
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                  }}
+                >
+                  <View
+                    style={{
+                      width: barW,
+                      height: h,
+                      borderRadius: 6,
+                      backgroundColor: fill,
+                    }}
+                  />
+                  <Text style={[styles.weekdayLabel, { color: palette.text.tertiary }]}>
+                    {WEEKDAY_SHORT[wd]}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+          <View style={{ marginTop: spacing[2], gap: spacing[1] }}>
+            {bestDay && (
+              <Text style={[styles.bestDayCaption, { color: palette.text.secondary }]}>
+                Лучший:{' '}
+                <Text style={{ color: colors.green[700], fontWeight: '700' }}>
+                  {WEEKDAY_SHORT[best]} · {formatMoney(bestDay.revenue)}
+                </Text>
+              </Text>
+            )}
+            {worstDay && (
+              <Text style={[styles.bestDayCaption, { color: palette.text.secondary }]}>
+                Худший:{' '}
+                <Text style={{ color: colors.orange[600], fontWeight: '700' }}>
+                  {WEEKDAY_SHORT[worst]} · {formatMoney(worstDay.revenue)}
+                </Text>
+              </Text>
+            )}
+          </View>
+        </>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── 9. Recent reviews ───────────────────────────────────────────────────────
+function RecentReviewsCard() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  const { data, isLoading } = useQuery({
+    queryKey: ['recent-reviews', 5],
+    queryFn: async () => (await reportsApi.recentReviews(5)).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const reviews = data ?? [];
+
+  return (
+    <AnimatedCard
+      index={13}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={() => {
+        haptic('tap');
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Marketing' } });
+      }}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.amber[50] }]}>
+          <Ionicons name="star-outline" size={16} color={colors.amber[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ПОСЛЕДНИЕ ОТЗЫВЫ</Text>
+        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 'auto' }} />
+      </View>
+      {isLoading && reviews.length === 0 ? (
+        <View style={{ gap: spacing[2] }}>
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} width={'100%'} height={52} radius={10} />
+          ))}
+        </View>
+      ) : reviews.length === 0 ? (
+        <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Пока нет отзывов</Text>
+      ) : (
+        <View style={{ gap: spacing[2] }}>
+          {reviews.map((r) => (
+            <ReviewRow key={r.id} review={r} palette={palette} />
+          ))}
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
+const ReviewRow = React.memo(function ReviewRow({
+  review,
+  palette,
+}: {
+  review: RecentReview;
+  palette: SemanticPalette;
+}) {
+  const isLow = review.rating <= 3;
+  const firstLetter = (review.clientName || '?').trim().charAt(0).toUpperCase() || '?';
+  return (
+    <View
+      style={[
+        styles.reviewRow,
+        { backgroundColor: palette.bg.muted },
+        isLow && { borderLeftWidth: 3, borderLeftColor: colors.red[500] },
+      ]}
+    >
+      <View style={[styles.reviewAvatar, { backgroundColor: isLow ? colors.red[100] : colors.primary[100] }]}>
+        <Text style={[styles.reviewAvatarText, { color: isLow ? colors.red[700] : colors.primary[700] }]}>
+          {firstLetter}
+        </Text>
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={styles.reviewStarsRow}>
+          {[1, 2, 3, 4, 5].map((i) => (
+            <Ionicons
+              key={i}
+              name={i <= review.rating ? 'star' : 'star-outline'}
+              size={11}
+              color={i <= review.rating ? colors.yellow[500] : palette.border.subtle}
+            />
+          ))}
+          {review.employeeName && (
+            <Text style={[styles.reviewEmployee, { color: palette.text.tertiary }]} numberOfLines={1}>
+              · {review.employeeName}
+            </Text>
+          )}
+        </View>
+        {review.comment ? (
+          <Text style={[styles.reviewComment, { color: palette.text.primary }]} numberOfLines={2}>
+            {review.comment}
+          </Text>
+        ) : (
+          <Text style={[styles.reviewComment, { color: palette.text.tertiary, fontStyle: 'italic' }]} numberOfLines={1}>
+            Без комментария
+          </Text>
+        )}
+      </View>
+    </View>
+  );
+});
+
+// ── 10. Personal record ─────────────────────────────────────────────────────
+function PersonalRecordCard() {
+  const palette = useColors();
+  const { data } = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const bestDay = data?.personalRecord.bestDay;
+  const bestMonth = data?.personalRecord.bestMonth;
+  if (!bestDay && !bestMonth) return null;
+
+  const todayRevenue = data?.revenueToday ?? 0;
+  const distance = bestDay ? bestDay.value - todayRevenue : 0;
+  const ratio = bestDay && bestDay.value > 0 ? todayRevenue / bestDay.value : 0;
+  const closeToRecord = ratio >= 0.8 && distance > 0;
+
+  const formatDay = (iso: string): string => {
+    const parts = iso.split('-');
+    if (parts.length !== 3) return iso;
+    const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    return `${d.getDate()} ${MONTHS_RU_GEN[d.getMonth()]} ${d.getFullYear()}`;
+  };
+  const formatMonthYm = (ym: string): string => {
+    const [y, m] = ym.split('-');
+    const months = [
+      'январь',
+      'февраль',
+      'март',
+      'апрель',
+      'май',
+      'июнь',
+      'июль',
+      'август',
+      'сентябрь',
+      'октябрь',
+      'ноябрь',
+      'декабрь',
+    ];
+    return `${months[Number(m) - 1] ?? ''} ${y}`;
+  };
+
+  return (
+    <AnimatedCard
+      index={14}
+      style={
+        [
+          styles.ownerCard,
+          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          ...(closeToRecord ? [styles.recordHighlight] : []),
+        ] as any
+      }
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.amber[50] }]}>
+          <Ionicons name="trophy-outline" size={16} color={colors.amber[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЛИЧНЫЙ РЕКОРД</Text>
+      </View>
+      {bestDay && (
+        <View style={styles.recordRow}>
+          <Ionicons name="today-outline" size={14} color={palette.text.tertiary} />
+          <Text style={[styles.recordLabel, { color: palette.text.secondary }]}>Лучший день: </Text>
+          <Text style={[styles.recordValue, { color: palette.text.primary }]} numberOfLines={1}>
+            {formatDay(bestDay.date)} · <Text style={{ color: colors.amber[700] }}>{formatMoney(bestDay.value)}</Text>
+          </Text>
+        </View>
+      )}
+      {bestMonth && (
+        <View style={styles.recordRow}>
+          <Ionicons name="calendar-outline" size={14} color={palette.text.tertiary} />
+          <Text style={[styles.recordLabel, { color: palette.text.secondary }]}>Лучший месяц: </Text>
+          <Text style={[styles.recordValue, { color: palette.text.primary }]} numberOfLines={1}>
+            {formatMonthYm(bestMonth.ym)} ·{' '}
+            <Text style={{ color: colors.amber[700] }}>{formatMoney(bestMonth.value)}</Text>
+          </Text>
+        </View>
+      )}
+      {closeToRecord && (
+        <View style={[styles.recordCloseBox, { backgroundColor: colors.amber[50] }]}>
+          <Ionicons name="flame" size={14} color={colors.amber[700]} />
+          <Text style={[styles.recordCloseText, { color: colors.amber[800] }]}>
+            До рекорда осталось {formatMoney(distance)}
+          </Text>
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── 11. Month forecast ──────────────────────────────────────────────────────
+function MonthForecastCard() {
+  const palette = useColors();
+  const { data: v2 } = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+  // Сравнение с прошлым месяцем — берём revenue из dashboard-chart('month', -1).
+  const { data: prev } = useQuery({
+    queryKey: ['dashboard-chart', 'month', -1],
+    queryFn: async () => (await checksApi.getDashboardChart('month', -1)).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const forecast = v2?.monthForecast ?? 0;
+  const prevTotal = prev?.totalRevenue ?? 0;
+  if (forecast <= 0) return null;
+
+  const delta = formatDeltaPct(forecast, prevTotal);
+
+  return (
+    <AnimatedCard
+      index={15}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.primary[50] }]}>
+          <Ionicons name="trending-up-outline" size={16} color={colors.primary[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ПРОГНОЗ КОНЦА МЕСЯЦА</Text>
+      </View>
+      <Text style={[styles.forecastValue, { color: palette.text.primary }]} numberOfLines={1} adjustsFontSizeToFit>
+        {formatMoney(forecast)}
+      </Text>
+      <View style={styles.forecastDeltaRow}>
+        <View
+          style={[
+            styles.forecastChip,
+            {
+              backgroundColor:
+                delta.tone === 'up' ? colors.green[50] : delta.tone === 'down' ? colors.red[50] : palette.bg.muted,
+            },
+          ]}
+        >
+          <Ionicons
+            name={delta.tone === 'up' ? 'arrow-up' : delta.tone === 'down' ? 'arrow-down' : 'remove'}
+            size={12}
+            color={delta.tone === 'up' ? colors.green[700] : delta.tone === 'down' ? colors.red[700] : palette.text.tertiary}
+          />
+          <Text
+            style={[
+              styles.forecastChipText,
+              {
+                color: delta.tone === 'up' ? colors.green[700] : delta.tone === 'down' ? colors.red[700] : palette.text.tertiary,
+              },
+            ]}
+          >
+            {delta.text}
+          </Text>
+        </View>
+        <Text style={[styles.forecastCaption, { color: palette.text.tertiary }]}>к прошлому месяцу</Text>
+      </View>
+      <Text style={[styles.forecastSub, { color: palette.text.tertiary }]}>Расчёт по текущей динамике</Text>
+    </AnimatedCard>
+  );
+}
+
 function AdminDashboard({ name }: { name: string }) {
   return (
     <View style={{ gap: spacing[5] }}>
@@ -1494,9 +2325,17 @@ function AdminDashboard({ name }: { name: string }) {
       <KpiStrip />
       <OwnerAnalyticsChart />
       <TodaySnapshotRow />
-      <OwnerQuickActions />
-      <TopPerformers />
+      <CashPositionCard />
+      <MarginCard />
+      <DeferredCard />
+      <AlertsCard />
+      <ClientsNewVsReturningCard />
       <CallFunnelWidget />
+      <RetentionCard />
+      <BestDayOfWeekCard />
+      <RecentReviewsCard />
+      <PersonalRecordCard />
+      <MonthForecastCard />
     </View>
   );
 }
@@ -2128,10 +2967,17 @@ export default function DashboardScreen() {
     const dashboardKeys: (string | (string | number)[])[][] = [
       // Owner-side widgets:
       ['dashboard-chart'],
-      ['employee-ranking'],
+      ['dashboard-v2'],
       ['schedule-today'],
       ['marketing-dashboard'],
       ['calls-summary'],
+      // Owner widget queries (new in iter#14):
+      ['owner-alerts'],
+      ['clients-new-returning'],
+      ['retention'],
+      ['best-day-week'],
+      ['recent-reviews'],
+      ['call-funnel'],
       // Master-side widgets:
       ['shifts'],
       ['salary'],
@@ -2144,6 +2990,9 @@ export default function DashboardScreen() {
       // ever cached; restrict to the explicit prefix so we don't tear
       // down the schedule grid on a different month.
       ['users'],
+      // employee-ranking — оставляем на случай, если MasterDashboard или
+      // другие виджеты потом снова начнут читать ranking.
+      ['employee-ranking'],
     ];
     await Promise.all(dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })));
     setRefreshing(false);
@@ -2677,115 +3526,315 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
 
-  // ── 5. QUICK ACTIONS 2×2 ─────────────────────────────────────────────────
-  quickGrid2x2: {
+  // ── OWNER WIDGETS (iter#14, 2026-05-22) ──────────────────────────────────
+  // Generic card surface used by all owner widgets below.
+  ownerCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing[4],
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  ownerCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginBottom: spacing[3],
+  },
+  ownerCardIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ownerCardLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+
+  // Hero — additional rows
+  heroSecondary: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.78)',
+    marginTop: 4,
+  },
+  heroSecondaryBold: {
+    color: colors.white,
+    fontWeight: '700',
+  },
+  heroMonthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: spacing[2.5],
+    paddingTop: spacing[2.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.12)',
+  },
+  heroMonthText: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.72)',
+  },
+  heroMonthBold: { color: colors.white, fontWeight: '700' },
+
+  // Cash position
+  cashTotalBox: {
+    marginBottom: spacing[3],
+    paddingBottom: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(0,0,0,0.06)',
+  },
+  cashTotalLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  cashTotalValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+    fontVariant: ['tabular-nums'],
+  },
+  cashRowItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+  },
+  cashRowIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cashRowLabel: { flex: 1, fontSize: 14, fontWeight: '500' },
+  cashRowValue: { fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'] },
+
+  // Margin
+  marginRow: { flexDirection: 'row', alignItems: 'center' },
+  marginValue: {
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+    fontVariant: ['tabular-nums'],
+  },
+  marginCaption: { fontSize: 11, marginTop: 2 },
+  marginChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 4,
+    borderRadius: borderRadius.full,
+  },
+  marginChipText: { fontSize: 12, fontWeight: '700', letterSpacing: -0.1 },
+
+  // Deferred
+  deferredMain: { fontSize: 15, lineHeight: 22 },
+  deferredAccent: { fontWeight: '800', letterSpacing: -0.3 },
+  deferredCaption: { fontSize: 12, marginTop: 4 },
+
+  // Alerts
+  alertBadge: {
+    marginLeft: 'auto',
+    minWidth: 22,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  alertBadgeText: { color: colors.white, fontWeight: '800', fontSize: 11 },
+  alertsEmpty: {
+    alignItems: 'center',
+    paddingVertical: spacing[4],
+    gap: spacing[1.5],
+  },
+  alertsEmptyText: { fontSize: 13 },
+  alertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.lg,
+    borderLeftWidth: 3,
+  },
+  alertRowText: { flex: 1, fontSize: 13, lineHeight: 17 },
+  alertsExpandBtn: { alignItems: 'center', paddingVertical: spacing[2] },
+  alertsExpandText: { fontSize: 12, fontWeight: '700' },
+
+  // Clients new vs returning
+  clientsModeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: spacing[2.5],
+  },
+  modeChip: {
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: 5,
+    borderRadius: borderRadius.full,
+    backgroundColor: 'rgba(0,0,0,0.04)',
+  },
+  modeChipActive: { backgroundColor: colors.primary[600] },
+  modeChipText: { fontSize: 11, fontWeight: '600' },
+  modeChipTextActive: { color: colors.white, fontWeight: '700' },
+  dayPickerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing[2.5] },
+  dayArrow: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayChip: {
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: 5,
+    borderRadius: borderRadius.full,
+    minWidth: 44,
+    alignItems: 'center',
+  },
+  dayChipText: { fontSize: 11, fontWeight: '700' },
+  clientsCountsRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: spacing[2.5] },
+  clientsCount: {
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    fontVariant: ['tabular-nums'],
+  },
+  clientsCountLabel: { fontSize: 11, marginTop: 2 },
+  stackedBar: {
+    flexDirection: 'row',
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: spacing[2.5],
+  },
+  clientsRevenueRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing[3],
   },
-  quickActionTile: {
-    width: (SCREEN_WIDTH - spacing[4] * 2 - spacing[3]) / 2,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.gray[200],
-    paddingVertical: spacing[4],
-    paddingHorizontal: spacing[3.5],
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  quickActionIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickActionLabel: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.gray[900],
-    letterSpacing: -0.1,
-    lineHeight: 16,
-  },
+  clientsRevenueText: { fontSize: 12 },
 
-  // ── 6. TOP PERFORMERS ────────────────────────────────────────────────────
-  topPerformersCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.gray[200],
-    padding: spacing[2],
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
+  // Period chips (used by Retention + BestDayOfWeek)
+  periodChipsRow: {
+    flexDirection: 'row',
+    padding: 3,
+    borderRadius: borderRadius.full,
   },
-  topPerfRow: {
+  periodChip: {
+    flex: 1,
+    paddingVertical: 6,
+    alignItems: 'center',
+    borderRadius: borderRadius.full,
+  },
+  periodChipActive: {
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  periodChipText: { fontSize: 12, letterSpacing: -0.1 },
+
+  // Retention
+  retentionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[2],
+    justifyContent: 'space-between',
+    paddingVertical: 4,
   },
-  topPerfRowSkeleton: {
+  retentionLabel: { fontSize: 13 },
+  retentionValue: { fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+
+  // Best day of week
+  bestDayBars: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[2],
+    alignItems: 'flex-end',
   },
-  topPerfAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  weekdayLabel: { fontSize: 10, marginTop: 4, fontWeight: '600' },
+  bestDayCaption: { fontSize: 12 },
+
+  // Reviews
+  reviewRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2.5],
+    padding: spacing[2.5],
+    borderRadius: borderRadius.lg,
+  },
+  reviewAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
   },
-  topPerfRank: {
-    fontSize: fontSize.base,
-    fontWeight: '800',
-    letterSpacing: -0.2,
+  reviewAvatarText: { fontSize: 13, fontWeight: '800' },
+  reviewStarsRow: { flexDirection: 'row', alignItems: 'center', gap: 1 },
+  reviewEmployee: { fontSize: 11, marginLeft: 4 },
+  reviewComment: { fontSize: 13, marginTop: 4, lineHeight: 17 },
+
+  // Personal record
+  recordHighlight: {
+    borderColor: colors.amber[200],
+    backgroundColor: colors.amber[50],
   },
-  topPerfName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.gray[900],
-    letterSpacing: -0.2,
-  },
-  topPerfSub: {
-    fontSize: 12,
-    color: colors.gray[500],
-    marginTop: 1,
-  },
-  topPerfRevenue: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: colors.gray[900],
-    fontVariant: ['tabular-nums'],
-    letterSpacing: -0.2,
-  },
-  topPerfDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: colors.gray[100],
-    marginHorizontal: spacing[2],
-  },
-  topPerfEmpty: {
+  recordRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing[6],
+    gap: spacing[1.5],
+    paddingVertical: 4,
+  },
+  recordLabel: { fontSize: 13 },
+  recordValue: { flex: 1, fontSize: 13, fontWeight: '600' },
+  recordCloseBox: {
+    marginTop: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+  },
+  recordCloseText: { fontSize: 12, fontWeight: '700' },
+
+  // Forecast
+  forecastValue: {
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: -1,
+    fontVariant: ['tabular-nums'],
+  },
+  forecastDeltaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing[2],
+    marginTop: spacing[1.5],
   },
-  topPerfEmptyText: {
-    fontSize: 13,
-    color: colors.gray[400],
+  forecastChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
   },
+  forecastChipText: { fontSize: 12, fontWeight: '700' },
+  forecastCaption: { fontSize: 12 },
+  forecastSub: { fontSize: 11, marginTop: 6 },
+
+  // Shared
+  emptyText: { fontSize: 13, textAlign: 'center', paddingVertical: spacing[3] },
 
   // ── LEGACY (master path) ─────────────────────────────────────────────────
   errorBanner: {

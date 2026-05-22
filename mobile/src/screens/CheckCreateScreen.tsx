@@ -19,6 +19,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { Image as ExpoImage } from 'expo-image';
 import {
   checksApi,
   clientsApi,
@@ -29,6 +32,8 @@ import {
   warehouseCategoriesApi,
   warehousesApi,
   checkTemplatesApi,
+  checkPhotosApi,
+  subscriptionApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -51,6 +56,8 @@ import type {
   PaymentMethod,
   Warehouse,
   CheckTemplate,
+  CheckPhoto,
+  SubscriptionInfo,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
@@ -358,6 +365,22 @@ export default function CheckCreateScreen() {
   // Line items
   const [serviceLines, setServiceLines] = useState<(CheckServiceLine & { lineMasterId?: string })[]>([]);
   const [productLines, setProductLines] = useState<CheckProductLine[]>([]);
+
+  // ── Photo attachments ─────────────────────────────────────────────────────
+  // Three-state model so the "create" flow (where check id doesn't exist yet)
+  // and the "edit" flow (where it does) share the same UI:
+  //   • `pendingPhotos` — local URIs picked + compressed BEFORE the check is
+  //     saved. Uploaded en masse inside `createMutation.onSuccess` using the
+  //     newly-returned check id.
+  //   • `existingPhotos` — already-uploaded photos returned by the API in
+  //     edit mode. Deletable immediately. New photos in edit mode are also
+  //     uploaded immediately (since the check id is known).
+  //   • `uploadingUris` — set of local URIs that are currently being POSTed.
+  //     The thumbnail shows a small spinner overlay while present.
+  const MAX_PHOTOS = 10;
+  const [pendingPhotos, setPendingPhotos] = useState<string[]>([]);
+  const [existingPhotos, setExistingPhotos] = useState<CheckPhoto[]>([]);
+  const [uploadingUris, setUploadingUris] = useState<Set<string>>(new Set());
 
   // Pickers
   const [plateSearch, setPlateSearch] = useState('');
@@ -671,6 +694,217 @@ export default function CheckCreateScreen() {
   const selectedClient = clientData || plateClients?.find((c) => c.id === clientId);
   const selectedCar = clientCars?.find((c) => c.id === carId) ?? clientCars?.[0];
 
+  // ── Inline feature-gate check for "check_photos" ──────────────────────────
+  // FeatureGate is a full-screen paywall (it replaces the screen if the
+  // plan lacks the feature) — that would hide the entire cash form. For
+  // a small in-form block we mirror the same logic inline: only render
+  // the photo strip when the tenant's plan includes "check_photos" OR
+  // when the user is superadmin. Subscription query is already cached
+  // app-wide via the same query key, so this is essentially free.
+  const { user: authUser } = useAuth();
+  const { data: subInfo } = useQuery<SubscriptionInfo>({
+    queryKey: ['subscription'],
+    queryFn: async () => (await subscriptionApi.get()).data,
+    staleTime: 5 * 60 * 1000,
+  });
+  const canAttachPhotos = useMemo(() => {
+    if (authUser?.role === 'superadmin') return true;
+    if (!subInfo) return true; // optimistic — same behaviour as FeatureGate
+    const currentPlan = subInfo.plans?.find((p) => p.name === subInfo.planName);
+    const features = Array.isArray(currentPlan?.features) ? (currentPlan!.features as string[]) : [];
+    return features.includes('check_photos');
+  }, [authUser?.role, subInfo]);
+
+  // ── Existing photos in edit mode ──────────────────────────────────────────
+  // Cached separately from `pendingPhotos` so the edit flow doesn't fight the
+  // create flow. Refetched after a successful immediate-upload (edit mode).
+  const {
+    data: editPhotos,
+    refetch: refetchEditPhotos,
+  } = useQuery<CheckPhoto[]>({
+    queryKey: ['check-photos', editId],
+    queryFn: async () => (await checkPhotosApi.getByCheck(editId!)).data,
+    enabled: !!editId && canAttachPhotos,
+    staleTime: 30_000,
+  });
+  useEffect(() => {
+    if (editPhotos) setExistingPhotos(editPhotos);
+  }, [editPhotos]);
+
+  // ── Photo helpers ─────────────────────────────────────────────────────────
+  // `compressPhoto` runs through expo-image-manipulator: resize to max
+  // 1280px on the longest side + JPEG q=0.7. Result is typically
+  // 150–300 KB, well below the backend's 10 MB cap and small enough to
+  // upload over LTE without stalling the form.
+  const compressPhoto = async (uri: string): Promise<string> => {
+    try {
+      const result = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 1280 } }],
+        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
+      );
+      return result.uri;
+    } catch (err) {
+      // If compression fails for any reason (corrupt image, exotic codec)
+      // fall back to the original URI — backend will still receive a
+      // valid file, just possibly a larger one.
+      console.warn('[CheckCreate] photo compression failed, using original', err);
+      return uri;
+    }
+  };
+
+  const buildPhotoFormData = (uri: string): FormData => {
+    const filename = uri.split('/').pop() || 'photo.jpg';
+    const fd = new FormData();
+    fd.append('photo', { uri, name: filename, type: 'image/jpeg' } as any);
+    return fd;
+  };
+
+  /** Open the system picker. If `replace` is set, the chosen photo
+   *  replaces an existing entry rather than appending a new one — used
+   *  by the tap-to-replace gesture on a thumbnail. Otherwise (the "+"
+   *  tile) the new photo is appended. */
+  type ReplaceTarget = { kind: 'pending'; uri: string } | { kind: 'existing'; photo: CheckPhoto };
+  const pickAndAddPhoto = async (replace?: ReplaceTarget) => {
+    if (!replace) {
+      const totalCount = pendingPhotos.length + existingPhotos.length;
+      if (totalCount >= MAX_PHOTOS) {
+        Alert.alert('Лимит', `Можно прикрепить не более ${MAX_PHOTOS} фото`);
+        return;
+      }
+    }
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Нет доступа', 'Разрешите доступ к фото в настройках iPhone.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 1, // we re-compress below — picker quality just controls source decode
+        allowsEditing: false,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      const compressedUri = await compressPhoto(asset.uri);
+
+      // ── Replace flows ──
+      if (replace?.kind === 'pending') {
+        setPendingPhotos((prev) => prev.map((u) => (u === replace.uri ? compressedUri : u)));
+        return;
+      }
+      if (replace?.kind === 'existing') {
+        // For existing (already uploaded) photos: upload the new one, then
+        // remove the old one. Order matters — upload first so a failure
+        // doesn't leave the user with fewer photos than they started with.
+        setUploadingUris((prev) => {
+          const next = new Set(prev);
+          next.add(compressedUri);
+          return next;
+        });
+        try {
+          await checkPhotosApi.upload(replace.photo.checkId, buildPhotoFormData(compressedUri));
+          await checkPhotosApi.remove(replace.photo.id);
+          await refetchEditPhotos();
+        } catch {
+          Alert.alert('Ошибка', 'Не удалось заменить фото');
+        } finally {
+          setUploadingUris((prev) => {
+            const next = new Set(prev);
+            next.delete(compressedUri);
+            return next;
+          });
+        }
+        return;
+      }
+
+      // ── Append flow ──
+      if (editId) {
+        // Edit mode: upload immediately, then refetch the gallery.
+        setUploadingUris((prev) => {
+          const next = new Set(prev);
+          next.add(compressedUri);
+          return next;
+        });
+        try {
+          await checkPhotosApi.upload(editId, buildPhotoFormData(compressedUri));
+          await refetchEditPhotos();
+        } catch {
+          Alert.alert('Ошибка', 'Не удалось загрузить фото');
+        } finally {
+          setUploadingUris((prev) => {
+            const next = new Set(prev);
+            next.delete(compressedUri);
+            return next;
+          });
+        }
+      } else {
+        // Create mode: defer the upload until the check is saved.
+        setPendingPhotos((prev) => [...prev, compressedUri]);
+      }
+    } catch (err) {
+      console.warn('[CheckCreate] pickAndAddPhoto error', err);
+      Alert.alert('Ошибка', 'Не удалось выбрать фото');
+    }
+  };
+
+  const removePendingPhoto = (uri: string) => {
+    Alert.alert('Удалить фото?', 'Это действие необратимо', [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: () => setPendingPhotos((prev) => prev.filter((u) => u !== uri)),
+      },
+    ]);
+  };
+
+  const removeExistingPhoto = (photoId: string) => {
+    Alert.alert('Удалить фото?', 'Это действие необратимо', [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await checkPhotosApi.remove(photoId);
+            setExistingPhotos((prev) => prev.filter((p) => p.id !== photoId));
+            if (editId) refetchEditPhotos();
+          } catch {
+            Alert.alert('Ошибка', 'Не удалось удалить фото');
+          }
+        },
+      },
+    ]);
+  };
+
+  /** Upload every pending local URI to a freshly-created check. Returns
+   *  the URIs that failed so the caller can offer a retry. */
+  const uploadPendingForCheck = async (checkId: string, uris: string[]): Promise<string[]> => {
+    if (uris.length === 0) return [];
+    const failed: string[] = [];
+    setUploadingUris(new Set(uris));
+    try {
+      for (const uri of uris) {
+        try {
+          await checkPhotosApi.upload(checkId, buildPhotoFormData(uri));
+        } catch (err) {
+          console.warn('[CheckCreate] photo upload failed', err);
+          failed.push(uri);
+        } finally {
+          setUploadingUris((prev) => {
+            const next = new Set(prev);
+            next.delete(uri);
+            return next;
+          });
+        }
+      }
+    } finally {
+      setUploadingUris(new Set());
+    }
+    return failed;
+  };
+
   const resetForm = () => {
     setClientId('');
     setCarId('');
@@ -683,6 +917,9 @@ export default function CheckCreateScreen() {
     setServiceLines([]);
     setProductLines([]);
     setCheckDate(new Date());
+    setPendingPhotos([]);
+    setExistingPhotos([]);
+    setUploadingUris(new Set());
   };
 
   // Guard against double-fire: TouchableOpacity can occasionally deliver
@@ -693,10 +930,42 @@ export default function CheckCreateScreen() {
 
   const createMutation = useMutation({
     mutationFn: (data: any) => (editId ? checksApi.update(editId, data) : checksApi.create(data)),
-    onSuccess: () => {
+    onSuccess: async (res: any) => {
       submittingRef.current = false;
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+
+      // Upload pending local photos (create-mode only — in edit mode they
+      // were already uploaded immediately on pick). Snapshot the list
+      // BEFORE resetting the form / navigating away.
+      const uris = pendingPhotos;
+      const savedCheckId: string | undefined = editId || res?.data?.id;
+      if (!editId && savedCheckId && uris.length > 0) {
+        try {
+          const failed = await uploadPendingForCheck(savedCheckId, uris);
+          if (failed.length > 0) {
+            Alert.alert(
+              'Чек создан, но не все фото загружены',
+              `Не удалось загрузить ${failed.length} из ${uris.length} фото. Повторить попытку?`,
+              [
+                { text: 'Отмена', style: 'cancel' },
+                {
+                  text: 'Повторить',
+                  onPress: async () => {
+                    const stillFailed = await uploadPendingForCheck(savedCheckId, failed);
+                    if (stillFailed.length > 0) {
+                      Alert.alert('Ошибка', 'Не удалось загрузить часть фото. Откройте чек и добавьте их вручную.');
+                    }
+                  },
+                },
+              ],
+            );
+          }
+        } catch (err) {
+          console.warn('[CheckCreate] pending photo upload sequence failed', err);
+        }
+      }
+
       if (isStackScreen) {
         navigation.goBack();
       } else {
@@ -718,8 +987,8 @@ export default function CheckCreateScreen() {
   const total = subtotal - discountNum;
   const cardAmountCalc = Math.max(total - (Number(cashAmount) || 0), 0);
 
-  // Get current user as default master
-  const { user: currentUser } = useAuth();
+  // Get current user as default master (already resolved above via `authUser`)
+  const currentUser = authUser;
   const defaultMasterId = currentUser?.id || '';
   // Mirror warehouse role gating — directors / admins / superadmins see
   // cost price inside the picker, masters don't. Same predicate as
@@ -1186,7 +1455,11 @@ export default function CheckCreateScreen() {
               client info / mileage but BEFORE services & products. The
               comment is about what the masters did / warned the client
               about, so it belongs to the receipt as a whole — not nested
-              inside client info. */}
+              inside client info.
+
+              The photo strip lives INSIDE this section (below the textarea)
+              so the "notes" block stays a single visual unit: text + photos
+              describe the same thing — what happened during the work. */}
           <View
             style={[styles.sectionComment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           >
@@ -1205,6 +1478,80 @@ export default function CheckCreateScreen() {
               placeholder="Введите сюда ваш коментарий..."
               placeholderTextColor={palette.text.tertiary}
             />
+
+            {/* ── Photo strip (feature-gated inline) ─────────────────────── */}
+            {canAttachPhotos && (
+              <View style={styles.photoBlock}>
+                <View style={styles.photoBlockHeader}>
+                  <Ionicons name="camera-outline" size={14} color={colors.teal[600]} />
+                  <Text style={[styles.photoBlockTitle, { color: palette.text.secondary }]}>
+                    Фото к заказ-наряду
+                  </Text>
+                  <Text style={[styles.photoBlockCount, { color: palette.text.tertiary }]}>
+                    {pendingPhotos.length + existingPhotos.length}/{MAX_PHOTOS}
+                  </Text>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.photoStripContent}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {existingPhotos.map((photo) => (
+                    <TouchableOpacity
+                      key={photo.id}
+                      activeOpacity={0.85}
+                      onPress={() => pickAndAddPhoto({ kind: 'existing', photo })}
+                      onLongPress={() => removeExistingPhoto(photo.id)}
+                      delayLongPress={400}
+                      style={[styles.photoThumbWrap, { borderColor: palette.border.subtle }]}
+                    >
+                      <ExpoImage
+                        source={{ uri: photo.photoUrl }}
+                        style={styles.photoThumbImg}
+                        contentFit="cover"
+                        transition={150}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                  {pendingPhotos.map((uri) => (
+                    <TouchableOpacity
+                      key={uri}
+                      activeOpacity={0.85}
+                      onPress={() => pickAndAddPhoto({ kind: 'pending', uri })}
+                      onLongPress={() => removePendingPhoto(uri)}
+                      delayLongPress={400}
+                      style={[styles.photoThumbWrap, { borderColor: palette.border.subtle }]}
+                    >
+                      <ExpoImage
+                        source={{ uri }}
+                        style={styles.photoThumbImg}
+                        contentFit="cover"
+                        transition={120}
+                      />
+                      {uploadingUris.has(uri) && (
+                        <View style={styles.photoUploadOverlay}>
+                          <ActivityIndicator size="small" color="#fff" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                  {pendingPhotos.length + existingPhotos.length < MAX_PHOTOS && (
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      onPress={() => pickAndAddPhoto()}
+                      style={[
+                        styles.photoAddTile,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ]}
+                      accessibilityLabel="Добавить фото"
+                    >
+                      <Ionicons name="add" size={28} color={colors.primary[600]} />
+                    </TouchableOpacity>
+                  )}
+                </ScrollView>
+              </View>
+            )}
           </View>
 
           {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
@@ -2470,4 +2817,56 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   // (Product Picker styles moved into <ProductPickerModal/>.)
+
+  // ── Photo strip (lives inside the comment section) ───────────────────────
+  // 64×64 thumbnails matches the "compact strip" feel asked for — large
+  // enough to recognise the picture, small enough that 5+ fit on screen
+  // without scrolling on an iPhone 14.
+  photoBlock: { marginTop: spacing[2], gap: spacing[1.5] },
+  photoBlockHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[1],
+  },
+  photoBlockTitle: {
+    fontSize: 11,
+    fontWeight: fontWeight.semibold,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  photoBlockCount: {
+    marginLeft: 'auto',
+    fontSize: 11,
+    fontWeight: fontWeight.medium,
+  },
+  photoStripContent: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    paddingVertical: spacing[1],
+  },
+  photoThumbWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    position: 'relative',
+  },
+  photoThumbImg: { width: '100%', height: '100%' },
+  photoUploadOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoAddTile: {
+    width: 64,
+    height: 64,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 });
