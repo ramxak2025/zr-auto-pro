@@ -225,10 +225,7 @@ export default function SalaryScreen() {
 
       {/* Month Navigation */}
       <View
-        style={[
-          styles.monthNav,
-          { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle },
-        ]}
+        style={[styles.monthNav, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}
       >
         <TouchableOpacity
           onPress={prevMonthNav}
@@ -316,9 +313,7 @@ export default function SalaryScreen() {
                 <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
                   <Ionicons name="wallet-outline" size={36} color={palette.text.tertiary} />
                 </View>
-                <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>
-                  Нет данных за этот месяц
-                </Text>
+                <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Нет данных за этот месяц</Text>
                 <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>
                   Зарплата рассчитывается на основе закрытых чеков
                 </Text>
@@ -470,9 +465,7 @@ export default function SalaryScreen() {
                       {payments.length === 0 ? (
                         <View style={styles.noPayments}>
                           <Ionicons name="document-text-outline" size={20} color={palette.text.tertiary} />
-                          <Text style={[styles.noPaymentsText, { color: palette.text.tertiary }]}>
-                            Выплат пока нет
-                          </Text>
+                          <Text style={[styles.noPaymentsText, { color: palette.text.tertiary }]}>Выплат пока нет</Text>
                         </View>
                       ) : (
                         payments.map((p: SalaryPayment) => (
@@ -545,10 +538,7 @@ export default function SalaryScreen() {
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сумма</Text>
           <View
-            style={[
-              styles.formInputRow,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-            ]}
+            style={[styles.formInputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
           >
             <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
             <TextInput
@@ -672,10 +662,7 @@ export default function SalaryScreen() {
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий (необязательно)</Text>
           <View
-            style={[
-              styles.formInputRow,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-            ]}
+            style={[styles.formInputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
           >
             <Ionicons name="chatbubble-outline" size={14} color={palette.text.tertiary} />
             <TextInput

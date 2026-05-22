@@ -14,24 +14,20 @@ export class WarehouseService {
    *     (matches the pre-migration tenant-scoped behaviour, so callers
    *     that pre-date the per-warehouse split keep their old folders).
    */
-  private async resolveWarehouseId(
-    tenantID: string,
-    warehouseId?: string | null,
-  ): Promise<string | null> {
+  private async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
     if (warehouseId) {
-      const { rows } = await this.pool.query(
-        'SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-        [warehouseId, tenantID],
-      );
+      const { rows } = await this.pool.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
+        warehouseId,
+        tenantID,
+      ]);
       if (rows.length === 0) {
         throw new BadRequestException({ message: 'Склад не найден' });
       }
       return rows[0].id;
     }
-    const { rows } = await this.pool.query(
-      `SELECT id FROM warehouses WHERE tenant_id=$1 AND kind='main' LIMIT 1`,
-      [tenantID],
-    );
+    const { rows } = await this.pool.query(`SELECT id FROM warehouses WHERE tenant_id=$1 AND kind='main' LIMIT 1`, [
+      tenantID,
+    ]);
     return rows.length > 0 ? rows[0].id : null;
   }
 
@@ -99,12 +95,7 @@ export class WarehouseService {
     }
   }
 
-  async removeCategory(
-    id: string,
-    tenantID: string,
-    moveProductsTo?: string,
-    deleteContents?: boolean,
-  ) {
+  async removeCategory(id: string, tenantID: string, moveProductsTo?: string, deleteContents?: boolean) {
     // Find the path of the category being deleted
     const { rows: catRows } = await this.pool.query(
       'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2',
@@ -146,10 +137,10 @@ export class WarehouseService {
       }
 
       // Delete the category and all subcategories
-      await client.query(
-        `DELETE FROM warehouse_categories WHERE tenant_id=$1 AND (path=$2 OR path LIKE $2 || '/%')`,
-        [tenantID, deletedPath],
-      );
+      await client.query(`DELETE FROM warehouse_categories WHERE tenant_id=$1 AND (path=$2 OR path LIKE $2 || '/%')`, [
+        tenantID,
+        deletedPath,
+      ]);
 
       await client.query('COMMIT');
     } catch (err) {
@@ -167,10 +158,11 @@ export class WarehouseService {
     try {
       await client.query('BEGIN');
       for (let i = 0; i < orderedIds.length; i++) {
-        await client.query(
-          'UPDATE warehouse_categories SET sort_order=$1 WHERE id=$2 AND tenant_id=$3',
-          [i, orderedIds[i], tenantID],
-        );
+        await client.query('UPDATE warehouse_categories SET sort_order=$1 WHERE id=$2 AND tenant_id=$3', [
+          i,
+          orderedIds[i],
+          tenantID,
+        ]);
       }
       await client.query('COMMIT');
     } catch (err) {
@@ -195,10 +187,11 @@ export class WarehouseService {
       await client.query('BEGIN');
 
       // Rename category itself
-      await client.query(
-        'UPDATE warehouse_categories SET path=$3 WHERE id=$1 AND tenant_id=$2',
-        [id, tenantID, newPath],
-      );
+      await client.query('UPDATE warehouse_categories SET path=$3 WHERE id=$1 AND tenant_id=$2', [
+        id,
+        tenantID,
+        newPath,
+      ]);
 
       // Rename all subcategories
       await client.query(
@@ -208,10 +201,11 @@ export class WarehouseService {
       );
 
       // Update products category references
-      await client.query(
-        'UPDATE products SET category=$3 WHERE tenant_id=$1 AND category=$2',
-        [tenantID, oldPath, newPath],
-      );
+      await client.query('UPDATE products SET category=$3 WHERE tenant_id=$1 AND category=$2', [
+        tenantID,
+        oldPath,
+        newPath,
+      ]);
       await client.query(
         `UPDATE products SET category = $3 || substring(category from length($2) + 1)
          WHERE tenant_id=$1 AND category LIKE $2 || '/%'`,

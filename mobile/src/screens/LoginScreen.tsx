@@ -101,20 +101,16 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.flex}
-      >
-        <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="handled"
-        >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.container}>
             {/* Logo */}
             <Animated.View style={[styles.logoWrap, { opacity: logoFade, transform: [{ scale: logoScale }] }]}>
               <CachedImage source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
             </Animated.View>
-            <Animated.Text style={[styles.subtitle, { opacity: logoFade, color: palette.text.tertiary }]}>Система управления автосервисом</Animated.Text>
+            <Animated.Text style={[styles.subtitle, { opacity: logoFade, color: palette.text.tertiary }]}>
+              Система управления автосервисом
+            </Animated.Text>
 
             {/* Phone */}
             <Animated.View style={[styles.fieldWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
@@ -164,10 +160,7 @@ export default function LoginScreen() {
                     passwordError ? styles.inputError : null,
                   ]}
                 />
-                <TouchableOpacity
-                  style={styles.eyeBtn}
-                  onPress={() => setShowPassword(!showPassword)}
-                >
+                <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword(!showPassword)}>
                   <Ionicons name={showPassword ? 'eye' : 'eye-off'} size={20} color={colors.gray[400]} />
                 </TouchableOpacity>
               </View>
@@ -176,12 +169,7 @@ export default function LoginScreen() {
 
             {/* Submit */}
             <Animated.View style={{ opacity: formFade, transform: [{ translateY: formSlide }] }}>
-              <Button
-                title="Войти"
-                onPress={handleSubmit}
-                loading={submitting}
-                size="lg"
-              />
+              <Button title="Войти" onPress={handleSubmit} loading={submitting} size="lg" />
             </Animated.View>
 
             {/* Demo access */}

@@ -35,11 +35,7 @@ export class ChecksController {
    * selected, so the master immediately sees when the customer was here last.
    */
   @Get('last-visit')
-  getLastVisit(
-    @CurrentUser() user: JwtPayload,
-    @Query('clientId') clientId?: string,
-    @Query('carId') carId?: string,
-  ) {
+  getLastVisit(@CurrentUser() user: JwtPayload, @Query('clientId') clientId?: string, @Query('carId') carId?: string) {
     return this.checksService.getLastVisit(user.tenantID, { clientId, carId });
   }
 

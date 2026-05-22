@@ -22,7 +22,10 @@ export default function GatedScreen({ featureKey, title, description, benefits, 
 
   const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
-    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    queryFn: async () => {
+      const res = await subscriptionApi.get();
+      return res.data;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
@@ -35,7 +38,7 @@ export default function GatedScreen({ featureKey, title, description, benefits, 
   if (!sub) return <>{children}</>;
 
   // Find current plan's features
-  const currentPlan = sub.plans?.find(p => p.name === sub.planName);
+  const currentPlan = sub.plans?.find((p) => p.name === sub.planName);
   const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
 
   if (planFeatures.includes(featureKey)) {
@@ -43,12 +46,7 @@ export default function GatedScreen({ featureKey, title, description, benefits, 
   }
 
   return (
-    <FeatureGate
-      featureKey={featureKey}
-      title={title}
-      description={description}
-      benefits={benefits}
-    >
+    <FeatureGate featureKey={featureKey} title={title} description={description} benefits={benefits}>
       {children}
     </FeatureGate>
   );

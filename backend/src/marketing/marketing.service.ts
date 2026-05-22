@@ -1,4 +1,12 @@
-import { Injectable, Inject, BadRequestException, NotFoundException, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  BadRequestException,
+  NotFoundException,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import * as crypto from 'crypto';
 import { PG_POOL } from '../database.module';
@@ -9,7 +17,10 @@ interface MessagingProviderAdapter {
 }
 
 class WhatsAppAdapter implements MessagingProviderAdapter {
-  constructor(private apiKey: string, private senderPhone: string) {}
+  constructor(
+    private apiKey: string,
+    private senderPhone: string,
+  ) {}
   async sendMessage(phone: string, message: string) {
     // Real implementation would call WhatsApp Business API here
     Logger.log(`[WhatsApp → ${phone}] ${message.substring(0, 60)}...`, 'WhatsAppAdapter');
@@ -19,7 +30,10 @@ class WhatsAppAdapter implements MessagingProviderAdapter {
 
 // ─── SMS.RU Real Adapter ─────────────────────────────────────────────
 class SmsRuAdapter implements MessagingProviderAdapter {
-  constructor(private apiId: string, private senderName: string) {}
+  constructor(
+    private apiId: string,
+    private senderName: string,
+  ) {}
 
   async sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }> {
     try {
@@ -39,7 +53,10 @@ class SmsRuAdapter implements MessagingProviderAdapter {
       const response = await fetch(`https://sms.ru/sms/send?${params.toString()}`);
       const data = await response.json();
 
-      Logger.log(`[SMS.RU → ${cleanPhone}] status=${data.status_code}, response=${JSON.stringify(data)}`, 'SmsRuAdapter');
+      Logger.log(
+        `[SMS.RU → ${cleanPhone}] status=${data.status_code}, response=${JSON.stringify(data)}`,
+        'SmsRuAdapter',
+      );
 
       if (data.status === 'OK' && data.status_code === 100) {
         // Check per-number status
@@ -67,7 +84,11 @@ class SmsRuAdapter implements MessagingProviderAdapter {
 
 // ─── Мои Звонки Adapter ──────────────────────────────────────────────
 class MoiZvonkiAdapter implements MessagingProviderAdapter {
-  constructor(private apiKey: string, private userName: string, private domain: string) {}
+  constructor(
+    private apiKey: string,
+    private userName: string,
+    private domain: string,
+  ) {}
 
   async sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }> {
     try {
@@ -90,7 +111,10 @@ class MoiZvonkiAdapter implements MessagingProviderAdapter {
 
       const data = await response.json();
 
-      Logger.log(`[МоиЗвонки → ${cleanPhone}] status=${response.status}, response=${JSON.stringify(data)}`, 'MoiZvonkiAdapter');
+      Logger.log(
+        `[МоиЗвонки → ${cleanPhone}] status=${response.status}, response=${JSON.stringify(data)}`,
+        'MoiZvonkiAdapter',
+      );
 
       if (response.ok) {
         return { success: true };
@@ -108,7 +132,10 @@ class MoiZvonkiAdapter implements MessagingProviderAdapter {
 }
 
 class SmsGenericAdapter implements MessagingProviderAdapter {
-  constructor(private apiKey: string, private senderName: string) {}
+  constructor(
+    private apiKey: string,
+    private senderName: string,
+  ) {}
   async sendMessage(phone: string, message: string) {
     Logger.log(`[SMS → ${phone}] ${message.substring(0, 60)}...`, 'SmsGenericAdapter');
     return { success: true };
@@ -116,7 +143,10 @@ class SmsGenericAdapter implements MessagingProviderAdapter {
 }
 
 class EmailAdapter implements MessagingProviderAdapter {
-  constructor(private apiKey: string, private senderName: string) {}
+  constructor(
+    private apiKey: string,
+    private senderName: string,
+  ) {}
   async sendMessage(phone: string, message: string) {
     Logger.log(`[Email → ${phone}] ${message.substring(0, 60)}...`, 'EmailAdapter');
     return { success: true };
@@ -148,12 +178,18 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   // ─── Messaging Provider Factory ──────────────────────────────────
   private createAdapter(row: any): MessagingProviderAdapter {
     switch (row.provider_type) {
-      case 'whatsapp':   return new WhatsAppAdapter(row.api_key, row.sender_phone || '');
-      case 'smsru':      return new SmsRuAdapter(row.api_key, row.sender_name || '');
-      case 'moizvonki':  return new MoiZvonkiAdapter(row.api_key, row.sender_name || '', row.webhook_url || '');
-      case 'sms':        return new SmsGenericAdapter(row.api_key, row.sender_name || '');
-      case 'email':      return new EmailAdapter(row.api_key, row.sender_name || '');
-      default:           return new SmsGenericAdapter(row.api_key, row.sender_name || '');
+      case 'whatsapp':
+        return new WhatsAppAdapter(row.api_key, row.sender_phone || '');
+      case 'smsru':
+        return new SmsRuAdapter(row.api_key, row.sender_name || '');
+      case 'moizvonki':
+        return new MoiZvonkiAdapter(row.api_key, row.sender_name || '', row.webhook_url || '');
+      case 'sms':
+        return new SmsGenericAdapter(row.api_key, row.sender_name || '');
+      case 'email':
+        return new EmailAdapter(row.api_key, row.sender_name || '');
+      default:
+        return new SmsGenericAdapter(row.api_key, row.sender_name || '');
     }
   }
 
@@ -177,10 +213,14 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
        FROM messaging_integrations WHERE tenant_id=$1 ORDER BY created_at`,
       [tenantId],
     );
-    return rows.map(r => ({
-      id: r.id, providerType: r.provider_type, senderName: r.sender_name,
-      senderPhone: r.sender_phone, webhookUrl: r.webhook_url,
-      isActive: r.is_active, createdAt: r.created_at,
+    return rows.map((r) => ({
+      id: r.id,
+      providerType: r.provider_type,
+      senderName: r.sender_name,
+      senderPhone: r.sender_phone,
+      webhookUrl: r.webhook_url,
+      isActive: r.is_active,
+      createdAt: r.created_at,
     }));
   }
 
@@ -193,15 +233,29 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         `UPDATE messaging_integrations SET provider_type=$1, api_key=$2, sender_name=$3,
          sender_phone=$4, webhook_url=$5, is_active=$6, updated_at=now()
          WHERE id=$7 AND tenant_id=$8`,
-        [dto.providerType, dto.apiKey, dto.senderName || null, dto.senderPhone || null,
-         dto.webhookUrl || null, dto.isActive !== false, dto.id, tenantId],
+        [
+          dto.providerType,
+          dto.apiKey,
+          dto.senderName || null,
+          dto.senderPhone || null,
+          dto.webhookUrl || null,
+          dto.isActive !== false,
+          dto.id,
+          tenantId,
+        ],
       );
     } else {
       await this.pool.query(
         `INSERT INTO messaging_integrations (tenant_id, provider_type, api_key, sender_name, sender_phone, webhook_url)
          VALUES ($1,$2,$3,$4,$5,$6)`,
-        [tenantId, dto.providerType, dto.apiKey, dto.senderName || null,
-         dto.senderPhone || null, dto.webhookUrl || null],
+        [
+          tenantId,
+          dto.providerType,
+          dto.apiKey,
+          dto.senderName || null,
+          dto.senderPhone || null,
+          dto.webhookUrl || null,
+        ],
       );
     }
     return this.getIntegrations(tenantId);
@@ -218,7 +272,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       `SELECT id, platform, url, is_active FROM review_platform_links WHERE tenant_id=$1 ORDER BY platform`,
       [tenantId],
     );
-    return rows.map(r => ({ id: r.id, platform: r.platform, url: r.url, isActive: r.is_active }));
+    return rows.map((r) => ({ id: r.id, platform: r.platform, url: r.url, isActive: r.is_active }));
   }
 
   async upsertPlatformLink(tenantId: string, dto: any) {
@@ -241,16 +295,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Review Settings ─────────────────────────────────────────────
   async getSettings(tenantId: string) {
-    const { rows } = await this.pool.query(
-      `SELECT * FROM review_settings WHERE tenant_id=$1`, [tenantId],
-    );
+    const { rows } = await this.pool.query(`SELECT * FROM review_settings WHERE tenant_id=$1`, [tenantId]);
     if (rows.length === 0) {
-      await this.pool.query(
-        `INSERT INTO review_settings (tenant_id) VALUES ($1) ON CONFLICT DO NOTHING`, [tenantId],
-      );
-      const { rows: newRows } = await this.pool.query(
-        `SELECT * FROM review_settings WHERE tenant_id=$1`, [tenantId],
-      );
+      await this.pool.query(`INSERT INTO review_settings (tenant_id) VALUES ($1) ON CONFLICT DO NOTHING`, [tenantId]);
+      const { rows: newRows } = await this.pool.query(`SELECT * FROM review_settings WHERE tenant_id=$1`, [tenantId]);
       return this.mapSettings(newRows[0]);
     }
     return this.mapSettings(rows[0]);
@@ -273,8 +321,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
   private mapSettings(r: any) {
     return {
-      sendTime: r.send_time, feedbackDelayHours: r.feedback_delay_hours,
-      autoSendEnabled: r.auto_send_enabled, messageTemplate: r.message_template,
+      sendTime: r.send_time,
+      feedbackDelayHours: r.feedback_delay_hours,
+      autoSendEnabled: r.auto_send_enabled,
+      messageTemplate: r.message_template,
     };
   }
 
@@ -287,7 +337,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
        JOIN tenants t ON t.id = rt.tenant_id
        LEFT JOIN clients cl ON cl.id = rt.client_id
        LEFT JOIN users u ON u.id = rt.employee_id
-       WHERE rt.token=$1`, [token],
+       WHERE rt.token=$1`,
+      [token],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Ссылка не найдена' });
     const r = rows[0];
@@ -296,8 +347,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
     const links = await this.getPlatformLinks(r.tenant_id);
     return {
-      tenantName: r.tenant_name, clientName: r.client_name,
-      employeeName: r.employee_name, platformLinks: links,
+      tenantName: r.tenant_name,
+      clientName: r.client_name,
+      employeeName: r.employee_name,
+      platformLinks: links,
     };
   }
 
@@ -306,9 +359,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException({ message: 'Оценка должна быть от 1 до 5' });
     }
 
-    const { rows } = await this.pool.query(
-      `SELECT * FROM review_tokens WHERE token=$1`, [token],
-    );
+    const { rows } = await this.pool.query(`SELECT * FROM review_tokens WHERE token=$1`, [token]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Ссылка не найдена' });
     const rt = rows[0];
     if (rt.used_at) throw new BadRequestException({ message: 'Отзыв уже оставлен' });
@@ -318,8 +369,15 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     await this.pool.query(
       `INSERT INTO review_responses (tenant_id, check_id, client_id, employee_id, rating, comment, redirected_to)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [rt.tenant_id, rt.check_id, rt.client_id, rt.employee_id,
-       dto.rating, dto.comment || null, dto.redirectedTo || null],
+      [
+        rt.tenant_id,
+        rt.check_id,
+        rt.client_id,
+        rt.employee_id,
+        dto.rating,
+        dto.comment || null,
+        dto.redirectedTo || null,
+      ],
     );
 
     // Mark token as used
@@ -341,7 +399,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
          ORDER BY created_at DESC LIMIT 3`,
         [employeeId, tenantId],
       );
-      if (rows.length >= 3 && rows.every(r => r.rating <= 3)) {
+      if (rows.length >= 3 && rows.every((r) => r.rating <= 3)) {
         const { rows: existing } = await this.pool.query(
           `SELECT 1 FROM review_alerts WHERE employee_id=$1 AND tenant_id=$2
            AND alert_type='consecutive_negative' AND created_at > now() - interval '7 days'`,
@@ -351,7 +409,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           await this.pool.query(
             `INSERT INTO review_alerts (tenant_id, employee_id, alert_type, details)
              VALUES ($1,$2,'consecutive_negative',$3)`,
-            [tenantId, employeeId, JSON.stringify({ ratings: rows.map(r => r.rating) })],
+            [tenantId, employeeId, JSON.stringify({ ratings: rows.map((r) => r.rating) })],
           );
         }
       }
@@ -382,9 +440,14 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
        WHERE ra.tenant_id=$1 ORDER BY ra.created_at DESC LIMIT 50`,
       [tenantId],
     );
-    return rows.map(r => ({
-      id: r.id, alertType: r.alert_type, employeeName: r.employee_name,
-      clientName: r.client_name, details: r.details, isRead: r.is_read, createdAt: r.created_at,
+    return rows.map((r) => ({
+      id: r.id,
+      alertType: r.alert_type,
+      employeeName: r.employee_name,
+      clientName: r.client_name,
+      details: r.details,
+      isRead: r.is_read,
+      createdAt: r.created_at,
     }));
   }
 
@@ -411,9 +474,18 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     const params: any[] = [tenantId];
     let idx = 2;
 
-    if (employeeId) { sql += ` AND rr.employee_id=$${idx++}`; params.push(employeeId); }
-    if (minRating)  { sql += ` AND rr.rating >= $${idx++}`; params.push(minRating); }
-    if (maxRating)  { sql += ` AND rr.rating <= $${idx++}`; params.push(maxRating); }
+    if (employeeId) {
+      sql += ` AND rr.employee_id=$${idx++}`;
+      params.push(employeeId);
+    }
+    if (minRating) {
+      sql += ` AND rr.rating >= $${idx++}`;
+      params.push(minRating);
+    }
+    if (maxRating) {
+      sql += ` AND rr.rating <= $${idx++}`;
+      params.push(maxRating);
+    }
     if (month) {
       sql += ` AND to_char(rr.created_at, 'YYYY-MM') = $${idx++}`;
       params.push(month);
@@ -421,20 +493,28 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
     sql += ` ORDER BY rr.created_at DESC LIMIT 200`;
     const { rows } = await this.pool.query(sql, params);
-    return rows.map(r => ({
-      id: r.id, checkId: r.check_id,
-      clientId: r.client_id, clientName: r.client_name,
-      employeeName: r.employee_name, employeeId: r.employee_id,
-      rating: r.rating, comment: r.comment,
-      carMakeModel: r.car_make_model || null, carPlate: r.car_plate || null,
-      redirectedTo: r.redirected_to, createdAt: r.created_at,
+    return rows.map((r) => ({
+      id: r.id,
+      checkId: r.check_id,
+      clientId: r.client_id,
+      clientName: r.client_name,
+      employeeName: r.employee_name,
+      employeeId: r.employee_id,
+      rating: r.rating,
+      comment: r.comment,
+      carMakeModel: r.car_make_model || null,
+      carPlate: r.car_plate || null,
+      redirectedTo: r.redirected_to,
+      createdAt: r.created_at,
     }));
   }
 
   // ─── Dashboard Analytics ─────────────────────────────────────────
   async getDashboard(tenantId: string) {
     // Total reviews and avg rating
-    const { rows: [stats] } = await this.pool.query(
+    const {
+      rows: [stats],
+    } = await this.pool.query(
       `SELECT COUNT(*) as total, COALESCE(AVG(rating),0) as avg_rating,
               COUNT(*) FILTER (WHERE rating <= 3) as negative,
               COUNT(*) FILTER (WHERE rating >= 4) as positive,
@@ -444,7 +524,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     );
 
     // Total tokens sent
-    const { rows: [tokenStats] } = await this.pool.query(
+    const {
+      rows: [tokenStats],
+    } = await this.pool.query(
       `SELECT COUNT(*) as sent, COUNT(*) FILTER (WHERE used_at IS NOT NULL) as responded
        FROM review_tokens WHERE tenant_id=$1`,
       [tenantId],
@@ -464,10 +546,11 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     );
 
     // Unread alerts count
-    const { rows: [alertCount] } = await this.pool.query(
-      `SELECT COUNT(*) as count FROM review_alerts WHERE tenant_id=$1 AND is_read=false`,
-      [tenantId],
-    );
+    const {
+      rows: [alertCount],
+    } = await this.pool.query(`SELECT COUNT(*) as count FROM review_alerts WHERE tenant_id=$1 AND is_read=false`, [
+      tenantId,
+    ]);
 
     return {
       totalReviews: parseInt(stats.total),
@@ -478,10 +561,12 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       tokensSent: parseInt(tokenStats.sent),
       tokensResponded: parseInt(tokenStats.responded),
       responseRate: tokenStats.sent > 0 ? Math.round((tokenStats.responded / tokenStats.sent) * 100) : 0,
-      conversionRate: stats.positive > 0 && stats.redirected > 0 ? Math.round((stats.redirected / stats.positive) * 100) : 0,
+      conversionRate:
+        stats.positive > 0 && stats.redirected > 0 ? Math.round((stats.redirected / stats.positive) * 100) : 0,
       unreadAlerts: parseInt(alertCount.count),
-      employeeRatings: employeeRatings.map(r => ({
-        employeeId: r.employee_id, employeeName: r.employee_name,
+      employeeRatings: employeeRatings.map((r) => ({
+        employeeId: r.employee_id,
+        employeeName: r.employee_name,
         reviewCount: parseInt(r.review_count),
         avgRating: parseFloat(parseFloat(r.avg_rating).toFixed(1)),
         negativeRate: r.review_count > 0 ? Math.round((r.negative_count / r.review_count) * 100) : 0,
@@ -570,14 +655,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
           // Build message from template
           const { rows: settingsRows } = await this.pool.query(
-            `SELECT message_template FROM review_settings WHERE tenant_id=$1`, [job.tenant_id],
+            `SELECT message_template FROM review_settings WHERE tenant_id=$1`,
+            [job.tenant_id],
           );
-          const { rows: tenantRows } = await this.pool.query(
-            `SELECT name FROM tenants WHERE id=$1`, [job.tenant_id],
-          );
-          const { rows: clientRows } = await this.pool.query(
-            `SELECT full_name FROM clients WHERE id=$1`, [job.client_id],
-          );
+          const { rows: tenantRows } = await this.pool.query(`SELECT name FROM tenants WHERE id=$1`, [job.tenant_id]);
+          const { rows: clientRows } = await this.pool.query(`SELECT full_name FROM clients WHERE id=$1`, [
+            job.client_id,
+          ]);
 
           const template = settingsRows[0]?.message_template || 'Оцените обслуживание: {reviewLink}';
           // Public review URL must be served by our own domain so clients
@@ -595,10 +679,11 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         } catch (err: any) {
           this.logger.error(`Review job ${job.id} failed: ${err.message}`);
           const newStatus = job.attempts >= 3 ? 'failed' : 'pending';
-          await this.pool.query(
-            `UPDATE review_jobs SET status=$1, error=$2 WHERE id=$3`,
-            [newStatus, err.message, job.id],
-          );
+          await this.pool.query(`UPDATE review_jobs SET status=$1, error=$2 WHERE id=$3`, [
+            newStatus,
+            err.message,
+            job.id,
+          ]);
         }
       }
     } catch (err) {

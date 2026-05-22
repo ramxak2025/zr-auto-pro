@@ -56,11 +56,7 @@ export class WarehouseController {
 
   @Roles('director', 'admin', 'superadmin')
   @Patch('categories/:id/rename')
-  renameCategory(
-    @Param('id') id: string,
-    @CurrentUser() user: JwtPayload,
-    @Body('newPath') newPath: string,
-  ) {
+  renameCategory(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body('newPath') newPath: string) {
     return this.warehouseService.renameCategory(id, user.tenantID, newPath);
   }
 }

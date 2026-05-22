@@ -94,10 +94,7 @@ export class ClientsService {
       idx += 2;
     }
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM clients c WHERE ${where}`,
-      params,
-    );
+    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM clients c WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
@@ -130,10 +127,7 @@ export class ClientsService {
   }
 
   async getById(id: string, tenantID: string) {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM clients WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM clients WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
 
     const client = this.mapClient(rows[0]);
@@ -163,9 +157,18 @@ export class ClientsService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.fullName !== undefined) { sets.push(`full_name=$${idx++}`); vals.push(dto.fullName); }
-    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(dto.phone); }
-    if (dto.comment !== undefined) { sets.push(`comment=$${idx++}`); vals.push(dto.comment); }
+    if (dto.fullName !== undefined) {
+      sets.push(`full_name=$${idx++}`);
+      vals.push(dto.fullName);
+    }
+    if (dto.phone !== undefined) {
+      sets.push(`phone=$${idx++}`);
+      vals.push(dto.phone);
+    }
+    if (dto.comment !== undefined) {
+      sets.push(`comment=$${idx++}`);
+      vals.push(dto.comment);
+    }
 
     if (sets.length === 0) return this.getById(id, tenantID);
 
@@ -184,7 +187,7 @@ export class ClientsService {
       [tenantID],
     );
     const header = 'Имя;Телефон';
-    const lines = rows.map(r => `${r.full_name};${r.phone}`);
+    const lines = rows.map((r) => `${r.full_name};${r.phone}`);
     return [header, ...lines].join('\n');
   }
 

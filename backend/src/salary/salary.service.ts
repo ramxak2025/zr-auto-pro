@@ -7,7 +7,8 @@ export class SalaryService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   async getAll(tenantID: string, query: any) {
-    const dateFrom = query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const dateFrom =
+      query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
 
     const { rows } = await this.pool.query(
@@ -187,8 +188,18 @@ export class SalaryService {
 
     // Format month_year for description (e.g., "2026-02" -> "Февраль 2026")
     const monthNames = [
-      'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-      'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+      'Январь',
+      'Февраль',
+      'Март',
+      'Апрель',
+      'Май',
+      'Июнь',
+      'Июль',
+      'Август',
+      'Сентябрь',
+      'Октябрь',
+      'Ноябрь',
+      'Декабрь',
     ];
     const [year, month] = dto.monthYear.split('-');
     const monthName = monthNames[parseInt(month, 10) - 1] || dto.monthYear;
@@ -259,14 +270,16 @@ export class SalaryService {
       [userID, tenantID],
     );
 
-    const productPromotions = promoRows.map(p => ({
+    const productPromotions = promoRows.map((p) => ({
       productId: p.product_id,
       productName: p.product_name,
       percent: parseFloat(p.percent) || 0,
       sellPrice: parseFloat(p.sell_price) || 0,
       costPrice: parseFloat(p.cost_price) || 0,
       photo: p.photo,
-      estimatedBonus: Math.round(((parseFloat(p.sell_price) || 0) - (parseFloat(p.cost_price) || 0)) * (parseFloat(p.percent) / 100)),
+      estimatedBonus: Math.round(
+        ((parseFloat(p.sell_price) || 0) - (parseFloat(p.cost_price) || 0)) * (parseFloat(p.percent) / 100),
+      ),
     }));
 
     return {

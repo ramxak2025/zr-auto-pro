@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import UIKit
+import WidgetKit
 
 public class AutexaLiquidGlassModule: Module {
   public func definition() -> ModuleDefinition {
@@ -16,6 +17,27 @@ public class AutexaLiquidGlassModule: Module {
       }
       Prop("topRim") { (view: AutexaLiquidGlassView, value: Bool) in
         view.setTopRim(visible: value)
+      }
+    }
+
+    // Write today's dashboard snapshot into the shared App Group UserDefaults
+    // so the AuTexaWidget WidgetKit extension can read it without a network
+    // request. Immediately reloads all widget timelines so the Home Screen
+    // reflects the new data within seconds.
+    //
+    // `json` must be a JSON string conforming to the WidgetDashboardData
+    // struct in ios-extensions/AuTexaWidget/AuTexaWidget.swift:
+    //   { revenue, checksCount, profitToday, shiftOpen, updatedAt }
+    //
+    // On any OS where WidgetKit is not available (iOS < 14) the write still
+    // succeeds (UserDefaults) but reloadAllTimelines is a no-op.
+    Function("setWidgetData") { (json: String) in
+      if let defaults = UserDefaults(suiteName: "group.com.autexa.mobile") {
+        defaults.set(json, forKey: "widget_dashboard_data")
+        defaults.synchronize()
+      }
+      if #available(iOS 14.0, *) {
+        WidgetCenter.shared.reloadAllTimelines()
       }
     }
 

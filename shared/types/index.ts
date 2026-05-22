@@ -148,6 +148,8 @@ export interface Product {
   warehouseId: string | null;
   /** Default warranty period (in days) applied to lines that reference this product. Null = no warranty. */
   warrantyDays: number | null;
+  /** EAN-13 / QR / custom barcode. Null if not set. */
+  barcode?: string | null;
   createdAt: string;
 }
 
@@ -572,4 +574,44 @@ export interface PublicReviewData {
   clientName?: string;
   employeeName?: string;
   platformLinks: ReviewPlatformLink[];
+}
+
+export interface CheckPhoto {
+  id: string;
+  checkId: string;
+  photoUrl: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+export interface CheckTemplate {
+  id: string;
+  name: string;
+  services: Array<{ serviceId?: string; name: string; price: number; quantity: number }>;
+  products: Array<{ productId?: string; name: string; sellPrice: number; costPrice: number; quantity: number }>;
+  createdAt: string;
+}
+
+export interface PushToken {
+  token: string;
+  platform: 'ios' | 'android';
+}
+
+export interface CallFunnel {
+  totalCalls: number;
+  uniqueCallers: number;
+  arrivedClients: number;
+  createdChecks: number;
+  totalRevenue: number;
+  avgCheckValue: number;
+  repeatClients: number;
+  conversionRate: number;
+  period: { from: string; to: string };
+}
+
+export interface ReminderSettings {
+  enabled: boolean;
+  monthsInterval: number;
+  messageTemplate: string;
+  lastRunAt?: string | null;
 }

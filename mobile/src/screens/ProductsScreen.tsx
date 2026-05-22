@@ -22,13 +22,7 @@ import { Pressable } from 'react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import {
-  productsApi,
-  warehouseCategoriesApi,
-  uploadsApi,
-  warehousesApi,
-  stockMovementsApi,
-} from '../api/services';
+import { productsApi, warehouseCategoriesApi, uploadsApi, warehousesApi, stockMovementsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -210,9 +204,7 @@ const ProductRow = React.memo(function ProductRow({
             {item.name}
           </Text>
           {item.category && !hideCategory && (
-            <Text style={[styles.productCategory, { color: textTertiary }]}>
-              {item.category.split('/').pop()}
-            </Text>
+            <Text style={[styles.productCategory, { color: textTertiary }]}>{item.category.split('/').pop()}</Text>
           )}
           <View style={styles.productPrices}>
             <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
@@ -224,12 +216,8 @@ const ProductRow = React.memo(function ProductRow({
           </View>
         </View>
         <View style={styles.productStockWrap}>
-          {lowStock && (
-            <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
-          )}
-          <Text
-            style={[styles.productStock, { color: textPrimary }, lowStock && styles.productStockLow]}
-          >
+          {lowStock && <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />}
+          <Text style={[styles.productStock, { color: textPrimary }, lowStock && styles.productStockLow]}>
             {item.stock}
           </Text>
           <Text style={[styles.productStockLabel, { color: textTertiary }]}>шт</Text>
@@ -961,19 +949,31 @@ export default function ProductsScreen() {
   const handleWriteoffSubmit = async () => {
     const qty = Number(writeoffQty);
     if (!qty || qty <= 0) {
-      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E');
+      Alert.alert(
+        '\u041E\u0448\u0438\u0431\u043A\u0430',
+        '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u043E',
+      );
       return;
     }
     if (qty > writeoffProductStock) {
-      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', `\u041D\u0435\u043B\u044C\u0437\u044F \u0441\u043F\u0438\u0441\u0430\u0442\u044C \u0431\u043E\u043B\u044C\u0448\u0435 \u0447\u0435\u043C \u0435\u0441\u0442\u044C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0435 (${writeoffProductStock})`);
+      Alert.alert(
+        '\u041E\u0448\u0438\u0431\u043A\u0430',
+        `\u041D\u0435\u043B\u044C\u0437\u044F \u0441\u043F\u0438\u0441\u0430\u0442\u044C \u0431\u043E\u043B\u044C\u0448\u0435 \u0447\u0435\u043C \u0435\u0441\u0442\u044C \u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0435 (${writeoffProductStock})`,
+      );
       return;
     }
     if (!writeoffReason.trim()) {
-      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043F\u0440\u0438\u0447\u0438\u043D\u0443 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F');
+      Alert.alert(
+        '\u041E\u0448\u0438\u0431\u043A\u0430',
+        '\u0423\u043A\u0430\u0436\u0438\u0442\u0435 \u043F\u0440\u0438\u0447\u0438\u043D\u0443 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u044F',
+      );
       return;
     }
     if (!activeWarehouseId) {
-      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', '\u0421\u043A\u043B\u0430\u0434 \u0435\u0449\u0451 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D');
+      Alert.alert(
+        '\u041E\u0448\u0438\u0431\u043A\u0430',
+        '\u0421\u043A\u043B\u0430\u0434 \u0435\u0449\u0451 \u043D\u0435 \u0432\u044B\u0431\u0440\u0430\u043D',
+      );
       return;
     }
 
@@ -995,7 +995,11 @@ export default function ProductsScreen() {
         `\u0421\u043F\u0438\u0441\u0430\u043D\u043E ${qty} \u0448\u0442. "${writeoffProductName}"${writeoffMode === 'expense' ? ' (\u0441 \u0443\u0447\u0451\u0442\u043E\u043C \u0432 \u0440\u0430\u0441\u0445\u043E\u0434\u0430\u0445)' : ''}`,
       );
     } catch (err: any) {
-      Alert.alert('\u041E\u0448\u0438\u0431\u043A\u0430', err?.response?.data?.message || '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0438');
+      Alert.alert(
+        '\u041E\u0448\u0438\u0431\u043A\u0430',
+        err?.response?.data?.message ||
+          '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0438',
+      );
     }
   };
 
@@ -1564,10 +1568,7 @@ export default function ProductsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
-          onPress={openWriteoff}
-        >
+        <TouchableOpacity style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]} onPress={openWriteoff}>
           <View style={[styles.opsIcon, { backgroundColor: colors.red[50] }]}>
             <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
           </View>
@@ -1886,9 +1887,7 @@ export default function ProductsScreen() {
         <View style={[styles.writeoffSelectedProduct, { backgroundColor: palette.accent.primarySoft }]}>
           <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
           <View style={{ flex: 1 }}>
-            <Text style={[styles.writeoffSelectedName, { color: palette.text.primary }]}>
-              {writeoffProductName}
-            </Text>
+            <Text style={[styles.writeoffSelectedName, { color: palette.text.primary }]}>{writeoffProductName}</Text>
             <Text style={[styles.writeoffSelectedStock, { color: palette.text.secondary }]}>
               {'На складе: '}
               {writeoffProductStock} {'шт'}
@@ -1916,8 +1915,7 @@ export default function ProductsScreen() {
                 styles.writeoffRadioRow,
                 {
                   backgroundColor: palette.bg.card,
-                  borderColor:
-                    writeoffMode === 'expense' ? palette.accent.primary : palette.border.subtle,
+                  borderColor: writeoffMode === 'expense' ? palette.accent.primary : palette.border.subtle,
                 },
               ]}
             >
@@ -1925,8 +1923,7 @@ export default function ProductsScreen() {
                 style={[
                   styles.writeoffRadioCircle,
                   {
-                    borderColor:
-                      writeoffMode === 'expense' ? palette.accent.primary : palette.border.strong,
+                    borderColor: writeoffMode === 'expense' ? palette.accent.primary : palette.border.strong,
                   },
                 ]}
               >
@@ -1951,8 +1948,7 @@ export default function ProductsScreen() {
                 styles.writeoffRadioRow,
                 {
                   backgroundColor: palette.bg.card,
-                  borderColor:
-                    writeoffMode === 'simple' ? palette.accent.primary : palette.border.subtle,
+                  borderColor: writeoffMode === 'simple' ? palette.accent.primary : palette.border.subtle,
                 },
               ]}
             >
@@ -1960,8 +1956,7 @@ export default function ProductsScreen() {
                 style={[
                   styles.writeoffRadioCircle,
                   {
-                    borderColor:
-                      writeoffMode === 'simple' ? palette.accent.primary : palette.border.strong,
+                    borderColor: writeoffMode === 'simple' ? palette.accent.primary : palette.border.strong,
                   },
                 ]}
               >
@@ -2147,9 +2142,7 @@ export default function ProductsScreen() {
               Cap it there and rely on the alpha-tinted backdrop layer
               below for visual depth. */}
           <BlurView intensity={Platform.OS === 'android' ? 24 : 90} tint="dark" style={StyleSheet.absoluteFill} />
-          {Platform.OS === 'android' && (
-            <View pointerEvents="none" style={styles.fullscreenAndroidScrim} />
-          )}
+          {Platform.OS === 'android' && <View pointerEvents="none" style={styles.fullscreenAndroidScrim} />}
           {/* Inner Pressable absorbs taps on the image so the image
               itself doesn't dismiss the preview — only the backdrop does. */}
           {fullscreenPhoto && (

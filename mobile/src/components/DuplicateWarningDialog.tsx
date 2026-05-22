@@ -71,9 +71,7 @@ export default function DuplicateWarningDialog({
                   </Text>
                 </View>
               ))}
-              {existingCars.length > 5 && (
-                <Text style={styles.carsMore}>… и ещё {existingCars.length - 5}</Text>
-              )}
+              {existingCars.length > 5 && <Text style={styles.carsMore}>… и ещё {existingCars.length - 5}</Text>}
             </ScrollView>
           </View>
         )}

@@ -27,12 +27,7 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { haptic } from '../platform/haptics';
 import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
@@ -148,16 +143,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
           'worklet';
           dragging.value = false;
         }),
-    [
-      capsuleX,
-      lastSlot,
-      dragging,
-      rowWidth,
-      slotWidth,
-      safeFocusedIndex,
-      navigateToIndex,
-      fireCrossingHaptic,
-    ],
+    [capsuleX, lastSlot, dragging, rowWidth, slotWidth, safeFocusedIndex, navigateToIndex, fireCrossingHaptic],
   );
 
   const capsuleStyle = useAnimatedStyle(() => ({
@@ -169,15 +155,12 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // light overlay on top; both are tuned per mode so the bar reads as
   // a discrete material in both light and dark contexts.
   const blurTint = palette.bg.canvas === '#0a0d14' ? 'dark' : 'light';
-  const surfaceTint = palette.bg.canvas === '#0a0d14'
-    ? 'rgba(20, 26, 37, 0.65)' // dark mode — sit slightly above canvas
-    : 'rgba(255, 255, 255, 0.45)';
-  const rim = palette.bg.canvas === '#0a0d14'
-    ? 'rgba(255, 255, 255, 0.06)'
-    : 'rgba(255, 255, 255, 0.95)';
-  const islandBorder = palette.bg.canvas === '#0a0d14'
-    ? 'rgba(255, 255, 255, 0.08)'
-    : 'rgba(15, 23, 42, 0.08)';
+  const surfaceTint =
+    palette.bg.canvas === '#0a0d14'
+      ? 'rgba(20, 26, 37, 0.65)' // dark mode — sit slightly above canvas
+      : 'rgba(255, 255, 255, 0.45)';
+  const rim = palette.bg.canvas === '#0a0d14' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.95)';
+  const islandBorder = palette.bg.canvas === '#0a0d14' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 42, 0.08)';
 
   return (
     <View
@@ -296,21 +279,11 @@ function TabItem({ routeName, label, focused, onPress, palette }: TabItemProps) 
       accessibilityState={{ selected: focused }}
     >
       <Animated.View style={iconStyle}>
-        {Cmp ? (
-          <Cmp
-            size={22}
-            color={tint}
-            strokeWidth={focused ? 2.2 : 1.7}
-            fill="none"
-          />
-        ) : null}
+        {Cmp ? <Cmp size={22} color={tint} strokeWidth={focused ? 2.2 : 1.7} fill="none" /> : null}
       </Animated.View>
       <Text
         variant="caption"
-        style={[
-          styles.label,
-          { color: tint, fontWeight: focused ? '600' : '500' },
-        ]}
+        style={[styles.label, { color: tint, fontWeight: focused ? '600' : '500' }]}
         numberOfLines={1}
       >
         {label}

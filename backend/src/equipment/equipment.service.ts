@@ -15,7 +15,7 @@ export class EquipmentService {
       `SELECT * FROM storage_categories WHERE tenant_id = $1 ORDER BY sort_order, name`,
       [tenantId],
     );
-    return rows.map(r => ({ id: r.id, name: r.name, parentId: r.parent_id, sortOrder: r.sort_order }));
+    return rows.map((r) => ({ id: r.id, name: r.name, parentId: r.parent_id, sortOrder: r.sort_order }));
   }
 
   async createCategory(tenantId: string, dto: any) {
@@ -37,8 +37,14 @@ export class EquipmentService {
     let where = 'si.tenant_id = $1';
     const params: any[] = [tenantId];
     let idx = 2;
-    if (query?.categoryId) { where += ` AND si.category_id = $${idx++}`; params.push(query.categoryId); }
-    if (query?.search) { where += ` AND si.name ILIKE $${idx++}`; params.push(`%${query.search}%`); }
+    if (query?.categoryId) {
+      where += ` AND si.category_id = $${idx++}`;
+      params.push(query.categoryId);
+    }
+    if (query?.search) {
+      where += ` AND si.name ILIKE $${idx++}`;
+      params.push(`%${query.search}%`);
+    }
 
     const { rows } = await this.pool.query(
       `SELECT si.*, sc.name as category_name
@@ -46,11 +52,17 @@ export class EquipmentService {
        WHERE ${where} ORDER BY si.name LIMIT 500`,
       params,
     );
-    return rows.map(r => ({
-      id: r.id, name: r.name, description: r.description, photo: r.photo,
-      purchasePrice: parseFloat(r.purchase_price) || 0, quantity: parseInt(r.quantity) || 0,
-      unit: r.unit, serviceLifeMonths: r.service_life_months,
-      categoryId: r.category_id, categoryName: r.category_name,
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      photo: r.photo,
+      purchasePrice: parseFloat(r.purchase_price) || 0,
+      quantity: parseInt(r.quantity) || 0,
+      unit: r.unit,
+      serviceLifeMonths: r.service_life_months,
+      categoryId: r.category_id,
+      categoryName: r.category_name,
     }));
   }
 
@@ -58,8 +70,17 @@ export class EquipmentService {
     const { rows } = await this.pool.query(
       `INSERT INTO storage_items (tenant_id, category_id, name, description, photo, purchase_price, quantity, unit, service_life_months)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [tenantId, dto.categoryId || null, dto.name, dto.description, dto.photo,
-       dto.purchasePrice || 0, dto.quantity || 0, dto.unit || 'шт', dto.serviceLifeMonths || null],
+      [
+        tenantId,
+        dto.categoryId || null,
+        dto.name,
+        dto.description,
+        dto.photo,
+        dto.purchasePrice || 0,
+        dto.quantity || 0,
+        dto.unit || 'шт',
+        dto.serviceLifeMonths || null,
+      ],
     );
     return this.mapStorageItem(rows[0]);
   }
@@ -68,14 +89,38 @@ export class EquipmentService {
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.description !== undefined) { sets.push(`description=$${idx++}`); vals.push(dto.description); }
-    if (dto.photo !== undefined) { sets.push(`photo=$${idx++}`); vals.push(dto.photo); }
-    if (dto.purchasePrice !== undefined) { sets.push(`purchase_price=$${idx++}`); vals.push(dto.purchasePrice); }
-    if (dto.quantity !== undefined) { sets.push(`quantity=$${idx++}`); vals.push(dto.quantity); }
-    if (dto.unit !== undefined) { sets.push(`unit=$${idx++}`); vals.push(dto.unit); }
-    if (dto.serviceLifeMonths !== undefined) { sets.push(`service_life_months=$${idx++}`); vals.push(dto.serviceLifeMonths); }
-    if (dto.categoryId !== undefined) { sets.push(`category_id=$${idx++}`); vals.push(dto.categoryId); }
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.description !== undefined) {
+      sets.push(`description=$${idx++}`);
+      vals.push(dto.description);
+    }
+    if (dto.photo !== undefined) {
+      sets.push(`photo=$${idx++}`);
+      vals.push(dto.photo);
+    }
+    if (dto.purchasePrice !== undefined) {
+      sets.push(`purchase_price=$${idx++}`);
+      vals.push(dto.purchasePrice);
+    }
+    if (dto.quantity !== undefined) {
+      sets.push(`quantity=$${idx++}`);
+      vals.push(dto.quantity);
+    }
+    if (dto.unit !== undefined) {
+      sets.push(`unit=$${idx++}`);
+      vals.push(dto.unit);
+    }
+    if (dto.serviceLifeMonths !== undefined) {
+      sets.push(`service_life_months=$${idx++}`);
+      vals.push(dto.serviceLifeMonths);
+    }
+    if (dto.categoryId !== undefined) {
+      sets.push(`category_id=$${idx++}`);
+      vals.push(dto.categoryId);
+    }
     if (sets.length === 0) return;
     vals.push(id, tenantId);
     await this.pool.query(`UPDATE storage_items SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}`, vals);
@@ -89,10 +134,16 @@ export class EquipmentService {
 
   private mapStorageItem(r: any) {
     return {
-      id: r.id, name: r.name, description: r.description, photo: r.photo,
-      purchasePrice: parseFloat(r.purchase_price) || 0, quantity: parseInt(r.quantity) || 0,
-      unit: r.unit, serviceLifeMonths: r.service_life_months,
-      categoryId: r.category_id, categoryName: r.category_name,
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      photo: r.photo,
+      purchasePrice: parseFloat(r.purchase_price) || 0,
+      quantity: parseInt(r.quantity) || 0,
+      unit: r.unit,
+      serviceLifeMonths: r.service_life_months,
+      categoryId: r.category_id,
+      categoryName: r.category_name,
     };
   }
 
@@ -107,7 +158,7 @@ export class EquipmentService {
        ORDER BY ei.category_type, ei.issued_at DESC LIMIT 200`,
       [tenantId, userId],
     );
-    return rows.map(r => this.mapIssued(r));
+    return rows.map((r) => this.mapIssued(r));
   }
 
   async getEmployeeSummary(tenantId: string) {
@@ -124,8 +175,11 @@ export class EquipmentService {
        GROUP BY u.id ORDER BY u.full_name`,
       [tenantId],
     );
-    return rows.map(r => ({
-      userId: r.id, fullName: r.full_name, avatar: r.avatar, role: r.role,
+    return rows.map((r) => ({
+      userId: r.id,
+      fullName: r.full_name,
+      avatar: r.avatar,
+      role: r.role,
       activeCount: parseInt(r.active_count) || 0,
       totalCost: parseFloat(r.total_cost) || 0,
       toolsCount: parseInt(r.tools_count) || 0,
@@ -142,10 +196,10 @@ export class EquipmentService {
     if (!dto.userId) {
       throw new BadRequestException({ message: 'Сотрудник обязателен' });
     }
-    const { rows: userRows } = await this.pool.query(
-      'SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1',
-      [dto.userId, tenantId],
-    );
+    const { rows: userRows } = await this.pool.query('SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+      dto.userId,
+      tenantId,
+    ]);
     if (userRows.length === 0) {
       throw new BadRequestException({ message: 'Сотрудник не найден' });
     }
@@ -170,17 +224,28 @@ export class EquipmentService {
     const { rows } = await this.pool.query(
       `INSERT INTO equipment_issued (tenant_id, user_id, storage_item_id, name, description, photo, cost, category_type, service_life_months, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [tenantId, dto.userId, dto.storageItemId || null, dto.name, dto.description,
-       dto.photo, dto.cost || 0, dto.categoryType || 'tools', dto.serviceLifeMonths || null, expiresAt],
+      [
+        tenantId,
+        dto.userId,
+        dto.storageItemId || null,
+        dto.name,
+        dto.description,
+        dto.photo,
+        dto.cost || 0,
+        dto.categoryType || 'tools',
+        dto.serviceLifeMonths || null,
+        expiresAt,
+      ],
     );
     return this.mapIssued(rows[0]);
   }
 
   async replaceItem(id: string, tenantId: string, dto: any) {
     // Get old item
-    const { rows: oldRows } = await this.pool.query(
-      'SELECT * FROM equipment_issued WHERE id = $1 AND tenant_id = $2', [id, tenantId],
-    );
+    const { rows: oldRows } = await this.pool.query('SELECT * FROM equipment_issued WHERE id = $1 AND tenant_id = $2', [
+      id,
+      tenantId,
+    ]);
     if (oldRows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
     const old = oldRows[0];
 
@@ -190,10 +255,10 @@ export class EquipmentService {
     // drop the upfront check without also losing the WHERE clause.
     if (dto.oldDestination === 'storage' && old.storage_item_id) {
       // Return to storage
-      await this.pool.query(
-        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1 AND tenant_id = $2',
-        [old.storage_item_id, tenantId],
-      );
+      await this.pool.query('UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1 AND tenant_id = $2', [
+        old.storage_item_id,
+        tenantId,
+      ]);
       await this.pool.query(
         `UPDATE equipment_issued SET status = 'returned', return_reason = $3, trashed_at = now()
          WHERE id = $1 AND tenant_id = $2`,
@@ -249,7 +314,7 @@ export class EquipmentService {
        ORDER BY ei.trashed_at DESC LIMIT 100`,
       [tenantId],
     );
-    return rows.map(r => this.mapIssued(r));
+    return rows.map((r) => this.mapIssued(r));
   }
 
   async permanentDelete(id: string, tenantId: string) {
@@ -258,15 +323,16 @@ export class EquipmentService {
   }
 
   async returnToStorage(id: string, tenantId: string) {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM equipment_issued WHERE id = $1 AND tenant_id = $2', [id, tenantId],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM equipment_issued WHERE id = $1 AND tenant_id = $2', [
+      id,
+      tenantId,
+    ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Не найдено' });
     if (rows[0].storage_item_id) {
-      await this.pool.query(
-        'UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1 AND tenant_id = $2',
-        [rows[0].storage_item_id, tenantId],
-      );
+      await this.pool.query('UPDATE storage_items SET quantity = quantity + 1 WHERE id = $1 AND tenant_id = $2', [
+        rows[0].storage_item_id,
+        tenantId,
+      ]);
     }
     await this.pool.query(
       `UPDATE equipment_issued SET status = 'returned', return_reason = 'Возврат на склад', trashed_at = now()
@@ -283,13 +349,24 @@ export class EquipmentService {
 
   private mapIssued(r: any) {
     return {
-      id: r.id, userId: r.user_id, userName: r.user_name || null, userAvatar: r.user_avatar || null,
-      storageItemId: r.storage_item_id, name: r.name, description: r.description,
-      photo: r.photo, cost: parseFloat(r.cost) || 0, categoryType: r.category_type,
-      issuedAt: r.issued_at, serviceLifeMonths: r.service_life_months,
-      expiresAt: r.expires_at, status: r.status,
-      trashedAt: r.trashed_at, trashExpiresAt: r.trash_expires_at,
-      returnReason: r.return_reason, replacedBy: r.replaced_by,
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name || null,
+      userAvatar: r.user_avatar || null,
+      storageItemId: r.storage_item_id,
+      name: r.name,
+      description: r.description,
+      photo: r.photo,
+      cost: parseFloat(r.cost) || 0,
+      categoryType: r.category_type,
+      issuedAt: r.issued_at,
+      serviceLifeMonths: r.service_life_months,
+      expiresAt: r.expires_at,
+      status: r.status,
+      trashedAt: r.trashed_at,
+      trashExpiresAt: r.trash_expires_at,
+      returnReason: r.return_reason,
+      replacedBy: r.replaced_by,
     };
   }
 }

@@ -1,7 +1,17 @@
-import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  InternalServerErrorException,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarrantyService } from '../warranty/warranty.service';
+import { PushService } from '../push/push.service';
 
 // Only tables we explicitly want to allow as targets of cross-tenant
 // assertions. Keeping this as an allow-list (not a string the caller
@@ -16,6 +26,7 @@ export class ChecksService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private warranty: WarrantyService,
+    @Optional() private pushService?: PushService,
   ) {}
 
   /**
@@ -36,10 +47,10 @@ export class ChecksService {
     if (!TENANT_OWNED_TABLES.has(table)) {
       throw new InternalServerErrorException({ message: 'Internal assertion error' });
     }
-    const { rows } = await client.query(
-      `SELECT 1 FROM ${table} WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
-      [id, tenantID],
-    );
+    const { rows } = await client.query(`SELECT 1 FROM ${table} WHERE id = $1 AND tenant_id = $2 LIMIT 1`, [
+      id,
+      tenantID,
+    ]);
     if (rows.length === 0) {
       throw new BadRequestException({ message: `${label} не найден` });
     }
@@ -57,10 +68,10 @@ export class ChecksService {
     }
     const uniqueIds = Array.from(new Set(ids));
     if (uniqueIds.length === 0) return;
-    const { rows } = await client.query(
-      `SELECT id FROM ${table} WHERE id = ANY($1) AND tenant_id = $2`,
-      [uniqueIds, tenantID],
-    );
+    const { rows } = await client.query(`SELECT id FROM ${table} WHERE id = ANY($1) AND tenant_id = $2`, [
+      uniqueIds,
+      tenantID,
+    ]);
     if (rows.length !== uniqueIds.length) {
       throw new BadRequestException({ message: `${label} не найден или принадлежит другому автосервису` });
     }
@@ -102,12 +113,29 @@ export class ChecksService {
     const params: any[] = [tenantID];
     let idx = 2;
 
-    if (query.masterId) { where += ` AND ch.master_id = $${idx++}`; params.push(query.masterId); }
-    if (query.clientId) { where += ` AND ch.client_id = $${idx++}`; params.push(query.clientId); }
-    if (query.carId) { where += ` AND ch.car_id = $${idx++}`; params.push(query.carId); }
-    if (query.dateFrom) { where += ` AND ch.date >= $${idx++}`; params.push(query.dateFrom); }
-    if (query.dateTo) { where += ` AND ch.date <= $${idx++}`; params.push(query.dateTo + 'T23:59:59Z'); }
-    if (query.retail === 'true') { where += ` AND ch.client_id IS NULL`; }
+    if (query.masterId) {
+      where += ` AND ch.master_id = $${idx++}`;
+      params.push(query.masterId);
+    }
+    if (query.clientId) {
+      where += ` AND ch.client_id = $${idx++}`;
+      params.push(query.clientId);
+    }
+    if (query.carId) {
+      where += ` AND ch.car_id = $${idx++}`;
+      params.push(query.carId);
+    }
+    if (query.dateFrom) {
+      where += ` AND ch.date >= $${idx++}`;
+      params.push(query.dateFrom);
+    }
+    if (query.dateTo) {
+      where += ` AND ch.date <= $${idx++}`;
+      params.push(query.dateTo + 'T23:59:59Z');
+    }
+    if (query.retail === 'true') {
+      where += ` AND ch.client_id IS NULL`;
+    }
     if (query.search) {
       where += ` AND (cl.full_name ILIKE $${idx} OR cl.phone ILIKE $${idx} OR ca.plate_number ILIKE $${idx})`;
       params.push(`%${query.search}%`);
@@ -303,7 +331,8 @@ export class ChecksService {
           [serviceIds, tenantID],
         );
         for (const r of srvRows) {
-          serviceMasterPct[r.id] = r.master_percent !== null && r.master_percent !== undefined ? parseFloat(r.master_percent) : null;
+          serviceMasterPct[r.id] =
+            r.master_percent !== null && r.master_percent !== undefined ? parseFloat(r.master_percent) : null;
         }
       }
 
@@ -314,8 +343,8 @@ export class ChecksService {
         const masterId = svc.masterId || dto.masterId;
         // Service-specific percent takes priority over master default
         const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
-        const salaryPct = serviceOverride !== null ? serviceOverride : (salaryMap[masterId] || 0);
-        serviceSalaryTotal += total * salaryPct / 100;
+        const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
+        serviceSalaryTotal += (total * salaryPct) / 100;
         serviceLines.push({ ...svc, total, masterId });
       }
 
@@ -358,7 +387,7 @@ export class ChecksService {
         // Product commission: specific per-product % takes priority, otherwise global %
         const pct = productCommissionMap[prod.productId] ?? globalProductPct;
         if (pct > 0 && productProfit > 0) {
-          productSalaryTotal += productProfit * pct / 100;
+          productSalaryTotal += (productProfit * pct) / 100;
         }
 
         productLines.push({ ...prod, totalSell, totalCost });
@@ -391,12 +420,28 @@ export class ChecksService {
          service_salary_total, product_salary_total, total_cost, profit, tenant_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
          RETURNING *`,
-        [checkDate, dto.masterId, dto.clientId || null, dto.carId || null,
-         dto.mileage || null, dto.comment || null, discount,
-         dto.isDeferred || false, dto.paymentMethod || 'cash',
-         dto.cashAmount || 0, dto.cardAmount || 0,
-         serviceTotal, productTotal, totalRevenue, productCostTotal,
-         serviceSalaryTotal, productSalaryTotal, totalCost, profit, tenantID],
+        [
+          checkDate,
+          dto.masterId,
+          dto.clientId || null,
+          dto.carId || null,
+          dto.mileage || null,
+          dto.comment || null,
+          discount,
+          dto.isDeferred || false,
+          dto.paymentMethod || 'cash',
+          dto.cashAmount || 0,
+          dto.cardAmount || 0,
+          serviceTotal,
+          productTotal,
+          totalRevenue,
+          productCostTotal,
+          serviceSalaryTotal,
+          productSalaryTotal,
+          totalCost,
+          profit,
+          tenantID,
+        ],
       );
 
       const checkId = checkRows[0].id;
@@ -406,8 +451,15 @@ export class ChecksService {
         await client.query(
           `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total)
            VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [checkId, svc.serviceId || null, svc.masterId || null,
-           svc.name, svc.price || 0, svc.quantity || 1, svc.total],
+          [
+            checkId,
+            svc.serviceId || null,
+            svc.masterId || null,
+            svc.name,
+            svc.price || 0,
+            svc.quantity || 1,
+            svc.total,
+          ],
         );
       }
 
@@ -416,17 +468,25 @@ export class ChecksService {
         await client.query(
           `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [checkId, prod.productId || null, prod.name,
-           prod.sellPrice || 0, prod.costPrice || 0, prod.quantity || 1,
-           prod.totalSell, prod.totalCost],
+          [
+            checkId,
+            prod.productId || null,
+            prod.name,
+            prod.sellPrice || 0,
+            prod.costPrice || 0,
+            prod.quantity || 1,
+            prod.totalSell,
+            prod.totalCost,
+          ],
         );
 
         // Decrease product stock
         if (prod.productId && !dto.isDeferred) {
-          await client.query(
-            `UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2 AND tenant_id = $3`,
-            [prod.quantity || 1, prod.productId, tenantID],
-          );
+          await client.query(`UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2 AND tenant_id = $3`, [
+            prod.quantity || 1,
+            prod.productId,
+            tenantID,
+          ]);
         }
       }
 
@@ -453,15 +513,32 @@ export class ChecksService {
         }
         if (warrantyLines.length > 0) {
           await this.warranty.createFromCheckLines(
-            client, tenantID, checkId, checkDate,
-            dto.clientId || null, dto.carId || null, warrantyLines,
+            client,
+            tenantID,
+            checkId,
+            checkDate,
+            dto.clientId || null,
+            dto.carId || null,
+            warrantyLines,
           );
         }
       }
 
       await client.query('COMMIT');
 
-      return this.getById(checkId, tenantID);
+      const savedCheck = await this.getById(checkId, tenantID);
+
+      // Push notification to master when assigned by someone else
+      if (this.pushService && dto.masterId && dto.masterId !== userID) {
+        const checkNumber = (savedCheck as any).number;
+        this.pushService
+          .sendToUser(dto.masterId, 'Новый заказ-наряд', `Назначен заказ-наряд #${checkNumber}`)
+          .catch(() => {
+            /* non-fatal */
+          });
+      }
+
+      return savedCheck;
     } catch (err) {
       await client.query('ROLLBACK');
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
@@ -489,29 +566,70 @@ export class ChecksService {
       sets.push(`date=$${idx++}`);
       vals.push(dto.date);
     }
-    if (dto.paymentMethod !== undefined) { sets.push(`payment_method=$${idx++}`); vals.push(dto.paymentMethod); }
-    if (dto.isDeferred !== undefined) { sets.push(`is_deferred=$${idx++}`); vals.push(dto.isDeferred); }
-    if (dto.comment !== undefined) { sets.push(`comment=$${idx++}`); vals.push(dto.comment); }
-    if (dto.cashAmount !== undefined) { sets.push(`cash_amount=$${idx++}`); vals.push(dto.cashAmount); }
-    if (dto.cardAmount !== undefined) { sets.push(`card_amount=$${idx++}`); vals.push(dto.cardAmount); }
+    if (dto.paymentMethod !== undefined) {
+      sets.push(`payment_method=$${idx++}`);
+      vals.push(dto.paymentMethod);
+    }
+    if (dto.isDeferred !== undefined) {
+      sets.push(`is_deferred=$${idx++}`);
+      vals.push(dto.isDeferred);
+    }
+    if (dto.comment !== undefined) {
+      sets.push(`comment=$${idx++}`);
+      vals.push(dto.comment);
+    }
+    if (dto.cashAmount !== undefined) {
+      sets.push(`cash_amount=$${idx++}`);
+      vals.push(dto.cashAmount);
+    }
+    if (dto.cardAmount !== undefined) {
+      sets.push(`card_amount=$${idx++}`);
+      vals.push(dto.cardAmount);
+    }
+    if (dto.paymentStatus !== undefined) {
+      sets.push(`payment_status=$${idx++}`);
+      vals.push(dto.paymentStatus);
+    }
 
     if (sets.length === 0) return this.getById(id, tenantID);
 
     vals.push(id, tenantID);
     const { rows } = await this.pool.query(
-      `UPDATE checks SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING id`,
+      `UPDATE checks SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING id, number, total_revenue, payment_status`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+
+    // Push directors/admins when check is marked paid
+    if (this.pushService && dto.paymentStatus === 'paid') {
+      const updatedRow = rows[0];
+      const totalRevenue: number = parseFloat(updatedRow.total_revenue) || 0;
+      const checkNumber: number = updatedRow.number;
+      const formatted = new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency: 'RUB',
+        maximumFractionDigits: 0,
+      }).format(totalRevenue);
+      const { rows: managers } = await this.pool.query(
+        `SELECT id FROM users WHERE tenant_id=$1 AND role IN ('director','admin')`,
+        [tenantID],
+      );
+      for (const mgr of managers) {
+        this.pushService.sendToUser(mgr.id, 'Чек закрыт', `Чек #${checkNumber} закрыт — ${formatted}`).catch(() => {
+          /* non-fatal */
+        });
+      }
+    }
+
     return this.getById(id, tenantID);
   }
 
   private async fullUpdate(id: string, tenantID: string, userRole: string, dto: any) {
     // Verify check exists and is deferred
-    const { rows: checkRows } = await this.pool.query(
-      'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows: checkRows } = await this.pool.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
     if (checkRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
     if (!checkRows[0].is_deferred) {
       throw new ForbiddenException({ message: 'Редактирование доступно только для отложенных чеков' });
@@ -556,7 +674,8 @@ export class ChecksService {
           [serviceIds, tenantID],
         );
         for (const r of srvRows) {
-          serviceMasterPct[r.id] = r.master_percent !== null && r.master_percent !== undefined ? parseFloat(r.master_percent) : null;
+          serviceMasterPct[r.id] =
+            r.master_percent !== null && r.master_percent !== undefined ? parseFloat(r.master_percent) : null;
         }
       }
 
@@ -567,8 +686,8 @@ export class ChecksService {
         serviceTotal += total;
         const masterId = svc.masterId || primaryMasterId;
         const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
-        const salaryPct = serviceOverride !== null ? serviceOverride : (salaryMap[masterId] || 0);
-        serviceSalaryTotal += total * salaryPct / 100;
+        const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
+        serviceSalaryTotal += (total * salaryPct) / 100;
         serviceLines.push({ ...svc, total, masterId });
       }
 
@@ -608,7 +727,7 @@ export class ChecksService {
 
         const pct = productCommissionMap[prod.productId] ?? globalProductPct;
         if (pct > 0 && productProfit > 0) {
-          productSalaryTotal += productProfit * pct / 100;
+          productSalaryTotal += (productProfit * pct) / 100;
         }
 
         productLines.push({ ...prod, totalSell, totalCost });
@@ -625,26 +744,64 @@ export class ChecksService {
       const updateVals: any[] = [];
       let ui = 1;
 
-      if (dto.masterId !== undefined) { updateFields.push(`master_id=$${ui++}`); updateVals.push(dto.masterId); }
-      if (dto.clientId !== undefined) { updateFields.push(`client_id=$${ui++}`); updateVals.push(dto.clientId || null); }
-      if (dto.carId !== undefined) { updateFields.push(`car_id=$${ui++}`); updateVals.push(dto.carId || null); }
-      if (dto.mileage !== undefined) { updateFields.push(`mileage=$${ui++}`); updateVals.push(dto.mileage || null); }
-      if (dto.comment !== undefined) { updateFields.push(`comment=$${ui++}`); updateVals.push(dto.comment || null); }
-      if (dto.discount !== undefined) { updateFields.push(`discount=$${ui++}`); updateVals.push(dto.discount || 0); }
-      if (dto.paymentMethod !== undefined) { updateFields.push(`payment_method=$${ui++}`); updateVals.push(dto.paymentMethod); }
-      if (dto.cashAmount !== undefined) { updateFields.push(`cash_amount=$${ui++}`); updateVals.push(dto.cashAmount || 0); }
-      if (dto.cardAmount !== undefined) { updateFields.push(`card_amount=$${ui++}`); updateVals.push(dto.cardAmount || 0); }
-      if (dto.isDeferred !== undefined) { updateFields.push(`is_deferred=$${ui++}`); updateVals.push(dto.isDeferred); }
+      if (dto.masterId !== undefined) {
+        updateFields.push(`master_id=$${ui++}`);
+        updateVals.push(dto.masterId);
+      }
+      if (dto.clientId !== undefined) {
+        updateFields.push(`client_id=$${ui++}`);
+        updateVals.push(dto.clientId || null);
+      }
+      if (dto.carId !== undefined) {
+        updateFields.push(`car_id=$${ui++}`);
+        updateVals.push(dto.carId || null);
+      }
+      if (dto.mileage !== undefined) {
+        updateFields.push(`mileage=$${ui++}`);
+        updateVals.push(dto.mileage || null);
+      }
+      if (dto.comment !== undefined) {
+        updateFields.push(`comment=$${ui++}`);
+        updateVals.push(dto.comment || null);
+      }
+      if (dto.discount !== undefined) {
+        updateFields.push(`discount=$${ui++}`);
+        updateVals.push(dto.discount || 0);
+      }
+      if (dto.paymentMethod !== undefined) {
+        updateFields.push(`payment_method=$${ui++}`);
+        updateVals.push(dto.paymentMethod);
+      }
+      if (dto.cashAmount !== undefined) {
+        updateFields.push(`cash_amount=$${ui++}`);
+        updateVals.push(dto.cashAmount || 0);
+      }
+      if (dto.cardAmount !== undefined) {
+        updateFields.push(`card_amount=$${ui++}`);
+        updateVals.push(dto.cardAmount || 0);
+      }
+      if (dto.isDeferred !== undefined) {
+        updateFields.push(`is_deferred=$${ui++}`);
+        updateVals.push(dto.isDeferred);
+      }
 
       // Always update calculated fields
-      updateFields.push(`service_total=$${ui++}`); updateVals.push(serviceTotal);
-      updateFields.push(`product_total=$${ui++}`); updateVals.push(productTotal);
-      updateFields.push(`total_revenue=$${ui++}`); updateVals.push(totalRevenue);
-      updateFields.push(`product_cost_total=$${ui++}`); updateVals.push(productCostTotal);
-      updateFields.push(`service_salary_total=$${ui++}`); updateVals.push(serviceSalaryTotal);
-      updateFields.push(`product_salary_total=$${ui++}`); updateVals.push(productSalaryTotal);
-      updateFields.push(`total_cost=$${ui++}`); updateVals.push(totalCost);
-      updateFields.push(`profit=$${ui++}`); updateVals.push(profit);
+      updateFields.push(`service_total=$${ui++}`);
+      updateVals.push(serviceTotal);
+      updateFields.push(`product_total=$${ui++}`);
+      updateVals.push(productTotal);
+      updateFields.push(`total_revenue=$${ui++}`);
+      updateVals.push(totalRevenue);
+      updateFields.push(`product_cost_total=$${ui++}`);
+      updateVals.push(productCostTotal);
+      updateFields.push(`service_salary_total=$${ui++}`);
+      updateVals.push(serviceSalaryTotal);
+      updateFields.push(`product_salary_total=$${ui++}`);
+      updateVals.push(productSalaryTotal);
+      updateFields.push(`total_cost=$${ui++}`);
+      updateVals.push(totalCost);
+      updateFields.push(`profit=$${ui++}`);
+      updateVals.push(profit);
 
       updateVals.push(id, tenantID);
       await client.query(
@@ -666,7 +823,16 @@ export class ChecksService {
       for (const prod of productLines) {
         await client.query(
           `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [id, prod.productId || null, prod.name, prod.sellPrice || 0, prod.costPrice || 0, prod.quantity || 1, prod.totalSell, prod.totalCost],
+          [
+            id,
+            prod.productId || null,
+            prod.name,
+            prod.sellPrice || 0,
+            prod.costPrice || 0,
+            prod.quantity || 1,
+            prod.totalSell,
+            prod.totalCost,
+          ],
         );
       }
 
@@ -681,10 +847,10 @@ export class ChecksService {
   }
 
   async remove(id: string, tenantID: string, userRole: string) {
-    const { rows } = await this.pool.query(
-      'SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
 
     if (userRole === 'master' && !rows[0].is_deferred) {
@@ -780,7 +946,9 @@ export class ChecksService {
 
     // Build lookup from query results
     const dataMap: Record<string, { revenue: number; profit: number; checkCount: number }> = {};
-    let totalRevenue = 0, totalProfit = 0, totalChecks = 0;
+    let totalRevenue = 0,
+      totalProfit = 0,
+      totalChecks = 0;
     for (const r of rows) {
       const key = typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10);
       const revenue = parseFloat(r.revenue) || 0;
@@ -827,11 +995,22 @@ export class ChecksService {
         const d = new Date(dateFrom.getFullYear(), m, 1);
         const key = d.toISOString().slice(0, 7); // yyyy-MM
         // Sum all matching days in this month
-        let rev = 0, prof = 0, cc = 0;
+        let rev = 0,
+          prof = 0,
+          cc = 0;
         for (const [dk, dv] of Object.entries(dataMap)) {
-          if (dk.startsWith(key)) { rev += dv.revenue; prof += dv.profit; cc += dv.checkCount; }
+          if (dk.startsWith(key)) {
+            rev += dv.revenue;
+            prof += dv.profit;
+            cc += dv.checkCount;
+          }
         }
-        points.push({ date: `${dateFrom.getFullYear()}-${String(m + 1).padStart(2, '0')}-01`, revenue: rev, profit: prof, checkCount: cc });
+        points.push({
+          date: `${dateFrom.getFullYear()}-${String(m + 1).padStart(2, '0')}-01`,
+          revenue: rev,
+          profit: prof,
+          checkCount: cc,
+        });
       }
     } else {
       // week / month — fill each day

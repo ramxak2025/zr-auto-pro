@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View, Text, TouchableOpacity, Modal as RNModal, StyleSheet, ScrollView,
-} from 'react-native';
+import { View, Text, TouchableOpacity, Modal as RNModal, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 
@@ -13,7 +11,20 @@ interface Props {
   onCancel: () => void;
 }
 
-const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const MONTH_NAMES = [
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
+];
 const DAY_ABBR = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 function getDaysInMonth(year: number, month: number): number {
@@ -49,12 +60,16 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
   const selectedStr = `${value.getFullYear()}-${value.getMonth()}-${value.getDate()}`;
 
   const prevMonth = () => {
-    if (viewMonth === 0) { setViewMonth(11); setViewYear(viewYear - 1); }
-    else setViewMonth(viewMonth - 1);
+    if (viewMonth === 0) {
+      setViewMonth(11);
+      setViewYear(viewYear - 1);
+    } else setViewMonth(viewMonth - 1);
   };
   const nextMonth = () => {
-    if (viewMonth === 11) { setViewMonth(0); setViewYear(viewYear + 1); }
-    else setViewMonth(viewMonth + 1);
+    if (viewMonth === 11) {
+      setViewMonth(0);
+      setViewYear(viewYear + 1);
+    } else setViewMonth(viewMonth + 1);
   };
 
   const cells: (number | null)[] = [];
@@ -69,7 +84,9 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
         <TouchableOpacity onPress={prevMonth} style={cs.navBtn}>
           <Ionicons name="chevron-back" size={18} color={colors.gray[600]} />
         </TouchableOpacity>
-        <Text style={cs.monthText}>{MONTH_NAMES[viewMonth]} {viewYear}</Text>
+        <Text style={cs.monthText}>
+          {MONTH_NAMES[viewMonth]} {viewYear}
+        </Text>
         <TouchableOpacity onPress={nextMonth} style={cs.navBtn}>
           <Ionicons name="chevron-forward" size={18} color={colors.gray[600]} />
         </TouchableOpacity>
@@ -77,7 +94,7 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
 
       {/* Day of week headers */}
       <View style={cs.weekRow}>
-        {DAY_ABBR.map(d => (
+        {DAY_ABBR.map((d) => (
           <View key={d} style={cs.weekCell}>
             <Text style={cs.weekText}>{d}</Text>
           </View>
@@ -114,8 +131,21 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
 }
 
 const cs = StyleSheet.create({
-  monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[2], marginBottom: spacing[3] },
-  navBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
+  monthNav: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[2],
+    marginBottom: spacing[3],
+  },
+  navBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   monthText: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   weekRow: { flexDirection: 'row', marginBottom: spacing[1] },
   weekCell: { flex: 1, alignItems: 'center', paddingVertical: spacing[1] },
@@ -124,7 +154,15 @@ const cs = StyleSheet.create({
   dayCell: { width: '14.28%', alignItems: 'center', paddingVertical: spacing[1.5] },
   dayCellSelected: { backgroundColor: colors.primary[600], borderRadius: 20 },
   dayCellToday: { backgroundColor: colors.primary[50], borderRadius: 20 },
-  dayText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900], width: 32, height: 32, lineHeight: 32, textAlign: 'center' },
+  dayText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+    color: colors.gray[900],
+    width: 32,
+    height: 32,
+    lineHeight: 32,
+    textAlign: 'center',
+  },
   dayTextSelected: { color: colors.white, fontWeight: fontWeight.bold },
   dayTextToday: { color: colors.primary[600], fontWeight: fontWeight.bold },
 });
@@ -185,14 +223,18 @@ function TimePicker({ value, onChange }: { value: Date; onChange: (d: Date) => v
       <View style={ts.presetsColumn}>
         <Text style={ts.label}>Быстро</Text>
         <ScrollView style={{ maxHeight: 140 }} showsVerticalScrollIndicator={false}>
-          {['09:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'].map(preset => {
+          {['09:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'].map((preset) => {
             const [h, m] = preset.split(':').map(Number);
             const isActive = hours === h && minutes === m;
             return (
               <TouchableOpacity
                 key={preset}
                 style={[ts.presetBtn, isActive && ts.presetBtnActive]}
-                onPress={() => { const d = new Date(value); d.setHours(h, m); onChange(d); }}
+                onPress={() => {
+                  const d = new Date(value);
+                  d.setHours(h, m);
+                  onChange(d);
+                }}
               >
                 <Text style={[ts.presetText, isActive && ts.presetTextActive]}>{preset}</Text>
               </TouchableOpacity>
@@ -207,14 +249,41 @@ function TimePicker({ value, onChange }: { value: Date; onChange: (d: Date) => v
 const ts = StyleSheet.create({
   container: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: spacing[2] },
   column: { alignItems: 'center' },
-  label: { fontSize: 10, color: colors.gray[400], fontWeight: fontWeight.semibold, marginBottom: spacing[2], letterSpacing: 0.5 },
+  label: {
+    fontSize: 10,
+    color: colors.gray[400],
+    fontWeight: fontWeight.semibold,
+    marginBottom: spacing[2],
+    letterSpacing: 0.5,
+  },
   controls: { alignItems: 'center', gap: spacing[1] },
-  arrowBtn: { width: 44, height: 36, borderRadius: borderRadius.lg, backgroundColor: colors.gray[100], alignItems: 'center', justifyContent: 'center' },
-  valueBox: { width: 60, height: 56, borderRadius: borderRadius.xl, backgroundColor: colors.primary[50], borderWidth: 2, borderColor: colors.primary[200], alignItems: 'center', justifyContent: 'center' },
+  arrowBtn: {
+    width: 44,
+    height: 36,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.gray[100],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  valueBox: {
+    width: 60,
+    height: 56,
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.primary[50],
+    borderWidth: 2,
+    borderColor: colors.primary[200],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   valueText: { fontSize: 28, fontWeight: fontWeight.bold, color: colors.primary[700] },
   separator: { fontSize: 28, fontWeight: fontWeight.bold, color: colors.gray[300], marginTop: 42 },
   presetsColumn: { alignItems: 'center', marginLeft: spacing[3] },
-  presetBtn: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5], borderRadius: borderRadius.md, marginBottom: spacing[1] },
+  presetBtn: {
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.md,
+    marginBottom: spacing[1],
+  },
   presetBtnActive: { backgroundColor: colors.primary[50] },
   presetText: { fontSize: fontSize.xs, color: colors.gray[500], fontWeight: fontWeight.medium },
   presetTextActive: { color: colors.primary[700], fontWeight: fontWeight.bold },

@@ -70,9 +70,9 @@ type CategoryType = 'tools' | 'uniform' | 'other';
 
 // Card geometry — premium 2-column grid, computed at runtime so it fits any iPhone.
 const SCREEN_PADDING = spacing[4]; // 16pt
-const CARD_GUTTER = spacing[3];    // 12pt
-const CARD_RADIUS = 22;            // squircle-like, between borderRadius['2xl'] and ['3xl']
-const CARD_ASPECT = 1.18;          // 4:5-ish — premium portrait card
+const CARD_GUTTER = spacing[3]; // 12pt
+const CARD_RADIUS = 22; // squircle-like, between borderRadius['2xl'] and ['3xl']
+const CARD_ASPECT = 1.18; // 4:5-ish — premium portrait card
 
 function formatMoney(v: number) {
   return (
@@ -84,12 +84,14 @@ function formatMoney(v: number) {
 
 function getInitials(fullName?: string | null): string {
   if (!fullName) return '?';
-  return fullName
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() || '')
-    .join('') || '?';
+  return (
+    fullName
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase() || '')
+      .join('') || '?'
+  );
 }
 
 // ─── Centered iOS dialog primitive (used by Issue / Trash / FAB dialogs) ───
@@ -128,10 +130,7 @@ function CenteredDialog({
     <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       {/* The scrim is itself pressable: tap-outside-to-close. The inner card
           stops propagation so taps on it never close the dialog. */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={dialogStyles.kavRoot}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={dialogStyles.kavRoot}>
         <TouchableOpacity activeOpacity={1} style={dialogStyles.scrim} onPress={onClose}>
           <TouchableOpacity activeOpacity={1} style={dialogStyles.card} onPress={() => {}}>
             <View style={dialogStyles.header}>
@@ -337,13 +336,7 @@ function FrostedPill({ icon, label }: { icon: string; label: string | number }) 
 // ─── iOS segmented control (2 segments) ────────────────────────────────────
 // Pill-shaped gray track + a white pill for the active segment with a soft
 // shadow. Mirrors UISegmentedControl from iOS 13+. ~28pt segment height.
-function SegmentedTabs({
-  value,
-  onChange,
-}: {
-  value: Tab;
-  onChange: (v: Tab) => void;
-}) {
+function SegmentedTabs({ value, onChange }: { value: Tab; onChange: (v: Tab) => void }) {
   const palette = useColors();
   const items: { k: Tab; l: string }[] = [
     { k: 'employees', l: 'Сотрудники' },
@@ -381,20 +374,9 @@ function SegmentedTabs({
 }
 
 // ─── Premium employee card (2-col grid) ────────────────────────────────────
-function EmployeeCard({
-  emp,
-  cardWidth,
-  onPress,
-}: {
-  emp: any;
-  cardWidth: number;
-  onPress: () => void;
-}) {
+function EmployeeCard({ emp, cardWidth, onPress }: { emp: any; cardWidth: number; onPress: () => void }) {
   const initials = getInitials(emp.fullName);
-  const otherCount = Math.max(
-    0,
-    (emp.activeCount || 0) - (emp.toolsCount || 0) - (emp.uniformCount || 0),
-  );
+  const otherCount = Math.max(0, (emp.activeCount || 0) - (emp.toolsCount || 0) - (emp.uniformCount || 0));
 
   return (
     <PressableScale
@@ -410,11 +392,7 @@ function EmployeeCard({
       ]}
     >
       {emp.avatar ? (
-        <CachedImage
-          source={{ uri: emp.avatar }}
-          style={StyleSheet.absoluteFillObject as any}
-          resizeMode="cover"
-        />
+        <CachedImage source={{ uri: emp.avatar }} style={StyleSheet.absoluteFillObject as any} resizeMode="cover" />
       ) : (
         <LinearGradient
           colors={[colors.primary[500], colors.primary[700]] as [string, string]}
@@ -429,22 +407,15 @@ function EmployeeCard({
       )}
 
       <LinearGradient
-        colors={[
-          'rgba(29,78,216,0.30)',
-          'rgba(0,0,0,0.00)',
-        ]}
+        colors={['rgba(29,78,216,0.30)', 'rgba(0,0,0,0.00)']}
         locations={[0, 0.45]}
         style={StyleSheet.absoluteFillObject}
         pointerEvents="none"
       />
 
       <LinearGradient
-        colors={[
-          'rgba(0,0,0,0.00)',
-          'rgba(0,0,0,0.55)',
-          'rgba(0,0,0,0.86)',
-        ]}
-        locations={[0.40, 0.72, 1]}
+        colors={['rgba(0,0,0,0.00)', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.86)']}
+        locations={[0.4, 0.72, 1]}
         style={StyleSheet.absoluteFillObject}
         pointerEvents="none"
       />
@@ -470,7 +441,7 @@ function EmployeeCard({
           {emp.fullName || '—'}
         </Text>
         <Text style={styles.heroMeta} numberOfLines={1}>
-          {emp.activeCount || 0} {(emp.activeCount === 1 ? 'предмет' : 'предметов')}
+          {emp.activeCount || 0} {emp.activeCount === 1 ? 'предмет' : 'предметов'}
         </Text>
       </View>
     </PressableScale>
@@ -555,7 +526,9 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
               </Text>
               <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
               {item.serviceLifeMonths && (
-                <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>Срок: {item.serviceLifeMonths} мес.</Text>
+                <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
+                  Срок: {item.serviceLifeMonths} мес.
+                </Text>
               )}
             </View>
             {canEdit && (
@@ -638,12 +611,7 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
       )}
 
       {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
-      <IssueModal
-        visible={showIssue}
-        userId={emp.userId}
-        onClose={() => setShowIssue(false)}
-        qc={qc}
-      />
+      <IssueModal visible={showIssue} userId={emp.userId} onClose={() => setShowIssue(false)} qc={qc} />
     </ScrollView>
   );
 }
@@ -751,11 +719,7 @@ function IssueModal({
             {storageItems
               .filter((s: any) => s.quantity > 0)
               .map((s: any) => (
-                <TouchableOpacity
-                  key={s.id}
-                  onPress={() => pickFromStorage(s)}
-                  style={styles.storageChip}
-                >
+                <TouchableOpacity key={s.id} onPress={() => pickFromStorage(s)} style={styles.storageChip}>
                   <Text style={styles.storageChipName} numberOfLines={1}>
                     {s.name}
                   </Text>
@@ -819,14 +783,7 @@ function IssueModal({
             }}
             style={[styles.catBtn, categoryType === ct.k && styles.catBtnActive]}
           >
-            <Text
-              style={[
-                styles.catBtnText,
-                categoryType === ct.k && { color: colors.primary[700] },
-              ]}
-            >
-              {ct.l}
-            </Text>
+            <Text style={[styles.catBtnText, categoryType === ct.k && { color: colors.primary[700] }]}>{ct.l}</Text>
           </TouchableOpacity>
         ))}
       </View>
@@ -847,13 +804,7 @@ function IssueModal({
 }
 
 // ─── Create-folder dialog (Storage root FAB) ───────────────────────────────
-function CreateFolderDialog({
-  visible,
-  onClose,
-}: {
-  visible: boolean;
-  onClose: () => void;
-}) {
+function CreateFolderDialog({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState('');
 
@@ -1116,13 +1067,7 @@ function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => vo
 }
 
 // ─── Storage tab ───────────────────────────────────────────────────────────
-function StorageTab({
-  canEdit,
-  fabOffsetBottom,
-}: {
-  canEdit: boolean;
-  fabOffsetBottom: number;
-}) {
+function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetBottom: number }) {
   const palette = useColors();
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -1135,8 +1080,7 @@ function StorageTab({
   });
   const { data: items = [] } = useQuery({
     queryKey: ['eq-storage', selectedCat],
-    queryFn: async () =>
-      (await equipmentApi.getStorageItems(selectedCat ? { categoryId: selectedCat } : {})).data,
+    queryFn: async () => (await equipmentApi.getStorageItems(selectedCat ? { categoryId: selectedCat } : {})).data,
   });
 
   const catCounts: Record<string, number> = {};
@@ -1149,13 +1093,7 @@ function StorageTab({
   const renderFab = () => {
     if (!canEdit) return null;
     return (
-      <View
-        style={[
-          styles.fabWrap,
-          { bottom: fabOffsetBottom },
-        ]}
-        pointerEvents="box-none"
-      >
+      <View style={[styles.fabWrap, { bottom: fabOffsetBottom }]} pointerEvents="box-none">
         <PressableScale
           onPress={() => {
             haptic('impact');
@@ -1203,7 +1141,9 @@ function StorageTab({
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.folderName, { color: palette.text.primary }]}>{c.name}</Text>
-                  <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>{catCounts[c.id] || 0} предметов</Text>
+                  <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
+                    {catCounts[c.id] || 0} предметов
+                  </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
               </TouchableOpacity>
@@ -1211,10 +1151,7 @@ function StorageTab({
           )}
         </View>
         {renderFab()}
-        <CreateFolderDialog
-          visible={showCreateFolder}
-          onClose={() => setShowCreateFolder(false)}
-        />
+        <CreateFolderDialog visible={showCreateFolder} onClose={() => setShowCreateFolder(false)} />
       </>
     );
   }
@@ -1232,9 +1169,7 @@ function StorageTab({
         {items.length === 0 ? (
           <View style={{ alignItems: 'center', paddingVertical: spacing[10] }}>
             <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
-            <Text style={{ fontSize: fontSize.sm, color: palette.text.tertiary, marginTop: spacing[2] }}>
-              Пусто
-            </Text>
+            <Text style={{ fontSize: fontSize.sm, color: palette.text.tertiary, marginTop: spacing[2] }}>Пусто</Text>
             {canEdit && (
               <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary, marginTop: 4 }}>
                 Нажмите «+» внизу, чтобы добавить предмет
@@ -1338,9 +1273,7 @@ export default function EquipmentScreen() {
     return (
       <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
         <IosScreenHeader title="Моё имущество" onBack={() => navigation.goBack()} />
-        <ScrollView
-          contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}
-        >
+        <ScrollView contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
           <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary, marginBottom: spacing[3] }}>
             {myEquipment.length} предметов на {formatMoney(total)}
           </Text>
@@ -1377,11 +1310,7 @@ export default function EquipmentScreen() {
   // below + AppNavigator entry) — iOS edge-swipe slides back to the grid.
   return (
     <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
-      <IosScreenHeader
-        title="Имущество"
-        onBack={() => navigation.goBack()}
-        trailing={headerTrailing}
-      />
+      <IosScreenHeader title="Имущество" onBack={() => navigation.goBack()} trailing={headerTrailing} />
 
       <View style={styles.segmentWrap}>
         <SegmentedTabs value={tab} onChange={setTab} />
@@ -1410,9 +1339,7 @@ export default function EquipmentScreen() {
             )}
           </View>
         )}
-        {tab === 'storage' && (
-          <StorageTab canEdit={canEdit} fabOffsetBottom={fabOffsetBottom} />
-        )}
+        {tab === 'storage' && <StorageTab canEdit={canEdit} fabOffsetBottom={fabOffsetBottom} />}
       </ScrollView>
 
       <TrashDialog visible={showTrash} onClose={() => setShowTrash(false)} />
@@ -1814,4 +1741,3 @@ const styles = StyleSheet.create({
   },
   photoImage: { width: '90%', height: '85%' },
 });
-

@@ -23,7 +23,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import { UserRole } from '../../../shared/types';
 
-type TabKey = 'dashboard' | 'reviews' | 'integrations' | 'settings';
+type TabKey = 'dashboard' | 'reviews' | 'integrations' | 'settings' | 'reminders';
 
 function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
   const stars = [];
@@ -169,10 +169,14 @@ function DashboardTab() {
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                   <StarRating rating={emp.averageRating || 0} size={12} />
-                  <Text style={[styles.empReviewCount, { color: palette.text.tertiary }]}>{emp.reviewCount} отзывов</Text>
+                  <Text style={[styles.empReviewCount, { color: palette.text.tertiary }]}>
+                    {emp.reviewCount} отзывов
+                  </Text>
                 </View>
               </View>
-              <Text style={[styles.empRating, { color: palette.text.primary }]}>{(emp.averageRating || 0).toFixed(1)}</Text>
+              <Text style={[styles.empRating, { color: palette.text.primary }]}>
+                {(emp.averageRating || 0).toFixed(1)}
+              </Text>
             </View>
           ))}
         </AnimatedCard>
@@ -287,12 +291,18 @@ function ReviewsTab() {
           >
             <View style={styles.reviewHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={[styles.reviewClientName, { color: palette.text.primary }]}>{review.clientName || 'Клиент'}</Text>
-                <Text style={[styles.reviewDate, { color: palette.text.tertiary }]}>{new Date(review.createdAt).toLocaleDateString('ru-RU')}</Text>
+                <Text style={[styles.reviewClientName, { color: palette.text.primary }]}>
+                  {review.clientName || 'Клиент'}
+                </Text>
+                <Text style={[styles.reviewDate, { color: palette.text.tertiary }]}>
+                  {new Date(review.createdAt).toLocaleDateString('ru-RU')}
+                </Text>
               </View>
               <StarRating rating={review.rating} size={16} />
             </View>
-            {review.comment && <Text style={[styles.reviewComment, { color: palette.text.secondary }]}>{review.comment}</Text>}
+            {review.comment && (
+              <Text style={[styles.reviewComment, { color: palette.text.secondary }]}>{review.comment}</Text>
+            )}
             {review.employeeName && (
               <View style={[styles.reviewEmployeeTag, { borderTopColor: palette.border.subtle }]}>
                 <Ionicons name="person-outline" size={12} color={palette.text.tertiary} />
@@ -438,7 +448,10 @@ function IntegrationsTab() {
           return (
             <TouchableOpacity
               key={p.key}
-              style={[styles.integrationRow, idx > 0 && [styles.integrationBorder, { borderTopColor: palette.border.subtle }]]}
+              style={[
+                styles.integrationRow,
+                idx > 0 && [styles.integrationBorder, { borderTopColor: palette.border.subtle }],
+              ]}
               onPress={() => openProviderEdit(p.key)}
               activeOpacity={0.7}
             >
@@ -450,8 +463,18 @@ function IntegrationsTab() {
                 <Text style={[styles.integrationDesc, { color: palette.text.tertiary }]}>{p.desc}</Text>
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <View style={[styles.statusBadge, active ? styles.statusActive : [styles.statusInactive, { backgroundColor: palette.bg.muted }]]}>
-                  <Text style={[styles.statusText, active ? styles.statusTextActive : [styles.statusTextInactive, { color: palette.text.tertiary }]]}>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    active ? styles.statusActive : [styles.statusInactive, { backgroundColor: palette.bg.muted }],
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusText,
+                      active ? styles.statusTextActive : [styles.statusTextInactive, { color: palette.text.tertiary }],
+                    ]}
+                  >
                     {active ? 'Активен' : 'Не настроен'}
                   </Text>
                 </View>
@@ -476,7 +499,10 @@ function IntegrationsTab() {
           return (
             <TouchableOpacity
               key={p.key}
-              style={[styles.integrationRow, idx > 0 && [styles.integrationBorder, { borderTopColor: palette.border.subtle }]]}
+              style={[
+                styles.integrationRow,
+                idx > 0 && [styles.integrationBorder, { borderTopColor: palette.border.subtle }],
+              ]}
               onPress={() => openPlatformEdit(p.key)}
               activeOpacity={0.7}
             >
@@ -492,8 +518,18 @@ function IntegrationsTab() {
                 )}
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <View style={[styles.statusBadge, link ? styles.statusActive : [styles.statusInactive, { backgroundColor: palette.bg.muted }]]}>
-                  <Text style={[styles.statusText, link ? styles.statusTextActive : [styles.statusTextInactive, { color: palette.text.tertiary }]]}>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    link ? styles.statusActive : [styles.statusInactive, { backgroundColor: palette.bg.muted }],
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.statusText,
+                      link ? styles.statusTextActive : [styles.statusTextInactive, { color: palette.text.tertiary }],
+                    ]}
+                  >
                     {link ? 'Настроен' : 'Не настроен'}
                   </Text>
                 </View>
@@ -672,7 +708,9 @@ function SettingsTab() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.settingsLabel, { color: palette.text.primary }]}>Автоматическая отправка</Text>
-            <Text style={[styles.settingsHint, { color: palette.text.tertiary }]}>Отправлять запросы на отзыв автоматически</Text>
+            <Text style={[styles.settingsHint, { color: palette.text.tertiary }]}>
+              Отправлять запросы на отзыв автоматически
+            </Text>
           </View>
           <Ionicons
             name={autoSend ? 'checkbox' : 'square-outline'}
@@ -693,7 +731,10 @@ function SettingsTab() {
           <TextInput
             value={sendTime}
             onChangeText={setSendTime}
-            style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary }]}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="10:00"
             placeholderTextColor={palette.text.tertiary}
           />
@@ -703,7 +744,10 @@ function SettingsTab() {
           <TextInput
             value={delayHours}
             onChangeText={setDelayHours}
-            style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary }]}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             keyboardType="numeric"
             placeholder="24"
             placeholderTextColor={palette.text.tertiary}
@@ -721,7 +765,16 @@ function SettingsTab() {
           <TextInput
             value={messageTemplate}
             onChangeText={setMessageTemplate}
-            style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary, minHeight: 100, textAlignVertical: 'top' }]}
+            style={[
+              styles.formInput,
+              {
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+                minHeight: 100,
+                textAlignVertical: 'top',
+              },
+            ]}
             multiline
             placeholder={'Здравствуйте, {client_name}!\nСпасибо за визит...\n{review_link}'}
             placeholderTextColor={palette.text.tertiary}
@@ -757,6 +810,185 @@ function SettingsTab() {
   );
 }
 
+// ── Reminders Tab ──
+function RemindersTab() {
+  const palette = useColors();
+  const [enabled, setEnabled] = React.useState(false);
+  const [monthsInterval, setMonthsInterval] = React.useState(6);
+  const [messageTemplate, setMessageTemplate] = React.useState('');
+  const [sendResult, setSendResult] = React.useState<string | null>(null);
+
+  const { data: settings, refetch: refetchSettings } = useQuery({
+    queryKey: ['reminder-settings'],
+    queryFn: async () => (await marketingApi.getReminderSettings()).data,
+    staleTime: 60_000,
+  });
+
+  // Sync local state with fetched settings
+  React.useEffect(() => {
+    if (settings) {
+      setEnabled(settings.enabled);
+      setMonthsInterval(settings.monthsInterval);
+      setMessageTemplate(settings.messageTemplate);
+    }
+  }, [settings]);
+
+  const saveSettings = useMutation({
+    mutationFn: () => marketingApi.updateReminderSettings({ enabled, monthsInterval, messageTemplate }),
+    onSuccess: () => {
+      refetchSettings();
+      Alert.alert('Готово', 'Настройки сохранены');
+    },
+    onError: () => Alert.alert('Ошибка', 'Не удалось сохранить настройки'),
+  });
+
+  const sendReminders = useMutation({
+    mutationFn: () => marketingApi.sendReminders(),
+    onSuccess: (res) => {
+      setSendResult(`Отправлено: ${res.data.sent}, ошибок: ${res.data.errors}`);
+      Alert.alert('Готово', `Отправлено: ${res.data.sent}, ошибок: ${res.data.errors}`);
+    },
+    onError: () => Alert.alert('Ошибка', 'Не удалось отправить напоминания'),
+  });
+
+  return (
+    <View style={{ gap: spacing[4] }}>
+      <AnimatedCard
+        index={0}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: spacing[3] }]}>
+          Авто-напоминания клиентам
+        </Text>
+
+        {/* Toggle */}
+        <View style={[styles.settingsRow, { borderBottomColor: palette.border.subtle }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.settingsRowLabel, { color: palette.text.primary }]}>Авто-напоминания включены</Text>
+            <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: 2 }}>
+              Рассылка клиентам, давно не посещавшим сервис
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.toggleBtn, { backgroundColor: enabled ? colors.primary[600] : palette.bg.muted }]}
+            onPress={() => setEnabled((v) => !v)}
+          >
+            <Text style={{ fontSize: 12, fontWeight: '600', color: enabled ? colors.white : palette.text.tertiary }}>
+              {enabled ? 'Вкл' : 'Выкл'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Interval chips */}
+        <View style={{ marginTop: spacing[3] }}>
+          <Text style={[styles.settingsRowLabel, { color: palette.text.secondary, marginBottom: spacing[2] }]}>
+            Интервал (месяцев с визита)
+          </Text>
+          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            {[3, 6, 12].map((m) => (
+              <TouchableOpacity
+                key={m}
+                style={[
+                  styles.intervalChip,
+                  {
+                    backgroundColor: monthsInterval === m ? colors.primary[600] : palette.bg.muted,
+                    borderColor: monthsInterval === m ? colors.primary[600] : palette.border.subtle,
+                  },
+                ]}
+                onPress={() => setMonthsInterval(m)}
+              >
+                <Text
+                  style={{
+                    fontSize: 13,
+                    fontWeight: '600',
+                    color: monthsInterval === m ? colors.white : palette.text.secondary,
+                  }}
+                >
+                  {m} мес.
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Message template */}
+        <View style={{ marginTop: spacing[3] }}>
+          <Text style={[styles.settingsRowLabel, { color: palette.text.secondary, marginBottom: spacing[1.5] }]}>
+            Шаблон сообщения
+          </Text>
+          <TextInput
+            value={messageTemplate}
+            onChangeText={setMessageTemplate}
+            style={[
+              styles.reminderTextInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
+            multiline
+            numberOfLines={4}
+            placeholder="Привет, {name}! Прошло {months} месяцев с вашего последнего визита. Ждём вас в сервисе!"
+            placeholderTextColor={palette.text.tertiary}
+          />
+          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+            Переменные: {'{name}'} — имя, {'{months}'} — месяцев, {'{car}'} — авто
+          </Text>
+        </View>
+
+        {/* Save */}
+        <TouchableOpacity
+          style={[styles.settingsSaveBtn, saveSettings.isPending && { opacity: 0.6 }]}
+          onPress={() => saveSettings.mutate()}
+          disabled={saveSettings.isPending}
+        >
+          {saveSettings.isPending ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : (
+            <>
+              <Ionicons name="checkmark-circle" size={18} color={colors.white} />
+              <Text style={styles.settingsSaveBtnText}>Сохранить</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {/* Divider */}
+        <View
+          style={[
+            { height: StyleSheet.hairlineWidth, backgroundColor: palette.border.subtle, marginVertical: spacing[3] },
+          ]}
+        />
+
+        {/* Send now */}
+        <TouchableOpacity
+          style={[
+            styles.sendNowBtn,
+            { backgroundColor: colors.orange[50], borderColor: colors.orange[400] },
+            sendReminders.isPending && { opacity: 0.6 },
+          ]}
+          onPress={() => {
+            setSendResult(null);
+            sendReminders.mutate();
+          }}
+          disabled={sendReminders.isPending}
+        >
+          {sendReminders.isPending ? (
+            <ActivityIndicator size="small" color={colors.orange[600]} />
+          ) : (
+            <>
+              <Ionicons name="send-outline" size={16} color={colors.orange[600]} />
+              <Text style={{ fontSize: 14, fontWeight: '600', color: colors.orange[700] }}>Отправить сейчас</Text>
+            </>
+          )}
+        </TouchableOpacity>
+
+        {sendResult ? (
+          <Text style={{ fontSize: 12, color: palette.text.secondary, textAlign: 'center', marginTop: spacing[2] }}>
+            {sendResult}
+          </Text>
+        ) : null}
+      </AnimatedCard>
+    </View>
+  );
+}
+
 // ── Main Screen ──
 export default function MarketingScreen() {
   const navigation = useNavigation<any>();
@@ -774,7 +1006,10 @@ export default function MarketingScreen() {
     { key: 'reviews', label: 'Отзывы', icon: 'chatbubbles-outline' },
     { key: 'integrations', label: 'Каналы', icon: 'link-outline' },
     ...(isAdmin
-      ? [{ key: 'settings' as TabKey, label: 'Настройки', icon: 'settings-outline' as keyof typeof Ionicons.glyphMap }]
+      ? [
+          { key: 'reminders' as TabKey, label: 'SMS', icon: 'notifications-outline' as keyof typeof Ionicons.glyphMap },
+          { key: 'settings' as TabKey, label: 'Настройки', icon: 'settings-outline' as keyof typeof Ionicons.glyphMap },
+        ]
       : []),
   ];
 
@@ -804,7 +1039,9 @@ export default function MarketingScreen() {
                 size={18}
                 color={active ? colors.primary[600] : palette.text.tertiary}
               />
-              <Text style={[styles.tabText, { color: palette.text.tertiary }, active && styles.tabTextActive]}>{tab.label}</Text>
+              <Text style={[styles.tabText, { color: palette.text.tertiary }, active && styles.tabTextActive]}>
+                {tab.label}
+              </Text>
             </TouchableOpacity>
           );
         })}
@@ -820,6 +1057,7 @@ export default function MarketingScreen() {
         {activeTab === 'dashboard' && <DashboardTab />}
         {activeTab === 'reviews' && <ReviewsTab />}
         {activeTab === 'integrations' && <IntegrationsTab />}
+        {activeTab === 'reminders' && <RemindersTab />}
         {activeTab === 'settings' && <SettingsTab />}
       </ScrollView>
     </View>
@@ -1050,4 +1288,43 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3.5],
   },
   settingsSaveBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
+  // Reminders tab
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingBottom: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  settingsRowLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  toggleBtn: {
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    minWidth: 52,
+    alignItems: 'center',
+  },
+  intervalChip: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing[2],
+    alignItems: 'center',
+  },
+  reminderTextInput: {
+    borderWidth: 1,
+    borderRadius: borderRadius.xl,
+    padding: spacing[3],
+    fontSize: fontSize.sm,
+    textAlignVertical: 'top' as const,
+    minHeight: 100,
+  },
+  sendNowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderWidth: 1,
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+  },
 });

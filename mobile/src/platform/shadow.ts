@@ -22,9 +22,9 @@ export function shadow(level: ShadowLevel = 'md', color = '#0f172a'): ViewStyle 
     const map: Record<Exclude<ShadowLevel, 'none'>, ViewStyle> = {
       xs: { shadowColor: color, shadowOpacity: 0.05, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
       sm: { shadowColor: color, shadowOpacity: 0.08, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
-      md: { shadowColor: color, shadowOpacity: 0.10, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+      md: { shadowColor: color, shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
       lg: { shadowColor: color, shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 6 } },
-      xl: { shadowColor: color, shadowOpacity: 0.20, shadowRadius: 28, shadowOffset: { width: 0, height: 12 } },
+      xl: { shadowColor: color, shadowOpacity: 0.2, shadowRadius: 28, shadowOffset: { width: 0, height: 12 } },
     };
     return map[level];
   }

@@ -29,7 +29,18 @@ function resolveEntry(name: string): IconMapEntry {
 
 function MaterialCommunityIcons({ name, size = 24, color = '#000', style }: MCIProps) {
   const entry = resolveEntry(name);
-  const Cmp = (Lucide as unknown as Record<string, React.ComponentType<{ size?: number; color?: string; strokeWidth?: number; fill?: string; style?: StyleProp<ViewStyle> }>>)[entry.lucide];
+  const Cmp = (
+    Lucide as unknown as Record<
+      string,
+      React.ComponentType<{
+        size?: number;
+        color?: string;
+        strokeWidth?: number;
+        fill?: string;
+        style?: StyleProp<ViewStyle>;
+      }>
+    >
+  )[entry.lucide];
   if (!Cmp) {
     return <View style={[{ width: size, height: size }, style as StyleProp<ViewStyle>]} />;
   }
@@ -44,12 +55,11 @@ function MaterialCommunityIcons({ name, size = 24, color = '#000', style }: MCIP
   );
 }
 
-(MaterialCommunityIcons as unknown as { glyphMap: Record<string, number> }).glyphMap = Object.keys(MCI_TO_LUCIDE).reduce<Record<string, number>>(
-  (acc, k, i) => {
-    acc[k] = i;
-    return acc;
-  },
-  {},
-);
+(MaterialCommunityIcons as unknown as { glyphMap: Record<string, number> }).glyphMap = Object.keys(
+  MCI_TO_LUCIDE,
+).reduce<Record<string, number>>((acc, k, i) => {
+  acc[k] = i;
+  return acc;
+}, {});
 
 export default MaterialCommunityIcons;

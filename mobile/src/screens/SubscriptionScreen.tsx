@@ -103,7 +103,11 @@ export default function SubscriptionScreen() {
                   <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Оплачено до</Text>
                   {sub?.subscriptionEnd ? (
                     <Text
-                      style={[styles.infoValue, { color: palette.text.primary }, isExpired && { color: colors.red[600] }]}
+                      style={[
+                        styles.infoValue,
+                        { color: palette.text.primary },
+                        isExpired && { color: colors.red[600] },
+                      ]}
                     >
                       {formatDate(sub.subscriptionEnd)}
                       {isExpired ? '  (истекла)' : ''}

@@ -1,13 +1,5 @@
 import React from 'react';
-import {
-  Modal as RNModal,
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  Pressable,
-  Platform,
-} from 'react-native';
+import { Modal as RNModal, View, Text, TouchableOpacity, StyleSheet, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Warehouse } from '../../../shared/types';
@@ -33,7 +25,10 @@ interface WarehouseSwitcherProps {
   onSelect: (warehouse: Warehouse) => void;
 }
 
-const KIND_META: Record<Warehouse['kind'], { icon: keyof typeof Ionicons.glyphMap; tint: 'primary' | 'red' | 'amber' }> = {
+const KIND_META: Record<
+  Warehouse['kind'],
+  { icon: keyof typeof Ionicons.glyphMap; tint: 'primary' | 'red' | 'amber' }
+> = {
   main: { icon: 'cube-outline', tint: 'primary' },
   defect: { icon: 'warning-outline', tint: 'red' },
   used: { icon: 'sync-outline', tint: 'amber' },
@@ -63,17 +58,11 @@ export default function WarehouseSwitcher({
 
   // Sort by sortOrder (server already does it; defensive fallback for
   // older clients reading from persistent cache before the migration).
-  const sorted = React.useMemo(
-    () => [...warehouses].sort((a, b) => a.sortOrder - b.sortOrder),
-    [warehouses],
-  );
+  const sorted = React.useMemo(() => [...warehouses].sort((a, b) => a.sortOrder - b.sortOrder), [warehouses]);
 
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <Pressable
-        style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.45)' }]}
-        onPress={onClose}
-      >
+      <Pressable style={[styles.overlay, { backgroundColor: 'rgba(0,0,0,0.45)' }]} onPress={onClose}>
         <Pressable
           onPress={(e) => e.stopPropagation?.()}
           style={[
@@ -88,9 +77,7 @@ export default function WarehouseSwitcher({
           <Text style={[styles.title, { color: palette.text.primary }]}>{'Выбор склада'}</Text>
           {sorted.length === 0 ? (
             <View style={styles.emptyWrap}>
-              <Text style={[styles.emptyText, { color: palette.text.secondary }]}>
-                {'Склады недоступны'}
-              </Text>
+              <Text style={[styles.emptyText, { color: palette.text.secondary }]}>{'Склады недоступны'}</Text>
             </View>
           ) : (
             sorted.map((wh, idx) => {
@@ -129,9 +116,7 @@ export default function WarehouseSwitcher({
                           : 'Б/У детали и комплектующие'}
                     </Text>
                   </View>
-                  {isSelected && (
-                    <Ionicons name="checkmark-circle" size={22} color={palette.accent.primary} />
-                  )}
+                  {isSelected && <Ionicons name="checkmark-circle" size={22} color={palette.accent.primary} />}
                 </TouchableOpacity>
               );
             })

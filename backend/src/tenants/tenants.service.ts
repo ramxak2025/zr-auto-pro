@@ -115,9 +115,15 @@ export class TenantsService {
       if (planRows.length > 0) {
         const p = planRows[0];
         (tenant as any).plan = {
-          id: p.id, name: p.name, monthlyPrice: parseFloat(p.monthly_price) || 0,
-          description: p.description, features: p.features || [],
-          maxUsers: p.max_users, isActive: p.is_active, sortOrder: p.sort_order, createdAt: p.created_at,
+          id: p.id,
+          name: p.name,
+          monthlyPrice: parseFloat(p.monthly_price) || 0,
+          description: p.description,
+          features: p.features || [],
+          maxUsers: p.max_users,
+          isActive: p.is_active,
+          sortOrder: p.sort_order,
+          createdAt: p.created_at,
         };
       }
     }
@@ -134,9 +140,19 @@ export class TenantsService {
         `INSERT INTO tenants (name, phone, address, email, description, is_active, max_users, plan_id, monthly_price, subscription_end, subscription_note)
          VALUES ($1,$2,$3,$4,$5,COALESCE($6,true),$7,$8,$9,$10,$11)
          RETURNING *`,
-        [dto.name, dto.phone, dto.address, dto.email, dto.description,
-         dto.isActive, dto.maxUsers || 10, dto.planId, dto.monthlyPrice || 0,
-         dto.subscriptionEnd, dto.subscriptionNote],
+        [
+          dto.name,
+          dto.phone,
+          dto.address,
+          dto.email,
+          dto.description,
+          dto.isActive,
+          dto.maxUsers || 10,
+          dto.planId,
+          dto.monthlyPrice || 0,
+          dto.subscriptionEnd,
+          dto.subscriptionNote,
+        ],
       );
 
       const tenant = this.mapTenant(tenantRows[0]);
@@ -171,7 +187,8 @@ export class TenantsService {
       if (dto.directorPhone && dto.directorPassword && dto.directorName) {
         const directorPhone = normalizePhone(dto.directorPhone);
         const hash = await bcrypt.hash(dto.directorPassword, 10);
-        const allPerms = '{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"checks_change_datetime":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true,"schedule_view":true,"salary_view":true,"marketing_access":true}';
+        const allPerms =
+          '{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"checks_change_datetime":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true,"schedule_view":true,"salary_view":true,"marketing_access":true}';
         await client.query(
           `INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions)
            VALUES ($1, $2, $3, 'director', true, $4, $5)`,
@@ -195,22 +212,70 @@ export class TenantsService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(dto.phone); }
-    if (dto.address !== undefined) { sets.push(`address=$${idx++}`); vals.push(dto.address); }
-    if (dto.email !== undefined) { sets.push(`email=$${idx++}`); vals.push(dto.email); }
-    if (dto.description !== undefined) { sets.push(`description=$${idx++}`); vals.push(dto.description); }
-    if (dto.isActive !== undefined) { sets.push(`is_active=$${idx++}`); vals.push(dto.isActive); }
-    if (dto.maxUsers !== undefined) { sets.push(`max_users=$${idx++}`); vals.push(dto.maxUsers); }
-    if (dto.planId !== undefined) { sets.push(`plan_id=$${idx++}`); vals.push(dto.planId); }
-    if (dto.monthlyPrice !== undefined) { sets.push(`monthly_price=$${idx++}`); vals.push(dto.monthlyPrice); }
-    if (dto.subscriptionEnd !== undefined) { sets.push(`subscription_end=$${idx++}`); vals.push(dto.subscriptionEnd); }
-    if (dto.subscriptionNote !== undefined) { sets.push(`subscription_note=$${idx++}`); vals.push(dto.subscriptionNote); }
-    if (dto.legalName !== undefined) { sets.push(`legal_name=$${idx++}`); vals.push(dto.legalName); }
-    if (dto.inn !== undefined) { sets.push(`inn=$${idx++}`); vals.push(dto.inn); }
-    if (dto.kpp !== undefined) { sets.push(`kpp=$${idx++}`); vals.push(dto.kpp); }
-    if (dto.ogrn !== undefined) { sets.push(`ogrn=$${idx++}`); vals.push(dto.ogrn); }
-    if (dto.receiptFooter !== undefined) { sets.push(`receipt_footer=$${idx++}`); vals.push(dto.receiptFooter); }
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.phone !== undefined) {
+      sets.push(`phone=$${idx++}`);
+      vals.push(dto.phone);
+    }
+    if (dto.address !== undefined) {
+      sets.push(`address=$${idx++}`);
+      vals.push(dto.address);
+    }
+    if (dto.email !== undefined) {
+      sets.push(`email=$${idx++}`);
+      vals.push(dto.email);
+    }
+    if (dto.description !== undefined) {
+      sets.push(`description=$${idx++}`);
+      vals.push(dto.description);
+    }
+    if (dto.isActive !== undefined) {
+      sets.push(`is_active=$${idx++}`);
+      vals.push(dto.isActive);
+    }
+    if (dto.maxUsers !== undefined) {
+      sets.push(`max_users=$${idx++}`);
+      vals.push(dto.maxUsers);
+    }
+    if (dto.planId !== undefined) {
+      sets.push(`plan_id=$${idx++}`);
+      vals.push(dto.planId);
+    }
+    if (dto.monthlyPrice !== undefined) {
+      sets.push(`monthly_price=$${idx++}`);
+      vals.push(dto.monthlyPrice);
+    }
+    if (dto.subscriptionEnd !== undefined) {
+      sets.push(`subscription_end=$${idx++}`);
+      vals.push(dto.subscriptionEnd);
+    }
+    if (dto.subscriptionNote !== undefined) {
+      sets.push(`subscription_note=$${idx++}`);
+      vals.push(dto.subscriptionNote);
+    }
+    if (dto.legalName !== undefined) {
+      sets.push(`legal_name=$${idx++}`);
+      vals.push(dto.legalName);
+    }
+    if (dto.inn !== undefined) {
+      sets.push(`inn=$${idx++}`);
+      vals.push(dto.inn);
+    }
+    if (dto.kpp !== undefined) {
+      sets.push(`kpp=$${idx++}`);
+      vals.push(dto.kpp);
+    }
+    if (dto.ogrn !== undefined) {
+      sets.push(`ogrn=$${idx++}`);
+      vals.push(dto.ogrn);
+    }
+    if (dto.receiptFooter !== undefined) {
+      sets.push(`receipt_footer=$${idx++}`);
+      vals.push(dto.receiptFooter);
+    }
 
     if (sets.length === 0) return this.getById(id);
 
@@ -234,15 +299,18 @@ export class TenantsService {
 
       // 1. Remove check line items (reference services/products/users without CASCADE)
       await client.query(
-        `DELETE FROM check_service_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`, [id],
+        `DELETE FROM check_service_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`,
+        [id],
       );
       await client.query(
-        `DELETE FROM check_product_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`, [id],
+        `DELETE FROM check_product_lines WHERE check_id IN (SELECT id FROM checks WHERE tenant_id=$1)`,
+        [id],
       );
 
       // 2. Remove delivery items (reference products without CASCADE)
       await client.query(
-        `DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE tenant_id=$1)`, [id],
+        `DELETE FROM delivery_items WHERE delivery_id IN (SELECT id FROM deliveries WHERE tenant_id=$1)`,
+        [id],
       );
 
       // 3. Remove checks (reference users/clients/cars without CASCADE)
@@ -288,10 +356,7 @@ export class TenantsService {
   }
 
   async getMyCompany(tenantId: string) {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM tenants WHERE id=$1',
-      [tenantId],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM tenants WHERE id=$1', [tenantId]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Компания не найдена' });
     return this.mapTenant(rows[0]);
   }
@@ -302,16 +367,46 @@ export class TenantsService {
     let idx = 1;
 
     // Only allow company-info fields (not admin fields like isActive, maxUsers)
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(dto.phone); }
-    if (dto.address !== undefined) { sets.push(`address=$${idx++}`); vals.push(dto.address); }
-    if (dto.email !== undefined) { sets.push(`email=$${idx++}`); vals.push(dto.email); }
-    if (dto.description !== undefined) { sets.push(`description=$${idx++}`); vals.push(dto.description); }
-    if (dto.legalName !== undefined) { sets.push(`legal_name=$${idx++}`); vals.push(dto.legalName); }
-    if (dto.inn !== undefined) { sets.push(`inn=$${idx++}`); vals.push(dto.inn); }
-    if (dto.kpp !== undefined) { sets.push(`kpp=$${idx++}`); vals.push(dto.kpp); }
-    if (dto.ogrn !== undefined) { sets.push(`ogrn=$${idx++}`); vals.push(dto.ogrn); }
-    if (dto.receiptFooter !== undefined) { sets.push(`receipt_footer=$${idx++}`); vals.push(dto.receiptFooter); }
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.phone !== undefined) {
+      sets.push(`phone=$${idx++}`);
+      vals.push(dto.phone);
+    }
+    if (dto.address !== undefined) {
+      sets.push(`address=$${idx++}`);
+      vals.push(dto.address);
+    }
+    if (dto.email !== undefined) {
+      sets.push(`email=$${idx++}`);
+      vals.push(dto.email);
+    }
+    if (dto.description !== undefined) {
+      sets.push(`description=$${idx++}`);
+      vals.push(dto.description);
+    }
+    if (dto.legalName !== undefined) {
+      sets.push(`legal_name=$${idx++}`);
+      vals.push(dto.legalName);
+    }
+    if (dto.inn !== undefined) {
+      sets.push(`inn=$${idx++}`);
+      vals.push(dto.inn);
+    }
+    if (dto.kpp !== undefined) {
+      sets.push(`kpp=$${idx++}`);
+      vals.push(dto.kpp);
+    }
+    if (dto.ogrn !== undefined) {
+      sets.push(`ogrn=$${idx++}`);
+      vals.push(dto.ogrn);
+    }
+    if (dto.receiptFooter !== undefined) {
+      sets.push(`receipt_footer=$${idx++}`);
+      vals.push(dto.receiptFooter);
+    }
 
     if (sets.length === 0) return this.getMyCompany(tenantId);
 
@@ -357,9 +452,15 @@ export class TenantsService {
       maxUsers: r.max_users,
       currentUsers: parseInt(r.current_users),
       plans: plans.map((p) => ({
-        id: p.id, name: p.name, monthlyPrice: parseFloat(p.monthly_price) || 0,
-        description: p.description, features: p.features || [],
-        maxUsers: p.max_users, isActive: p.is_active, sortOrder: p.sort_order, createdAt: p.created_at,
+        id: p.id,
+        name: p.name,
+        monthlyPrice: parseFloat(p.monthly_price) || 0,
+        description: p.description,
+        features: p.features || [],
+        maxUsers: p.max_users,
+        isActive: p.is_active,
+        sortOrder: p.sort_order,
+        createdAt: p.created_at,
       })),
     };
   }

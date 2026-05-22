@@ -13,11 +13,7 @@
  * one rename.
  */
 import React from 'react';
-import {
-  Modal as RNModal,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { Modal as RNModal, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
@@ -44,13 +40,7 @@ export interface BottomSheetProps {
   children?: React.ReactNode;
 }
 
-export function BottomSheet({
-  visible,
-  onClose,
-  title,
-  heightRatio = 0.7,
-  children,
-}: BottomSheetProps) {
+export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, children }: BottomSheetProps) {
   const insets = useSafeAreaInsets();
   const translateY = useSharedValue(1000); // off-screen by default
   const lastOffset = useSharedValue(0);
@@ -88,9 +78,7 @@ export function BottomSheet({
         translateY.value = withTiming(sheetHeight.value, { duration: 200 });
         runOnJS(close)();
       } else {
-        translateY.value = preferSpring
-          ? withSpring(0, SPRING_TIGHT)
-          : withTiming(0, TIMING_STANDARD);
+        translateY.value = preferSpring ? withSpring(0, SPRING_TIGHT) : withTiming(0, TIMING_STANDARD);
       }
     });
 
@@ -99,35 +87,22 @@ export function BottomSheet({
   }));
 
   const backdropStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      translateY.value,
-      [0, sheetHeight.value || 600],
-      [1, 0],
-      Extrapolation.CLAMP,
-    ),
+    opacity: interpolate(translateY.value, [0, sheetHeight.value || 600], [1, 0], Extrapolation.CLAMP),
   }));
 
   return (
-    <RNModal
-      visible={visible}
-      transparent
-      onRequestClose={close}
-      statusBarTranslucent
-      animationType="none"
-    >
+    <RNModal visible={visible} transparent onRequestClose={close} statusBarTranslucent animationType="none">
       <View style={styles.host}>
         <Animated.View style={[styles.backdrop, backdropStyle]}>
-          <PressableScale
-            style={StyleSheet.absoluteFill}
-            onPress={close}
-            hapticIntent={null}
-          >
+          <PressableScale style={StyleSheet.absoluteFill} onPress={close} hapticIntent={null}>
             <View />
           </PressableScale>
         </Animated.View>
 
         <Animated.View
-          onLayout={(e) => { sheetHeight.value = e.nativeEvent.layout.height; }}
+          onLayout={(e) => {
+            sheetHeight.value = e.nativeEvent.layout.height;
+          }}
           style={[
             styles.sheet,
             {
@@ -146,12 +121,10 @@ export function BottomSheet({
                     <Text variant="title3" style={{ flex: 1 }}>
                       {title}
                     </Text>
-                  ) : <View style={{ flex: 1 }} />}
-                  <PressableScale
-                    onPress={close}
-                    style={styles.closeBtn}
-                    hapticIntent={null}
-                  >
+                  ) : (
+                    <View style={{ flex: 1 }} />
+                  )}
+                  <PressableScale onPress={close} style={styles.closeBtn} hapticIntent={null}>
                     <Icon name="close" size={18} color={colors.gray[500]} />
                   </PressableScale>
                 </View>

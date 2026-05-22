@@ -66,16 +66,22 @@ export function MetricCard({
   });
 
   const deltaColor =
-    deltaPercent === undefined ? colors.gray[400] :
-    deltaPercent > 0 ? colors.green[600] :
-    deltaPercent < 0 ? colors.red[500] :
-    colors.gray[500];
+    deltaPercent === undefined
+      ? colors.gray[400]
+      : deltaPercent > 0
+        ? colors.green[600]
+        : deltaPercent < 0
+          ? colors.red[500]
+          : colors.gray[500];
 
   const deltaBg =
-    deltaPercent === undefined ? 'transparent' :
-    deltaPercent > 0 ? colors.green[50] :
-    deltaPercent < 0 ? colors.red[50] :
-    colors.gray[100];
+    deltaPercent === undefined
+      ? 'transparent'
+      : deltaPercent > 0
+        ? colors.green[50]
+        : deltaPercent < 0
+          ? colors.red[50]
+          : colors.gray[100];
 
   return (
     <View style={[styles.card, shadow('md'), style]}>
@@ -86,7 +92,8 @@ export function MetricCard({
         {deltaPercent !== undefined && (
           <View style={[styles.deltaPill, { backgroundColor: deltaBg }]}>
             <Text variant="caption" color={deltaColor} style={styles.deltaText}>
-              {deltaPercent > 0 ? '+' : ''}{deltaPercent.toFixed(1)}%
+              {deltaPercent > 0 ? '+' : ''}
+              {deltaPercent.toFixed(1)}%
             </Text>
           </View>
         )}

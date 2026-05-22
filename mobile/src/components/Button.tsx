@@ -105,9 +105,7 @@ export function Button({
           <ActivityIndicator color={palette.fg} size="small" />
         ) : (
           <>
-            {icon ? (
-              <Icon name={icon} size={SIZE_ICON[size]} color={palette.fg} />
-            ) : null}
+            {icon ? <Icon name={icon} size={SIZE_ICON[size]} color={palette.fg} /> : null}
             <Text variant={SIZE_TEXT[size]} color={palette.fg} style={styles.label}>
               {title}
             </Text>

@@ -282,7 +282,10 @@ export default function ClientDetailScreen() {
             />
           }
         >
-          <AnimatedCard style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]} index={0}>
+          <AnimatedCard
+            style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            index={0}
+          >
             <View style={styles.avatarSection}>
               <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
                 <Ionicons name="storefront-outline" size={26} color={colors.primary[600]} />
@@ -311,7 +314,7 @@ export default function ClientDetailScreen() {
             <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Чеки ({checks?.length || 0})</Text>
           </View>
 
-          {(!checks || checks.length === 0) ? (
+          {!checks || checks.length === 0 ? (
             <View style={styles.emptyChecks}>
               <Ionicons name="receipt-outline" size={32} color={palette.text.tertiary} />
               <Text style={[styles.emptyChecksText, { color: palette.text.tertiary }]}>Нет чеков</Text>
@@ -366,7 +369,9 @@ export default function ClientDetailScreen() {
                               </Text>
                             </View>
                           </View>
-                          <Text style={[styles.checkTotal, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue)}</Text>
+                          <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
+                            {formatMoney(check.totalRevenue)}
+                          </Text>
                         </View>
                         {check.car && (
                           <View style={styles.checkInfoRow}>
@@ -375,9 +380,7 @@ export default function ClientDetailScreen() {
                               <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
                                 {check.car.makeModel}
                               </Text>
-                              {check.car.plateNumber && (
-                                <Text style={styles.plateTag}>{check.car.plateNumber}</Text>
-                              )}
+                              {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
                             </View>
                           </View>
                         )}
@@ -423,7 +426,8 @@ export default function ClientDetailScreen() {
   }
 
   if (isLoading) return <LoadingSpinner />;
-  if (!client) return <Text style={{ padding: 20, textAlign: 'center', color: palette.text.secondary }}>Клиент не найден</Text>;
+  if (!client)
+    return <Text style={{ padding: 20, textAlign: 'center', color: palette.text.secondary }}>Клиент не найден</Text>;
 
   // Group filtered checks by date
   const groupedChecks: { label: string; checks: Check[] }[] = [];
@@ -454,7 +458,10 @@ export default function ClientDetailScreen() {
         }
       >
         {/* Client info card */}
-        <AnimatedCard style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]} index={0}>
+        <AnimatedCard
+          style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          index={0}
+        >
           {/* Avatar + name */}
           <View style={styles.avatarSection}>
             <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
@@ -652,7 +659,9 @@ export default function ClientDetailScreen() {
                             </Text>
                           </View>
                         </View>
-                        <Text style={[styles.checkTotal, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue)}</Text>
+                        <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
+                          {formatMoney(check.totalRevenue)}
+                        </Text>
                       </View>
 
                       {/* Middle: car info chip */}
@@ -681,7 +690,9 @@ export default function ClientDetailScreen() {
                           {new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
                         </Text>
                         {check.master && (
-                          <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
+                          <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>
+                            {check.master.fullName}
+                          </Text>
                         )}
                         {canViewProfit && check.profit !== undefined && (
                           <Text
@@ -740,7 +751,13 @@ export default function ClientDetailScreen() {
             onChangeText={setCarComment}
             style={[
               styles.formInput,
-              { height: 80, textAlignVertical: 'top', backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              {
+                height: 80,
+                textAlignVertical: 'top',
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
             ]}
             multiline
             placeholder="Необязательно"
@@ -751,7 +768,10 @@ export default function ClientDetailScreen() {
           <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeCarModal}>
             <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]} onPress={handleCarSubmit}>
+          <TouchableOpacity
+            style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
+            onPress={handleCarSubmit}
+          >
             <Text style={styles.submitBtnText}>{editingCar ? 'Сохранить' : 'Добавить'}</Text>
           </TouchableOpacity>
         </View>
@@ -783,11 +803,7 @@ export default function ClientDetailScreen() {
             : `Госномер ${duplicateCar?.plateNumber || plateNumber} уже привязан к другому клиенту.`
         }
         existingLabel={duplicateCar?.makeModel || ''}
-        existingSubtitle={
-          duplicateCar?.client
-            ? `Клиент: ${duplicateCar.client.fullName}`
-            : duplicateCar?.plateNumber
-        }
+        existingSubtitle={duplicateCar?.client ? `Клиент: ${duplicateCar.client.fullName}` : duplicateCar?.plateNumber}
         openExistingLabel={duplicateCar?.clientId === id ? 'Закрыть' : 'Открыть владельца'}
       />
     </View>

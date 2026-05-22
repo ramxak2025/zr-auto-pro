@@ -14,7 +14,9 @@
       "resizeMode": "cover",
       "backgroundColor": "#f9fafb"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.autexa.mobile",
@@ -23,7 +25,10 @@
         "NSCameraUsageDescription": "Приложению нужен доступ к камере для фотографирования документов и автомобилей",
         "NSPhotoLibraryUsageDescription": "Приложению нужен доступ к галерее для выбора фотографий",
         "ITSAppUsesNonExemptEncryption": false,
-        "LSApplicationQueriesSchemes": ["tel", "telprompt"]
+        "LSApplicationQueriesSchemes": [
+          "tel",
+          "telprompt"
+        ]
       }
     },
     "android": {
@@ -79,7 +84,10 @@
             "newArchEnabled": true
           }
         }
-      ]
+      ],
+      "expo-barcode-scanner",
+      ["expo-notifications", { "icon": "./assets/icon.png", "color": "#2563eb" }],
+      "./plugins/withWidgetExtension"
     ]
   }
 }

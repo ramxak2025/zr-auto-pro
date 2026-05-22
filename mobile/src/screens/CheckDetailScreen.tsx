@@ -1,16 +1,19 @@
 import React, { useRef, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Animated } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Animated, Modal as RNModal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { checksApi, myCompanyApi } from '../api/services';
+import * as ImagePicker from 'expo-image-picker';
+import { checksApi, myCompanyApi, checkPhotosApi } from '../api/services';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import FeatureGate from '../components/FeatureGate';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
@@ -120,6 +123,49 @@ export default function CheckDetailScreen() {
     queryFn: async () => (await myCompanyApi.get()).data,
     staleTime: 5 * 60_000,
   });
+
+  // ── Photo attachments ──────────────────────────────────────────────────────
+  const { data: photos = [], refetch: refetchPhotos } = useQuery<
+    Array<{ id: string; checkId: string; photoUrl: string; createdAt: string; createdBy: string }>
+  >({
+    queryKey: ['check-photos', id],
+    queryFn: async () => {
+      const res = await checkPhotosApi.getByCheck(id);
+      return res.data;
+    },
+    staleTime: 30_000,
+  });
+
+  const uploadPhotoMutation = useMutation({
+    mutationFn: async () => {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+      const asset = result.assets[0];
+      const uri = asset.uri;
+      const filename = uri.split('/').pop() || 'photo.jpg';
+      const formData = new FormData();
+      formData.append('photo', { uri, name: filename, type: 'image/jpeg' } as any);
+      await checkPhotosApi.upload(id, formData);
+    },
+    onSuccess: () => refetchPhotos(),
+    onError: () => Alert.alert('Ошибка', 'Не удалось загрузить фото'),
+  });
+
+  const deletePhotoMutation = useMutation({
+    mutationFn: (photoId: string) => checkPhotosApi.remove(photoId),
+    onSuccess: () => refetchPhotos(),
+    onError: () => Alert.alert('Ошибка', 'Не удалось удалить фото'),
+  });
+
+  const handleDeletePhoto = (photoId: string) => {
+    Alert.alert('Удалить фото?', 'Это действие необратимо', [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Удалить', style: 'destructive', onPress: () => deletePhotoMutation.mutate(photoId) },
+    ]);
+  };
 
   const generatePdf = async () => {
     if (!check) return;
@@ -410,7 +456,9 @@ export default function CheckDetailScreen() {
                 </View>
                 <View style={styles.infoContent}>
                   <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Пробег</Text>
-                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>{check.mileage.toLocaleString()} км</Text>
+                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>
+                    {check.mileage.toLocaleString()} км
+                  </Text>
                 </View>
               </View>
             </>
@@ -419,12 +467,7 @@ export default function CheckDetailScreen() {
 
         {/* Comment */}
         {check.comment && (
-          <View
-            style={[
-              styles.commentCard,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-            ]}
-          >
+          <View style={[styles.commentCard, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
             <Ionicons name="chatbubble-ellipses" size={15} color={colors.primary[400]} />
             <Text style={[styles.commentText, { color: palette.text.secondary }]}>{check.comment}</Text>
           </View>
@@ -596,6 +639,62 @@ export default function CheckDetailScreen() {
             })}
           </View>
         )}
+
+        {/* Photo Attachments — premium feature */}
+        <FeatureGate
+          featureKey="check_photos"
+          title="Фото к чеку"
+          description="Прикрепляйте фото повреждений, до/после ремонта"
+          benefits={['Документирование работ', 'Защита от споров', 'История ремонта']}
+        >
+          <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <View style={styles.sectionHeader}>
+              <LinearGradient
+                colors={[colors.teal[50], palette.bg.card]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.sectionGradient}
+              >
+                <Ionicons name="camera" size={15} color={colors.teal[600]} />
+                <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Фото</Text>
+              </LinearGradient>
+              <TouchableOpacity
+                onPress={() => uploadPhotoMutation.mutate()}
+                disabled={uploadPhotoMutation.isPending}
+                style={[styles.photoAddBtn, { backgroundColor: palette.bg.muted }]}
+                hitSlop={8}
+                accessibilityLabel="Добавить фото"
+              >
+                <Ionicons name="add" size={18} color={colors.primary[600]} />
+              </TouchableOpacity>
+            </View>
+            {photos.length === 0 ? (
+              <View style={styles.photoEmpty}>
+                <Ionicons name="images-outline" size={28} color={palette.text.tertiary} />
+                <Text style={[styles.photoEmptyText, { color: palette.text.tertiary }]}>
+                  Нет фото. Нажмите «+» чтобы добавить.
+                </Text>
+              </View>
+            ) : (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.photoScrollContent}
+              >
+                {photos.map((photo) => (
+                  <TouchableOpacity
+                    key={photo.id}
+                    onLongPress={() => handleDeletePhoto(photo.id)}
+                    delayLongPress={500}
+                    activeOpacity={0.85}
+                  >
+                    <Image source={{ uri: photo.photoUrl }} style={styles.photoThumb} contentFit="cover" />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </FeatureGate>
 
         {/* Grand total — hero card */}
         <View style={styles.totalCard}>
@@ -790,6 +889,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sectionBadgeText: { fontSize: 11, fontWeight: fontWeight.bold },
+
+  // Photo attachments
+  photoAddBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[3],
+  },
+  photoEmptyText: { fontSize: 12, flex: 1 },
+  photoScrollContent: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[3],
+    gap: spacing[2],
+  },
+  photoThumb: {
+    width: 80,
+    height: 80,
+    borderRadius: 10,
+    backgroundColor: colors.gray[100],
+  },
 
   // Line items
   lineItem: {

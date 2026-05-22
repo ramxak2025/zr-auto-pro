@@ -25,6 +25,9 @@ import {
   createWarehousesApi,
   createWarrantyApi,
   createStockMovementsApi,
+  createCheckPhotosApi,
+  createCheckTemplatesApi,
+  createPushApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -53,6 +56,10 @@ export const warehousesApi = createWarehousesApi(api);
 export const warrantyApi = createWarrantyApi(api);
 export const stockMovementsApi = createStockMovementsApi(api);
 
+export const checkPhotosApi = createCheckPhotosApi(api);
+export const checkTemplatesApi = createCheckTemplatesApi(api);
+export const pushApi = createPushApi(api);
+
 // Platform-specific upload for React Native
 export const uploadsApi = {
   upload: async (uri: string, filename: string) => {
@@ -62,8 +69,12 @@ export const uploadsApi = {
       name: filename || 'photo.jpg',
       type: 'image/jpeg',
     } as any);
-    return api.post<{ url: string; thumbnail: string; filename: string; originalname: string; size: number }>('/uploads', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return api.post<{ url: string; thumbnail: string; filename: string; originalname: string; size: number }>(
+      '/uploads',
+      fd,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      },
+    );
   },
 };

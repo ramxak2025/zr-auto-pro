@@ -8,10 +8,10 @@ export class CarsService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   private async assertClientInTenant(clientId: string, tenantID: string): Promise<void> {
-    const { rows } = await this.pool.query(
-      'SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2 LIMIT 1',
-      [clientId, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+      clientId,
+      tenantID,
+    ]);
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Клиент не найден' });
     }
@@ -95,10 +95,7 @@ export class CarsService {
       idx += 2;
     }
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM cars ca WHERE ${where}`,
-      params,
-    );
+    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM cars ca WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
@@ -146,10 +143,22 @@ export class CarsService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.plateNumber !== undefined) { sets.push(`plate_number=$${idx++}`); vals.push(dto.plateNumber); }
-    if (dto.makeModel !== undefined) { sets.push(`make_model=$${idx++}`); vals.push(dto.makeModel); }
-    if (dto.comment !== undefined) { sets.push(`comment=$${idx++}`); vals.push(dto.comment); }
-    if (dto.clientId !== undefined) { sets.push(`client_id=$${idx++}`); vals.push(dto.clientId); }
+    if (dto.plateNumber !== undefined) {
+      sets.push(`plate_number=$${idx++}`);
+      vals.push(dto.plateNumber);
+    }
+    if (dto.makeModel !== undefined) {
+      sets.push(`make_model=$${idx++}`);
+      vals.push(dto.makeModel);
+    }
+    if (dto.comment !== undefined) {
+      sets.push(`comment=$${idx++}`);
+      vals.push(dto.comment);
+    }
+    if (dto.clientId !== undefined) {
+      sets.push(`client_id=$${idx++}`);
+      vals.push(dto.clientId);
+    }
 
     if (sets.length === 0) return this.getById(id, tenantID);
 

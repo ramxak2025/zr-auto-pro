@@ -1,7 +1,14 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  RefreshControl, TextInput, ActivityIndicator, Alert,
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  StyleSheet,
+  RefreshControl,
+  TextInput,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -72,7 +79,12 @@ const ALL_FEATURES: { key: string; label: string }[] = [
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function StatCard({
-  title, value, subtitle, icon, gradientColors, index,
+  title,
+  value,
+  subtitle,
+  icon,
+  gradientColors,
+  index,
 }: {
   title: string;
   value: string;
@@ -104,21 +116,22 @@ function StatCard({
 //  Overview Tab
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function OverviewTab({
-  stats, tenants, plans,
-}: {
-  stats?: PlatformStats;
-  tenants: Tenant[];
-  plans: Plan[];
-}) {
+function OverviewTab({ stats, tenants, plans }: { stats?: PlatformStats; tenants: Tenant[]; plans: Plan[] }) {
   const palette = useColors();
   const totalRevenue = useMemo(() => tenants.reduce((s, t) => s + (t.monthlyPrice || 0), 0), [tenants]);
-  const activeSubs = useMemo(() => tenants.filter(t => t.isActive && t.subscriptionEnd && !isExpired(t.subscriptionEnd)).length, [tenants]);
-  const expiringSoon = useMemo(() => tenants.filter(t => {
-    if (!t.subscriptionEnd || !t.isActive) return false;
-    const days = Math.ceil((new Date(t.subscriptionEnd).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-    return days >= 0 && days <= 7;
-  }).length, [tenants]);
+  const activeSubs = useMemo(
+    () => tenants.filter((t) => t.isActive && t.subscriptionEnd && !isExpired(t.subscriptionEnd)).length,
+    [tenants],
+  );
+  const expiringSoon = useMemo(
+    () =>
+      tenants.filter((t) => {
+        if (!t.subscriptionEnd || !t.isActive) return false;
+        const days = Math.ceil((new Date(t.subscriptionEnd).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+        return days >= 0 && days <= 7;
+      }).length,
+    [tenants],
+  );
 
   return (
     <View style={styles.tabContent}>
@@ -128,7 +141,7 @@ function OverviewTab({
           index={0}
           title="Всего клиентов"
           value={String(stats?.totalTenants ?? tenants.length)}
-          subtitle={`${stats?.activeTenants ?? tenants.filter(t => t.isActive).length} активных`}
+          subtitle={`${stats?.activeTenants ?? tenants.filter((t) => t.isActive).length} активных`}
           icon="business"
           gradientColors={[colors.primary[500], colors.primary[700]]}
         />
@@ -181,9 +194,7 @@ function OverviewTab({
               return (
                 <View key={tenant.id} style={[styles.recentTenantRow, { borderTopColor: palette.border.subtle }]}>
                   <View style={styles.tenantAvatar}>
-                    <Text style={styles.tenantAvatarText}>
-                      {tenant.name?.charAt(0)?.toUpperCase() || 'T'}
-                    </Text>
+                    <Text style={styles.tenantAvatarText}>{tenant.name?.charAt(0)?.toUpperCase() || 'T'}</Text>
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.recentTenantName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -213,7 +224,7 @@ function OverviewTab({
             <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Распределение по тарифам</Text>
           </View>
           {plans.map((plan) => {
-            const count = tenants.filter(t => t.planId === plan.id).length;
+            const count = tenants.filter((t) => t.planId === plan.id).length;
             const pct = tenants.length > 0 ? Math.round((count / tenants.length) * 100) : 0;
             return (
               <View key={plan.id} style={styles.planDistRow}>
@@ -241,7 +252,12 @@ function OverviewTab({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function TenantDetailCard({
-  tenant, plans, onToggleActive, onChangePlan, togglingId, changingPlanId,
+  tenant,
+  plans,
+  onToggleActive,
+  onChangePlan,
+  togglingId,
+  changingPlanId,
 }: {
   tenant: Tenant;
   plans: Plan[];
@@ -253,25 +269,21 @@ function TenantDetailCard({
   const palette = useColors();
   const [expanded, setExpanded] = useState(false);
   const status = getSubscriptionStatusColor(tenant);
-  const planName = tenant.plan?.name || plans.find(p => p.id === tenant.planId)?.name || 'Не назначен';
+  const planName = tenant.plan?.name || plans.find((p) => p.id === tenant.planId)?.name || 'Не назначен';
 
   return (
     <AnimatedCard
       index={0}
       style={[styles.tenantCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
-      <TouchableOpacity
-        style={styles.tenantCardHeader}
-        onPress={() => setExpanded(!expanded)}
-        activeOpacity={0.7}
-      >
+      <TouchableOpacity style={styles.tenantCardHeader} onPress={() => setExpanded(!expanded)} activeOpacity={0.7}>
         <View style={styles.tenantAvatar}>
-          <Text style={styles.tenantAvatarText}>
-            {tenant.name?.charAt(0)?.toUpperCase() || 'T'}
-          </Text>
+          <Text style={styles.tenantAvatarText}>{tenant.name?.charAt(0)?.toUpperCase() || 'T'}</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.tenantName, { color: palette.text.primary }]} numberOfLines={1}>{tenant.name}</Text>
+          <Text style={[styles.tenantName, { color: palette.text.primary }]} numberOfLines={1}>
+            {tenant.name}
+          </Text>
           <View style={styles.tenantMeta}>
             <Text style={[styles.tenantPlan, { color: palette.text.secondary }]}>{planName}</Text>
             <Text style={styles.metaDot}>{'\u00B7'}</Text>
@@ -314,15 +326,19 @@ function TenantDetailCard({
               </View>
               <View style={styles.detailInfoRow}>
                 <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>Стоимость</Text>
-                <Text style={[styles.detailInfoValue, { color: palette.text.primary }]}>{formatMoney(tenant.monthlyPrice)}/мес</Text>
+                <Text style={[styles.detailInfoValue, { color: palette.text.primary }]}>
+                  {formatMoney(tenant.monthlyPrice)}/мес
+                </Text>
               </View>
               <View style={styles.detailInfoRow}>
                 <Text style={[styles.detailInfoLabel, { color: palette.text.secondary }]}>Оплачено до</Text>
-                <Text style={[
-                  styles.detailInfoValue,
-                  { color: palette.text.primary },
-                  isExpired(tenant.subscriptionEnd) && { color: colors.red[600] },
-                ]}>
+                <Text
+                  style={[
+                    styles.detailInfoValue,
+                    { color: palette.text.primary },
+                    isExpired(tenant.subscriptionEnd) && { color: colors.red[600] },
+                  ]}
+                >
                   {tenant.subscriptionEnd ? formatFullDate(tenant.subscriptionEnd) : 'Не указано'}
                 </Text>
               </View>
@@ -365,10 +381,7 @@ function TenantDetailCard({
           {/* Actions */}
           <View style={styles.actionsRow}>
             <TouchableOpacity
-              style={[
-                styles.actionBtn,
-                tenant.isActive ? styles.actionBtnDanger : styles.actionBtnSuccess,
-              ]}
+              style={[styles.actionBtn, tenant.isActive ? styles.actionBtnDanger : styles.actionBtnSuccess]}
               onPress={() => onToggleActive(tenant)}
               disabled={togglingId === tenant.id}
               activeOpacity={0.7}
@@ -382,9 +395,7 @@ function TenantDetailCard({
                     size={16}
                     color={colors.white}
                   />
-                  <Text style={styles.actionBtnText}>
-                    {tenant.isActive ? 'Отключить' : 'Активировать'}
-                  </Text>
+                  <Text style={styles.actionBtnText}>{tenant.isActive ? 'Отключить' : 'Активировать'}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -392,22 +403,18 @@ function TenantDetailCard({
             <TouchableOpacity
               style={[styles.actionBtn, styles.actionBtnPrimary]}
               onPress={() => {
-                const planOptions = plans.filter(p => p.id !== tenant.planId);
+                const planOptions = plans.filter((p) => p.id !== tenant.planId);
                 if (planOptions.length === 0) {
                   Alert.alert('Нет доступных тарифов', 'Все тарифы уже назначены или отсутствуют.');
                   return;
                 }
-                Alert.alert(
-                  'Сменить тариф',
-                  `Выберите тариф для "${tenant.name}"`,
-                  [
-                    ...planOptions.map(p => ({
-                      text: `${p.name} (${formatMoney(p.monthlyPrice)}/мес)`,
-                      onPress: () => onChangePlan(tenant, p.id),
-                    })),
-                    { text: 'Отмена', style: 'cancel' as const },
-                  ],
-                );
+                Alert.alert('Сменить тариф', `Выберите тариф для "${tenant.name}"`, [
+                  ...planOptions.map((p) => ({
+                    text: `${p.name} (${formatMoney(p.monthlyPrice)}/мес)`,
+                    onPress: () => onChangePlan(tenant, p.id),
+                  })),
+                  { text: 'Отмена', style: 'cancel' as const },
+                ]);
               }}
               disabled={changingPlanId === tenant.id}
               activeOpacity={0.7}
@@ -434,7 +441,9 @@ function DetailRow({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMa
     <View style={styles.detailRow}>
       <Ionicons name={icon} size={16} color={palette.text.tertiary} />
       <Text style={[styles.detailLabel, { color: palette.text.tertiary }]}>{label}</Text>
-      <Text style={[styles.detailValue, { color: palette.text.primary }]} numberOfLines={1}>{value}</Text>
+      <Text style={[styles.detailValue, { color: palette.text.primary }]} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -444,7 +453,12 @@ function DetailRow({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMa
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function TenantsTab({
-  tenants, plans, onToggleActive, onChangePlan, togglingId, changingPlanId,
+  tenants,
+  plans,
+  onToggleActive,
+  onChangePlan,
+  togglingId,
+  changingPlanId,
 }: {
   tenants: Tenant[];
   plans: Plan[];
@@ -461,21 +475,20 @@ function TenantsTab({
     let list = tenants;
     if (search.trim()) {
       const q = search.toLowerCase();
-      list = list.filter(t =>
-        t.name.toLowerCase().includes(q) ||
-        t.phone?.toLowerCase().includes(q) ||
-        t.email?.toLowerCase().includes(q),
+      list = list.filter(
+        (t) =>
+          t.name.toLowerCase().includes(q) || t.phone?.toLowerCase().includes(q) || t.email?.toLowerCase().includes(q),
       );
     }
     switch (filterStatus) {
       case 'active':
-        list = list.filter(t => t.isActive && !isExpired(t.subscriptionEnd));
+        list = list.filter((t) => t.isActive && !isExpired(t.subscriptionEnd));
         break;
       case 'inactive':
-        list = list.filter(t => !t.isActive);
+        list = list.filter((t) => !t.isActive);
         break;
       case 'expired':
-        list = list.filter(t => t.isActive && isExpired(t.subscriptionEnd));
+        list = list.filter((t) => t.isActive && isExpired(t.subscriptionEnd));
         break;
     }
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -513,8 +526,13 @@ function TenantsTab({
       </AnimatedCard>
 
       {/* Filters */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filtersScroll} contentContainerStyle={styles.filtersContent}>
-        {statusFilters.map(f => (
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.filtersScroll}
+        contentContainerStyle={styles.filtersContent}
+      >
+        {statusFilters.map((f) => (
           <TouchableOpacity
             key={f.key}
             style={[
@@ -525,11 +543,13 @@ function TenantsTab({
             onPress={() => setFilterStatus(f.key)}
             activeOpacity={0.7}
           >
-            <Text style={[
-              styles.filterChipText,
-              { color: palette.text.secondary },
-              filterStatus === f.key && styles.filterChipTextActive,
-            ]}>
+            <Text
+              style={[
+                styles.filterChipText,
+                { color: palette.text.secondary },
+                filterStatus === f.key && styles.filterChipTextActive,
+              ]}
+            >
               {f.label}
             </Text>
           </TouchableOpacity>
@@ -549,7 +569,9 @@ function TenantsTab({
         >
           <Ionicons name="search-outline" size={48} color={palette.text.tertiary} />
           <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Ничего не найдено</Text>
-          <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>Попробуйте изменить параметры поиска</Text>
+          <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>
+            Попробуйте изменить параметры поиска
+          </Text>
         </AnimatedCard>
       ) : (
         filtered.map((tenant) => (
@@ -574,10 +596,7 @@ function TenantsTab({
 
 function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
   const palette = useColors();
-  const sortedPlans = useMemo(
-    () => [...plans].sort((a, b) => a.sortOrder - b.sortOrder),
-    [plans],
-  );
+  const sortedPlans = useMemo(() => [...plans].sort((a, b) => a.sortOrder - b.sortOrder), [plans]);
 
   if (plans.length === 0) {
     return (
@@ -597,9 +616,10 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
   return (
     <View style={styles.tabContent}>
       {sortedPlans.map((plan, idx) => {
-        const subscriberCount = tenants.filter(t => t.planId === plan.id).length;
+        const subscriberCount = tenants.filter((t) => t.planId === plan.id).length;
         const features: string[] = Array.isArray(plan.features) ? plan.features : [];
-        const isPopular = subscriberCount === Math.max(...plans.map(p => tenants.filter(t => t.planId === p.id).length));
+        const isPopular =
+          subscriberCount === Math.max(...plans.map((p) => tenants.filter((t) => t.planId === p.id).length));
         return (
           <AnimatedCard
             key={plan.id}
@@ -607,10 +627,7 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
             style={[styles.planCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           >
             {isPopular && subscriberCount > 0 && (
-              <LinearGradient
-                colors={[colors.primary[500], colors.primary[600]]}
-                style={styles.popularBanner}
-              >
+              <LinearGradient colors={[colors.primary[500], colors.primary[600]]} style={styles.popularBanner}>
                 <Ionicons name="star" size={12} color={colors.white} />
                 <Text style={styles.popularBannerText}>Популярный</Text>
               </LinearGradient>
@@ -623,18 +640,21 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
                     <Text style={[styles.planCardDesc, { color: palette.text.secondary }]}>{plan.description}</Text>
                   )}
                 </View>
-                <View style={[
-                  styles.planActiveBadge,
-                  { backgroundColor: plan.isActive ? colors.green[50] : colors.gray[100] },
-                ]}>
-                  <View style={[
-                    styles.planActiveDot,
-                    { backgroundColor: plan.isActive ? colors.green[500] : colors.gray[400] },
-                  ]} />
-                  <Text style={[
-                    styles.planActiveText,
-                    { color: plan.isActive ? colors.green[700] : colors.gray[500] },
-                  ]}>
+                <View
+                  style={[
+                    styles.planActiveBadge,
+                    { backgroundColor: plan.isActive ? colors.green[50] : colors.gray[100] },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.planActiveDot,
+                      { backgroundColor: plan.isActive ? colors.green[500] : colors.gray[400] },
+                    ]}
+                  />
+                  <Text
+                    style={[styles.planActiveText, { color: plan.isActive ? colors.green[700] : colors.gray[500] }]}
+                  >
                     {plan.isActive ? 'Активен' : 'Отключён'}
                   </Text>
                 </View>
@@ -656,13 +676,15 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
                 </View>
                 <View style={[styles.planStatItem, { backgroundColor: palette.bg.muted }]}>
                   <Ionicons name="business" size={14} color={colors.purple[700]} />
-                  <Text style={[styles.planStatText, { color: palette.text.primary }]}>{subscriberCount} подписчик(ов)</Text>
+                  <Text style={[styles.planStatText, { color: palette.text.primary }]}>
+                    {subscriberCount} подписчик(ов)
+                  </Text>
                 </View>
               </View>
 
               {/* Features */}
               <View style={[styles.planFeaturesList, { borderTopColor: palette.border.subtle }]}>
-                {ALL_FEATURES.map(feat => {
+                {ALL_FEATURES.map((feat) => {
                   const included = features.includes(feat.key);
                   return (
                     <View key={feat.key} style={styles.planFeatureRow}>
@@ -671,11 +693,13 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
                         size={16}
                         color={included ? colors.green[500] : palette.text.tertiary}
                       />
-                      <Text style={[
-                        styles.planFeatureText,
-                        { color: palette.text.primary },
-                        !included && [styles.planFeatureTextDisabled, { color: palette.text.tertiary }],
-                      ]}>
+                      <Text
+                        style={[
+                          styles.planFeatureText,
+                          { color: palette.text.primary },
+                          !included && [styles.planFeatureTextDisabled, { color: palette.text.tertiary }],
+                        ]}
+                      >
                         {feat.label}
                       </Text>
                     </View>
@@ -707,17 +731,26 @@ export default function AdminScreen() {
   // ── Queries ──
   const { data: tenants = [], isLoading: tenantsLoading } = useQuery<Tenant[]>({
     queryKey: ['admin-tenants'],
-    queryFn: async () => { const res = await tenantsApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await tenantsApi.getAll();
+      return res.data;
+    },
   });
 
   const { data: stats } = useQuery<PlatformStats>({
     queryKey: ['admin-stats'],
-    queryFn: async () => { const res = await tenantsApi.getStats(); return res.data; },
+    queryFn: async () => {
+      const res = await tenantsApi.getStats();
+      return res.data;
+    },
   });
 
   const { data: plans = [], isLoading: plansLoading } = useQuery<Plan[]>({
     queryKey: ['admin-plans'],
-    queryFn: async () => { const res = await plansApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await plansApi.getAll();
+      return res.data;
+    },
   });
 
   const isLoading = tenantsLoading || plansLoading;
@@ -741,7 +774,7 @@ export default function AdminScreen() {
   const changePlanMutation = useMutation({
     mutationFn: async ({ tenantId, planId }: { tenantId: string; planId: string }) => {
       setChangingPlanId(tenantId);
-      const plan = plans.find(p => p.id === planId);
+      const plan = plans.find((p) => p.id === planId);
       await tenantsApi.update(tenantId, {
         planId,
         monthlyPrice: plan?.monthlyPrice,
@@ -758,24 +791,30 @@ export default function AdminScreen() {
     onSettled: () => setChangingPlanId(null),
   });
 
-  const handleToggleActive = useCallback((tenant: Tenant) => {
-    Alert.alert(
-      tenant.isActive ? 'Отключить клиента?' : 'Активировать клиента?',
-      `${tenant.name} будет ${tenant.isActive ? 'отключён' : 'активирован'}.`,
-      [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: tenant.isActive ? 'Отключить' : 'Активировать',
-          style: tenant.isActive ? 'destructive' : 'default',
-          onPress: () => toggleActiveMutation.mutate(tenant),
-        },
-      ],
-    );
-  }, [toggleActiveMutation]);
+  const handleToggleActive = useCallback(
+    (tenant: Tenant) => {
+      Alert.alert(
+        tenant.isActive ? 'Отключить клиента?' : 'Активировать клиента?',
+        `${tenant.name} будет ${tenant.isActive ? 'отключён' : 'активирован'}.`,
+        [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: tenant.isActive ? 'Отключить' : 'Активировать',
+            style: tenant.isActive ? 'destructive' : 'default',
+            onPress: () => toggleActiveMutation.mutate(tenant),
+          },
+        ],
+      );
+    },
+    [toggleActiveMutation],
+  );
 
-  const handleChangePlan = useCallback((tenant: Tenant, planId: string) => {
-    changePlanMutation.mutate({ tenantId: tenant.id, planId });
-  }, [changePlanMutation]);
+  const handleChangePlan = useCallback(
+    (tenant: Tenant, planId: string) => {
+      changePlanMutation.mutate({ tenantId: tenant.id, planId });
+    },
+    [changePlanMutation],
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -793,7 +832,7 @@ export default function AdminScreen() {
 
       {/* Tab bar */}
       <View style={[styles.tabBar, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
-        {TABS.map(tab => (
+        {TABS.map((tab) => (
           <TouchableOpacity
             key={tab.key}
             style={[styles.tab, activeTab === tab.key && styles.tabActive]}
@@ -805,11 +844,9 @@ export default function AdminScreen() {
               size={16}
               color={activeTab === tab.key ? colors.primary[600] : palette.text.tertiary}
             />
-            <Text style={[
-              styles.tabText,
-              { color: palette.text.tertiary },
-              activeTab === tab.key && styles.tabTextActive,
-            ]}>
+            <Text
+              style={[styles.tabText, { color: palette.text.tertiary }, activeTab === tab.key && styles.tabTextActive]}
+            >
               {tab.label}
             </Text>
           </TouchableOpacity>
@@ -826,17 +863,11 @@ export default function AdminScreen() {
         <ScrollView
           contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={colors.primary[600]}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
           }
           showsVerticalScrollIndicator={false}
         >
-          {activeTab === 'overview' && (
-            <OverviewTab stats={stats} tenants={tenants} plans={plans} />
-          )}
+          {activeTab === 'overview' && <OverviewTab stats={stats} tenants={tenants} plans={plans} />}
           {activeTab === 'tenants' && (
             <TenantsTab
               tenants={tenants}
@@ -847,9 +878,7 @@ export default function AdminScreen() {
               changingPlanId={changingPlanId}
             />
           )}
-          {activeTab === 'plans' && (
-            <PlansTab plans={plans} tenants={tenants} />
-          )}
+          {activeTab === 'plans' && <PlansTab plans={plans} tenants={tenants} />}
         </ScrollView>
       )}
     </View>

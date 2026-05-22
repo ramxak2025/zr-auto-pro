@@ -415,8 +415,16 @@ export default function EmployeeDetailScreen() {
               }
               palette={palette}
             />
-            <Tile label="Пришёл" value={today?.actualArrival ? formatTime(today.actualArrival) : '—'} palette={palette} />
-            <Tile label="Опоздание" value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'} palette={palette} />
+            <Tile
+              label="Пришёл"
+              value={today?.actualArrival ? formatTime(today.actualArrival) : '—'}
+              palette={palette}
+            />
+            <Tile
+              label="Опоздание"
+              value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'}
+              palette={palette}
+            />
           </View>
           {today?.note ? (
             <View style={styles.note}>
@@ -436,7 +444,9 @@ export default function EmployeeDetailScreen() {
             </View>
             {(salary.serviceEarnings != null || salary.productEarnings != null) && (
               <View style={[styles.tilesGrid, { marginTop: spacing[2] }]}>
-                {salary.serviceEarnings != null && <Tile label="С услуг" value={formatMoney(salary.serviceEarnings)} palette={palette} />}
+                {salary.serviceEarnings != null && (
+                  <Tile label="С услуг" value={formatMoney(salary.serviceEarnings)} palette={palette} />
+                )}
                 {salary.productEarnings != null && (
                   <Tile label="С товаров" value={formatMoney(salary.productEarnings)} palette={palette} />
                 )}
@@ -450,19 +460,30 @@ export default function EmployeeDetailScreen() {
           <Section icon="trophy-outline" title="Рейтинг" palette={palette}>
             <View style={styles.tilesGrid}>
               {rank.todayPlace ? (
-                <Tile label="Сегодня" value={`${rank.todayPlace} / ${rank.todayTotal}`} hint={medal(rank.todayPlace)} palette={palette} />
+                <Tile
+                  label="Сегодня"
+                  value={`${rank.todayPlace} / ${rank.todayTotal}`}
+                  hint={medal(rank.todayPlace)}
+                  palette={palette}
+                />
               ) : (
                 <View style={{ flex: 1 }} />
               )}
               {rank.monthPlace ? (
-                <Tile label="Месяц" value={`${rank.monthPlace} / ${rank.monthTotal}`} hint={medal(rank.monthPlace)} palette={palette} />
+                <Tile
+                  label="Месяц"
+                  value={`${rank.monthPlace} / ${rank.monthTotal}`}
+                  hint={medal(rank.monthPlace)}
+                  palette={palette}
+                />
               ) : (
                 <View style={{ flex: 1 }} />
               )}
             </View>
             {rank.monthPlace ? (
               <Text style={[styles.rankSub, { color: palette.text.secondary }]}>
-                Выручка за месяц: <Text style={[styles.rankNum, { color: palette.text.primary }]}>{formatMoney(rank.monthRevenue)}</Text>
+                Выручка за месяц:{' '}
+                <Text style={[styles.rankNum, { color: palette.text.primary }]}>{formatMoney(rank.monthRevenue)}</Text>
                 {'   ·   '}
                 Чеков: <Text style={[styles.rankNum, { color: palette.text.primary }]}>{rank.monthChecks}</Text>
               </Text>
@@ -545,7 +566,9 @@ export default function EmployeeDetailScreen() {
                       {c.car?.makeModel ? ` · ${c.car.makeModel}` : ''}
                     </Text>
                   </View>
-                  <Text style={[styles.recentAmount, { color: palette.text.primary }]}>{formatMoney(c.totalRevenue)}</Text>
+                  <Text style={[styles.recentAmount, { color: palette.text.primary }]}>
+                    {formatMoney(c.totalRevenue)}
+                  </Text>
                   <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
                 </TouchableOpacity>
               ))}
@@ -563,9 +586,19 @@ export default function EmployeeDetailScreen() {
             {!!user.username && <ContactRow icon="at-outline" label="Логин" value={user.username} palette={palette} />}
             {showWorkConditions && (
               <>
-                <ContactRow icon="shield-outline" label="Доля с услуг" value={`${user.salaryPercent || 0}%`} palette={palette} />
+                <ContactRow
+                  icon="shield-outline"
+                  label="Доля с услуг"
+                  value={`${user.salaryPercent || 0}%`}
+                  palette={palette}
+                />
                 {typeof user.productSalaryPercent === 'number' && (
-                  <ContactRow icon="shield-outline" label="Доля с товаров" value={`${user.productSalaryPercent}%`} palette={palette} />
+                  <ContactRow
+                    icon="shield-outline"
+                    label="Доля с товаров"
+                    value={`${user.productSalaryPercent}%`}
+                    palette={palette}
+                  />
                 )}
                 {user.daysOff && user.daysOff.length > 0 && (
                   <ContactRow
@@ -634,11 +667,7 @@ function Tile({
     >
       <Text style={[styles.tileLabel, { color: palette.text.tertiary }]}>{label}</Text>
       <Text
-        style={[
-          styles.tileValue,
-          { color: palette.text.primary },
-          highlight ? styles.tileValueHighlight : null,
-        ]}
+        style={[styles.tileValue, { color: palette.text.primary }, highlight ? styles.tileValueHighlight : null]}
         numberOfLines={1}
       >
         {value}

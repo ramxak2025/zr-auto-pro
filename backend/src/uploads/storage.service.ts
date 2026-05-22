@@ -102,8 +102,7 @@ export class LocalStorageAdapter implements IStorageAdapter {
     const metadata = await sharp(inputBuffer).metadata();
 
     const needsResize =
-      (metadata.width && metadata.width > MAX_IMAGE_WIDTH) ||
-      (metadata.height && metadata.height > MAX_IMAGE_HEIGHT);
+      (metadata.width && metadata.width > MAX_IMAGE_WIDTH) || (metadata.height && metadata.height > MAX_IMAGE_HEIGHT);
 
     const resizeOptions = needsResize
       ? { width: MAX_IMAGE_WIDTH, height: MAX_IMAGE_HEIGHT, fit: 'inside' as const, withoutEnlargement: true }
@@ -139,9 +138,7 @@ export class LocalStorageAdapter implements IStorageAdapter {
     const webpUrl = '/api/uploads/' + webpStoredPath;
     const jpegUrl = '/api/uploads/' + jpegStoredPath;
 
-    this.logger.log(
-      `Image optimized: ${metadata.width}x${metadata.height} → WebP ${webpStats.size} bytes`,
-    );
+    this.logger.log(`Image optimized: ${metadata.width}x${metadata.height} → WebP ${webpStats.size} bytes`);
 
     return {
       storedPath: webpStoredPath,

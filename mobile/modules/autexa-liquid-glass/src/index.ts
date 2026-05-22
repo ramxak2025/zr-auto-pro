@@ -15,6 +15,30 @@ export type {
 } from './AutexaScheduleGrid';
 
 /**
+ * Write today's dashboard snapshot into the shared App Group UserDefaults so
+ * the AuTexaWidget WidgetKit extension can display it on the Home Screen.
+ * Immediately triggers a widget timeline reload (WidgetCenter.reloadAllTimelines).
+ *
+ * `json` must be a JSON string matching:
+ *   { revenue: number, checksCount: number, profitToday: number,
+ *     shiftOpen: boolean, updatedAt: string }
+ *
+ * Safe to call on Android — falls through to a no-op silently.
+ */
+export function setWidgetData(json: string): void {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).expo) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { requireNativeModule } = require('expo-modules-core');
+      const mod = requireNativeModule('AutexaLiquidGlass');
+      mod.setWidgetData(json);
+    } catch {
+      // Module missing (Android / unit tests) — silently no-op.
+    }
+  }
+}
+
+/**
  * Force the iOS app's interface style at runtime.
  *
  * Bridges to UIWindow.overrideUserInterfaceStyle so the system glass

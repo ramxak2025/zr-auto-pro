@@ -31,9 +31,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <View style={styles.container}>
           <Text style={styles.title}>Что-то пошло не так</Text>
-          <Text style={styles.message}>
-            {this.state.error?.message || 'Произошла непредвиденная ошибка'}
-          </Text>
+          <Text style={styles.message}>{this.state.error?.message || 'Произошла непредвиденная ошибка'}</Text>
           <TouchableOpacity style={styles.button} onPress={this.handleReset}>
             <Text style={styles.buttonText}>Попробовать снова</Text>
           </TouchableOpacity>

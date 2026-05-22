@@ -35,9 +35,8 @@ export class WarrantyService {
       productId: row.product_id,
       serviceId: row.service_id,
       itemName: row.item_name,
-      warrantyDays: typeof row.warranty_days === 'number'
-        ? row.warranty_days
-        : parseInt(String(row.warranty_days), 10) || 0,
+      warrantyDays:
+        typeof row.warranty_days === 'number' ? row.warranty_days : parseInt(String(row.warranty_days), 10) || 0,
       startedAt: row.started_at,
       expiresAt: row.expires_at,
       usedAt: row.used_at,

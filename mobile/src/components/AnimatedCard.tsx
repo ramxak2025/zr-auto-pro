@@ -93,12 +93,7 @@ export default function AnimatedCard({
   if (skipAnimation) {
     if (onPress) {
       return (
-        <TouchableOpacity
-          style={style}
-          onPress={onPress}
-          onLongPress={onLongPress}
-          activeOpacity={activeOpacity}
-        >
+        <TouchableOpacity style={style} onPress={onPress} onLongPress={onLongPress} activeOpacity={activeOpacity}>
           {children}
         </TouchableOpacity>
       );
@@ -114,12 +109,7 @@ export default function AnimatedCard({
   if (onPress) {
     return (
       <Animated.View style={animatedStyle}>
-        <TouchableOpacity
-          style={style}
-          onPress={onPress}
-          onLongPress={onLongPress}
-          activeOpacity={activeOpacity}
-        >
+        <TouchableOpacity style={style} onPress={onPress} onLongPress={onLongPress} activeOpacity={activeOpacity}>
           {children}
         </TouchableOpacity>
       </Animated.View>

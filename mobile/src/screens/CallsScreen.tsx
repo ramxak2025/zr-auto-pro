@@ -197,7 +197,11 @@ const CallRow = React.memo(function CallRow({
         )}
       </View>
       {isThisPlaying && call.recordingUrl && (
-        <ExpandedRecordingPlayer recordingUrl={call.recordingUrl} onClose={() => setPlayingId(null)} palette={palette} />
+        <ExpandedRecordingPlayer
+          recordingUrl={call.recordingUrl}
+          onClose={() => setPlayingId(null)}
+          palette={palette}
+        />
       )}
     </View>
   );
@@ -319,7 +323,9 @@ function ExpandedRecordingPlayer({
   };
 
   return (
-    <View style={[styles.expandedPlayer, { backgroundColor: palette.bg.muted, borderBottomColor: palette.border.subtle }]}>
+    <View
+      style={[styles.expandedPlayer, { backgroundColor: palette.bg.muted, borderBottomColor: palette.border.subtle }]}
+    >
       {/* Time labels */}
       <View style={styles.expandedTimeRow}>
         <Text style={[styles.expandedTime, { color: palette.text.secondary }]}>{formatDuration(positionSec)}</Text>

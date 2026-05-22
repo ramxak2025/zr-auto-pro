@@ -12,13 +12,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 
 interface SkeletonProps {
   width?: number | `${number}%`;
@@ -32,11 +26,7 @@ export function Skeleton({ width = '100%', height = 16, radius = 6, style }: Ske
 
   // Kick off once, run forever
   React.useEffect(() => {
-    progress.value = withRepeat(
-      withTiming(1, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      false,
-    );
+    progress.value = withRepeat(withTiming(1, { duration: 1200, easing: Easing.inOut(Easing.ease) }), -1, false);
   }, [progress]);
 
   const animatedStyle = useAnimatedStyle(() => ({

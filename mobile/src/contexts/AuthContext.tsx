@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
+import * as Notifications from 'expo-notifications';
 import type { QueryClient } from '@tanstack/react-query';
 import {
   authApi,
@@ -16,6 +18,7 @@ import {
   callsApi,
   subscriptionApi,
   scheduleApi,
+  pushApi,
 } from '../api/services';
 import { onAuthExpired } from '../api/axios';
 import { clearPersistentCache } from '../utils/persistentCache';
@@ -238,6 +241,39 @@ function prefetchAfterLogin(qc: QueryClient): void {
     queryFn: async () => (await scheduleApi.getToday()).data,
     staleTime: 60_000,
   }).catch(() => {});
+
+  // Push token registration — fire-and-forget, never blocks login.
+  registerPushToken().catch(() => {});
+}
+
+/**
+ * Request push permission and register the Expo push token with the server.
+ * Silently swallows all errors — push is non-critical.
+ */
+async function registerPushToken(): Promise<void> {
+  try {
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'default',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+      });
+    }
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    if (finalStatus !== 'granted') return;
+    const tokenData = await Notifications.getExpoPushTokenAsync({
+      projectId: '2d08b9be-9503-4e31-9198-8ec7093e44d7',
+    });
+    const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
+    await pushApi.register(tokenData.data, platform);
+  } catch {
+    // Silent fail — push registration is best-effort.
+  }
 }
 
 export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProviderProps) {

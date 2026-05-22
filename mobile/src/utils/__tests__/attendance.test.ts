@@ -65,9 +65,7 @@ describe('classifyEntry', () => {
   });
 
   it('classifies a fulfilled shift (actualArrival)', () => {
-    expect(
-      classifyEntry(base({ actualArrival: '2026-05-18T09:00:00' }), NOW),
-    ).toBe('full');
+    expect(classifyEntry(base({ actualArrival: '2026-05-18T09:00:00' }), NOW)).toBe('full');
   });
 
   it('classifies on_time even without actualArrival', () => {
@@ -169,9 +167,7 @@ describe('calculateAttendanceStats', () => {
   });
 
   it('ignores future dates', () => {
-    const entries: RawScheduleEntry[] = [
-      { userId: 'u1', date: '2099-01-01', actualArrival: '2099-01-01T09:00:00' },
-    ];
+    const entries: RawScheduleEntry[] = [{ userId: 'u1', date: '2099-01-01', actualArrival: '2099-01-01T09:00:00' }];
     expect(calculateAttendanceStats(entries, NOW)).toEqual({});
   });
 

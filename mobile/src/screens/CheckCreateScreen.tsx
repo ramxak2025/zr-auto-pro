@@ -28,6 +28,7 @@ import {
   productsApi,
   warehouseCategoriesApi,
   warehousesApi,
+  checkTemplatesApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -49,6 +50,7 @@ import type {
   CheckProductLine,
   PaymentMethod,
   Warehouse,
+  CheckTemplate,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
@@ -397,6 +399,7 @@ export default function CheckCreateScreen() {
   const [showServicePicker, setShowServicePicker] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
   const [showMasterPicker, setShowMasterPicker] = useState<number | null>(null);
+  const [showTemplatesPicker, setShowTemplatesPicker] = useState(false);
   // Warehouse selection for the in-cash product picker. Null on first
   // mount, resolved to the tenant's "main" warehouse as soon as the
   // warehouses list arrives (see effect below). Owner ask: "не
@@ -554,6 +557,98 @@ export default function CheckCreateScreen() {
     return services.filter((s) => s.name.toLowerCase().includes(q));
   }, [allServices, serviceSearch]);
 
+  // ── Check Templates ────────────────────────────────────────────────────────
+  const { data: templates = [] } = useQuery<CheckTemplate[]>({
+    queryKey: ['check-templates'],
+    queryFn: async () => (await checkTemplatesApi.list()).data,
+    staleTime: 60_000,
+  });
+
+  const applyTemplate = (template: CheckTemplate) => {
+    setServiceLines(
+      template.services.map((s) => ({
+        serviceId: s.serviceId,
+        name: s.name,
+        price: s.price,
+        quantity: s.quantity,
+        total: s.price * s.quantity,
+        masterId: defaultMasterId,
+        lineMasterId: defaultMasterId,
+      })),
+    );
+    setProductLines(
+      template.products.map((p) => ({
+        productId: p.productId,
+        name: p.name,
+        sellPrice: p.sellPrice,
+        costPrice: p.costPrice,
+        quantity: p.quantity,
+        totalSell: p.sellPrice * p.quantity,
+        totalCost: p.costPrice * p.quantity,
+      })),
+    );
+    setShowTemplatesPicker(false);
+  };
+
+  const promptTemplateName = (): Promise<string | null> =>
+    new Promise((resolve) => {
+      if (Platform.OS === 'ios') {
+        Alert.prompt(
+          'Имя шаблона',
+          'Введите название шаблона',
+          [
+            { text: 'Отмена', onPress: () => resolve(null), style: 'cancel' },
+            { text: 'Сохранить', onPress: (text?: string) => resolve(text || null) },
+          ],
+          'plain-text',
+        );
+      } else {
+        // Android: use a fallback name based on timestamp
+        resolve(`Шаблон ${new Date().toLocaleDateString('ru-RU')}`);
+      }
+    });
+
+  const saveAsTemplate = async () => {
+    if (serviceLines.length === 0 && productLines.length === 0) return;
+    const name = await promptTemplateName();
+    if (!name) return;
+    try {
+      await checkTemplatesApi.create({
+        name,
+        services: serviceLines
+          .filter((l) => !!l.serviceId)
+          .map((l) => ({
+            serviceId: l.serviceId!,
+            name: l.name,
+            price: l.price,
+            quantity: l.quantity,
+          })),
+        products: productLines
+          .filter((l) => !!l.productId)
+          .map((l) => ({
+            productId: l.productId!,
+            name: l.name,
+            sellPrice: l.sellPrice,
+            costPrice: l.costPrice,
+            quantity: l.quantity,
+          })),
+      });
+      queryClient.invalidateQueries({ queryKey: ['check-templates'] });
+      Alert.alert('Готово', 'Шаблон сохранён');
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось сохранить шаблон');
+    }
+  };
+
+  const deleteTemplate = async (templateId: string) => {
+    try {
+      await checkTemplatesApi.remove(templateId);
+      queryClient.invalidateQueries({ queryKey: ['check-templates'] });
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось удалить шаблон');
+    }
+  };
+
   // Load existing check for editing
   useEffect(() => {
     if (editId) {
@@ -611,12 +706,7 @@ export default function CheckCreateScreen() {
     },
     onError: (err: any) => {
       submittingRef.current = false;
-      Alert.alert(
-        'Ошибка',
-        err?.response?.data?.message ||
-          err?.response?.data?.error ||
-          'Не удалось сохранить чек',
-      );
+      Alert.alert('Ошибка', err?.response?.data?.message || err?.response?.data?.error || 'Не удалось сохранить чек');
     },
   });
 
@@ -828,7 +918,9 @@ export default function CheckCreateScreen() {
           keyboardShouldPersistTaps="handled"
         >
           {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
-          <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
             <View style={styles.sectionHeader}>
               <Ionicons name="person-circle-outline" size={18} color={colors.blue[600]} />
               <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Информация о клиенте</Text>
@@ -1019,10 +1111,17 @@ export default function CheckCreateScreen() {
                   <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
                 )}
 
-                <View style={[styles.retailDefault, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+                <View
+                  style={[
+                    styles.retailDefault,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  ]}
+                >
                   <Ionicons name="storefront-outline" size={16} color={colors.blue[500]} />
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.retailDefaultText, { color: palette.text.primary }]}>Розничный покупатель</Text>
+                    <Text style={[styles.retailDefaultText, { color: palette.text.primary }]}>
+                      Розничный покупатель
+                    </Text>
                     <Text style={[styles.retailDefaultHint, { color: palette.text.tertiary }]}>
                       Наберите госномер чтобы привязать клиента
                     </Text>
@@ -1068,7 +1167,9 @@ export default function CheckCreateScreen() {
             )}
 
             {/* Mileage */}
-            <View style={[styles.mileageRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <View
+              style={[styles.mileageRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
               <Ionicons name="speedometer-outline" size={16} color={colors.blue[400]} />
               <TextInput
                 value={mileage}
@@ -1086,7 +1187,9 @@ export default function CheckCreateScreen() {
               comment is about what the masters did / warned the client
               about, so it belongs to the receipt as a whole — not nested
               inside client info. */}
-          <View style={[styles.sectionComment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[styles.sectionComment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
             <View style={styles.sectionHeader}>
               <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.purple[600]} />
               <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Комментарий</Text>
@@ -1106,13 +1209,25 @@ export default function CheckCreateScreen() {
 
           {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
           <View style={[styles.sectionItems, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="receipt-outline" size={18} color={colors.orange[600]} />
-              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Товары и услуги</Text>
+            <View style={[styles.sectionHeader, { justifyContent: 'space-between' }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <Ionicons name="receipt-outline" size={18} color={colors.orange[600]} />
+                <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Товары и услуги</Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.templateChip, { backgroundColor: colors.primary[50], borderColor: colors.primary[100] }]}
+                onPress={() => setShowTemplatesPicker(true)}
+                hitSlop={8}
+              >
+                <Ionicons name="copy-outline" size={13} color={colors.primary[600]} />
+                <Text style={styles.templateChipText}>Шаблоны</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Services */}
-            <View style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <View
+              style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
               <View style={styles.linesSectionHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                   <View style={[styles.sectionIcon, { backgroundColor: colors.orange[50] }]}>
@@ -1138,7 +1253,10 @@ export default function CheckCreateScreen() {
               {serviceLines.map((line, idx) => (
                 <View
                   key={idx}
-                  style={[styles.lineItem, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+                  style={[
+                    styles.lineItem,
+                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                  ]}
                 >
                   <View style={styles.lineTop}>
                     <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -1164,7 +1282,11 @@ export default function CheckCreateScreen() {
                         onChangeText={(v) => updateServiceLine(idx, 'price', Number(v) || 0)}
                         style={[
                           styles.lineInput,
-                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                          {
+                            backgroundColor: palette.bg.muted,
+                            borderColor: palette.border.subtle,
+                            color: palette.text.primary,
+                          },
                         ]}
                         keyboardType="numeric"
                       />
@@ -1176,7 +1298,11 @@ export default function CheckCreateScreen() {
                         onChangeText={(v) => updateServiceLine(idx, 'quantity', Number(v) || 1)}
                         style={[
                           styles.lineInput,
-                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                          {
+                            backgroundColor: palette.bg.muted,
+                            borderColor: palette.border.subtle,
+                            color: palette.text.primary,
+                          },
                         ]}
                         keyboardType="numeric"
                       />
@@ -1202,7 +1328,9 @@ export default function CheckCreateScreen() {
             </View>
 
             {/* Products */}
-            <View style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <View
+              style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
               <View style={styles.linesSectionHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                   <View style={[styles.sectionIcon, { backgroundColor: colors.blue[50] }]}>
@@ -1222,7 +1350,10 @@ export default function CheckCreateScreen() {
               {productLines.map((line, idx) => (
                 <View
                   key={idx}
-                  style={[styles.lineItem, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+                  style={[
+                    styles.lineItem,
+                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                  ]}
                 >
                   <View style={styles.lineTop}>
                     <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -1243,7 +1374,11 @@ export default function CheckCreateScreen() {
                         onChangeText={(v) => updateProductLine(idx, 'sellPrice', Number(v) || 0)}
                         style={[
                           styles.lineInput,
-                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                          {
+                            backgroundColor: palette.bg.muted,
+                            borderColor: palette.border.subtle,
+                            color: palette.text.primary,
+                          },
                         ]}
                         keyboardType="numeric"
                       />
@@ -1255,7 +1390,11 @@ export default function CheckCreateScreen() {
                         onChangeText={(v) => updateProductLine(idx, 'quantity', Number(v) || 1)}
                         style={[
                           styles.lineInput,
-                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                          {
+                            backgroundColor: palette.bg.muted,
+                            borderColor: palette.border.subtle,
+                            color: palette.text.primary,
+                          },
                         ]}
                         keyboardType="numeric"
                       />
@@ -1277,8 +1416,21 @@ export default function CheckCreateScreen() {
               )}
             </View>
 
+            {/* Сохранить как шаблон */}
+            {(serviceLines.length > 0 || productLines.length > 0) && (
+              <TouchableOpacity
+                style={[styles.saveTemplateBtn, { borderColor: palette.border.subtle }]}
+                onPress={saveAsTemplate}
+              >
+                <Ionicons name="bookmark-outline" size={14} color={palette.text.tertiary} />
+                <Text style={[styles.saveTemplateBtnText, { color: palette.text.tertiary }]}>Сохранить как шаблон</Text>
+              </TouchableOpacity>
+            )}
+
             {/* Discount */}
-            <View style={[styles.discountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <View
+              style={[styles.discountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
               <Ionicons name="pricetag-outline" size={16} color={colors.orange[500]} />
               <Text style={[styles.discountLabel, { color: palette.text.secondary }]}>Скидка</Text>
               <TextInput
@@ -1297,7 +1449,12 @@ export default function CheckCreateScreen() {
 
           {/* ═══ SECTION 4: SUMMARY — special card ═══ */}
           {(serviceLines.length > 0 || productLines.length > 0) && (
-            <View style={[styles.summaryCard, { backgroundColor: palette.bg.card, borderColor: palette.accent.primarySoft }]}>
+            <View
+              style={[
+                styles.summaryCard,
+                { backgroundColor: palette.bg.card, borderColor: palette.accent.primarySoft },
+              ]}
+            >
               <Text style={[styles.summaryTitle, { color: palette.text.tertiary }]}>ИТОГО</Text>
               {serviceLines.length > 0 && (
                 <View style={styles.summaryRow}>
@@ -1307,7 +1464,9 @@ export default function CheckCreateScreen() {
                       Услуги ({serviceLines.length})
                     </Text>
                   </View>
-                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(serviceTotal)}</Text>
+                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>
+                    {formatMoney(serviceTotal)}
+                  </Text>
                 </View>
               )}
               {productLines.length > 0 && (
@@ -1318,7 +1477,9 @@ export default function CheckCreateScreen() {
                       Товары ({productLines.length})
                     </Text>
                   </View>
-                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(productTotal)}</Text>
+                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>
+                    {formatMoney(productTotal)}
+                  </Text>
                 </View>
               )}
               {serviceLines.length > 0 && productLines.length > 0 && (
@@ -1348,7 +1509,9 @@ export default function CheckCreateScreen() {
           )}
 
           {/* ═══ SECTION 5: PAYMENT — green tint ═══ */}
-          <View style={[styles.sectionPayment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[styles.sectionPayment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
             <View style={styles.sectionHeader}>
               <Ionicons name="wallet-outline" size={18} color={colors.green[600]} />
               <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
@@ -1383,7 +1546,9 @@ export default function CheckCreateScreen() {
             </View>
 
             {paymentMethod === ('cash' as PaymentMethod) && (
-              <View style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+              <View
+                style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              >
                 <View style={styles.splitRow}>
                   <View style={styles.splitIconRow}>
                     <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
@@ -1394,7 +1559,11 @@ export default function CheckCreateScreen() {
                     onChangeText={setCashGiven}
                     style={[
                       styles.splitInput,
-                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, color: palette.text.primary },
+                      {
+                        backgroundColor: palette.bg.card,
+                        borderColor: palette.border.subtle,
+                        color: palette.text.primary,
+                      },
                     ]}
                     keyboardType="numeric"
                     placeholder="0"
@@ -1407,7 +1576,9 @@ export default function CheckCreateScreen() {
                     <View style={styles.splitRow}>
                       <View style={styles.splitIconRow}>
                         <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
-                        <Text style={[styles.splitLabel, { color: palette.text.secondary, fontWeight: fontWeight.bold }]}>
+                        <Text
+                          style={[styles.splitLabel, { color: palette.text.secondary, fontWeight: fontWeight.bold }]}
+                        >
                           Сдача
                         </Text>
                       </View>
@@ -1421,7 +1592,9 @@ export default function CheckCreateScreen() {
             )}
 
             {paymentMethod === ('cash_card' as PaymentMethod) && (
-              <View style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+              <View
+                style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              >
                 <View style={styles.splitRow}>
                   <View style={styles.splitIconRow}>
                     <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
@@ -1432,7 +1605,11 @@ export default function CheckCreateScreen() {
                     onChangeText={setCashAmount}
                     style={[
                       styles.splitInput,
-                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, color: palette.text.primary },
+                      {
+                        backgroundColor: palette.bg.card,
+                        borderColor: palette.border.subtle,
+                        color: palette.text.primary,
+                      },
                     ]}
                     keyboardType="numeric"
                     placeholder="0"
@@ -1570,7 +1747,12 @@ export default function CheckCreateScreen() {
           onChangeText={setServiceSearch}
           style={[
             styles.formInput,
-            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary, marginBottom: spacing[3] },
+            {
+              backgroundColor: palette.bg.muted,
+              borderColor: palette.border.subtle,
+              color: palette.text.primary,
+              marginBottom: spacing[3],
+            },
           ]}
           placeholder="Поиск услуги..."
           placeholderTextColor={palette.text.tertiary}
@@ -1618,52 +1800,96 @@ export default function CheckCreateScreen() {
         }}
       />
 
+      {/* Templates Picker */}
+      <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
+        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
+          {templates.length === 0 ? (
+            <View style={{ alignItems: 'center', paddingVertical: spacing[6] }}>
+              <Ionicons name="copy-outline" size={32} color={colors.gray[300]} />
+              <Text style={{ color: colors.gray[400], marginTop: spacing[2], fontSize: 14 }}>
+                Нет сохранённых шаблонов
+              </Text>
+              <Text style={{ color: colors.gray[400], fontSize: 12, textAlign: 'center', marginTop: spacing[1] }}>
+                Добавьте услуги и товары, затем нажмите «Сохранить как шаблон»
+              </Text>
+            </View>
+          ) : (
+            templates.map((tpl) => (
+              <View key={tpl.id} style={[styles.pickerItem, { borderBottomColor: colors.gray[100] }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.pickerName, { color: colors.gray[900] }]}>{tpl.name}</Text>
+                  <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>
+                    {tpl.services.length > 0 ? `${tpl.services.length} усл.` : ''}
+                    {tpl.services.length > 0 && tpl.products.length > 0 ? ' · ' : ''}
+                    {tpl.products.length > 0 ? `${tpl.products.length} тов.` : ''}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <TouchableOpacity
+                    onPress={() => applyTemplate(tpl)}
+                    style={{
+                      backgroundColor: colors.primary[50],
+                      borderRadius: 8,
+                      paddingHorizontal: spacing[3],
+                      paddingVertical: 6,
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, color: colors.primary[600], fontWeight: '600' }}>Применить</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() =>
+                      Alert.alert('Удалить шаблон?', tpl.name, [
+                        { text: 'Отмена', style: 'cancel' },
+                        { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
+                      ])
+                    }
+                    hitSlop={8}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+          )}
+        </ScrollView>
+      </Modal>
+
       {/* Legacy bottom-sheet kept dormant — replaced by the inline
           dropdown inside ProductPickerModal. iOS would freeze when
           presenting this RNModal on top of the picker RNModal during
           the warehouse switch. */}
       {false && (
-      <Modal
-        visible={showWarehouseSheet}
-        onClose={() => setShowWarehouseSheet(false)}
-        title="Выбрать склад"
-      >
-        {(warehouses || []).map((w) => {
-          const iconName: keyof typeof Ionicons.glyphMap =
-            w.kind === 'defect'
-              ? 'warning-outline'
-              : w.kind === 'used'
-                ? 'cube-outline'
-                : 'home-outline';
-          const sub =
-            w.kind === 'defect'
-              ? 'Брак — можно продать со склада брака'
-              : w.kind === 'used'
-                ? 'Б/У — продажа подержанных деталей'
-                : 'Основной склад';
-          const active = pickerWarehouseId === w.id;
-          return (
-            <TouchableOpacity
-              key={w.id}
-              style={styles.warehouseOption}
-              onPress={() => {
-                setPickerWarehouseId(w.id);
-                setShowWarehouseSheet(false);
-              }}
-              activeOpacity={0.7}
-            >
-              <Ionicons name={iconName} size={18} color={colors.primary[600]} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.warehouseOptionName}>{w.name}</Text>
-                <Text style={styles.warehouseOptionSub}>{sub}</Text>
-              </View>
-              {active ? (
-                <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />
-              ) : null}
-            </TouchableOpacity>
-          );
-        })}
-      </Modal>
+        <Modal visible={showWarehouseSheet} onClose={() => setShowWarehouseSheet(false)} title="Выбрать склад">
+          {(warehouses || []).map((w) => {
+            const iconName: keyof typeof Ionicons.glyphMap =
+              w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
+            const sub =
+              w.kind === 'defect'
+                ? 'Брак — можно продать со склада брака'
+                : w.kind === 'used'
+                  ? 'Б/У — продажа подержанных деталей'
+                  : 'Основной склад';
+            const active = pickerWarehouseId === w.id;
+            return (
+              <TouchableOpacity
+                key={w.id}
+                style={styles.warehouseOption}
+                onPress={() => {
+                  setPickerWarehouseId(w.id);
+                  setShowWarehouseSheet(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name={iconName} size={18} color={colors.primary[600]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.warehouseOptionName}>{w.name}</Text>
+                  <Text style={styles.warehouseOptionSub}>{sub}</Text>
+                </View>
+                {active ? <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} /> : null}
+              </TouchableOpacity>
+            );
+          })}
+        </Modal>
       )}
     </View>
   );
@@ -1750,6 +1976,26 @@ const styles = StyleSheet.create({
   },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[1] },
   sectionLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[800] },
+  templateChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  templateChipText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.primary[600] },
+  saveTemplateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
+    marginTop: spacing[1],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  saveTemplateBtnText: { fontSize: 12, fontWeight: fontWeight.medium },
 
   // Date/Time
   dateTimeCard: { flexDirection: 'row', gap: spacing[2] },

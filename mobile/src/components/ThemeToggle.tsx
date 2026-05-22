@@ -67,25 +67,17 @@ export function ThemeToggle({ onColor }: { onColor?: string }) {
     // Track tint shifts from a soft warm cream (sun side) to a deep
     // cold blue (moon side) — same visual language as iOS Control
     // Center's appearance toggle.
-    backgroundColor: progress.value > 0.5
-      ? 'rgba(15, 23, 42, 0.55)'
-      : 'rgba(255, 255, 255, 0.22)',
+    backgroundColor: progress.value > 0.5 ? 'rgba(15, 23, 42, 0.55)' : 'rgba(255, 255, 255, 0.22)',
   }));
 
   const sunStyle = useAnimatedStyle(() => ({
     opacity: 1 - progress.value,
-    transform: [
-      { rotate: `${progress.value * -90}deg` },
-      { scale: 1 - progress.value * 0.2 },
-    ],
+    transform: [{ rotate: `${progress.value * -90}deg` }, { scale: 1 - progress.value * 0.2 }],
   }));
 
   const moonStyle = useAnimatedStyle(() => ({
     opacity: progress.value,
-    transform: [
-      { rotate: `${(1 - progress.value) * 90}deg` },
-      { scale: 0.8 + progress.value * 0.2 },
-    ],
+    transform: [{ rotate: `${(1 - progress.value) * 90}deg` }, { scale: 0.8 + progress.value * 0.2 }],
   }));
 
   const handle = React.useCallback(() => {

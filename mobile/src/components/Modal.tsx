@@ -27,19 +27,13 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
   const palette = useColors();
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.overlay}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.overlay}>
         <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
         <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
           <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
           <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
             <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
-            <TouchableOpacity
-              onPress={onClose}
-              style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
-            >
+            <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
               <Ionicons name="close" size={20} color={palette.text.tertiary} />
             </TouchableOpacity>
           </View>

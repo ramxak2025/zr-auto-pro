@@ -28,7 +28,10 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
 
   const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
-    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    queryFn: async () => {
+      const res = await subscriptionApi.get();
+      return res.data;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
@@ -40,7 +43,7 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
   // Check if feature is in plan
   const planFeatures: string[] = sub?.plans
     ? (() => {
-        const currentPlan = sub.plans.find(p => p.name === sub.planName);
+        const currentPlan = sub.plans.find((p) => p.name === sub.planName);
         return Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
       })()
     : [];
@@ -68,10 +71,7 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
 
       <View style={styles.container}>
         {/* Lock icon */}
-        <LinearGradient
-          colors={[colors.gray[100], colors.gray[50]]}
-          style={styles.lockCircle}
-        >
+        <LinearGradient colors={[colors.gray[100], colors.gray[50]]} style={styles.lockCircle}>
           <Ionicons name="lock-closed" size={36} color={colors.gray[400]} />
         </LinearGradient>
 
@@ -106,19 +106,75 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing[4], paddingVertical: spacing[3], backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.gray[200] },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    backgroundColor: colors.white,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.gray[200],
+  },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  container: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing[6], paddingBottom: spacing[8] },
-  lockCircle: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center', marginBottom: spacing[5] },
+  container: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[6],
+    paddingBottom: spacing[8],
+  },
+  lockCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[5],
+  },
   title: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, color: colors.gray[900], textAlign: 'center' },
-  locked: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.red[500], marginTop: spacing[2], marginBottom: spacing[2] },
-  description: { fontSize: fontSize.sm, color: colors.gray[500], textAlign: 'center', lineHeight: 20, marginBottom: spacing[5] },
-  benefitsCard: { backgroundColor: colors.white, borderRadius: borderRadius['2xl'], borderWidth: 1, borderColor: colors.gray[100], padding: spacing[5], width: '100%', marginBottom: spacing[5] },
-  benefitsTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[800], marginBottom: spacing[3] },
+  locked: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    color: colors.red[500],
+    marginTop: spacing[2],
+    marginBottom: spacing[2],
+  },
+  description: {
+    fontSize: fontSize.sm,
+    color: colors.gray[500],
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: spacing[5],
+  },
+  benefitsCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[5],
+    width: '100%',
+    marginBottom: spacing[5],
+  },
+  benefitsTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+    color: colors.gray[800],
+    marginBottom: spacing[3],
+  },
   benefitRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], paddingVertical: spacing[1.5] },
   benefitText: { fontSize: fontSize.sm, color: colors.gray[700], flex: 1 },
-  upgradeBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing[2], width: '100%', backgroundColor: colors.primary[600], paddingVertical: spacing[4], borderRadius: borderRadius.xl },
+  upgradeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    width: '100%',
+    backgroundColor: colors.primary[600],
+    paddingVertical: spacing[4],
+    borderRadius: borderRadius.xl,
+  },
   upgradeBtnText: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.white },
   goBackBtn: { marginTop: spacing[3] },
   goBackText: { fontSize: fontSize.sm, color: colors.gray[400] },

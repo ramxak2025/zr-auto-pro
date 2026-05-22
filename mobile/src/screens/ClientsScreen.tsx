@@ -256,9 +256,7 @@ export default function ClientsScreen() {
       fullName,
       phone,
       comment: comment || undefined,
-      car: hasInlineCar
-        ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, comment: carComment }
-        : undefined,
+      car: hasInlineCar ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, comment: carComment } : undefined,
     });
   };
 
@@ -335,14 +333,15 @@ export default function ClientsScreen() {
   // re-mounts the row. The empty `tenantId`/`createdAt` are fine — the
   // detail screen treats id === '__retail__' as a virtual entity.
   const retailBuyer = useMemo<Client>(
-    () => ({
-      id: '__retail__',
-      fullName: 'Розничный покупатель',
-      phone: '',
-      comment: 'Все чеки без клиента — автоматически розничный покупатель',
-      tenantId: '',
-      createdAt: '',
-    } as Client),
+    () =>
+      ({
+        id: '__retail__',
+        fullName: 'Розничный покупатель',
+        phone: '',
+        comment: 'Все чеки без клиента — автоматически розничный покупатель',
+        tenantId: '',
+        createdAt: '',
+      }) as Client,
     [],
   );
 
@@ -350,110 +349,110 @@ export default function ClientsScreen() {
   // FlashList only sees a new array reference when the underlying data
   // or search-mode actually changes — keeps virtualisation stable
   // while parent state (modals, dialog flags) churns above it.
-  const displayClients = useMemo(
-    () => (!search ? [retailBuyer, ...clients] : clients),
-    [search, retailBuyer, clients],
-  );
+  const displayClients = useMemo(() => (!search ? [retailBuyer, ...clients] : clients), [search, retailBuyer, clients]);
 
   // Cars FlashList data — same retail-buyer pin treatment. Inline
   // `[{ id: '__retail__' }, ...carsList]` re-created on every render
   // caused the whole virtualised list to re-key its rows.
   const displayCars = useMemo<Car[]>(
-    () => (!search ? ([{ id: '__retail__' } as unknown as Car, ...carsList]) : carsList),
+    () => (!search ? [{ id: '__retail__' } as unknown as Car, ...carsList] : carsList),
     [search, carsList],
   );
 
-  const renderClient = useCallback(({ item }: { item: Client; index: number }) => {
-    // Pinned retail buyer — same row geometry, branded icon instead of
-    // initials so it reads as a "system" entry above the alphabet. Tap
-    // opens the virtual retail-buyer view (ClientDetail with id
-    // '__retail__') — list of all checks paid by walk-in retail.
-    if (item.id === '__retail__') {
-      return (
+  const renderClient = useCallback(
+    ({ item }: { item: Client; index: number }) => {
+      // Pinned retail buyer — same row geometry, branded icon instead of
+      // initials so it reads as a "system" entry above the alphabet. Tap
+      // opens the virtual retail-buyer view (ClientDetail with id
+      // '__retail__') — list of all checks paid by walk-in retail.
+      if (item.id === '__retail__') {
+        return (
+          <TouchableOpacity
+            style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
+            activeOpacity={0.6}
+            onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
+          >
+            <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
+              <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
+            </View>
+            <View style={styles.info}>
+              <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
+                {item.fullName}
+              </Text>
+              <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
+                Все чеки без клиента
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
+          </TouchableOpacity>
+        );
+      }
+
+      const initials = getInitials(item.fullName);
+      const avatarBg = getAvatarColor(item.fullName);
+      const carsCount = item.cars?.length || 0;
+
+      const card = (
         <TouchableOpacity
           style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
           activeOpacity={0.6}
-          onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
+          onPress={() => navigation.navigate('ClientDetail', { id: item.id })}
         >
-          <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
-            <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
+          <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+            <Text style={styles.avatarInitials}>{initials}</Text>
           </View>
           <View style={styles.info}>
             <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
               {item.fullName}
             </Text>
             <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-              Все чеки без клиента
+              {/* item.phone is typed required but legacy rows have null —
+                pass through `|| ''` so formatPhone doesn't throw on .replace. */}
+              {[formatPhone(item.phone || '') || 'Без телефона', carsCount > 0 ? `${carsCount} авто` : null]
+                .filter(Boolean)
+                .join(' · ')}
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
         </TouchableOpacity>
       );
-    }
 
-    const initials = getInitials(item.fullName);
-    const avatarBg = getAvatarColor(item.fullName);
-    const carsCount = item.cars?.length || 0;
+      if (!canDelete) return card;
 
-    const card = (
-      <TouchableOpacity
-        style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
-        activeOpacity={0.6}
-        onPress={() => navigation.navigate('ClientDetail', { id: item.id })}
-      >
-        <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
-          <Text style={styles.avatarInitials}>{initials}</Text>
-        </View>
-        <View style={styles.info}>
-          <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
-            {item.fullName}
-          </Text>
-          <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-            {/* item.phone is typed required but legacy rows have null —
-                pass through `|| ''` so formatPhone doesn't throw on .replace. */}
-            {[formatPhone(item.phone || '') || 'Без телефона', carsCount > 0 ? `${carsCount} авто` : null]
-              .filter(Boolean)
-              .join(' · ')}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
-      </TouchableOpacity>
-    );
-
-    if (!canDelete) return card;
-
-    return (
-      <Swipeable
-        renderRightActions={() => (
-          <View style={styles.swipeActionsRow}>
-            <TouchableOpacity style={styles.swipeEditAction} onPress={() => openEditModal(item)} activeOpacity={0.85}>
-              <Ionicons name="pencil" size={20} color={colors.white} />
-              <Text style={styles.swipeActionText}>Изменить</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.swipeDeleteAction}
-              onPress={() => {
-                setDeleteId(item.id);
-                setConfirmOpen(true);
-              }}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="trash-outline" size={20} color={colors.white} />
-              <Text style={styles.swipeActionText}>Удалить</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        overshootRight={false}
-      >
-        {card}
-      </Swipeable>
-    );
-  // The inline TouchableOpacity / Swipeable rendering captures
-  // openEditModal / setDeleteId / etc, but those identities are stable
-  // for the lifetime of this screen instance, so we intentionally only
-  // depend on the things that actually flow into row visuals.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canDelete, navigation, palette]);
+      return (
+        <Swipeable
+          renderRightActions={() => (
+            <View style={styles.swipeActionsRow}>
+              <TouchableOpacity style={styles.swipeEditAction} onPress={() => openEditModal(item)} activeOpacity={0.85}>
+                <Ionicons name="pencil" size={20} color={colors.white} />
+                <Text style={styles.swipeActionText}>Изменить</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.swipeDeleteAction}
+                onPress={() => {
+                  setDeleteId(item.id);
+                  setConfirmOpen(true);
+                }}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="trash-outline" size={20} color={colors.white} />
+                <Text style={styles.swipeActionText}>Удалить</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          overshootRight={false}
+        >
+          {card}
+        </Swipeable>
+      );
+      // The inline TouchableOpacity / Swipeable rendering captures
+      // openEditModal / setDeleteId / etc, but those identities are stable
+      // for the lifetime of this screen instance, so we intentionally only
+      // depend on the things that actually flow into row visuals.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [canDelete, navigation, palette],
+  );
 
   // Cars renderer — stable identity (FlashList re-renders every row
   // when this changes), so wrap in useCallback. The retail-pin branch
@@ -550,7 +549,11 @@ export default function ClientsScreen() {
             }}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
-            <Ionicons name="car-sport" size={14} color={mode === 'cars' ? colors.primary[700] : palette.text.secondary} />
+            <Ionicons
+              name="car-sport"
+              size={14}
+              color={mode === 'cars' ? colors.primary[700] : palette.text.secondary}
+            />
             <Text
               style={
                 mode === 'cars'
@@ -574,7 +577,11 @@ export default function ClientsScreen() {
             }}
             hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
           >
-            <Ionicons name="people" size={14} color={mode === 'clients' ? colors.primary[700] : palette.text.secondary} />
+            <Ionicons
+              name="people"
+              size={14}
+              color={mode === 'clients' ? colors.primary[700] : palette.text.secondary}
+            />
             <Text
               style={
                 mode === 'clients'
@@ -705,7 +712,13 @@ export default function ClientsScreen() {
             onChangeText={setComment}
             style={[
               styles.formInput,
-              { height: 80, textAlignVertical: 'top', backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              {
+                height: 80,
+                textAlignVertical: 'top',
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
             ]}
             placeholder="Необязательно"
             multiline
@@ -730,7 +743,11 @@ export default function ClientsScreen() {
                 onChangeText={setCarMakeModel}
                 style={[
                   styles.formInput,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
                 ]}
                 placeholder="Toyota Camry"
                 placeholderTextColor={palette.text.tertiary}
@@ -743,7 +760,11 @@ export default function ClientsScreen() {
                 onChangeText={(t) => setCarPlate(processPlateMainInput(t.replace(/\s/g, '')))}
                 style={[
                   styles.formInput,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
                 ]}
                 placeholder="А000АА00"
                 autoCapitalize="characters"
@@ -758,7 +779,11 @@ export default function ClientsScreen() {
                 onChangeText={(t) => setCarVin(t.toUpperCase())}
                 style={[
                   styles.formInput,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
                 ]}
                 placeholder="1HGCM82633A123456"
                 autoCapitalize="characters"
@@ -831,11 +856,7 @@ export default function ClientsScreen() {
             : `Госномер ${duplicateCar?.plateNumber || ''} уже существует.`
         }
         existingLabel={duplicateCar?.makeModel || duplicateCar?.plateNumber || ''}
-        existingSubtitle={
-          duplicateCar?.client
-            ? `Клиент: ${duplicateCar.client.fullName}`
-            : duplicateCar?.plateNumber
-        }
+        existingSubtitle={duplicateCar?.client ? `Клиент: ${duplicateCar.client.fullName}` : duplicateCar?.plateNumber}
         openExistingLabel={duplicateCar?.client ? 'Открыть владельца' : 'Закрыть'}
       />
     </View>

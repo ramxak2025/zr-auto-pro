@@ -74,14 +74,7 @@ function Segment({ active, label, flag, icon, onPress }: SegmentProps) {
       ) : icon ? (
         <Ionicons name={icon} size={14} color={active ? colors.primary[700] : colors.gray[500]} />
       ) : null}
-      <Text
-        style={[
-          styles.label,
-          active ? styles.labelActive : styles.labelInactive,
-        ]}
-      >
-        {label}
-      </Text>
+      <Text style={[styles.label, active ? styles.labelActive : styles.labelInactive]}>{label}</Text>
     </Pressable>
   );
 }

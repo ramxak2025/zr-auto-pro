@@ -118,7 +118,10 @@ export default function CompanySettingsScreen() {
     );
   }
 
-  const cardStyle = StyleSheet.flatten([styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]);
+  const cardStyle = StyleSheet.flatten([
+    styles.card,
+    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+  ]);
   const cardTitleStyle = StyleSheet.flatten([styles.cardTitle, { color: palette.text.primary }]);
   const labelStyle = StyleSheet.flatten([styles.label, { color: palette.text.secondary }]);
   const inputStyle = StyleSheet.flatten([

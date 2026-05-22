@@ -7,7 +7,8 @@ export class ReportsService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   async getFinancial(tenantID: string, query: any) {
-    const dateFrom = query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const dateFrom =
+      query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
 
     const { rows } = await this.pool.query(
@@ -60,7 +61,8 @@ export class ReportsService {
    * kept around, only marked deleted_at), so the join still resolves.
    */
   async getDefectWriteoffReport(tenantID: string, query: { from?: string; to?: string }) {
-    const dateFrom = query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const dateFrom =
+      query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.to || new Date().toISOString().split('T')[0];
 
     const { rows } = await this.pool.query(
@@ -97,8 +99,92 @@ export class ReportsService {
     };
   }
 
+  /**
+   * Call funnel report: cross-reference sms_history (which logs inbound/outbound
+   * SMS contacts stored persistently in DB) with checks to build a conversion
+   * funnel. The external "calls" log (from Moi Zvonki API) is not persisted to
+   * DB, so we use sms_history as the tenant contact proxy.
+   *
+   * For tenants without any SMS integration the query returns zeros — not an
+   * error, just an empty funnel.
+   */
+  async getCallFunnel(tenantID: string, query: { dateFrom?: string; dateTo?: string }) {
+    const dateFrom =
+      query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
+
+    // Contact stats from sms_history
+    const { rows: contactRows } = await this.pool.query(
+      `SELECT
+         COUNT(*) AS total_contacts,
+         COUNT(DISTINCT phone) AS unique_callers
+       FROM sms_history
+       WHERE tenant_id = $1
+         AND created_at::date BETWEEN $2::date AND $3::date`,
+      [tenantID, dateFrom, dateTo],
+    );
+
+    // Checks created for clients who appear in sms_history during the same period
+    const { rows: checkRows } = await this.pool.query(
+      `SELECT
+         COUNT(DISTINCT ch.client_id) AS arrived_clients,
+         COUNT(DISTINCT ch.id) AS created_checks,
+         COALESCE(SUM(ch.total_revenue), 0) AS total_revenue
+       FROM checks ch
+       JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
+       WHERE ch.tenant_id = $1
+         AND ch.is_deferred = false
+         AND ch.date::date BETWEEN $2::date AND $3::date
+         AND cl.phone IN (
+           SELECT DISTINCT phone FROM sms_history
+           WHERE tenant_id = $1
+             AND created_at::date BETWEEN $2::date AND $3::date
+         )`,
+      [tenantID, dateFrom, dateTo],
+    );
+
+    // Repeat clients (clients with more than 1 check total for this tenant)
+    const { rows: repeatRows } = await this.pool.query(
+      `SELECT COUNT(DISTINCT client_id) AS repeat_clients
+       FROM (
+         SELECT client_id, COUNT(*) AS check_count
+         FROM checks
+         WHERE tenant_id = $1 AND is_deferred = false AND client_id IS NOT NULL
+         GROUP BY client_id
+         HAVING COUNT(*) > 1
+       ) sub`,
+      [tenantID],
+    );
+
+    const c = contactRows[0];
+    const r = checkRows[0];
+    const rp = repeatRows[0];
+
+    const totalCalls = parseInt(c.total_contacts) || 0;
+    const uniqueCallers = parseInt(c.unique_callers) || 0;
+    const arrivedClients = parseInt(r.arrived_clients) || 0;
+    const createdChecks = parseInt(r.created_checks) || 0;
+    const totalRevenue = parseFloat(r.total_revenue) || 0;
+    const avgCheckValue = createdChecks > 0 ? totalRevenue / createdChecks : 0;
+    const repeatClients = parseInt(rp.repeat_clients) || 0;
+    const conversionRate = uniqueCallers > 0 ? (arrivedClients / uniqueCallers) * 100 : 0;
+
+    return {
+      totalCalls,
+      uniqueCallers,
+      arrivedClients,
+      createdChecks,
+      totalRevenue,
+      avgCheckValue,
+      repeatClients,
+      conversionRate: Math.round(conversionRate * 10) / 10,
+      period: { from: dateFrom, to: dateTo },
+    };
+  }
+
   async getCashFlow(tenantID: string, query: any) {
-    const dateFrom = query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const dateFrom =
+      query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
     const masterId = query.masterId || null;
 

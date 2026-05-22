@@ -38,7 +38,13 @@ interface MasterPickerRowProps {
   onPick: (id: string, fullName: string) => void;
   palette: ReturnType<typeof useColors>;
 }
-const MasterPickerRow = React.memo(function MasterPickerRow({ id, fullName, active, onPick, palette }: MasterPickerRowProps) {
+const MasterPickerRow = React.memo(function MasterPickerRow({
+  id,
+  fullName,
+  active,
+  onPick,
+  palette,
+}: MasterPickerRowProps) {
   return (
     <TouchableOpacity
       style={[styles.masterOption, active && styles.masterOptionActive]}
@@ -129,10 +135,7 @@ export default function CashFlowScreen() {
   // when cashflow.totals didn't change. ChannelRow is a plain function but
   // its parent (the AnimatedCard) participates in the AnimatedCard entrance
   // sequencing, and a stable totals object keeps useMemo deps clean.
-  const totals = useMemo(
-    () => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 },
-    [cashflow?.totals],
-  );
+  const totals = useMemo(() => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 }, [cashflow?.totals]);
 
   // Memoise the daily breakdown array so each child <AnimatedCard> sees
   // the same row reference between renders (e.g. master-picker open).
@@ -298,11 +301,7 @@ export default function CashFlowScreen() {
         {cashflow === undefined ? (
           renderColdStart()
         ) : !cashflow && !isLoading ? (
-          <EmptyState
-            title="Нет данных"
-            description="За выбранный период чеков не было"
-            icon="wallet"
-          />
+          <EmptyState title="Нет данных" description="За выбранный период чеков не было" icon="wallet" />
         ) : (
           <>
             {/* Hero totals — one big card.
@@ -352,11 +351,7 @@ export default function CashFlowScreen() {
             {/* Daily breakdown */}
             <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.tertiary }]}>По дням</Text>
             {days.length === 0 ? (
-              <EmptyState
-                title="Нет операций"
-                description="За выбранный период чеков не было"
-                icon="receipt"
-              />
+              <EmptyState title="Нет операций" description="За выбранный период чеков не было" icon="receipt" />
             ) : (
               days.map((day: any, idx: number) => (
                 <AnimatedCard
@@ -409,11 +404,7 @@ export default function CashFlowScreen() {
 
       {/* Master picker modal */}
       <Modal visible={showMasterPicker} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowMasterPicker(false)}
-        >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowMasterPicker(false)}>
           <TouchableOpacity activeOpacity={1} style={[styles.modalContent, { backgroundColor: palette.bg.card }]}>
             <View style={[styles.modalHeader, { borderBottomColor: palette.border.subtle }]}>
               <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Выберите мастера</Text>
@@ -429,7 +420,11 @@ export default function CashFlowScreen() {
                 setShowMasterPicker(false);
               }}
             >
-              <Ionicons name="people-outline" size={18} color={!masterId ? colors.primary[600] : palette.text.secondary} />
+              <Ionicons
+                name="people-outline"
+                size={18}
+                color={!masterId ? colors.primary[600] : palette.text.secondary}
+              />
               <Text
                 style={[
                   styles.masterOptionText,

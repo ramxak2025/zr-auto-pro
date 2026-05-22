@@ -4,6 +4,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as Font from 'expo-font';
+import * as Notifications from 'expo-notifications';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { AuthProvider } from './src/contexts/AuthContext';
@@ -13,6 +14,18 @@ import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
 import { colors } from './src/theme';
 import { hydrateCache, attachPersistence } from './src/utils/persistentCache';
+
+// Configure how notifications are handled when the app is in the foreground.
+// Must be set before any notification arrives — top-level call outside component.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -70,6 +83,22 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Notification response listener — handles taps on push notifications
+  // while the app is backgrounded or cold-started from a notification.
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data as Record<string, unknown>;
+      // When the notification carries a checkId, navigate to that check.
+      // We use console.log here because the navigation ref is not yet
+      // available at the App level; screens pick up deep links via the
+      // URL scheme instead. Non-critical — no alert on failure.
+      if (data?.checkId) {
+        console.log('[Push] Notification tapped with checkId:', data.checkId);
+      }
+    });
+    return () => sub.remove();
   }, []);
 
   const showSplash = !cacheReady || !authResolved || !fontsReady;

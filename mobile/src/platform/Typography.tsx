@@ -8,28 +8,21 @@
  * reaching for `fontSize` directly, add a variant here instead.
  */
 import React from 'react';
-import {
-  Platform,
-  StyleProp,
-  StyleSheet,
-  Text as RNText,
-  TextProps as RNTextProps,
-  TextStyle,
-} from 'react-native';
+import { Platform, StyleProp, StyleSheet, Text as RNText, TextProps as RNTextProps, TextStyle } from 'react-native';
 import { colors } from '../theme';
 
 export type TextVariant =
-  | 'display'          // hero metric numbers
-  | 'title1'           // screen titles
-  | 'title2'           // section titles
-  | 'title3'           // card titles
-  | 'body'             // default running text
-  | 'bodyEmph'         // emphasised body
-  | 'callout'          // slightly larger body, CTAs
-  | 'footnote'         // captions, subtle hints
-  | 'caption'          // smallest — labels, timestamps
-  | 'label'            // UPPERCASE tracked labels
-  | 'mono';            // numeric / code-like
+  | 'display' // hero metric numbers
+  | 'title1' // screen titles
+  | 'title2' // section titles
+  | 'title3' // card titles
+  | 'body' // default running text
+  | 'bodyEmph' // emphasised body
+  | 'callout' // slightly larger body, CTAs
+  | 'footnote' // captions, subtle hints
+  | 'caption' // smallest — labels, timestamps
+  | 'label' // UPPERCASE tracked labels
+  | 'mono'; // numeric / code-like
 
 export interface TextProps extends RNTextProps {
   variant?: TextVariant;
@@ -128,11 +121,7 @@ const variantStyles: Record<TextVariant, TextStyle> = {
 
 export function Text({ variant = 'body', color, style, children, ...rest }: TextProps) {
   const base = variantStyles[variant];
-  const computed: StyleProp<TextStyle> = [
-    base,
-    color ? { color } : { color: colors.gray[900] },
-    style,
-  ];
+  const computed: StyleProp<TextStyle> = [base, color ? { color } : { color: colors.gray[900] }, style];
   return (
     <RNText allowFontScaling {...rest} style={computed}>
       {children}
@@ -142,7 +131,8 @@ export function Text({ variant = 'body', color, style, children, ...rest }: Text
 
 // Stylesheet export for cases where a style object is needed (e.g. TextInput).
 export const textVariantStyles = StyleSheet.create(
-  Object.fromEntries(
-    Object.entries(variantStyles).map(([k, v]) => [k, v as unknown as TextStyle]),
-  ) as Record<TextVariant, TextStyle>,
+  Object.fromEntries(Object.entries(variantStyles).map(([k, v]) => [k, v as unknown as TextStyle])) as Record<
+    TextVariant,
+    TextStyle
+  >,
 );

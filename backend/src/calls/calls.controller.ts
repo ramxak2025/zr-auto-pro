@@ -24,18 +24,12 @@ export class CallsController {
   }
 
   @Get('client/:clientId/sms')
-  getClientSmsHistory(
-    @CurrentUser() user: JwtPayload,
-    @Param('clientId') clientId: string,
-  ) {
+  getClientSmsHistory(@CurrentUser() user: JwtPayload, @Param('clientId') clientId: string) {
     return this.callsService.getClientSmsHistory(user.tenantID, clientId);
   }
 
   @Get('recording')
-  getRecordingUrl(
-    @CurrentUser() user: JwtPayload,
-    @Query('url') url: string,
-  ) {
+  getRecordingUrl(@CurrentUser() user: JwtPayload, @Query('url') url: string) {
     return this.callsService.getRecordingUrl(user.tenantID, url);
   }
 }

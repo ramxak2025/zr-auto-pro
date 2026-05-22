@@ -10,10 +10,10 @@ export class ScheduleService {
     if (!userID) {
       throw new BadRequestException({ message: 'Сотрудник обязателен' });
     }
-    const { rows } = await this.pool.query(
-      'SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1',
-      [userID, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT 1 FROM users WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+      userID,
+      tenantID,
+    ]);
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Сотрудник не найден' });
     }
@@ -159,10 +159,11 @@ export class ScheduleService {
     );
     if (existing.length > 0) return;
     // Auto-open shift — opened_at adjusted based on late status
-    await this.pool.query(
-      `INSERT INTO shifts (user_id, date, tenant_id, opened_at) VALUES ($1, $2, $3, now())`,
-      [userID, date, tenantID],
-    );
+    await this.pool.query(`INSERT INTO shifts (user_id, date, tenant_id, opened_at) VALUES ($1, $2, $3, now())`, [
+      userID,
+      date,
+      tenantID,
+    ]);
   }
 
   async create(tenantID: string, dto: any) {
@@ -187,9 +188,18 @@ export class ScheduleService {
          late_minutes    = EXCLUDED.late_minutes,
          actual_arrival  = EXCLUDED.actual_arrival
        RETURNING *`,
-      [dto.userId, dto.date, dto.shiftStart, dto.shiftEnd,
-       dto.isDayOff || false, dto.note, dto.lateStatus || null, dto.lateMinutes || 0,
-       dto.actualArrival || null, tenantID],
+      [
+        dto.userId,
+        dto.date,
+        dto.shiftStart,
+        dto.shiftEnd,
+        dto.isDayOff || false,
+        dto.note,
+        dto.lateStatus || null,
+        dto.lateMinutes || 0,
+        dto.actualArrival || null,
+        tenantID,
+      ],
     );
     // Auto-open shift if manually marked as attending
     await this.ensureShiftOpen(tenantID, dto.userId, dto.date, dto.lateStatus);
@@ -201,16 +211,40 @@ export class ScheduleService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.shiftStart !== undefined) { sets.push(`shift_start=$${idx++}`); vals.push(dto.shiftStart); }
-    if (dto.shiftEnd !== undefined) { sets.push(`shift_end=$${idx++}`); vals.push(dto.shiftEnd); }
-    if (dto.isDayOff !== undefined) { sets.push(`is_day_off=$${idx++}`); vals.push(dto.isDayOff); }
-    if (dto.note !== undefined) { sets.push(`note=$${idx++}`); vals.push(dto.note); }
-    if (dto.lateStatus !== undefined) { sets.push(`late_status=$${idx++}`); vals.push(dto.lateStatus); }
-    if (dto.lateMinutes !== undefined) { sets.push(`late_minutes=$${idx++}`); vals.push(dto.lateMinutes); }
-    if (dto.actualArrival !== undefined) { sets.push(`actual_arrival=$${idx++}`); vals.push(dto.actualArrival); }
+    if (dto.shiftStart !== undefined) {
+      sets.push(`shift_start=$${idx++}`);
+      vals.push(dto.shiftStart);
+    }
+    if (dto.shiftEnd !== undefined) {
+      sets.push(`shift_end=$${idx++}`);
+      vals.push(dto.shiftEnd);
+    }
+    if (dto.isDayOff !== undefined) {
+      sets.push(`is_day_off=$${idx++}`);
+      vals.push(dto.isDayOff);
+    }
+    if (dto.note !== undefined) {
+      sets.push(`note=$${idx++}`);
+      vals.push(dto.note);
+    }
+    if (dto.lateStatus !== undefined) {
+      sets.push(`late_status=$${idx++}`);
+      vals.push(dto.lateStatus);
+    }
+    if (dto.lateMinutes !== undefined) {
+      sets.push(`late_minutes=$${idx++}`);
+      vals.push(dto.lateMinutes);
+    }
+    if (dto.actualArrival !== undefined) {
+      sets.push(`actual_arrival=$${idx++}`);
+      vals.push(dto.actualArrival);
+    }
 
     if (sets.length === 0) {
-      const { rows } = await this.pool.query('SELECT * FROM schedule_entries WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+      const { rows } = await this.pool.query('SELECT * FROM schedule_entries WHERE id=$1 AND tenant_id=$2', [
+        id,
+        tenantID,
+      ]);
       return rows.length > 0 ? this.mapEntry(rows[0]) : null;
     }
 
@@ -222,7 +256,10 @@ export class ScheduleService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Запись не найдена' });
     // Auto-open shift if manually marked as attending
     if (dto.lateStatus && rows[0].user_id && rows[0].date) {
-      const dateStr = typeof rows[0].date === 'string' ? rows[0].date.slice(0, 10) : new Date(rows[0].date).toISOString().slice(0, 10);
+      const dateStr =
+        typeof rows[0].date === 'string'
+          ? rows[0].date.slice(0, 10)
+          : new Date(rows[0].date).toISOString().slice(0, 10);
       await this.ensureShiftOpen(tenantID, rows[0].user_id, dateStr, dto.lateStatus);
     }
     return this.mapEntry(rows[0]);
@@ -236,10 +273,7 @@ export class ScheduleService {
   // Work modes
 
   async getWorkModes(tenantID: string) {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM work_modes WHERE tenant_id=$1 ORDER BY name',
-      [tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM work_modes WHERE tenant_id=$1 ORDER BY name', [tenantID]);
     return rows.map((r) => ({
       id: r.id,
       tenantId: r.tenant_id,
@@ -257,14 +291,28 @@ export class ScheduleService {
     const { rows } = await this.pool.query(
       `INSERT INTO work_modes (name, type, work_days, off_days, week_days, shift_start, shift_end, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [dto.name, dto.type || 'rotating', dto.workDays || 2, dto.offDays || 2,
-       JSON.stringify(dto.weekDays || []), dto.shiftStart || '09:00', dto.shiftEnd || '18:00', tenantID],
+      [
+        dto.name,
+        dto.type || 'rotating',
+        dto.workDays || 2,
+        dto.offDays || 2,
+        JSON.stringify(dto.weekDays || []),
+        dto.shiftStart || '09:00',
+        dto.shiftEnd || '18:00',
+        tenantID,
+      ],
     );
     const r = rows[0];
     return {
-      id: r.id, tenantId: r.tenant_id, name: r.name, type: r.type,
-      workDays: r.work_days, offDays: r.off_days, weekDays: r.week_days || [],
-      shiftStart: r.shift_start, shiftEnd: r.shift_end,
+      id: r.id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      type: r.type,
+      workDays: r.work_days,
+      offDays: r.off_days,
+      weekDays: r.week_days || [],
+      shiftStart: r.shift_start,
+      shiftEnd: r.shift_end,
     };
   }
 
@@ -273,10 +321,10 @@ export class ScheduleService {
     const { workModeId, userId, dateFrom, dateTo } = dto;
 
     // Get the work mode
-    const { rows: wmRows } = await this.pool.query(
-      'SELECT * FROM work_modes WHERE id=$1 AND tenant_id=$2',
-      [workModeId, tenantID],
-    );
+    const { rows: wmRows } = await this.pool.query('SELECT * FROM work_modes WHERE id=$1 AND tenant_id=$2', [
+      workModeId,
+      tenantID,
+    ]);
     if (wmRows.length === 0) throw new NotFoundException({ message: 'Режим работы не найден' });
     const wm = wmRows[0];
 
@@ -287,13 +335,19 @@ export class ScheduleService {
         `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE id=$1 AND tenant_id=$2`,
         [userId, tenantID],
       );
-      userRows = uRows.map(r => ({ id: r.id, days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : (r.days_off || []) }));
+      userRows = uRows.map((r) => ({
+        id: r.id,
+        days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : r.days_off || [],
+      }));
     } else {
       const { rows: uRows } = await this.pool.query(
         `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('master', 'admin')`,
         [tenantID],
       );
-      userRows = uRows.map(r => ({ id: r.id, days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : (r.days_off || []) }));
+      userRows = uRows.map((r) => ({
+        id: r.id,
+        days_off: typeof r.days_off === 'string' ? JSON.parse(r.days_off) : r.days_off || [],
+      }));
     }
 
     if (userRows.length === 0) return { created: 0 };
@@ -333,20 +387,17 @@ export class ScheduleService {
         }
 
         // Delete existing entry for this user/date
-        await this.pool.query(
-          'DELETE FROM schedule_entries WHERE user_id=$1 AND date=$2 AND tenant_id=$3',
-          [uid, dateStr, tenantID],
-        );
+        await this.pool.query('DELETE FROM schedule_entries WHERE user_id=$1 AND date=$2 AND tenant_id=$3', [
+          uid,
+          dateStr,
+          tenantID,
+        ]);
 
         // Insert new entry
         await this.pool.query(
           `INSERT INTO schedule_entries (user_id, date, shift_start, shift_end, is_day_off, tenant_id)
            VALUES ($1, $2, $3, $4, $5, $6)`,
-          [uid, dateStr,
-           isWorkDay ? wm.shift_start : null,
-           isWorkDay ? wm.shift_end : null,
-           !isWorkDay,
-           tenantID],
+          [uid, dateStr, isWorkDay ? wm.shift_start : null, isWorkDay ? wm.shift_end : null, !isWorkDay, tenantID],
         );
         created++;
 
@@ -362,10 +413,22 @@ export class ScheduleService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.type !== undefined) { sets.push(`type=$${idx++}`); vals.push(dto.type); }
-    if (dto.shiftStart !== undefined) { sets.push(`shift_start=$${idx++}`); vals.push(dto.shiftStart); }
-    if (dto.shiftEnd !== undefined) { sets.push(`shift_end=$${idx++}`); vals.push(dto.shiftEnd); }
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.type !== undefined) {
+      sets.push(`type=$${idx++}`);
+      vals.push(dto.type);
+    }
+    if (dto.shiftStart !== undefined) {
+      sets.push(`shift_start=$${idx++}`);
+      vals.push(dto.shiftStart);
+    }
+    if (dto.shiftEnd !== undefined) {
+      sets.push(`shift_end=$${idx++}`);
+      vals.push(dto.shiftEnd);
+    }
 
     if (sets.length === 0) return {};
 
@@ -377,9 +440,15 @@ export class ScheduleService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Режим не найден' });
     const r = rows[0];
     return {
-      id: r.id, tenantId: r.tenant_id, name: r.name, type: r.type,
-      workDays: r.work_days, offDays: r.off_days, weekDays: r.week_days || [],
-      shiftStart: r.shift_start, shiftEnd: r.shift_end,
+      id: r.id,
+      tenantId: r.tenant_id,
+      name: r.name,
+      type: r.type,
+      workDays: r.work_days,
+      offDays: r.off_days,
+      weekDays: r.week_days || [],
+      shiftStart: r.shift_start,
+      shiftEnd: r.shift_end,
     };
   }
 }

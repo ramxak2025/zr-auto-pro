@@ -33,4 +33,9 @@ export class ReportsController {
   getDefectWriteoff(@CurrentUser() user: JwtPayload, @Query() query: { from?: string; to?: string }) {
     return this.reportsService.getDefectWriteoffReport(user.tenantID, query);
   }
+
+  @Get('call-funnel')
+  getCallFunnel(@CurrentUser() user: JwtPayload, @Query() query: { dateFrom?: string; dateTo?: string }) {
+    return this.reportsService.getCallFunnel(user.tenantID, query);
+  }
 }

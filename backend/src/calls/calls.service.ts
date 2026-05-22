@@ -73,13 +73,15 @@ export class CallsService {
         throw new BadRequestException({ message: `МоиЗвонки: ${err}` });
       }
 
-      const calls = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
+      const calls = Array.isArray(data.results) ? data.results : Array.isArray(data) ? data : [];
 
       // Log first 3 raw calls for debugging
       if (calls.length > 0) {
         for (let i = 0; i < Math.min(3, calls.length); i++) {
           const c = calls[i];
-          this.logger.log(`Raw call[${i}]: direction=${c.direction}, answered=${c.answered}, duration=${c.duration}, client_number=${c.client_number}, src_number=${c.src_number}, src_id=${c.src_id}, recording=${c.recording ? 'yes' : 'no'}`);
+          this.logger.log(
+            `Raw call[${i}]: direction=${c.direction}, answered=${c.answered}, duration=${c.duration}, client_number=${c.client_number}, src_number=${c.src_number}, src_id=${c.src_id}, recording=${c.recording ? 'yes' : 'no'}`,
+          );
         }
       }
 
@@ -97,7 +99,7 @@ export class CallsService {
           }
         }
 
-        const clientIds = [...new Set([...clientPhones.values()].map(c => c.id))];
+        const clientIds = [...new Set([...clientPhones.values()].map((c) => c.id))];
         if (clientIds.length > 0) {
           const { rows: cars } = await this.pool.query(
             `SELECT id, plate_number, make_model, client_id FROM cars WHERE client_id = ANY($1) AND tenant_id=$2`,
@@ -159,9 +161,7 @@ export class CallsService {
 
         const matchedClient = clientPhones.get(clientPhone) || clientPhones.get(clientPhoneShort) || null;
 
-        const callDate = call.start_time
-          ? new Date(call.start_time * 1000).toISOString()
-          : call.date || '';
+        const callDate = call.start_time ? new Date(call.start_time * 1000).toISOString() : call.date || '';
 
         const answered = call.answered;
         const isAnswered = answered === 1 || answered === '1' || answered === true || answered === 'true';
@@ -173,31 +173,33 @@ export class CallsService {
           id: call.db_call_id || call.event_pbx_call_id || `${call.start_time}_${clientPhone}`,
           date: callDate,
           direction,
-          from: direction === 'incoming' ? (call.client_number || '') : (call.src_number || ''),
-          to: direction === 'incoming' ? (call.src_number || '') : (call.client_number || ''),
+          from: direction === 'incoming' ? call.client_number || '' : call.src_number || '',
+          to: direction === 'incoming' ? call.src_number || '' : call.client_number || '',
           duration,
           status: finalAnswered ? 'answered' : 'missed',
           recordingUrl: call.recording || null,
           clientPhone,
           calledBack: false, // will be computed below
-          client: matchedClient ? {
-            id: matchedClient.id,
-            fullName: matchedClient.fullName,
-            cars: matchedClient.cars,
-          } : null,
+          client: matchedClient
+            ? {
+                id: matchedClient.id,
+                fullName: matchedClient.fullName,
+                cars: matchedClient.cars,
+              }
+            : null,
         };
       });
 
-      this.logger.log(`Mapped ${mappedCalls.length} calls: ${mappedCalls.filter(c => c.direction === 'incoming').length} in, ${mappedCalls.filter(c => c.direction === 'outgoing').length} out`);
+      this.logger.log(
+        `Mapped ${mappedCalls.length} calls: ${mappedCalls.filter((c) => c.direction === 'incoming').length} in, ${mappedCalls.filter((c) => c.direction === 'outgoing').length} out`,
+      );
 
       // Sort by date descending (newest first)
       mappedCalls.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       const incoming = mappedCalls.filter((c: any) => c.direction === 'incoming');
       const outgoing = mappedCalls.filter((c: any) => c.direction === 'outgoing');
-      const missed = mappedCalls.filter((c: any) =>
-        c.direction === 'incoming' && c.status === 'missed',
-      );
+      const missed = mappedCalls.filter((c: any) => c.direction === 'incoming' && c.status === 'missed');
 
       // Build set of phones we called back (outgoing with duration > 0 OR any answered incoming from same number after the missed call)
       const calledBackPhones = new Set<string>();
@@ -303,10 +305,10 @@ export class CallsService {
   }
 
   async getClientCalls(tenantId: string, clientId: string, query: { dateFrom?: string; dateTo?: string }) {
-    const { rows: clientRows } = await this.pool.query(
-      `SELECT phone FROM clients WHERE id=$1 AND tenant_id=$2`,
-      [clientId, tenantId],
-    );
+    const { rows: clientRows } = await this.pool.query(`SELECT phone FROM clients WHERE id=$1 AND tenant_id=$2`, [
+      clientId,
+      tenantId,
+    ]);
     if (clientRows.length === 0) {
       throw new BadRequestException({ message: 'Клиент не найден' });
     }
@@ -332,7 +334,7 @@ export class CallsService {
        ORDER BY created_at DESC LIMIT 100`,
       [tenantId, clientId],
     );
-    return rows.map(r => ({
+    return rows.map((r) => ({
       id: r.id,
       direction: r.direction,
       phone: r.phone,

@@ -1,4 +1,11 @@
-import { Injectable, Inject, UnauthorizedException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  UnauthorizedException,
+  BadRequestException,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { JwtService } from '@nestjs/jwt';
 import { Pool } from 'pg';
@@ -43,7 +50,9 @@ function mapUserRow(row: any) {
   if (row.tenant_json) {
     try {
       user.tenant = JSON.parse(row.tenant_json);
-    } catch { /* ignore malformed tenant JSON */ }
+    } catch {
+      /* ignore malformed tenant JSON */
+    }
   }
 
   return user;
@@ -84,9 +93,10 @@ export class AuthService {
   }
 
   async logout(jti: string, userId: string, tenantId: string): Promise<void> {
-    const decoded = this.jwtService.decode(
-      this.jwtService.sign({ sub: userId, jti }),
-    ) as Record<string, unknown> | null;
+    const decoded = this.jwtService.decode(this.jwtService.sign({ sub: userId, jti })) as Record<
+      string,
+      unknown
+    > | null;
     const exp = decoded?.exp ? new Date((decoded.exp as number) * 1000) : new Date(Date.now() + 7 * 86400000);
     await this.pool.query(
       `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
@@ -172,10 +182,9 @@ export class AuthService {
 
     const phone = normalizePhone(dto.phone);
 
-    const { rows: existsRows } = await this.pool.query(
-      'SELECT EXISTS(SELECT 1 FROM users WHERE phone=$1) as exists',
-      [phone],
-    );
+    const { rows: existsRows } = await this.pool.query('SELECT EXISTS(SELECT 1 FROM users WHERE phone=$1) as exists', [
+      phone,
+    ]);
     if (existsRows[0].exists) {
       throw new BadRequestException({ message: 'Пользователь с таким телефоном уже существует' });
     }

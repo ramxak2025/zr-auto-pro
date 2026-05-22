@@ -27,6 +27,9 @@ import { ImportsModule } from './imports/imports.module';
 import { WarehousesModule } from './warehouses/warehouses.module';
 import { WarrantyModule } from './warranty/warranty.module';
 import { StockMovementsModule } from './stock-movements/stock-movements.module';
+import { PushModule } from './push/push.module';
+import { CheckPhotosModule } from './check-photos/check-photos.module';
+import { CheckTemplatesModule } from './check-templates/check-templates.module';
 
 @Module({
   imports: [
@@ -57,6 +60,9 @@ import { StockMovementsModule } from './stock-movements/stock-movements.module';
     CallsModule,
     EquipmentModule,
     ImportsModule,
+    PushModule,
+    CheckPhotosModule,
+    CheckTemplatesModule,
   ],
   providers: [MigrationRunner],
 })

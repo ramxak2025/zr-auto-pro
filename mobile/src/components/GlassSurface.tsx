@@ -12,13 +12,7 @@
  */
 import { BlurView } from 'expo-blur';
 import React from 'react';
-import {
-  Platform,
-  StyleProp,
-  StyleSheet,
-  View,
-  ViewStyle,
-} from 'react-native';
+import { Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { shadow, ShadowLevel } from '../platform/shadow';
 
 export interface GlassSurfaceProps {
@@ -57,15 +51,7 @@ export function GlassSurface({
     );
   }
   return (
-    <View
-      style={[
-        { borderRadius: radius, backgroundColor: androidTint },
-        shadow(shadowLevel),
-        style,
-      ]}
-    >
-      {children}
-    </View>
+    <View style={[{ borderRadius: radius, backgroundColor: androidTint }, shadow(shadowLevel), style]}>{children}</View>
   );
 }
 

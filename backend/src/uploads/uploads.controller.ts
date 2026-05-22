@@ -1,6 +1,13 @@
 import {
-  Controller, Post, Get, Req, Res, UseGuards,
-  BadRequestException, InternalServerErrorException, Logger,
+  Controller,
+  Post,
+  Get,
+  Req,
+  Res,
+  UseGuards,
+  BadRequestException,
+  InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -20,10 +27,7 @@ export class UploadsController {
 
   @UseGuards(JwtAuthGuard)
   @Post()
-  async upload(
-    @Req() req: Request,
-    @CurrentUser() user: JwtPayload,
-  ): Promise<any> {
+  async upload(@Req() req: Request, @CurrentUser() user: JwtPayload): Promise<any> {
     return new Promise((resolve, reject) => {
       let resolved = false;
       let fileReceived = false;
@@ -61,9 +65,12 @@ export class UploadsController {
         }
 
         let truncated = false;
-        stream.on('limit', () => { truncated = true; });
+        stream.on('limit', () => {
+          truncated = true;
+        });
 
-        this.storage.save(stream, ext, user.tenantID)
+        this.storage
+          .save(stream, ext, user.tenantID)
           .then((stored) => {
             if (truncated) {
               done(new BadRequestException({ message: 'Файл слишком большой (макс 10МБ)' }));
@@ -123,8 +130,13 @@ export class UploadsController {
 
     const ext = path.extname(normalized).toLowerCase();
     const mimeMap: Record<string, string> = {
-      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-      '.webp': 'image/webp', '.gif': 'image/gif', '.heic': 'image/heic', '.heif': 'image/heif',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.gif': 'image/gif',
+      '.heic': 'image/heic',
+      '.heif': 'image/heif',
     };
 
     res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');

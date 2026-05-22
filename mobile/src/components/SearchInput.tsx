@@ -48,12 +48,7 @@ export default function SearchInput({ value, onChange, placeholder = 'Поиск
 
   return (
     <View style={styles.container}>
-      <View
-        style={[
-          styles.searchWrap,
-          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-        ]}
-      >
+      <View style={[styles.searchWrap, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
         <Ionicons name="search" size={16} color={palette.text.tertiary} style={styles.leadingIcon} />
         <TextInput
           value={localValue}

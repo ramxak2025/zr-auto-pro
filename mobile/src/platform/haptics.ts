@@ -10,12 +10,12 @@ import * as Haptics from 'expo-haptics';
 import { Platform } from 'react-native';
 
 export type HapticIntent =
-  | 'tap'          // light — menu tap, toggle
-  | 'select'       // medium — segmented control, tab switch
-  | 'impact'       // heavy — big CTA press
-  | 'success'      // success notification
-  | 'warning'      // warning notification
-  | 'error';       // error notification
+  | 'tap' // light — menu tap, toggle
+  | 'select' // medium — segmented control, tab switch
+  | 'impact' // heavy — big CTA press
+  | 'success' // success notification
+  | 'warning' // warning notification
+  | 'error'; // error notification
 
 export function haptic(intent: HapticIntent): void {
   // Android gets the softer variant of each — less intrusive.

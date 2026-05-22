@@ -10,10 +10,12 @@ import {
   Modal as RNModal,
   PanResponder,
   Pressable,
+  Alert,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import CachedImage from './CachedImage';
 import { Ionicons } from '@expo/vector-icons';
+import { BarCodeScanner } from 'expo-barcode-scanner';
 import { useQuery } from '@tanstack/react-query';
 import { productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
@@ -229,6 +231,28 @@ export default function ProductPickerModal({
   const [productSearch, setProductSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── Barcode scanner ────────────────────────────────────────────────────────
+  const [showScanner, setShowScanner] = useState(false);
+  const [scannerPermission, setScannerPermission] = useState<boolean | null>(null);
+
+  const openScanner = useCallback(async () => {
+    const { status } = await BarCodeScanner.requestPermissionsAsync();
+    const granted = status === 'granted';
+    setScannerPermission(granted);
+    if (granted) {
+      setShowScanner(true);
+    } else {
+      Alert.alert('Нет доступа к камере', 'Разрешите доступ к камере в настройках устройства');
+    }
+  }, []);
+
+  const handleBarCodeScanned = useCallback(({ data }: { type: string; data: string }) => {
+    setShowScanner(false);
+    setLocalSearch(data);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => setProductSearch(data), 200);
+  }, []);
+
   const handleSearchChange = useCallback((text: string) => {
     setLocalSearch(text);
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -435,11 +459,7 @@ export default function ProductPickerModal({
                 const iconName =
                   w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
                 const sub =
-                  w.kind === 'defect'
-                    ? 'Брак'
-                    : w.kind === 'used'
-                      ? 'Б/У — подержанные детали'
-                      : 'Основной склад';
+                  w.kind === 'defect' ? 'Брак' : w.kind === 'used' ? 'Б/У — подержанные детали' : 'Основной склад';
                 const active = warehouseSwitcher.value === w.id;
                 return (
                   <TouchableOpacity
@@ -488,8 +508,29 @@ export default function ProductPickerModal({
               >
                 <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
               </TouchableOpacity>
-            ) : null}
+            ) : (
+              <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
+                <Ionicons name="barcode-outline" size={20} color={colors.primary[500]} />
+              </TouchableOpacity>
+            )}
           </View>
+
+          {/* Full-screen barcode scanner modal */}
+          <RNModal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}>
+            <View style={styles.scannerContainer}>
+              {showScanner && scannerPermission ? (
+                <BarCodeScanner onBarCodeScanned={handleBarCodeScanned} style={StyleSheet.absoluteFillObject} />
+              ) : null}
+              <View style={styles.scannerOverlay} pointerEvents="box-none">
+                <View style={styles.scannerCornerBox} />
+                <Text style={styles.scannerHint}>Наведите камеру на штрих-код товара</Text>
+              </View>
+              <TouchableOpacity style={styles.scannerCancelBtn} onPress={() => setShowScanner(false)}>
+                <Ionicons name="close" size={22} color={colors.white} />
+                <Text style={styles.scannerCancelText}>Отмена</Text>
+              </TouchableOpacity>
+            </View>
+          </RNModal>
 
           {/* Breadcrumbs */}
           {!productSearch && productPath.length > 0 ? (
@@ -759,4 +800,42 @@ const styles = StyleSheet.create({
   skeletonWrap: { flex: 1, paddingTop: spacing[2] },
   empty: { alignItems: 'center', paddingVertical: spacing[10] },
   emptyText: { color: colors.gray[400], marginTop: spacing[2], fontSize: fontSize.sm },
+  // Barcode scanner
+  scannerContainer: { flex: 1, backgroundColor: '#000' },
+  scannerOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scannerCornerBox: {
+    width: 220,
+    height: 160,
+    borderWidth: 2,
+    borderColor: colors.primary[400],
+    borderRadius: borderRadius.xl,
+    backgroundColor: 'transparent',
+  },
+  scannerHint: {
+    marginTop: spacing[4],
+    color: colors.white,
+    fontSize: fontSize.sm,
+    textAlign: 'center',
+    opacity: 0.85,
+    paddingHorizontal: spacing[8],
+  },
+  scannerCancelBtn: {
+    position: 'absolute',
+    bottom: 48,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: spacing[6],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  scannerCancelText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 });

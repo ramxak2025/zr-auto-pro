@@ -34,15 +34,13 @@ export class MigrationRunner implements OnModuleInit {
         return;
       }
 
-      const files = fs.readdirSync(migrationsDir)
+      const files = fs
+        .readdirSync(migrationsDir)
         .filter((f) => f.endsWith('.sql'))
         .sort();
 
       for (const file of files) {
-        const { rows } = await client.query(
-          'SELECT 1 FROM _migrations WHERE name = $1',
-          [file],
-        );
+        const { rows } = await client.query('SELECT 1 FROM _migrations WHERE name = $1', [file]);
         if (rows.length > 0) continue;
 
         const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf-8');
@@ -50,10 +48,7 @@ export class MigrationRunner implements OnModuleInit {
         await client.query('BEGIN');
         try {
           await client.query(sql);
-          await client.query(
-            'INSERT INTO _migrations (name) VALUES ($1)',
-            [file],
-          );
+          await client.query('INSERT INTO _migrations (name) VALUES ($1)', [file]);
           await client.query('COMMIT');
           this.logger.log(`Migration ${file} applied`);
         } catch (err) {

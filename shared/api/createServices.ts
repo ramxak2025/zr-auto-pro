@@ -23,7 +23,7 @@ import type {
   WorkMode, StockMovement, PaginatedResponse, SubscriptionInfo, PlatformStats,
   TodayEmployeeStatus, MarketingDashboard, ReviewResponse, ReviewAlert,
   MessagingIntegration, ReviewPlatformLink, ReviewSettings, PublicReviewData,
-  Warehouse, WarrantyClaim,
+  Warehouse, WarrantyClaim, CheckPhoto, CheckTemplate, CallFunnel, ReminderSettings,
 } from '../types';
 import type {
   LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams,
@@ -277,6 +277,8 @@ export function createReportsApi(api: HttpClient) {
         returnedToSupplierQty: number;
         returnedToSupplierValue: number;
       }>('/reports/defect-writeoff', { params }),
+    callFunnel: (params: { dateFrom?: string; dateTo?: string }) =>
+      api.get<CallFunnel>('/reports/call-funnel', { params }),
   };
 }
 
@@ -401,6 +403,10 @@ export function createMarketingApi(api: HttpClient) {
     updateSettings: (data: Partial<ReviewSettings>) => api.patch<ReviewSettings>('/marketing/settings', data),
     testIntegration: (id?: string) => api.post('/marketing/integrations/test', { id }),
     sendSms: (data: { phone: string; text: string }) => api.post('/marketing/sms/send', data),
+    getReminderSettings: () => api.get<ReminderSettings>('/marketing/reminders'),
+    updateReminderSettings: (data: Partial<ReminderSettings>) =>
+      api.post<ReminderSettings>('/marketing/reminders', data),
+    sendReminders: () => api.post<{ sent: number; errors: number }>('/marketing/reminders/send'),
   };
 }
 
@@ -450,6 +456,38 @@ export function createEquipmentApi(api: HttpClient) {
     remove: (id: string) => api.delete(`/equipment/${id}`),
     // Trash
     getTrash: () => api.get<any[]>('/equipment/trash'),
+  };
+}
+
+export function createCheckPhotosApi(api: HttpClient) {
+  return {
+    getByCheck: (checkId: string) =>
+      api.get<CheckPhoto[]>(`/check-photos/${checkId}`),
+    upload: (checkId: string, formData: unknown) =>
+      api.post<CheckPhoto>(`/check-photos/${checkId}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      } as unknown),
+    remove: (id: string) => api.delete(`/check-photos/${id}`),
+  };
+}
+
+export function createCheckTemplatesApi(api: HttpClient) {
+  return {
+    list: () => api.get<CheckTemplate[]>('/check-templates'),
+    create: (data: { name: string; services: CheckTemplate['services']; products: CheckTemplate['products'] }) =>
+      api.post<CheckTemplate>('/check-templates', data),
+    update: (id: string, data: Partial<Pick<CheckTemplate, 'name' | 'services' | 'products'>>) =>
+      api.put<CheckTemplate>(`/check-templates/${id}`, data),
+    remove: (id: string) => api.delete(`/check-templates/${id}`),
+  };
+}
+
+export function createPushApi(api: HttpClient) {
+  return {
+    register: (token: string, platform: 'ios' | 'android') =>
+      api.post('/push/token', { token, platform }),
+    unregister: (token: string) =>
+      api.delete('/push/token', { data: { token } } as unknown),
   };
 }
 

@@ -53,4 +53,8 @@ export class UpdateProductDto {
   @Min(0)
   @IsOptional()
   warrantyDays?: number;
+
+  @IsString()
+  @IsOptional()
+  barcode?: string;
 }

@@ -140,7 +140,9 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
               return <View key={tab.routeName} style={styles.item} />;
             }
 
-            return <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} palette={palette} />;
+            return (
+              <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} palette={palette} />
+            );
           })}
         </View>
 

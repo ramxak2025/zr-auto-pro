@@ -119,9 +119,8 @@ const SupplierRow = React.memo(function SupplierRow({
           <Text style={[styles.cardSub, { color: textTertiary }]} numberOfLines={1}>
             {isUsedPurchase
               ? 'Покупка б/у у клиентов'
-              : [item.contactPerson, item.phone ? formatPhone(item.phone) : null]
-                  .filter(Boolean)
-                  .join(' · ') || 'Без контактов'}
+              : [item.contactPerson, item.phone ? formatPhone(item.phone) : null].filter(Boolean).join(' · ') ||
+                'Без контактов'}
           </Text>
         </View>
         <View style={styles.amountWrap}>
@@ -306,10 +305,7 @@ export default function SuppliersScreen() {
   // Stable handlers passed to memoised SupplierRow — without useCallback
   // every search-input keystroke would change the function identity and
   // bust React.memo's shallow prop comparison for every row in the list.
-  const handlePressSupplier = useCallback(
-    (id: string) => navigation.navigate('SupplierDetail', { id }),
-    [navigation],
-  );
+  const handlePressSupplier = useCallback((id: string) => navigation.navigate('SupplierDetail', { id }), [navigation]);
   const handleDeleteSupplier = useCallback((s: Supplier) => setPendingDelete(s), []);
 
   const renderSupplier = useCallback(

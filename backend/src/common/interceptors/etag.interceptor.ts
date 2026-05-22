@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  NestInterceptor,
-  ExecutionContext,
-  CallHandler,
-} from '@nestjs/common';
+import { Injectable, NestInterceptor, ExecutionContext, CallHandler } from '@nestjs/common';
 import { Observable, EMPTY } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { Response, Request } from 'express';

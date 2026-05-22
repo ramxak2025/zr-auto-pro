@@ -11,20 +11,8 @@
  * plus `hapticIntent` and `scaleTo`.
  */
 import React from 'react';
-import {
-  GestureResponderEvent,
-  Platform,
-  Pressable,
-  PressableProps,
-  StyleProp,
-  View,
-  ViewStyle,
-} from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
+import { GestureResponderEvent, Platform, Pressable, PressableProps, StyleProp, View, ViewStyle } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { haptic, HapticIntent } from './haptics';
 import { SPRING_PRESS } from './motion';
 

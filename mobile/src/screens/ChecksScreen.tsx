@@ -204,8 +204,7 @@ const CheckRow = React.memo(function CheckRow({
                   style={[
                     styles.deferredBadge,
                     {
-                      backgroundColor:
-                        palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100],
+                      backgroundColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100],
                     },
                   ]}
                 >
@@ -300,9 +299,7 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
     // "Покупка Б/У" — отдельная палитра (cyan) и лейбл. Owner brief:
     // эти движения должны визуально выделяться в журнале.
     const isUsedPurchase = !!m.isUsedPurchase;
-    const typeInfo = isUsedPurchase
-      ? USED_PURCHASE_ICON
-      : movementTypeIcons[m.type] || movementTypeIcons.income;
+    const typeInfo = isUsedPurchase ? USED_PURCHASE_ICON : movementTypeIcons[m.type] || movementTypeIcons.income;
     const label = isUsedPurchase ? USED_PURCHASE_LABEL : movementTypeLabels[m.type];
     const qtyColor = isUsedPurchase
       ? colors.cyan[600]
@@ -618,9 +615,7 @@ export default function ChecksScreen() {
   );
 
   const renderWarehouseDoc = useCallback(
-    ({ item }: { item: WarehouseDoc }) => (
-      <WarehouseDocRow item={item} onSelect={setSelectedDoc} palette={palette} />
-    ),
+    ({ item }: { item: WarehouseDoc }) => <WarehouseDocRow item={item} onSelect={setSelectedDoc} palette={palette} />,
     [palette],
   );
 
@@ -894,10 +889,7 @@ export default function ChecksScreen() {
               data={checks}
               keyExtractor={(item) => item.id}
               renderItem={renderCheck}
-              contentContainerStyle={[
-                styles.list,
-                Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
-              ]}
+              contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
@@ -942,10 +934,7 @@ export default function ChecksScreen() {
               data={warehouseDocs}
               keyExtractor={(item) => (item.kind === 'movement' ? `m-${item.data.id}` : `d-${item.data.id}`)}
               renderItem={renderWarehouseDoc}
-              contentContainerStyle={[
-                styles.list,
-                Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
-              ]}
+              contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}

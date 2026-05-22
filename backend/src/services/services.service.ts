@@ -12,10 +12,9 @@ export class ServicesService {
       name: row.name,
       category: row.category,
       defaultPrice: parseFloat(row.default_price) || 0,
-      masterPercent: row.master_percent !== null && row.master_percent !== undefined ? parseFloat(row.master_percent) : null,
-      warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined
-        ? parseInt(row.warranty_days)
-        : null,
+      masterPercent:
+        row.master_percent !== null && row.master_percent !== undefined ? parseFloat(row.master_percent) : null,
+      warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,
       createdAt: row.created_at,
     };
   }
@@ -50,10 +49,7 @@ export class ServicesService {
       idx++;
     }
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM services WHERE ${where}`,
-      params,
-    );
+    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM services WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
@@ -66,10 +62,7 @@ export class ServicesService {
   }
 
   async getById(id: string, tenantID: string) {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM services WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM services WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Услуга не найдена' });
     return this.mapService(rows[0]);
   }
@@ -78,8 +71,14 @@ export class ServicesService {
     const { rows } = await this.pool.query(
       `INSERT INTO services (name, category, default_price, master_percent, warranty_days, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [dto.name, dto.category, dto.defaultPrice || 0, dto.masterPercent ?? null,
-       this.normalizeWarrantyDays(dto.warrantyDays), tenantID],
+      [
+        dto.name,
+        dto.category,
+        dto.defaultPrice || 0,
+        dto.masterPercent ?? null,
+        this.normalizeWarrantyDays(dto.warrantyDays),
+        tenantID,
+      ],
     );
     return this.mapService(rows[0]);
   }
@@ -89,10 +88,22 @@ export class ServicesService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.category !== undefined) { sets.push(`category=$${idx++}`); vals.push(dto.category); }
-    if (dto.defaultPrice !== undefined) { sets.push(`default_price=$${idx++}`); vals.push(dto.defaultPrice); }
-    if (dto.masterPercent !== undefined) { sets.push(`master_percent=$${idx++}`); vals.push(dto.masterPercent); }
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.category !== undefined) {
+      sets.push(`category=$${idx++}`);
+      vals.push(dto.category);
+    }
+    if (dto.defaultPrice !== undefined) {
+      sets.push(`default_price=$${idx++}`);
+      vals.push(dto.defaultPrice);
+    }
+    if (dto.masterPercent !== undefined) {
+      sets.push(`master_percent=$${idx++}`);
+      vals.push(dto.masterPercent);
+    }
     if (dto.warrantyDays !== undefined) {
       sets.push(`warranty_days=$${idx++}`);
       vals.push(this.normalizeWarrantyDays(dto.warrantyDays));

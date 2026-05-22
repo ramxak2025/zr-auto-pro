@@ -462,10 +462,7 @@ const GridDayRow = memo(function GridDayRow({
             activeOpacity={canEdit ? 0.5 : 1}
           >
             {cell.hasEntry && cell.tintColor !== 'transparent' && (
-              <View
-                style={[styles.gridCellAccent, { backgroundColor: cell.tintColor }]}
-                pointerEvents="none"
-              />
+              <View style={[styles.gridCellAccent, { backgroundColor: cell.tintColor }]} pointerEvents="none" />
             )}
             {cell.hasEntry ? (
               cell.label ? (
@@ -1018,16 +1015,11 @@ function GridTab() {
       ) : activeUsers.length === 0 ? (
         <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
           <View
-            style={[
-              styles.emptyIcon,
-              { width: 72, height: 72, borderRadius: 36, backgroundColor: palette.bg.muted },
-            ]}
+            style={[styles.emptyIcon, { width: 72, height: 72, borderRadius: 36, backgroundColor: palette.bg.muted }]}
           >
             <Ionicons name="people-outline" size={32} color={palette.text.tertiary} />
           </View>
-          <Text
-            style={[styles.emptyTitle, { fontSize: 17, fontWeight: '600', color: palette.text.secondary }]}
-          >
+          <Text style={[styles.emptyTitle, { fontSize: 17, fontWeight: '600', color: palette.text.secondary }]}>
             Нет мастеров
           </Text>
           <Text
@@ -1051,7 +1043,9 @@ function GridTab() {
            no JS bridge round-trip per scroll frame. */
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Sticky left column -- employee names with avatar initials */}
-          <View style={[styles.stickyColumn, { backgroundColor: palette.bg.card, borderRightColor: palette.border.subtle }]}>
+          <View
+            style={[styles.stickyColumn, { backgroundColor: palette.bg.card, borderRightColor: palette.border.subtle }]}
+          >
             {/* Header cell */}
             <View
               style={[
@@ -1118,7 +1112,9 @@ function GridTab() {
                           <View style={styles.gridStatsRow}>
                             <View style={styles.gridStatPill}>
                               <View style={[styles.gridStatDot, { backgroundColor: colors.green[500] }]} />
-                              <Text style={[styles.gridStatText, { color: palette.text.tertiary }]}>{stats.worked}</Text>
+                              <Text style={[styles.gridStatText, { color: palette.text.tertiary }]}>
+                                {stats.worked}
+                              </Text>
                             </View>
                             <View style={styles.gridStatPill}>
                               <View style={[styles.gridStatDot, { backgroundColor: palette.text.tertiary }]} />
@@ -1146,13 +1142,7 @@ function GridTab() {
               {/* Day headers — memoised so the 28-31 day cells don't rebuild
                   on every QuickPopup open/close, pending-change toggle, or
                   background SWR refetch. */}
-              <GridDayHeaderRow
-                days={days}
-                today={today}
-                CELL_W={CELL_W}
-                ROW_H={ROW_H}
-                reduceMotion={reduceMotion}
-              />
+              <GridDayHeaderRow days={days} today={today} CELL_W={CELL_W} ROW_H={ROW_H} reduceMotion={reduceMotion} />
 
               {/* Day cells — Reanimated.ScrollView so the UI-thread
                   worklet handler can mirror its offset to the names
@@ -1508,7 +1498,9 @@ function TodayTab() {
           // lives in the GridTab heatmap.
           return (
             <AnimatedCard key={s.userId} index={idx + 2} onPress={() => openEmployee(navigation, s.userId)}>
-              <View style={[styles.todayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+              <View
+                style={[styles.todayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
                 <View style={[styles.todayCardAccent, { backgroundColor: info.borderColor }]} />
                 <View style={styles.todayCardContent}>
                   <Text style={styles.todayEmoji} allowFontScaling={false}>
@@ -1533,9 +1525,7 @@ function TodayTab() {
                         </Text>
                       )}
                     </View>
-                    {s.note ? (
-                      <Text style={[styles.todayNote, { color: palette.text.tertiary }]}>{s.note}</Text>
-                    ) : null}
+                    {s.note ? <Text style={[styles.todayNote, { color: palette.text.tertiary }]}>{s.note}</Text> : null}
                   </View>
                 </View>
               </View>
@@ -1753,7 +1743,9 @@ function RatingTab() {
   })();
 
   return (
-    <ScrollView contentContainerStyle={{ padding: spacing[4], gap: spacing[3], paddingBottom: tabBarHeight + spacing[4] }}>
+    <ScrollView
+      contentContainerStyle={{ padding: spacing[4], gap: spacing[3], paddingBottom: tabBarHeight + spacing[4] }}
+    >
       <View
         style={{
           flexDirection: 'row',
@@ -2380,7 +2372,9 @@ export default function ScheduleScreen() {
         <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
 
         {/* Tab bar */}
-        <View style={[styles.tabBar, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}>
+        <View
+          style={[styles.tabBar, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}
+        >
           <View style={[styles.tabBarInner, { backgroundColor: palette.bg.muted }]}>
             {tabConfig.map((t) => {
               const isActive = tab === t.key;

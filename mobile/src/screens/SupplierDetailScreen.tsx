@@ -21,7 +21,15 @@ import Modal from '../components/Modal';
 import ProductPickerModal from '../components/ProductPickerModal';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type { Supplier, Delivery, SupplierPayment, Product, Warehouse, StockMovement, PaginatedResponse } from '../../../shared/types';
+import type {
+  Supplier,
+  Delivery,
+  SupplierPayment,
+  Product,
+  Warehouse,
+  StockMovement,
+  PaginatedResponse,
+} from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 function formatMoney(v: number) {
@@ -99,7 +107,7 @@ export default function SupplierDetailScreen() {
       return Array.isArray(body)
         ? (body as Delivery[])
         : Array.isArray((body as { data?: unknown })?.data)
-          ? ((body as { data: Delivery[] }).data)
+          ? (body as { data: Delivery[] }).data
           : [];
     },
   });
@@ -112,7 +120,7 @@ export default function SupplierDetailScreen() {
       return Array.isArray(body)
         ? (body as SupplierPayment[])
         : Array.isArray((body as { data?: unknown })?.data)
-          ? ((body as { data: SupplierPayment[] }).data)
+          ? (body as { data: SupplierPayment[] }).data
           : [];
     },
   });
@@ -180,7 +188,7 @@ export default function SupplierDetailScreen() {
       const list: StockMovement[] = Array.isArray(body)
         ? (body as StockMovement[])
         : Array.isArray((body as { data?: unknown })?.data)
-          ? ((body as { data: StockMovement[] }).data)
+          ? (body as { data: StockMovement[] }).data
           : [];
       return list.filter((m) => m.supplierId === id);
     },
@@ -445,15 +453,23 @@ export default function SupplierDetailScreen() {
         {/* Stats cards */}
         <View style={styles.statsRow}>
           <AnimatedCard
-            style={[styles.statCard, { backgroundColor: palette.bg.card, borderWidth: 1, borderColor: palette.border.subtle }]}
+            style={[
+              styles.statCard,
+              { backgroundColor: palette.bg.card, borderWidth: 1, borderColor: palette.border.subtle },
+            ]}
             index={0}
           >
             <Ionicons name="cart-outline" size={16} color={colors.blue[600]} style={{ marginBottom: 2 }} />
             <Text style={[styles.statLabel, { color: palette.text.secondary }]}>Закупки</Text>
-            <Text style={[styles.statValue, { color: palette.text.primary }]}>{formatMoney(supplier.totalPurchases)}</Text>
+            <Text style={[styles.statValue, { color: palette.text.primary }]}>
+              {formatMoney(supplier.totalPurchases)}
+            </Text>
           </AnimatedCard>
           <AnimatedCard
-            style={[styles.statCard, { backgroundColor: palette.bg.card, borderWidth: 1, borderColor: palette.border.subtle }]}
+            style={[
+              styles.statCard,
+              { backgroundColor: palette.bg.card, borderWidth: 1, borderColor: palette.border.subtle },
+            ]}
             index={1}
           >
             <Ionicons name="checkmark-circle-outline" size={16} color={colors.green[600]} style={{ marginBottom: 2 }} />
@@ -473,14 +489,9 @@ export default function SupplierDetailScreen() {
               color={supplier.currentDebt > 0 ? colors.red[600] : palette.text.tertiary}
               style={{ marginBottom: 2 }}
             />
-            <Text style={[styles.statLabel, { color: palette.text.secondary }]}>
-              Долг
-            </Text>
+            <Text style={[styles.statLabel, { color: palette.text.secondary }]}>Долг</Text>
             <Text
-              style={[
-                styles.statValue,
-                { color: supplier.currentDebt > 0 ? colors.red[600] : palette.text.primary },
-              ]}
+              style={[styles.statValue, { color: supplier.currentDebt > 0 ? colors.red[600] : palette.text.primary }]}
             >
               {formatMoney(supplier.currentDebt)}
             </Text>
@@ -505,10 +516,7 @@ export default function SupplierDetailScreen() {
             style={[styles.quickPayBtn, { backgroundColor: colors.primary[600] }]}
             onPress={() => {
               if (!usedWarehouse) {
-                Alert.alert(
-                  'Склад Б/У не найден',
-                  'Подождите загрузку складов или обновите экран.',
-                );
+                Alert.alert('Склад Б/У не найден', 'Подождите загрузку складов или обновите экран.');
                 return;
               }
               setUpName('');
@@ -563,7 +571,11 @@ export default function SupplierDetailScreen() {
         {/* Tabs */}
         <View style={[styles.tabRow, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
-            style={[styles.tabBtn, tab === 'deliveries' && styles.tabBtnActive, tab === 'deliveries' && { backgroundColor: palette.bg.card }]}
+            style={[
+              styles.tabBtn,
+              tab === 'deliveries' && styles.tabBtnActive,
+              tab === 'deliveries' && { backgroundColor: palette.bg.card },
+            ]}
             onPress={() => setTab('deliveries')}
           >
             <Ionicons
@@ -583,7 +595,11 @@ export default function SupplierDetailScreen() {
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tabBtn, tab === 'payments' && styles.tabBtnActive, tab === 'payments' && { backgroundColor: palette.bg.card }]}
+            style={[
+              styles.tabBtn,
+              tab === 'payments' && styles.tabBtnActive,
+              tab === 'payments' && { backgroundColor: palette.bg.card },
+            ]}
             onPress={() => setTab('payments')}
           >
             <Ionicons
@@ -603,7 +619,11 @@ export default function SupplierDetailScreen() {
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tabBtn, tab === 'returns' && styles.tabBtnActive, tab === 'returns' && { backgroundColor: palette.bg.card }]}
+            style={[
+              styles.tabBtn,
+              tab === 'returns' && styles.tabBtnActive,
+              tab === 'returns' && { backgroundColor: palette.bg.card },
+            ]}
             onPress={() => setTab('returns')}
           >
             <Ionicons
@@ -650,7 +670,10 @@ export default function SupplierDetailScreen() {
               return (
                 <TouchableOpacity
                   key={d.id}
-                  style={[styles.deliveryCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  style={[
+                    styles.deliveryCard,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  ]}
                   onPress={() => setExpandedDelivery(isExpanded ? null : d.id)}
                   activeOpacity={0.7}
                 >
@@ -678,7 +701,9 @@ export default function SupplierDetailScreen() {
                         )}
                       </View>
                       <View style={styles.deliveryTopRight}>
-                        <Text style={[styles.deliveryAmount, { color: palette.text.primary }]}>{formatMoney(d.totalAmount)}</Text>
+                        <Text style={[styles.deliveryAmount, { color: palette.text.primary }]}>
+                          {formatMoney(d.totalAmount)}
+                        </Text>
                         <Ionicons
                           name={isExpanded ? 'chevron-up' : 'chevron-down'}
                           size={16}
@@ -746,7 +771,10 @@ export default function SupplierDetailScreen() {
             )}
 
             {(payments || []).map((p) => (
-              <View key={p.id} style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+              <View
+                key={p.id}
+                style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
                 <View style={[styles.deliveryAccent, { backgroundColor: colors.green[500] }]} />
                 <View style={styles.paymentContent}>
                   <View style={styles.paymentTop}>
@@ -766,10 +794,7 @@ export default function SupplierDetailScreen() {
 
         {tab === 'returns' && (
           <>
-            <TouchableOpacity
-              style={styles.actionBtn}
-              onPress={openReturnDefect}
-            >
+            <TouchableOpacity style={styles.actionBtn} onPress={openReturnDefect}>
               <Ionicons name="arrow-undo-outline" size={18} color={colors.primary[600]} />
               <Text style={styles.actionBtnText}>Оформить возврат брака</Text>
             </TouchableOpacity>
@@ -788,7 +813,10 @@ export default function SupplierDetailScreen() {
               const qty = Math.abs(m.quantity);
               const debtReduction = qty * (m.product?.costPrice ?? 0);
               return (
-                <View key={m.id} style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+                <View
+                  key={m.id}
+                  style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
                   <View style={[styles.deliveryAccent, { backgroundColor: colors.orange[500] }]} />
                   <View style={styles.paymentContent}>
                     <View style={styles.paymentTop}>
@@ -961,11 +989,7 @@ export default function SupplierDetailScreen() {
       {/* Used-purchase modal — owner types a free-form product name +
           qty + price + optional folder. Backend auto-creates or
           increments the matching Б/У SKU and grows supplier debt. */}
-      <Modal
-        visible={usedPurchaseModalOpen}
-        onClose={() => setUsedPurchaseModalOpen(false)}
-        title="Покупка б/у товара"
-      >
+      <Modal visible={usedPurchaseModalOpen} onClose={() => setUsedPurchaseModalOpen(false)} title="Покупка б/у товара">
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Название товара *</Text>
@@ -1019,17 +1043,11 @@ export default function SupplierDetailScreen() {
                 {usedCategories.slice(0, 16).map((cat) => (
                   <TouchableOpacity
                     key={cat.id}
-                    style={[
-                      styles.categoryChip,
-                      upCategory === cat.path && styles.categoryChipActive,
-                    ]}
+                    style={[styles.categoryChip, upCategory === cat.path && styles.categoryChipActive]}
                     onPress={() => setUpCategory(cat.path)}
                   >
                     <Text
-                      style={[
-                        styles.categoryChipText,
-                        upCategory === cat.path && styles.categoryChipTextActive,
-                      ]}
+                      style={[styles.categoryChipText, upCategory === cat.path && styles.categoryChipTextActive]}
                       numberOfLines={1}
                     >
                       {cat.path}
@@ -1077,11 +1095,7 @@ export default function SupplierDetailScreen() {
       </Modal>
 
       {/* Return defective stock modal */}
-      <Modal
-        visible={returnDefectModalOpen}
-        onClose={() => setReturnDefectModalOpen(false)}
-        title="Возврат брака"
-      >
+      <Modal visible={returnDefectModalOpen} onClose={() => setReturnDefectModalOpen(false)} title="Возврат брака">
         {/* Picker trigger — same UX as the delivery flow's "Добавить товар" */}
         <TouchableOpacity
           style={[styles.addItemBtn, { marginBottom: spacing[3] }]}
@@ -1102,9 +1116,7 @@ export default function SupplierDetailScreen() {
           >
             <View style={styles.defectInfoRow}>
               <Text style={[styles.defectInfoLabel, { color: palette.text.tertiary }]}>На складе брака</Text>
-              <Text style={[styles.defectInfoValue, { color: palette.text.primary }]}>
-                {defectProduct.stock} шт
-              </Text>
+              <Text style={[styles.defectInfoValue, { color: palette.text.primary }]}>{defectProduct.stock} шт</Text>
             </View>
             <View style={styles.defectInfoRow}>
               <Text style={[styles.defectInfoLabel, { color: palette.text.tertiary }]}>Закупочная (по умолчанию)</Text>
@@ -1219,9 +1231,7 @@ function DefectProductPickerModal({
   palette: ReturnType<typeof useColors>;
 }) {
   const [q, setQ] = useState('');
-  const filtered = q
-    ? products.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()))
-    : products;
+  const filtered = q ? products.filter((p) => p.name.toLowerCase().includes(q.toLowerCase())) : products;
   return (
     <Modal visible={visible} onClose={onClose} title="Товары на складе брака">
       <TextInput

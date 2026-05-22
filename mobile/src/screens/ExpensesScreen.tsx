@@ -80,7 +80,14 @@ interface ExpenseRowProps {
   onDelete: (id: string) => void;
   palette: ReturnType<typeof useColors>;
 }
-const ExpenseRow = React.memo(function ExpenseRow({ item, index, catColor, isDirector, onDelete, palette }: ExpenseRowProps) {
+const ExpenseRow = React.memo(function ExpenseRow({
+  item,
+  index,
+  catColor,
+  isDirector,
+  onDelete,
+  palette,
+}: ExpenseRowProps) {
   return (
     <AnimatedCard
       style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
@@ -541,7 +548,12 @@ export default function ExpensesScreen() {
             onChangeText={setNewCatName}
             style={[
               styles.formInput,
-              { flex: 1, backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              {
+                flex: 1,
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
             ]}
             placeholder="Новая категория..."
             placeholderTextColor={palette.text.tertiary}

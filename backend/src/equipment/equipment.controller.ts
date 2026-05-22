@@ -65,7 +65,11 @@ export class EquipmentController {
 
   // ─── Issued Equipment by User ─────────────────────────────────────
   @Get('user/:userId')
-  getByUser(@Param('userId') userId: string, @CurrentUser() user: JwtPayload, @Query('includeInactive') includeInactive?: string) {
+  getByUser(
+    @Param('userId') userId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('includeInactive') includeInactive?: string,
+  ) {
     return this.service.getIssuedByUser(user.tenantID, userId, includeInactive === 'true');
   }
 

@@ -1,4 +1,11 @@
-import { Injectable, Inject, NotFoundException, BadRequestException, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 
@@ -23,9 +30,8 @@ export class ProductsService {
       bundleItems: row.bundle_items || [],
       supplierId: row.supplier_id,
       warehouseId: row.warehouse_id ?? null,
-      warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined
-        ? parseInt(row.warranty_days)
-        : null,
+      warrantyDays: row.warranty_days !== null && row.warranty_days !== undefined ? parseInt(row.warranty_days) : null,
+      barcode: row.barcode ?? null,
       createdAt: row.created_at,
     };
     if (row.supplier_name) {
@@ -45,19 +51,18 @@ export class ProductsService {
    */
   private async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
     if (warehouseId) {
-      const { rows } = await this.pool.query(
-        'SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-        [warehouseId, tenantID],
-      );
+      const { rows } = await this.pool.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
+        warehouseId,
+        tenantID,
+      ]);
       if (rows.length === 0) {
         throw new BadRequestException({ message: 'Склад не найден' });
       }
       return rows[0].id;
     }
-    const { rows } = await this.pool.query(
-      `SELECT id FROM warehouses WHERE tenant_id=$1 AND kind='main' LIMIT 1`,
-      [tenantID],
-    );
+    const { rows } = await this.pool.query(`SELECT id FROM warehouses WHERE tenant_id=$1 AND kind='main' LIMIT 1`, [
+      tenantID,
+    ]);
     return rows.length > 0 ? rows[0].id : null;
   }
 
@@ -72,7 +77,7 @@ export class ProductsService {
     let idx = 2;
 
     if (search) {
-      where += ` AND p.name ILIKE $${idx}`;
+      where += ` AND (p.name ILIKE $${idx} OR p.barcode ILIKE $${idx})`;
       params.push(`%${search}%`);
       idx++;
     }
@@ -89,10 +94,7 @@ export class ProductsService {
       where += ` AND p.warehouse_id = (SELECT id FROM warehouses WHERE tenant_id = $1 AND kind = 'main' LIMIT 1)`;
     }
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM products p WHERE ${where}`,
-      params,
-    );
+    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM products p WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
@@ -218,12 +220,25 @@ export class ProductsService {
     const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId);
     const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
     const { rows } = await this.pool.query(
-      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-      [dto.name, dto.category, dto.photo, dto.costPrice || 0, dto.sellPrice || 0,
-       dto.stock || 0, dto.minStock || 0, dto.unit || 'pcs',
-       dto.isBundle || false, JSON.stringify(dto.bundleItems || []),
-       dto.supplierId, tenantID, warehouseId, warrantyDays],
+      `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *`,
+      [
+        dto.name,
+        dto.category,
+        dto.photo,
+        dto.costPrice || 0,
+        dto.sellPrice || 0,
+        dto.stock || 0,
+        dto.minStock || 0,
+        dto.unit || 'pcs',
+        dto.isBundle || false,
+        JSON.stringify(dto.bundleItems || []),
+        dto.supplierId,
+        tenantID,
+        warehouseId,
+        warrantyDays,
+        dto.barcode ?? null,
+      ],
     );
     return this.mapProduct(rows[0]);
   }
@@ -237,10 +252,10 @@ export class ProductsService {
   }
 
   private async assertSupplierInTenant(supplierId: string, tenantID: string): Promise<void> {
-    const { rows } = await this.pool.query(
-      'SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1',
-      [supplierId, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+      supplierId,
+      tenantID,
+    ]);
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Поставщик не найден' });
     }
@@ -261,17 +276,50 @@ export class ProductsService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.category !== undefined) { sets.push(`category=$${idx++}`); vals.push(dto.category); }
-    if (dto.photo !== undefined) { sets.push(`photo=$${idx++}`); vals.push(dto.photo); }
-    if (dto.costPrice !== undefined) { sets.push(`cost_price=$${idx++}`); vals.push(dto.costPrice); }
-    if (dto.sellPrice !== undefined) { sets.push(`sell_price=$${idx++}`); vals.push(dto.sellPrice); }
-    if (dto.stock !== undefined) { sets.push(`stock=$${idx++}`); vals.push(dto.stock); }
-    if (dto.minStock !== undefined) { sets.push(`min_stock=$${idx++}`); vals.push(dto.minStock); }
-    if (dto.unit !== undefined) { sets.push(`unit=$${idx++}`); vals.push(dto.unit); }
-    if (dto.isBundle !== undefined) { sets.push(`is_bundle=$${idx++}`); vals.push(dto.isBundle); }
-    if (dto.bundleItems !== undefined) { sets.push(`bundle_items=$${idx++}`); vals.push(JSON.stringify(dto.bundleItems)); }
-    if (dto.supplierId !== undefined) { sets.push(`supplier_id=$${idx++}`); vals.push(dto.supplierId); }
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.category !== undefined) {
+      sets.push(`category=$${idx++}`);
+      vals.push(dto.category);
+    }
+    if (dto.photo !== undefined) {
+      sets.push(`photo=$${idx++}`);
+      vals.push(dto.photo);
+    }
+    if (dto.costPrice !== undefined) {
+      sets.push(`cost_price=$${idx++}`);
+      vals.push(dto.costPrice);
+    }
+    if (dto.sellPrice !== undefined) {
+      sets.push(`sell_price=$${idx++}`);
+      vals.push(dto.sellPrice);
+    }
+    if (dto.stock !== undefined) {
+      sets.push(`stock=$${idx++}`);
+      vals.push(dto.stock);
+    }
+    if (dto.minStock !== undefined) {
+      sets.push(`min_stock=$${idx++}`);
+      vals.push(dto.minStock);
+    }
+    if (dto.unit !== undefined) {
+      sets.push(`unit=$${idx++}`);
+      vals.push(dto.unit);
+    }
+    if (dto.isBundle !== undefined) {
+      sets.push(`is_bundle=$${idx++}`);
+      vals.push(dto.isBundle);
+    }
+    if (dto.bundleItems !== undefined) {
+      sets.push(`bundle_items=$${idx++}`);
+      vals.push(JSON.stringify(dto.bundleItems));
+    }
+    if (dto.supplierId !== undefined) {
+      sets.push(`supplier_id=$${idx++}`);
+      vals.push(dto.supplierId);
+    }
     if (dto.warehouseId !== undefined) {
       const resolved = await this.resolveWarehouseId(tenantID, dto.warehouseId);
       sets.push(`warehouse_id=$${idx++}`);
@@ -280,6 +328,10 @@ export class ProductsService {
     if (dto.warrantyDays !== undefined) {
       sets.push(`warranty_days=$${idx++}`);
       vals.push(this.normalizeWarrantyDays(dto.warrantyDays));
+    }
+    if (dto.barcode !== undefined) {
+      sets.push(`barcode=$${idx++}`);
+      vals.push(dto.barcode ?? null);
     }
 
     if (sets.length === 0) return this.getById(id, tenantID);
@@ -403,10 +455,9 @@ export class ProductsService {
 
   // Drain the trash. Only ever touches rows with deleted_at IS NOT NULL.
   async emptyTrash(tenantID: string) {
-    const result = await this.pool.query(
-      'DELETE FROM products WHERE tenant_id=$1 AND deleted_at IS NOT NULL',
-      [tenantID],
-    );
+    const result = await this.pool.query('DELETE FROM products WHERE tenant_id=$1 AND deleted_at IS NOT NULL', [
+      tenantID,
+    ]);
     return { message: 'Корзина очищена', count: result.rowCount ?? 0 };
   }
 
@@ -418,7 +469,7 @@ export class ProductsService {
       [tenantID],
     );
     const header = 'Наименование;Группа;Единица измерения;Цена продажи;Цена закупки;Остаток;Мин. остаток';
-    const lines = rows.map(r => {
+    const lines = rows.map((r) => {
       const vals = [
         r.name || '',
         r.category || '',
@@ -454,15 +505,23 @@ export class ProductsService {
         const n = parseFloat(cleaned);
         return isFinite(n) ? Math.max(0, n) : 0; // clamp negatives
       };
-      const toStr = (v: unknown): string => (v === null || v === undefined) ? '' : String(v).trim();
+      const toStr = (v: unknown): string => (v === null || v === undefined ? '' : String(v).trim());
       const clampPrice = (n: number) => Math.min(n, 99999999.99);
       const clampStock = (n: number) => Math.min(n, 9999999.99);
 
       // Normalize + deduplicate by name (CSV often has duplicates).
-      const byName = new Map<string, {
-        name: string; category: string | null; unit: string;
-        costPrice: number; sellPrice: number; stock: number; minStock: number;
-      }>();
+      const byName = new Map<
+        string,
+        {
+          name: string;
+          category: string | null;
+          unit: string;
+          costPrice: number;
+          sellPrice: number;
+          stock: number;
+          minStock: number;
+        }
+      >();
 
       for (const item of items as unknown[]) {
         if (!item || typeof item !== 'object') continue;
@@ -514,7 +573,9 @@ export class ProductsService {
           const placeholders: string[] = [];
           chunk.forEach((it, idx) => {
             const b = idx * 8;
-            placeholders.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8})`);
+            placeholders.push(
+              `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8})`,
+            );
             values.push(it.name, it.category, it.costPrice, it.sellPrice, it.stock, it.minStock, it.unit, tenantID);
           });
           try {
@@ -617,10 +678,10 @@ export class ProductsService {
       let linkedExpenseId: string | null = null;
       const writeAsExpense = type === 'writeoff' && !!recordAsExpense;
       if (writeAsExpense) {
-        const catRes = await client.query(
-          'SELECT id FROM expense_categories WHERE tenant_id=$1 AND name=$2 LIMIT 1',
-          [tenantID, 'Списание со склада'],
-        );
+        const catRes = await client.query('SELECT id FROM expense_categories WHERE tenant_id=$1 AND name=$2 LIMIT 1', [
+          tenantID,
+          'Списание со склада',
+        ]);
         let categoryId = catRes.rows[0]?.id as string | undefined;
         if (!categoryId) {
           const ins = await client.query(
@@ -644,9 +705,17 @@ export class ProductsService {
            tenant_id, user_id, warehouse_id, record_as_expense, linked_expense_id
          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
-          id, type, quantity, stockBefore, stockAfter, reason,
-          tenantID, userId || null, productWarehouseId,
-          writeAsExpense, linkedExpenseId,
+          id,
+          type,
+          quantity,
+          stockBefore,
+          stockAfter,
+          reason,
+          tenantID,
+          userId || null,
+          productWarehouseId,
+          writeAsExpense,
+          linkedExpenseId,
         ],
       );
 

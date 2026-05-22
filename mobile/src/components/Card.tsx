@@ -86,14 +86,7 @@ export function Card({
 
 /** Visual divider used inside cards for separated rows. */
 export function CardDivider({ insetLeft = 0 }: { insetLeft?: number }) {
-  return (
-    <View
-      style={[
-        cardStyles.divider,
-        insetLeft ? { marginLeft: insetLeft } : null,
-      ]}
-    />
-  );
+  return <View style={[cardStyles.divider, insetLeft ? { marginLeft: insetLeft } : null]} />;
 }
 
 const cardStyles = StyleSheet.create({

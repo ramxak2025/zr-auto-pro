@@ -17,15 +17,7 @@ import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import Svg, {
-  Path,
-  Defs,
-  LinearGradient as SvgGrad,
-  Stop,
-  Line,
-  Circle,
-  RadialGradient,
-} from 'react-native-svg';
+import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line, Circle, RadialGradient } from 'react-native-svg';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
@@ -37,6 +29,7 @@ import {
   marketingApi,
   callsApi,
   usersApi,
+  reportsApi,
 } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -56,6 +49,7 @@ import type {
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
+import { updateWidgetData } from '../utils/widgetBridge';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -88,15 +82,7 @@ function getGreeting(): string {
   return 'Доброй ночи';
 }
 
-const WEEKDAYS_RU = [
-  'воскресенье',
-  'понедельник',
-  'вторник',
-  'среда',
-  'четверг',
-  'пятница',
-  'суббота',
-];
+const WEEKDAYS_RU = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
 const MONTHS_RU_GEN = [
   'января',
   'февраля',
@@ -223,6 +209,18 @@ function OwnerHero({ name }: { name: string }) {
   const ydayRevenue = yday.data?.totalRevenue ?? 0;
   const delta = useMemo(() => formatDeltaPct(todayRevenue, ydayRevenue), [todayRevenue, ydayRevenue]);
   const isLoading = today.data === undefined && today.isLoading;
+  const todayChecks = today.data?.totalChecks ?? 0;
+
+  // Sync widget data whenever today's revenue changes.
+  useEffect(() => {
+    if (!today.data) return;
+    updateWidgetData({
+      revenue: todayRevenue,
+      checksCount: todayChecks,
+      profitToday: today.data.totalProfit ?? 0,
+      shiftOpen: false,
+    });
+  }, [todayRevenue, todayChecks, today.data]);
 
   // Theme-aware hero gradient. Light mode keeps the brand-blue look
   // already shipped; dark mode swaps in a deep indigo→near-black ramp
@@ -266,12 +264,7 @@ function OwnerHero({ name }: { name: string }) {
         <View style={styles.heroValueBlock}>
           <Text style={styles.heroValueLabel}>Сегодня заработано</Text>
           {isLoading ? (
-            <Skeleton
-              width={220}
-              height={36}
-              radius={10}
-              style={{ backgroundColor: 'rgba(255,255,255,0.10)' }}
-            />
+            <Skeleton width={220} height={36} radius={10} style={{ backgroundColor: 'rgba(255,255,255,0.10)' }} />
           ) : (
             <Text style={styles.heroValue} numberOfLines={1} adjustsFontSizeToFit>
               {formatMoney(todayRevenue)}
@@ -288,9 +281,7 @@ function OwnerHero({ name }: { name: string }) {
               <Ionicons
                 name={delta.tone === 'up' ? 'arrow-up' : delta.tone === 'down' ? 'arrow-down' : 'remove'}
                 size={11}
-                color={
-                  delta.tone === 'up' ? '#bbf7d0' : delta.tone === 'down' ? '#fecaca' : 'rgba(255,255,255,0.7)'
-                }
+                color={delta.tone === 'up' ? '#bbf7d0' : delta.tone === 'down' ? '#fecaca' : 'rgba(255,255,255,0.7)'}
               />
               <Text
                 style={[
@@ -326,10 +317,7 @@ interface KpiTileSpec {
   title: string;
   format: 'money' | 'count';
   pickValue: (p: { revenue: number; profit: number; checkCount: number }) => number;
-  total: (
-    data: { totalRevenue: number; totalProfit: number; totalChecks: number },
-    avgValue: number,
-  ) => number;
+  total: (data: { totalRevenue: number; totalProfit: number; totalChecks: number }, avgValue: number) => number;
   navTo: () => { stack: string; screen?: string } | null;
 }
 
@@ -496,11 +484,7 @@ const KpiTile = React.memo(function KpiTile({
       onPress={onPress}
     >
       <Text style={[styles.kpiTileTitle, { color: palette.text.secondary }]}>{title}</Text>
-      <Text
-        style={[styles.kpiTileValue, { color: palette.text.primary }]}
-        numberOfLines={1}
-        adjustsFontSizeToFit
-      >
+      <Text style={[styles.kpiTileValue, { color: palette.text.primary }]} numberOfLines={1} adjustsFontSizeToFit>
         {value}
       </Text>
       <View style={styles.kpiTileSparkWrap}>
@@ -531,11 +515,7 @@ const KpiTile = React.memo(function KpiTile({
           name={delta.tone === 'up' ? 'arrow-up' : delta.tone === 'down' ? 'arrow-down' : 'remove'}
           size={10}
           color={
-            delta.tone === 'up'
-              ? colors.green[700]
-              : delta.tone === 'down'
-                ? colors.red[700]
-                : palette.text.tertiary
+            delta.tone === 'up' ? colors.green[700] : delta.tone === 'down' ? colors.red[700] : palette.text.tertiary
           }
         />
         <Text
@@ -739,11 +719,9 @@ function OwnerAnalyticsChart() {
   // We coalesce undefined to null here so every downstream read is safe,
   // and re-clamp `selX` to the new array length to avoid drawing the
   // scrub line off-canvas in the same intermediate frame.
-  const safeSelectedIdx =
-    selectedIdx !== null && selectedIdx >= 0 && selectedIdx < points.length ? selectedIdx : null;
+  const safeSelectedIdx = selectedIdx !== null && selectedIdx >= 0 && selectedIdx < points.length ? selectedIdx : null;
   const selPoint = safeSelectedIdx !== null ? points[safeSelectedIdx] : null;
-  const selX =
-    safeSelectedIdx !== null && points.length > 1 ? (safeSelectedIdx / (points.length - 1)) * svgW : 0;
+  const selX = safeSelectedIdx !== null && points.length > 1 ? (safeSelectedIdx / (points.length - 1)) * svgW : 0;
   const selRevY = selPoint ? svgH - ((selPoint.revenue || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
   const selProfY = selPoint ? svgH - ((selPoint.profit || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
 
@@ -989,9 +967,7 @@ function OwnerAnalyticsChart() {
               ]}
             >
               <Text style={[styles.chartStatLabelLight, { color: palette.text.secondary }]}>Чеков</Text>
-              <Text style={[styles.chartStatValueLight, { color: palette.text.primary }]}>
-                {displayChecks || '—'}
-              </Text>
+              <Text style={[styles.chartStatValueLight, { color: palette.text.primary }]}>{displayChecks || '—'}</Text>
             </View>
           </View>
           {selPoint !== null && displayAvg !== null && (
@@ -1099,7 +1075,11 @@ function OnShiftSnapshot() {
             style={[
               styles.miniAvatar,
               styles.miniAvatarMore,
-              { backgroundColor: palette.bg.muted, borderColor: palette.bg.card, marginLeft: visible.length === 0 ? 0 : -6 },
+              {
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.bg.card,
+                marginLeft: visible.length === 0 ? 0 : -6,
+              },
             ]}
           >
             <Text style={[styles.miniAvatarMoreText, { color: palette.text.secondary }]}>+{more}</Text>
@@ -1264,13 +1244,7 @@ function OwnerQuickActions() {
       <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>БЫСТРЫЕ ДЕЙСТВИЯ</Text>
       <View style={styles.quickGrid2x2}>
         {allowed.map((a, idx) => (
-          <QuickActionTile
-            key={a.key}
-            action={a}
-            index={idx}
-            onPress={tilePressMap.get(a.key)!}
-            palette={palette}
-          />
+          <QuickActionTile key={a.key} action={a} index={idx} onPress={tilePressMap.get(a.key)!} palette={palette} />
         ))}
       </View>
     </View>
@@ -1441,6 +1415,78 @@ const TopPerformerRow = React.memo(function TopPerformerRow({
 // ════════════════════════════════════════════════════════════════════════════
 //
 // Combines the 6 hero blocks. Не показывает ShiftControl — это фича мастера.
+// ── Call Funnel Widget ────────────────────────────────────────────────────────
+function CallFunnelWidget() {
+  const palette = useColors();
+
+  const now = new Date();
+  const dateFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const dateTo = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const monthLabel = now.toLocaleDateString('ru-RU', { month: 'long' });
+
+  const { data: funnel } = useQuery({
+    queryKey: ['call-funnel', dateFrom, dateTo],
+    queryFn: async () => {
+      const res = await reportsApi.callFunnel({ dateFrom, dateTo });
+      return res.data;
+    },
+    staleTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  if (!funnel) return null;
+
+  const tiles = [
+    { label: 'Звонков', value: String(funnel.totalCalls), icon: 'call-outline' as const, color: colors.primary[600] },
+    { label: 'Приехало', value: String(funnel.arrivedClients), icon: 'car-outline' as const, color: colors.teal[600] },
+    {
+      label: 'Чеков создано',
+      value: String(funnel.createdChecks),
+      icon: 'receipt-outline' as const,
+      color: colors.orange[600],
+    },
+    {
+      label: 'Конверсия',
+      value: `${funnel.conversionRate.toFixed(0)}%`,
+      icon: 'trending-up-outline' as const,
+      color: colors.green[600],
+    },
+  ];
+
+  return (
+    <AnimatedCard
+      index={8}
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: spacing[3],
+        }}
+      >
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary, fontSize: 11, letterSpacing: 0.5 }]}>
+          ВОРОНКА ЗВОНКОВ
+        </Text>
+        <Text style={[{ fontSize: 11, color: palette.text.tertiary }]}>{monthLabel}</Text>
+      </View>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] }}>
+        {tiles.map((tile) => (
+          <View
+            key={tile.label}
+            style={[styles.funnelTile, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            <Ionicons name={tile.icon} size={15} color={tile.color} />
+            <Text style={[styles.funnelTileValue, { color: palette.text.primary }]}>{tile.value}</Text>
+            <Text style={[styles.funnelTileLabel, { color: palette.text.tertiary }]}>{tile.label}</Text>
+          </View>
+        ))}
+      </View>
+    </AnimatedCard>
+  );
+}
+
 function AdminDashboard({ name }: { name: string }) {
   return (
     <View style={{ gap: spacing[5] }}>
@@ -1450,6 +1496,7 @@ function AdminDashboard({ name }: { name: string }) {
       <TodaySnapshotRow />
       <OwnerQuickActions />
       <TopPerformers />
+      <CallFunnelWidget />
     </View>
   );
 }
@@ -1491,7 +1538,10 @@ function ShiftControl() {
   const isLoading = openShift.isPending || closeShift.isPending;
 
   return (
-    <AnimatedCard index={1} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+    <AnimatedCard
+      index={1}
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
       <View style={styles.shiftRow}>
         <View style={styles.shiftLeft}>
           <View style={[styles.shiftIcon, currentShift ? styles.shiftIconOpen : { backgroundColor: palette.bg.muted }]}>
@@ -1502,11 +1552,12 @@ function ShiftControl() {
             />
           </View>
           <View>
-            <Text style={[styles.shiftTitle, { color: palette.text.primary }]}>{currentShift ? 'Смена открыта' : 'Смена закрыта'}</Text>
+            <Text style={[styles.shiftTitle, { color: palette.text.primary }]}>
+              {currentShift ? 'Смена открыта' : 'Смена закрыта'}
+            </Text>
             {currentShift && (
               <Text style={[styles.shiftSince, { color: palette.text.tertiary }]}>
-                с{' '}
-                {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
               </Text>
             )}
           </View>
@@ -1566,7 +1617,10 @@ function MasterRatingCard({ userId }: { userId?: string }) {
   const stars = Math.round(myRating.avgRating);
 
   return (
-    <AnimatedCard index={5} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+    <AnimatedCard
+      index={5}
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
         <View
           style={{
@@ -1665,7 +1719,10 @@ function MasterRecentChecks() {
   if (!Array.isArray(items) || items.length === 0) return null;
 
   return (
-    <AnimatedCard index={6} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+    <AnimatedCard
+      index={6}
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
       <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>ПОСЛЕДНИЕ ЧЕКИ</Text>
       <View style={{ gap: spacing[1.5] }}>
         {items.slice(0, 5).map((check: any) => (
@@ -1874,8 +1931,7 @@ function MasterDashboard() {
                 {user?.fullName || 'Мастер'}
               </Text>
               <Text style={styles.profilePercent}>
-                Услуги {data.salaryPercent}%
-                {data.productSalaryPercent ? ` · Товары ${data.productSalaryPercent}%` : ''}
+                Услуги {data.salaryPercent}%{data.productSalaryPercent ? ` · Товары ${data.productSalaryPercent}%` : ''}
               </Text>
             </View>
           </View>
@@ -1883,7 +1939,10 @@ function MasterDashboard() {
       </AnimatedCard>
 
       <View style={styles.statsRow}>
-        <AnimatedCard index={1} style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+        <AnimatedCard
+          index={1}
+          style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
           <Ionicons
             name="document-text-outline"
             size={18}
@@ -1894,15 +1953,23 @@ function MasterDashboard() {
           <Text style={[styles.statValue, { color: palette.text.primary }]}>{data.todayChecks || '—'}</Text>
           <Text style={[styles.statSub, { color: palette.text.tertiary }]}>За месяц: {data.monthChecks ?? 0}</Text>
         </AnimatedCard>
-        <AnimatedCard index={2} style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+        <AnimatedCard
+          index={2}
+          style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
           <Ionicons name="cash-outline" size={18} color={colors.green[600]} style={{ marginBottom: spacing[2] }} />
           <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>Сегодня</Text>
-          <Text style={[styles.statValue, { color: palette.text.primary }]}>{data.today ? formatMoney(data.today) : '—'}</Text>
+          <Text style={[styles.statValue, { color: palette.text.primary }]}>
+            {data.today ? formatMoney(data.today) : '—'}
+          </Text>
           <Text style={[styles.statSub, { color: palette.text.tertiary }]}>За месяц: {formatMoney(data.month)}</Text>
         </AnimatedCard>
       </View>
 
-      <AnimatedCard index={3} style={[styles.cashSection, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}>
+      <AnimatedCard
+        index={3}
+        style={[styles.cashSection, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+      >
         <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>КАССА СЕГОДНЯ</Text>
         <View style={styles.cashGrid}>
           {[
@@ -1940,18 +2007,25 @@ function MasterDashboard() {
       </AnimatedCard>
 
       {data.todayService || data.todayProduct ? (
-        <AnimatedCard index={4} style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+        <AnimatedCard
+          index={4}
+          style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
           <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>СТРУКТУРА ЗАРАБОТКА СЕГОДНЯ</Text>
           <View style={styles.earningsRow}>
             <View style={[styles.earningBox, { backgroundColor: colors.blue[50] }]}>
               <Ionicons name="build-outline" size={16} color={colors.blue[600]} />
               <Text style={[styles.earningLabel, { color: colors.blue[600] }]}>С услуг</Text>
-              <Text style={[styles.earningValue, { color: palette.text.primary }]}>{formatMoney(data.todayService ?? 0)}</Text>
+              <Text style={[styles.earningValue, { color: palette.text.primary }]}>
+                {formatMoney(data.todayService ?? 0)}
+              </Text>
             </View>
             <View style={[styles.earningBox, { backgroundColor: colors.green[50] }]}>
               <Ionicons name="cube-outline" size={16} color={colors.green[600]} />
               <Text style={[styles.earningLabel, { color: colors.green[600] }]}>С товаров</Text>
-              <Text style={[styles.earningValue, { color: palette.text.primary }]}>{formatMoney(data.todayProduct ?? 0)}</Text>
+              <Text style={[styles.earningValue, { color: palette.text.primary }]}>
+                {formatMoney(data.todayProduct ?? 0)}
+              </Text>
             </View>
           </View>
         </AnimatedCard>
@@ -1970,7 +2044,9 @@ function MasterDashboard() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.promoTitle, { color: palette.text.primary }]}>Бонус с товаров</Text>
-                <Text style={[styles.promoSub, { color: palette.text.secondary }]}>Продавай эти товары и получай % с прибыли</Text>
+                <Text style={[styles.promoSub, { color: palette.text.secondary }]}>
+                  Продавай эти товары и получай % с прибыли
+                </Text>
               </View>
             </View>
             <View style={{ paddingHorizontal: spacing[3], paddingBottom: spacing[3], gap: spacing[2] }}>
@@ -1983,7 +2059,13 @@ function MasterDashboard() {
                       {photoUrl ? (
                         <CachedImage source={{ uri: photoUrl }} style={styles.promoPhoto} />
                       ) : (
-                        <View style={[styles.promoPhoto, styles.promoPhotoPlaceholder, { backgroundColor: palette.bg.muted }]}>
+                        <View
+                          style={[
+                            styles.promoPhoto,
+                            styles.promoPhotoPlaceholder,
+                            { backgroundColor: palette.bg.muted },
+                          ]}
+                        >
                           <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
                         </View>
                       )}
@@ -1991,11 +2073,15 @@ function MasterDashboard() {
                         <Text style={[styles.promoName, { color: palette.text.primary }]} numberOfLines={1}>
                           {promo.productName}
                         </Text>
-                        <Text style={[styles.promoPrice, { color: palette.text.tertiary }]}>Цена: {formatMoney(promo.sellPrice)}</Text>
+                        <Text style={[styles.promoPrice, { color: palette.text.tertiary }]}>
+                          Цена: {formatMoney(promo.sellPrice)}
+                        </Text>
                       </View>
                       <View style={{ alignItems: 'flex-end', flexShrink: 0 }}>
                         <Text style={styles.promoBonus}>+{formatMoney(promo.estimatedBonus)}</Text>
-                        <Text style={[styles.promoPercent, { color: palette.text.tertiary }]}>{promo.percent}% с прибыли</Text>
+                        <Text style={[styles.promoPercent, { color: palette.text.tertiary }]}>
+                          {promo.percent}% с прибыли
+                        </Text>
                       </View>
                     </View>
                   );
@@ -2059,9 +2145,7 @@ export default function DashboardScreen() {
       // down the schedule grid on a different month.
       ['users'],
     ];
-    await Promise.all(
-      dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })),
-    );
+    await Promise.all(dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })));
     setRefreshing(false);
   };
 
@@ -2245,6 +2329,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  // Call funnel 2×2 grid tiles
+  funnelTile: {
+    flex: 1,
+    minWidth: '45%',
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing[3],
+    alignItems: 'flex-start',
+    gap: spacing[1],
+  },
+  funnelTileValue: { fontSize: 20, fontWeight: '700', letterSpacing: -0.5 },
+  funnelTileLabel: { fontSize: 11, fontWeight: '500' },
   kpiScrollContent: {
     gap: spacing[3],
     paddingRight: spacing[4],

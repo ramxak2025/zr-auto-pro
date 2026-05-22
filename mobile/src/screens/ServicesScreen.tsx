@@ -409,7 +409,10 @@ export default function ServicesScreen() {
               <Text style={styles.deleteFormBtnText}>Удалить</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]} onPress={handleSubmit}>
+          <TouchableOpacity
+            style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
+            onPress={handleSubmit}
+          >
             {createMutation.isPending || updateMutation.isPending ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (

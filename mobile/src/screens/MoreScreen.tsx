@@ -257,10 +257,7 @@ const MenuRow = React.memo(function MenuRow({
           <Ionicons name={item.icon} size={20} color={locked ? colors.gray[400] : item.iconColor} />
         </View>
         <View style={styles.menuTextWrap}>
-          <Text
-            style={[styles.menuLabel, { color: locked ? colors.gray[400] : labelColor }]}
-            numberOfLines={1}
-          >
+          <Text style={[styles.menuLabel, { color: locked ? colors.gray[400] : labelColor }]} numberOfLines={1}>
             {item.label}
           </Text>
           <Text style={[styles.menuDesc, { color: descColor }]} numberOfLines={1}>
@@ -422,12 +419,7 @@ export default function MoreScreen() {
               <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
                 {section.title}
               </Text>
-              <View
-                style={[
-                  styles.menuCard,
-                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                ]}
-              >
+              <View style={[styles.menuCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
                 {visibleItems.map((item, idx) => (
                   <MenuRow
                     key={item.screen}
@@ -447,10 +439,7 @@ export default function MoreScreen() {
 
         {/* Logout */}
         <TouchableOpacity
-          style={[
-            styles.logoutBtn,
-            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-          ]}
+          style={[styles.logoutBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           onPress={logout}
           activeOpacity={0.7}
         >

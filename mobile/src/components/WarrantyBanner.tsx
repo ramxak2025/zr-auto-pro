@@ -99,15 +99,9 @@ export default function WarrantyBanner({ clientId, carId }: WarrantyBannerProps)
       <View style={[styles.box, { backgroundColor: amber.bg, borderColor: amber.border }]}>
         <View style={styles.headerRow}>
           <Ionicons name="shield-checkmark" size={14} color={amber.icon} />
-          <Text style={[styles.title, { color: amber.title }]}>
-            Действующая гарантия: {claims.length}
-          </Text>
+          <Text style={[styles.title, { color: amber.title }]}>Действующая гарантия: {claims.length}</Text>
           <View style={{ flex: 1 }} />
-          <Ionicons
-            name={expanded ? 'chevron-up' : 'chevron-down'}
-            size={14}
-            color={amber.icon}
-          />
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={amber.icon} />
         </View>
         {visible.map((c) => (
           <Text key={c.id} style={[styles.item, { color: amber.body }]} numberOfLines={1}>

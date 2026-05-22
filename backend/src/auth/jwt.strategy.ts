@@ -27,10 +27,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     // Check if token has been revoked (via POST /auth/logout)
     if (jti) {
-      const { rows: revoked } = await this.pool.query(
-        `SELECT 1 FROM revoked_tokens WHERE jti=$1 LIMIT 1`,
-        [jti],
-      );
+      const { rows: revoked } = await this.pool.query(`SELECT 1 FROM revoked_tokens WHERE jti=$1 LIMIT 1`, [jti]);
       if (revoked.length > 0) {
         throw new UnauthorizedException({ message: 'Токен отозван' });
       }

@@ -1,4 +1,12 @@
-import { Injectable, Inject, BadRequestException, NotFoundException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  BadRequestException,
+  NotFoundException,
+  ForbiddenException,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
@@ -49,7 +57,7 @@ export class UsersService {
       role: row.role,
       salaryPercent: parseFloat(row.salary_percent) || 0,
       productSalaryPercent: parseFloat(row.product_salary_percent) || 0,
-      permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : (row.permissions || {}),
+      permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions || {},
       daysOff,
       sortOrder: parseInt(row.sort_order) || 0,
       isActive: row.is_active,
@@ -77,10 +85,11 @@ export class UsersService {
   async updateOrder(tenantID: string, orderedIds: string[]) {
     // Update sort_order for each user based on position in array
     for (let i = 0; i < orderedIds.length; i++) {
-      await this.pool.query(
-        `UPDATE users SET sort_order = $1 WHERE id = $2 AND tenant_id = $3`,
-        [i, orderedIds[i], tenantID],
-      );
+      await this.pool.query(`UPDATE users SET sort_order = $1 WHERE id = $2 AND tenant_id = $3`, [
+        i,
+        orderedIds[i],
+        tenantID,
+      ]);
     }
     return { message: 'Порядок обновлён' };
   }
@@ -173,10 +182,10 @@ export class UsersService {
     // Confirm the target lives in the actor's tenant. Without this the
     // surrounding `WHERE id=$ AND tenant_id=$` only protects mutation;
     // we'd still leak existence via different error paths.
-    const { rows: targetRows } = await this.pool.query(
-      'SELECT role FROM users WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows: targetRows } = await this.pool.query('SELECT role FROM users WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
     if (targetRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
     const targetRole = targetRows[0].role as string;
 
@@ -209,14 +218,38 @@ export class UsersService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(normalizePhone(dto.phone)); }
-    if (dto.fullName !== undefined) { sets.push(`full_name=$${idx++}`); vals.push(dto.fullName); }
-    if (dto.role !== undefined) { sets.push(`role=$${idx++}`); vals.push(dto.role); }
-    if (dto.salaryPercent !== undefined) { sets.push(`salary_percent=$${idx++}`); vals.push(dto.salaryPercent); }
-    if (dto.productSalaryPercent !== undefined) { sets.push(`product_salary_percent=$${idx++}`); vals.push(dto.productSalaryPercent); }
-    if (dto.permissions !== undefined) { sets.push(`permissions=$${idx++}`); vals.push(JSON.stringify(dto.permissions)); }
-    if (dto.isActive !== undefined) { sets.push(`is_active=$${idx++}`); vals.push(dto.isActive); }
-    if (dto.daysOff !== undefined) { sets.push(`days_off=$${idx++}`); vals.push(JSON.stringify(dto.daysOff)); }
+    if (dto.phone !== undefined) {
+      sets.push(`phone=$${idx++}`);
+      vals.push(normalizePhone(dto.phone));
+    }
+    if (dto.fullName !== undefined) {
+      sets.push(`full_name=$${idx++}`);
+      vals.push(dto.fullName);
+    }
+    if (dto.role !== undefined) {
+      sets.push(`role=$${idx++}`);
+      vals.push(dto.role);
+    }
+    if (dto.salaryPercent !== undefined) {
+      sets.push(`salary_percent=$${idx++}`);
+      vals.push(dto.salaryPercent);
+    }
+    if (dto.productSalaryPercent !== undefined) {
+      sets.push(`product_salary_percent=$${idx++}`);
+      vals.push(dto.productSalaryPercent);
+    }
+    if (dto.permissions !== undefined) {
+      sets.push(`permissions=$${idx++}`);
+      vals.push(JSON.stringify(dto.permissions));
+    }
+    if (dto.isActive !== undefined) {
+      sets.push(`is_active=$${idx++}`);
+      vals.push(dto.isActive);
+    }
+    if (dto.daysOff !== undefined) {
+      sets.push(`days_off=$${idx++}`);
+      vals.push(JSON.stringify(dto.daysOff));
+    }
     if (dto.team !== undefined) {
       // Empty string → store NULL so users without a team aren't grouped under "" on the FE.
       sets.push(`team=$${idx++}`);
@@ -258,10 +291,12 @@ export class UsersService {
         const dayOfWeek = entryDate.getDay();
         const shouldBeDayOff = newDaysOff.includes(dayOfWeek);
 
-        await this.pool.query(
-          `UPDATE schedule_entries SET is_day_off=$1, shift_start=$2, shift_end=$3 WHERE id=$4`,
-          [shouldBeDayOff, shouldBeDayOff ? null : '09:00', shouldBeDayOff ? null : '18:00', entry.id],
-        );
+        await this.pool.query(`UPDATE schedule_entries SET is_day_off=$1, shift_start=$2, shift_end=$3 WHERE id=$4`, [
+          shouldBeDayOff,
+          shouldBeDayOff ? null : '09:00',
+          shouldBeDayOff ? null : '18:00',
+          entry.id,
+        ]);
       }
     }
 
@@ -273,10 +308,7 @@ export class UsersService {
       throw new BadRequestException({ message: 'Нельзя удалить себя' });
     }
 
-    const { rows } = await this.pool.query(
-      'SELECT role FROM users WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT role FROM users WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
 
     if (rows[0].role === 'superadmin' || rows[0].role === 'director') {
@@ -311,7 +343,7 @@ export class UsersService {
 
     return {
       productSalaryPercent,
-      items: rows.map(r => ({
+      items: rows.map((r) => ({
         id: r.id,
         productId: r.product_id,
         percent: parseFloat(r.percent) || 0,
@@ -328,19 +360,17 @@ export class UsersService {
     dto: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> },
   ) {
     // Verify user exists
-    const { rows: userRows } = await this.pool.query(
-      'SELECT id FROM users WHERE id=$1 AND tenant_id=$2',
-      [userId, tenantID],
-    );
+    const { rows: userRows } = await this.pool.query('SELECT id FROM users WHERE id=$1 AND tenant_id=$2', [
+      userId,
+      tenantID,
+    ]);
     if (userRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
 
     // Verify every referenced product belongs to the caller's tenant before
     // we open a transaction — refuses a forged item.productId that points
     // to a product in another tenant.
     if (dto.items && dto.items.length > 0) {
-      const productIds = Array.from(
-        new Set(dto.items.map(i => i.productId).filter((x): x is string => !!x)),
-      );
+      const productIds = Array.from(new Set(dto.items.map((i) => i.productId).filter((x): x is string => !!x)));
       if (productIds.length > 0) {
         const { rows: prodRows } = await this.pool.query(
           'SELECT id FROM products WHERE id = ANY($1) AND tenant_id = $2',
@@ -357,16 +387,14 @@ export class UsersService {
       await client.query('BEGIN');
 
       // Update global product salary percent
-      await client.query(
-        'UPDATE users SET product_salary_percent = $1 WHERE id = $2 AND tenant_id = $3',
-        [dto.productSalaryPercent || 0, userId, tenantID],
-      );
+      await client.query('UPDATE users SET product_salary_percent = $1 WHERE id = $2 AND tenant_id = $3', [
+        dto.productSalaryPercent || 0,
+        userId,
+        tenantID,
+      ]);
 
       // Replace all product-specific commissions
-      await client.query(
-        'DELETE FROM product_commissions WHERE user_id = $1 AND tenant_id = $2',
-        [userId, tenantID],
-      );
+      await client.query('DELETE FROM product_commissions WHERE user_id = $1 AND tenant_id = $2', [userId, tenantID]);
 
       if (dto.items && dto.items.length > 0) {
         for (const item of dto.items) {

@@ -1,4 +1,12 @@
-import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
@@ -73,10 +81,7 @@ export class SuppliersService {
       idx++;
     }
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM suppliers WHERE ${where}`,
-      params,
-    );
+    const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM suppliers WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
@@ -94,10 +99,7 @@ export class SuppliersService {
   }
 
   async getById(id: string, tenantID: string) {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM suppliers WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM suppliers WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Поставщик не найден' });
     return this.mapSupplier(rows[0]);
   }
@@ -130,10 +132,22 @@ export class SuppliersService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.name !== undefined) { sets.push(`name=$${idx++}`); vals.push(dto.name); }
-    if (dto.phone !== undefined) { sets.push(`phone=$${idx++}`); vals.push(dto.phone); }
-    if (dto.contactPerson !== undefined) { sets.push(`contact_person=$${idx++}`); vals.push(dto.contactPerson); }
-    if (dto.comment !== undefined) { sets.push(`comment=$${idx++}`); vals.push(dto.comment); }
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.phone !== undefined) {
+      sets.push(`phone=$${idx++}`);
+      vals.push(dto.phone);
+    }
+    if (dto.contactPerson !== undefined) {
+      sets.push(`contact_person=$${idx++}`);
+      vals.push(dto.contactPerson);
+    }
+    if (dto.comment !== undefined) {
+      sets.push(`comment=$${idx++}`);
+      vals.push(dto.comment);
+    }
 
     if (sets.length === 0) return this.getById(id, tenantID);
 
@@ -252,10 +266,11 @@ export class SuppliersService {
         // bought the same SKU at a different price previously). The
         // current purchase price is logged on the stock_movement row
         // for audit / cost basis recomputation.
-        await client.query(
-          'UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3',
-          [stockAfter, productId, tenantID],
-        );
+        await client.query('UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3', [
+          stockAfter,
+          productId,
+          tenantID,
+        ]);
       } else {
         // Create a fresh Б/У product. sale_price defaults to
         // purchasePrice (owner can edit later). warehouseId is locked
@@ -307,17 +322,7 @@ export class SuppliersService {
            tenant_id, user_id, warehouse_id, supplier_id, is_used_purchase
          ) VALUES ($1, 'income', $2, $3, $4, $5, $6, $7, $8, $9, true)
          RETURNING id`,
-        [
-          productId,
-          qty,
-          stockBefore,
-          stockAfter,
-          dto?.note ?? null,
-          tenantID,
-          userID,
-          usedWarehouse.id,
-          supplierId,
-        ],
+        [productId, qty, stockBefore, stockAfter, dto?.note ?? null, tenantID, userID, usedWarehouse.id, supplierId],
       );
 
       await client.query('COMMIT');
@@ -411,10 +416,13 @@ export class SuppliersService {
 
     const r = rows[0];
     const delivery: any = {
-      id: r.id, supplierId: r.supplier_id,
+      id: r.id,
+      supplierId: r.supplier_id,
       supplier: { id: r.supplier_id, name: r.supplier_name },
-      date: r.date, totalAmount: parseFloat(r.total_amount) || 0,
-      paymentStatus: r.payment_status, comment: r.comment,
+      date: r.date,
+      totalAmount: parseFloat(r.total_amount) || 0,
+      paymentStatus: r.payment_status,
+      comment: r.comment,
     };
 
     const { rows: itemRows } = await this.pool.query(
@@ -424,7 +432,8 @@ export class SuppliersService {
       [id],
     );
     delivery.items = itemRows.map((item) => ({
-      id: item.id, productId: item.product_id,
+      id: item.id,
+      productId: item.product_id,
       product: item.product_name ? { id: item.product_id, name: item.product_name } : undefined,
       quantity: parseFloat(item.quantity) || 0,
       price: parseFloat(item.price) || 0,
@@ -447,10 +456,10 @@ export class SuppliersService {
       // else. Without this, a director could craft a request with a
       // supplierId from another tenant and corrupt that supplier's totals
       // (the post-insert UPDATE suppliers used to omit tenant_id).
-      const { rows: supRows } = await client.query(
-        'SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1',
-        [dto.supplierId, tenantID],
-      );
+      const { rows: supRows } = await client.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+        dto.supplierId,
+        tenantID,
+      ]);
       if (supRows.length === 0) {
         throw new BadRequestException({ message: 'Поставщик не найден' });
       }
@@ -478,10 +487,11 @@ export class SuppliersService {
         // Increase product stock — scoped to tenant (defense-in-depth so a
         // crafted productId from another tenant cannot mutate stock here).
         if (item.productId) {
-          const upd = await client.query(
-            'UPDATE products SET stock = stock + $1 WHERE id = $2 AND tenant_id = $3',
-            [item.quantity || 0, item.productId, tenantID],
-          );
+          const upd = await client.query('UPDATE products SET stock = stock + $1 WHERE id = $2 AND tenant_id = $3', [
+            item.quantity || 0,
+            item.productId,
+            tenantID,
+          ]);
           if (upd.rowCount === 0) {
             throw new BadRequestException({ message: `Товар ${item.productId} не найден` });
           }
@@ -546,10 +556,10 @@ export class SuppliersService {
 
       // Same cross-tenant guard as createDelivery — verify the supplier
       // lives in the caller's tenant before recording a payment against it.
-      const { rows: supRows } = await client.query(
-        'SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1',
-        [dto.supplierId, tenantID],
-      );
+      const { rows: supRows } = await client.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+        dto.supplierId,
+        tenantID,
+      ]);
       if (supRows.length === 0) {
         throw new BadRequestException({ message: 'Поставщик не найден' });
       }

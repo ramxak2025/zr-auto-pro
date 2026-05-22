@@ -46,7 +46,18 @@ function resolveEntry(name: string): IconMapEntry {
 
 function Ionicons({ name, size = 24, color = '#000', style }: IoniconsProps) {
   const entry = resolveEntry(name);
-  const Cmp = (Lucide as unknown as Record<string, React.ComponentType<{ size?: number; color?: string; strokeWidth?: number; fill?: string; style?: StyleProp<ViewStyle> }>>)[entry.lucide];
+  const Cmp = (
+    Lucide as unknown as Record<
+      string,
+      React.ComponentType<{
+        size?: number;
+        color?: string;
+        strokeWidth?: number;
+        fill?: string;
+        style?: StyleProp<ViewStyle>;
+      }>
+    >
+  )[entry.lucide];
   if (!Cmp) {
     // Last-resort placeholder so layout doesn't collapse.
     return <View style={[{ width: size, height: size }, style as StyleProp<ViewStyle>]} />;
@@ -65,12 +76,11 @@ function Ionicons({ name, size = 24, color = '#000', style }: IoniconsProps) {
 // Expose `glyphMap` so consumers doing `keyof typeof Ionicons.glyphMap`
 // still typecheck without changes. Values are intentionally never read
 // at runtime — only the keys matter for autocomplete / lookups.
-(Ionicons as unknown as { glyphMap: Record<string, number> }).glyphMap = Object.keys(IONICON_TO_LUCIDE).reduce<Record<string, number>>(
-  (acc, k, i) => {
-    acc[k] = i;
-    return acc;
-  },
-  {},
-);
+(Ionicons as unknown as { glyphMap: Record<string, number> }).glyphMap = Object.keys(IONICON_TO_LUCIDE).reduce<
+  Record<string, number>
+>((acc, k, i) => {
+  acc[k] = i;
+  return acc;
+}, {});
 
 export default Ionicons;

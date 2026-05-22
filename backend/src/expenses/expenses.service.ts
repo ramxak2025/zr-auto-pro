@@ -9,10 +9,9 @@ export class ExpensesService {
   // --- Categories ---
 
   async getCategories(tenantID: string) {
-    const { rows } = await this.pool.query(
-      'SELECT * FROM expense_categories WHERE tenant_id=$1 ORDER BY name',
-      [tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT * FROM expense_categories WHERE tenant_id=$1 ORDER BY name', [
+      tenantID,
+    ]);
     return rows.map((r) => ({ id: r.id, name: r.name, tenantId: r.tenant_id, createdAt: r.created_at }));
   }
 
@@ -40,8 +39,14 @@ export class ExpensesService {
     const params: any[] = [tenantID];
     let idx = 2;
 
-    if (dateFrom) { where += ` AND e.date >= $${idx++}`; params.push(dateFrom); }
-    if (dateTo) { where += ` AND e.date <= ($${idx++}::date + 1)::timestamptz`; params.push(dateTo); }
+    if (dateFrom) {
+      where += ` AND e.date >= $${idx++}`;
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      where += ` AND e.date <= ($${idx++}::date + 1)::timestamptz`;
+      params.push(dateTo);
+    }
 
     const { rows } = await this.pool.query(
       `SELECT e.*, ec.name as category_name, u.full_name as user_name
@@ -84,16 +89,23 @@ export class ExpensesService {
     const { rows } = await this.pool.query(
       `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [dto.categoryId || null, dto.amount, dto.description || null,
-       dto.date || new Date().toISOString(), userID, tenantID],
+      [
+        dto.categoryId || null,
+        dto.amount,
+        dto.description || null,
+        dto.date || new Date().toISOString(),
+        userID,
+        tenantID,
+      ],
     );
     return rows[0];
   }
 
   async remove(id: string, tenantID: string) {
-    const { rows } = await this.pool.query(
-      'DELETE FROM expenses WHERE id=$1 AND tenant_id=$2 RETURNING id', [id, tenantID],
-    );
+    const { rows } = await this.pool.query('DELETE FROM expenses WHERE id=$1 AND tenant_id=$2 RETURNING id', [
+      id,
+      tenantID,
+    ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Расход не найден' });
     return { message: 'Удалено' };
   }

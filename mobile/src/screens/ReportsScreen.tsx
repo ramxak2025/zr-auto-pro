@@ -189,7 +189,9 @@ export default function ReportsScreen() {
 
             {/* Revenue + Gross Profit */}
             <AnimatedCard index={1} style={styles.twoCol}>
-              <View style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+              <View
+                style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
                 <View style={styles.metricIconWrap}>
                   <View style={[styles.metricIcon, { backgroundColor: colors.blue[50] }]}>
                     <Ionicons name="trending-up" size={16} color={colors.blue[600]} />
@@ -199,14 +201,18 @@ export default function ReportsScreen() {
                 <Text style={[styles.metricValue, { color: palette.text.primary }]}>{formatMoney(report.revenue)}</Text>
               </View>
 
-              <View style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+              <View
+                style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
                 <View style={styles.metricIconWrap}>
                   <View style={[styles.metricIcon, { backgroundColor: colors.green[50] }]}>
                     <Ionicons name="trending-up" size={16} color={colors.green[600]} />
                   </View>
                   <Text style={[styles.metricLabel, { color: palette.text.secondary }]}>Валовая прибыль</Text>
                 </View>
-                <Text style={[styles.metricValue, { color: palette.text.primary }]}>{formatMoney(report.grossProfit)}</Text>
+                <Text style={[styles.metricValue, { color: palette.text.primary }]}>
+                  {formatMoney(report.grossProfit)}
+                </Text>
               </View>
             </AnimatedCard>
 
@@ -231,7 +237,9 @@ export default function ReportsScreen() {
                     )}
                   </View>
                 </View>
-                <Text style={[styles.expAmount, { color: palette.text.primary }]}>{formatMoney(report.productCost)}</Text>
+                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
+                  {formatMoney(report.productCost)}
+                </Text>
               </View>
 
               <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
@@ -270,7 +278,9 @@ export default function ReportsScreen() {
                         )}
                       </View>
                     </View>
-                    <Text style={[styles.expAmount, { color: palette.text.primary }]}>{formatMoney(otherExpenses)}</Text>
+                    <Text style={[styles.expAmount, { color: palette.text.primary }]}>
+                      {formatMoney(otherExpenses)}
+                    </Text>
                   </View>
                 </>
               )}

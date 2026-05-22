@@ -3,10 +3,14 @@ import { MarketingService } from './marketing.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { SubmitReviewDto } from './dto/submit-review.dto';
+import { ReminderService } from './reminder.service';
 
 @Controller('marketing')
 export class MarketingController {
-  constructor(private marketingService: MarketingService) {}
+  constructor(
+    private marketingService: MarketingService,
+    private reminderService: ReminderService,
+  ) {}
 
   // ─── Dashboard (protected) ────────────────────────────────────────
   @UseGuards(JwtAuthGuard)
@@ -84,6 +88,25 @@ export class MarketingController {
   @Patch('settings')
   updateSettings(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.marketingService.updateSettings(user.tenantID, dto);
+  }
+
+  // ─── Reminder Settings (protected) ───────────────────────────────
+  @UseGuards(JwtAuthGuard)
+  @Get('reminders')
+  getReminderSettings(@CurrentUser() user: JwtPayload) {
+    return this.reminderService.getSettings(user.tenantID);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('reminders')
+  updateReminderSettings(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+    return this.reminderService.updateSettings(user.tenantID, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('reminders/send')
+  sendReminders(@CurrentUser() user: JwtPayload) {
+    return this.reminderService.sendForTenant(user.tenantID);
   }
 
   // ─── Public Review Endpoints (no auth) ────────────────────────────
