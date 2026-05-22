@@ -38,6 +38,7 @@ import type { SemanticPalette } from '../theme/palette';
 import { ThemeToggle } from '../components/ThemeToggle';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
+import FreshnessBadge from '../components/FreshnessBadge';
 import type {
   SalarySummary,
   TodayEmployeeStatus,
@@ -1359,6 +1360,10 @@ const PeriodChips = React.memo(function PeriodChips({ value, onChange, palette }
 
 // ── 1. Cash Position ────────────────────────────────────────────────────────
 // 3-row breakdown (Наличные / Карта / Гарантия) + big total. Тап → CashFlow.
+// CRITICAL widget — the cash position is the number the owner trusts to plan
+// payouts. Showing yesterday's value silently is worse than a 300 ms spinner.
+// HYBRID-perf plan, part 3: refetch on every mount, no placeholder fall-back.
+// Other widgets on the dashboard keep `placeholderData` for instant feel.
 function CashPositionCard() {
   const palette = useColors();
   const navigation = useNavigation<any>();
@@ -1366,7 +1371,8 @@ function CashPositionCard() {
     queryKey: ['dashboard-v2', 'today'],
     queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
     staleTime: 60_000,
-    placeholderData: (prev) => prev,
+    placeholderData: undefined,
+    refetchOnMount: 'always',
   });
 
   const cash = data?.cashPosition.cash ?? 0;
@@ -2318,9 +2324,36 @@ function MonthForecastCard() {
   );
 }
 
+/**
+ * Owner-side freshness pill — consumes the dashboard-v2 query that the
+ * hero / KPI / cash position cards all read from. Sits at the very top
+ * of the dashboard, right-aligned, so the owner can see at a glance
+ * whether the numbers are still revalidating in the background.
+ *
+ * HYBRID-perf plan: dashboard-v2 cash position is critical and forces
+ * refetch-on-mount; this badge surfaces that revalidation state.
+ */
+function OwnerFreshnessBadge() {
+  const { isFetching, isLoading, dataUpdatedAt } = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    // Read-only consumer: don't re-trigger a separate fetch. The cash
+    // position card already requests this data with refetchOnMount.
+    enabled: false,
+    notifyOnChangeProps: ['isFetching', 'isLoading', 'dataUpdatedAt'],
+  });
+  return (
+    <View style={styles.ownerFreshnessRow}>
+      <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+    </View>
+  );
+}
+
 function AdminDashboard({ name }: { name: string }) {
   return (
     <View style={{ gap: spacing[5] }}>
+      <OwnerFreshnessBadge />
       <OwnerHero name={name} />
       <KpiStrip />
       <OwnerAnalyticsChart />
@@ -3052,6 +3085,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[4] },
+  // OwnerFreshnessBadge slot — sits above the hero card, right-aligned.
+  ownerFreshnessRow: { alignItems: 'flex-end', minHeight: 14, marginBottom: -spacing[2] },
 
   // Master-only header
   headerSection: { marginBottom: spacing[1] },

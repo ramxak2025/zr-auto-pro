@@ -574,53 +574,74 @@ export default function UsersScreen() {
       <Modal visible={modalOpen} onClose={closeModal} title={editingUser ? 'Редактировать' : 'Новый сотрудник'}>
         <ScrollView contentContainerStyle={styles.formContent} showsVerticalScrollIndicator={false}>
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>ФИО</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>ФИО</Text>
             <TextInput
               value={form.fullName}
               onChangeText={(v) => setForm({ ...form, fullName: v })}
-              style={styles.formInput}
+              style={[
+                styles.formInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
               placeholder="Иванов Иван Иванович"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
 
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Телефон (логин)</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон (логин)</Text>
             {/* Phone mask shared with LoginScreen — user types digits,
                 formatPhone re-formats to +7 (XXX) XXX-XX-XX live. */}
             <TextInput
               value={form.phone}
               onChangeText={(v) => setForm({ ...form, phone: formatPhone(v.replace(/\D/g, '')) })}
-              style={styles.formInput}
+              style={[
+                styles.formInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
               placeholder="+7 (___) ___-__-__"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
               keyboardType="phone-pad"
               autoComplete="tel"
             />
           </View>
 
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>{editingUser ? 'Новый пароль (пустой = не менять)' : 'Пароль'}</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+              {editingUser ? 'Новый пароль (пустой = не менять)' : 'Пароль'}
+            </Text>
             <TextInput
               value={form.password}
               onChangeText={(v) => setForm({ ...form, password: v })}
-              style={styles.formInput}
+              style={[
+                styles.formInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
               placeholder={editingUser ? 'Новый пароль' : 'Введите пароль'}
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
               secureTextEntry
             />
           </View>
 
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Роль</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Роль</Text>
             <View style={styles.roleRow}>
               {[UserRole.DIRECTOR, UserRole.ADMIN, UserRole.MASTER].map((r) => (
                 <TouchableOpacity
                   key={r}
-                  style={[styles.roleChip, form.role === r && styles.roleChipActive]}
+                  style={[
+                    styles.roleChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    form.role === r && styles.roleChipActive,
+                  ]}
                   onPress={() => setForm({ ...form, role: r })}
                 >
-                  <Text style={[styles.roleChipText, form.role === r && styles.roleChipTextActive]}>
+                  <Text
+                    style={[
+                      styles.roleChipText,
+                      { color: palette.text.secondary },
+                      form.role === r && styles.roleChipTextActive,
+                    ]}
+                  >
                     {roleLabels[r] || r}
                   </Text>
                 </TouchableOpacity>
@@ -630,65 +651,79 @@ export default function UsersScreen() {
 
           <View style={{ flexDirection: 'row', gap: spacing[3] }}>
             <View style={[styles.formField, { flex: 1 }]}>
-              <Text style={styles.formLabel}>% от услуг</Text>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>% от услуг</Text>
               <TextInput
                 value={String(form.salaryPercent)}
                 onChangeText={(v) => setForm({ ...form, salaryPercent: Number(v) || 0 })}
-                style={styles.formInput}
+                style={[
+                  styles.formInput,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                ]}
                 keyboardType="numeric"
                 placeholder="0"
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
             </View>
             <View style={[styles.formField, { flex: 1 }]}>
-              <Text style={styles.formLabel}>% от товаров</Text>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>% от товаров</Text>
               <TextInput
                 value={String(form.productSalaryPercent)}
                 onChangeText={(v) => setForm({ ...form, productSalaryPercent: Number(v) || 0 })}
-                style={styles.formInput}
+                style={[
+                  styles.formInput,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                ]}
                 keyboardType="numeric"
                 placeholder="0"
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
             </View>
           </View>
 
           <View style={styles.switchRow}>
-            <Text style={styles.formLabel}>Активен</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Активен</Text>
             <Switch
               value={form.isActive}
               onValueChange={(v) => setForm({ ...form, isActive: v })}
-              trackColor={{ false: colors.gray[300], true: colors.primary[400] }}
-              thumbColor={form.isActive ? colors.primary[600] : colors.gray[100]}
+              trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
+              thumbColor={form.isActive ? colors.primary[600] : palette.bg.muted}
             />
           </View>
 
           {/* Permissions — grouped */}
           <View style={styles.formField}>
-            <Text style={[styles.formLabel, { marginBottom: spacing[3] }]}>Права доступа</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary, marginBottom: spacing[3] }]}>
+              Права доступа
+            </Text>
             {permissionGroups.map((group) => (
-              <View key={group.title} style={styles.permGroup}>
-                <View style={styles.permGroupHeader}>
-                  <Ionicons name={group.icon} size={14} color={colors.gray[500]} />
-                  <Text style={styles.permGroupTitle}>{group.title}</Text>
+              <View
+                key={group.title}
+                style={[styles.permGroup, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              >
+                <View style={[styles.permGroupHeader, { borderBottomColor: palette.border.subtle }]}>
+                  <Ionicons name={group.icon} size={14} color={palette.text.secondary} />
+                  <Text style={[styles.permGroupTitle, { color: palette.text.secondary }]}>{group.title}</Text>
                 </View>
                 {group.items.map((item) => (
                   <TouchableOpacity key={item.key} style={styles.permRow} onPress={() => togglePermission(item.key)}>
                     <Ionicons
                       name={form.permissions[item.key] ? 'checkbox' : 'square-outline'}
                       size={20}
-                      color={form.permissions[item.key] ? colors.primary[600] : colors.gray[400]}
+                      color={form.permissions[item.key] ? colors.primary[600] : palette.text.tertiary}
                     />
-                    <Text style={styles.permLabel}>{item.label}</Text>
+                    <Text style={[styles.permLabel, { color: palette.text.primary }]}>{item.label}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
             ))}
           </View>
 
-          <View style={styles.formActions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-              <Text style={styles.cancelBtnText}>Отмена</Text>
+          <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+            <TouchableOpacity
+              style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+              onPress={closeModal}
+            >
+              <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={isSaving}>
               {isSaving ? (
@@ -727,7 +762,7 @@ export default function UsersScreen() {
                 style={styles.commPercentInput}
                 keyboardType="numeric"
                 placeholder="0"
-                placeholderTextColor={colors.gray[400]}
+                placeholderTextColor={palette.text.tertiary}
               />
               <Text style={styles.commPercentSign}>%</Text>
             </View>
@@ -737,8 +772,10 @@ export default function UsersScreen() {
           <View style={styles.commSection}>
             <View style={styles.commSectionHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.commSectionTitle}>Акционные товары</Text>
-                <Text style={styles.commSectionSub}>Отдельный % с прибыли для конкретных товаров</Text>
+                <Text style={[styles.commSectionTitle, { color: palette.text.primary }]}>Акционные товары</Text>
+                <Text style={[styles.commSectionSub, { color: palette.text.tertiary }]}>
+                  Отдельный % с прибыли для конкретных товаров
+                </Text>
               </View>
               <TouchableOpacity
                 style={styles.commAddBtn}
@@ -753,26 +790,31 @@ export default function UsersScreen() {
 
             {commissionItems.length === 0 ? (
               <TouchableOpacity
-                style={styles.commEmptyAdd}
+                style={[styles.commEmptyAdd, { borderColor: palette.border.subtle }]}
                 onPress={() => {
                   setProductSearchText('');
                   setShowAddProduct(true);
                 }}
               >
-                <Ionicons name="gift-outline" size={20} color={colors.gray[400]} />
-                <Text style={styles.commEmptyText}>Добавить акционный товар</Text>
+                <Ionicons name="gift-outline" size={20} color={palette.text.tertiary} />
+                <Text style={[styles.commEmptyText, { color: palette.text.tertiary }]}>
+                  Добавить акционный товар
+                </Text>
               </TouchableOpacity>
             ) : (
               commissionItems.map((item) => {
                 const profit = item.sellPrice - item.costPrice;
                 const bonus = Math.round(profit * (item.percent / 100));
                 return (
-                  <View key={item.productId} style={styles.commItem}>
+                  <View
+                    key={item.productId}
+                    style={[styles.commItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  >
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.commItemName} numberOfLines={1}>
+                      <Text style={[styles.commItemName, { color: palette.text.primary }]} numberOfLines={1}>
                         {item.productName}
                       </Text>
-                      <Text style={styles.commItemInfo}>
+                      <Text style={[styles.commItemInfo, { color: palette.text.tertiary }]}>
                         Цена: {formatMoney(item.sellPrice)} · Прибыль: {formatMoney(profit)}
                       </Text>
                     </View>
@@ -781,10 +823,17 @@ export default function UsersScreen() {
                         <TextInput
                           value={String(item.percent)}
                           onChangeText={(v) => updateCommissionPercent(item.productId, Number(v) || 0)}
-                          style={styles.commItemPercentInput}
+                          style={[
+                            styles.commItemPercentInput,
+                            {
+                              backgroundColor: palette.bg.muted,
+                              borderColor: palette.border.subtle,
+                              color: palette.text.primary,
+                            },
+                          ]}
                           keyboardType="numeric"
                         />
-                        <Text style={styles.commItemPercentSign}>%</Text>
+                        <Text style={[styles.commItemPercentSign, { color: palette.text.secondary }]}>%</Text>
                       </View>
                       <Text style={styles.commItemBonus}>+{formatMoney(bonus)}</Text>
                     </View>
@@ -801,9 +850,12 @@ export default function UsersScreen() {
           </View>
 
           {/* Save */}
-          <View style={styles.formActions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setCommissionUserId(null)}>
-              <Text style={styles.cancelBtnText}>Отмена</Text>
+          <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+            <TouchableOpacity
+              style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+              onPress={() => setCommissionUserId(null)}
+            >
+              <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.submitBtn}
@@ -824,19 +876,31 @@ export default function UsersScreen() {
           <TextInput
             value={productSearchText}
             onChangeText={setProductSearchText}
-            style={[styles.formInput, { marginBottom: spacing[3] }]}
+            style={[
+              styles.formInput,
+              {
+                marginBottom: spacing[3],
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
             placeholder="Поиск товара..."
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             autoFocus
           />
           <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
             {filteredProducts.map((p) => (
-              <TouchableOpacity key={p.id} style={styles.productPickerItem} onPress={() => addCommissionProduct(p)}>
+              <TouchableOpacity
+                key={p.id}
+                style={[styles.productPickerItem, { borderBottomColor: palette.border.subtle }]}
+                onPress={() => addCommissionProduct(p)}
+              >
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.productPickerName} numberOfLines={1}>
+                  <Text style={[styles.productPickerName, { color: palette.text.primary }]} numberOfLines={1}>
                     {p.name}
                   </Text>
-                  <Text style={styles.productPickerPrice}>
+                  <Text style={[styles.productPickerPrice, { color: palette.text.tertiary }]}>
                     {formatMoney(p.sellPrice)} · Прибыль: {formatMoney(p.sellPrice - p.costPrice)}
                   </Text>
                 </View>

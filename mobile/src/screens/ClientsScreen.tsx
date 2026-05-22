@@ -28,6 +28,7 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
+import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Client, PaginatedResponse } from '../../../shared/types';
@@ -117,7 +118,7 @@ export default function ClientsScreen() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const { data, isLoading } = useQuery<PaginatedResponse<Client>>({
+  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<PaginatedResponse<Client>>({
     queryKey: ['clients', { search, page, limit }],
     queryFn: async () => {
       const res = await clientsApi.getAll({ search, page, limit });
@@ -351,6 +352,22 @@ export default function ClientsScreen() {
   // while parent state (modals, dialog flags) churns above it.
   const displayClients = useMemo(() => (!search ? [retailBuyer, ...clients] : clients), [search, retailBuyer, clients]);
 
+  // Prefetch-on-tap — fires on `onPressIn` so by the time
+  // ClientDetailScreen mounts, `['client', id]` is in cache (or in flight).
+  // Skip the synthetic retail-buyer row — ClientDetail handles `__retail__`
+  // as a virtual entity (no GET /clients/__retail__).
+  const prefetchClientDetail = useCallback(
+    (clientId: string) => {
+      if (clientId === '__retail__') return;
+      queryClient.prefetchQuery({
+        queryKey: ['client', clientId],
+        queryFn: async () => (await clientsApi.getById(clientId)).data,
+        staleTime: 60_000,
+      });
+    },
+    [queryClient],
+  );
+
   // Cars FlashList data — same retail-buyer pin treatment. Inline
   // `[{ id: '__retail__' }, ...carsList]` re-created on every render
   // caused the whole virtualised list to re-key its rows.
@@ -397,6 +414,7 @@ export default function ClientsScreen() {
           style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
           activeOpacity={0.6}
           onPress={() => navigation.navigate('ClientDetail', { id: item.id })}
+          onPressIn={() => prefetchClientDetail(item.id)}
         >
           <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
             <Text style={styles.avatarInitials}>{initials}</Text>
@@ -451,7 +469,7 @@ export default function ClientsScreen() {
       // depend on the things that actually flow into row visuals.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [canDelete, navigation, palette],
+    [canDelete, navigation, palette, prefetchClientDetail],
   );
 
   // Cars renderer — stable identity (FlashList re-renders every row
@@ -527,6 +545,12 @@ export default function ClientsScreen() {
           </TouchableOpacity>
         }
       />
+      {/* FreshnessBadge — HYBRID-perf plan. Subtle pill under the header
+          shows the user that the list rendered from cache and is now
+          revalidating in the background. */}
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+      </View>
 
       {/* Авто ⇄ Клиенты — single screen with an in-place segmented control.
           Tapping a tab swaps which list is rendered below; no navigation,
@@ -883,6 +907,12 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: spacing[4] },
+  // FreshnessBadge slot — sits below the header, right-aligned.
+  freshnessRow: {
+    paddingHorizontal: spacing[4],
+    alignItems: 'flex-end',
+    minHeight: 14,
+  },
   list: { paddingHorizontal: 0, paddingBottom: spacing[8] },
 
   // ── iOS Contacts-style dense row ──

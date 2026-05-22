@@ -24,6 +24,7 @@ import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Supplier } from '../../../shared/types';
@@ -50,6 +51,11 @@ interface SupplierRowProps {
   index: number;
   canDelete: boolean;
   onPress: (id: string) => void;
+  /**
+   * Fires on `onPressIn` so the detail prefetch lands BEFORE the
+   * navigation push. Stable identity from useCallback in the parent.
+   */
+  onPressInRow: (id: string) => void;
   onEdit: (s: Supplier) => void;
   onDelete: (s: Supplier) => void;
   /** Theme palette tokens — passed in so memoised row reads dark/light
@@ -66,6 +72,7 @@ const SupplierRow = React.memo(function SupplierRow({
   index,
   canDelete,
   onPress,
+  onPressInRow,
   onEdit,
   onDelete,
   cardBg,
@@ -87,6 +94,7 @@ const SupplierRow = React.memo(function SupplierRow({
       style={[styles.card, { backgroundColor: cardBg, borderBottomColor: separatorColor }]}
       index={index}
       onPress={() => onPress(item.id)}
+      onPressIn={() => onPressInRow(item.id)}
     >
       <View style={styles.row}>
         <View
@@ -191,7 +199,12 @@ export default function SuppliersScreen() {
   const [contactPerson, setContactPerson] = useState('');
   const [comment, setComment] = useState('');
 
-  const { data: suppliersRaw, isLoading } = useQuery<Supplier[] | { data: Supplier[] }>({
+  const {
+    data: suppliersRaw,
+    isLoading,
+    isFetching,
+    dataUpdatedAt,
+  } = useQuery<Supplier[] | { data: Supplier[] }>({
     queryKey: ['suppliers', search],
     queryFn: async () => {
       const res = await suppliersApi.getAll({ search });
@@ -308,6 +321,20 @@ export default function SuppliersScreen() {
   const handlePressSupplier = useCallback((id: string) => navigation.navigate('SupplierDetail', { id }), [navigation]);
   const handleDeleteSupplier = useCallback((s: Supplier) => setPendingDelete(s), []);
 
+  // Prefetch-on-tap — by the time SupplierDetailScreen mounts, the
+  // canonical query is already in flight (often resolved). Fires from
+  // the row's `onPressIn`, BEFORE the navigation push.
+  const handlePressInSupplier = useCallback(
+    (id: string) => {
+      queryClient.prefetchQuery({
+        queryKey: ['supplier', id],
+        queryFn: async () => (await suppliersApi.getById(id)).data,
+        staleTime: 60_000,
+      });
+    },
+    [queryClient],
+  );
+
   const renderSupplier = useCallback(
     ({ item, index }: { item: Supplier; index: number }) => (
       <SupplierRow
@@ -315,6 +342,7 @@ export default function SuppliersScreen() {
         index={index}
         canDelete={canDelete}
         onPress={handlePressSupplier}
+        onPressInRow={handlePressInSupplier}
         onEdit={openEdit}
         onDelete={handleDeleteSupplier}
         cardBg={palette.bg.card}
@@ -328,6 +356,7 @@ export default function SuppliersScreen() {
     [
       canDelete,
       handlePressSupplier,
+      handlePressInSupplier,
       openEdit,
       handleDeleteSupplier,
       palette.bg.card,
@@ -349,6 +378,12 @@ export default function SuppliersScreen() {
           </TouchableOpacity>
         }
       />
+      {/* FreshnessBadge — HYBRID-perf plan. Tiny pulsing label that
+          reassures the owner this list rendered from cache and is being
+          revalidated, not "stuck". */}
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+      </View>
 
       <View style={styles.searchWrap}>
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск поставщика..." />
@@ -370,7 +405,8 @@ export default function SuppliersScreen() {
           data={suppliers}
           keyExtractor={(i) => i.id}
           renderItem={renderSupplier}
-          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+          contentContainerStyle={styles.list}
+          contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           removeClippedSubviews
           refreshControl={
@@ -494,6 +530,12 @@ const styles = StyleSheet.create({
   },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: spacing[4] },
+  // FreshnessBadge slot — sits below the header, right-aligned.
+  freshnessRow: {
+    paddingHorizontal: spacing[4],
+    alignItems: 'flex-end',
+    minHeight: 14,
+  },
   // iOS-grouped plain list — same look as warehouse rows.
   list: { paddingHorizontal: 0, paddingBottom: 120, paddingTop: 0 },
   card: {

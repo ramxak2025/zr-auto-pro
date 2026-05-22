@@ -24,10 +24,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { usersApi, scheduleApi, checksApi } from '../api/services';
+import { usersApi, scheduleApi, checksApi, employeesApi } from '../api/services';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
+import FreshnessBadge from '../components/FreshnessBadge';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -110,6 +111,8 @@ interface EmployeeRowProps {
   todayChecks?: number;
   showFinancials: boolean;
   onPress: (id: string) => void;
+  /** onPressIn — fires the detail prefetch BEFORE the navigation push. */
+  onPressIn: (id: string) => void;
   palette: ReturnType<typeof useColors>;
 }
 const EmployeeRow = React.memo(function EmployeeRow({
@@ -120,6 +123,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
   todayChecks,
   showFinancials,
   onPress,
+  onPressIn,
   palette,
 }: EmployeeRowProps) {
   const role = ROLE_BADGE[user.role] || ROLE_BADGE.master;
@@ -133,6 +137,7 @@ const EmployeeRow = React.memo(function EmployeeRow({
       index={index}
       style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       onPress={() => onPress(user.id)}
+      onPressIn={() => onPressIn(user.id)}
     >
       <View style={styles.rowMain}>
         <LinearGradient colors={avatarColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.avatar}>
@@ -189,7 +194,7 @@ export default function EmployeesScreen() {
   const showFinancials =
     me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin' || hasPermission('profit_view');
 
-  const { data: users, isLoading } = useQuery<User[]>({
+  const { data: users, isLoading, isFetching, dataUpdatedAt } = useQuery<User[]>({
     queryKey: ['users-all'],
     queryFn: async () => {
       const res = await usersApi.getAll();
@@ -281,6 +286,20 @@ export default function EmployeesScreen() {
 
   const onOpen = useCallback((id: string) => navigation.navigate('EmployeeDetail', { id }), [navigation]);
 
+  // Prefetch-on-tap — fires on `onPressIn` so the canonical
+  // `['employee-full-profile', id]` query is already resolving by the
+  // time EmployeeDetailScreen mounts.
+  const onPressInRow = useCallback(
+    (id: string) => {
+      queryClient.prefetchQuery({
+        queryKey: ['employee-full-profile', id],
+        queryFn: async () => (await employeesApi.fullProfile(id)).data,
+        staleTime: 60_000,
+      });
+    },
+    [queryClient],
+  );
+
   // Memoised "on smena" counter — running filter+length on every render
   // was negligible, but the result feeds the header subtitle and we get
   // a tidier deps graph for free.
@@ -315,11 +334,12 @@ export default function EmployeesScreen() {
           todayRevenue={r?.revenue}
           showFinancials={showFinancials}
           onPress={onOpen}
+          onPressIn={onPressInRow}
           palette={palette}
         />
       );
     },
-    [rankingMap, todayMap, showFinancials, onOpen, palette],
+    [rankingMap, todayMap, showFinancials, onOpen, onPressInRow, palette],
   );
 
   return (
@@ -329,6 +349,10 @@ export default function EmployeesScreen() {
         subtitle={users === undefined ? undefined : `На смене: ${onSmena} из ${sortedUsers.length}`}
         onBack={() => navigation.goBack()}
       />
+      {/* FreshnessBadge — HYBRID-perf plan. Driven by the users-all query. */}
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+      </View>
 
       {users === undefined ? (
         <ListSkeleton count={6} />
@@ -339,6 +363,7 @@ export default function EmployeesScreen() {
           data={sortedUsers}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
+          // FlashList v2 auto-measures rows; no estimatedItemSize.
           contentContainerStyle={[
             styles.list,
             // Android: contentInset ignored; ensure the list clears
@@ -360,6 +385,12 @@ export default function EmployeesScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   list: { paddingHorizontal: spacing[4], paddingTop: spacing[3], paddingBottom: spacing[8] },
+  // FreshnessBadge slot — right-aligned below the header.
+  freshnessRow: {
+    paddingHorizontal: spacing[4],
+    alignItems: 'flex-end',
+    minHeight: 14,
+  },
 
   row: {
     backgroundColor: colors.white,

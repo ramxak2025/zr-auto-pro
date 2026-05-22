@@ -37,6 +37,7 @@ import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
+import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Product, PaginatedResponse, StockMovement, Warehouse } from '../../../shared/types';
@@ -356,7 +357,12 @@ export default function ProductsScreen() {
   // Warehouses list — server returns the 3 fixed rows (main / defect /
   // used). Persisted (PERSISTED_KEYS contains 'warehouses') so the
   // switcher opens instantly on cold start.
-  const { data: warehouses } = useQuery<Warehouse[]>({
+  const {
+    data: warehouses,
+    isFetching: whIsFetching,
+    isLoading: whIsLoading,
+    dataUpdatedAt: whDataUpdatedAt,
+  } = useQuery<Warehouse[]>({
     queryKey: ['warehouses'],
     queryFn: async () => (await warehousesApi.list()).data,
     staleTime: 10 * 60_000,
@@ -378,7 +384,7 @@ export default function ProductsScreen() {
   const activeWarehouseId = activeWarehouse?.id;
   const isMainWarehouse = activeWarehouse?.kind === 'main';
 
-  const { data, isLoading } = useQuery<PaginatedResponse<Product>>({
+  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<PaginatedResponse<Product>>({
     // Include warehouseId in the key so each warehouse owns its own
     // cache slot — switching tabs is instant via `placeholderData` while
     // the new slot's fresh data arrives in the background.
@@ -478,6 +484,12 @@ export default function ProductsScreen() {
       ),
   });
 
+  // Optimistic stock update \u2014 applies the new value to every cached
+  // products list immediately, so the row in the warehouse jumps to its
+  // new number before the network round-trip completes. The server
+  // response is the source of truth: invalidation in `onSettled`
+  // overwrites any drift between optimistic delta and actual stockAfter
+  // (e.g. parallel sale on another device).
   const stockMutation = useMutation({
     mutationFn: ({
       id,
@@ -486,15 +498,40 @@ export default function ProductsScreen() {
       id: string;
       data: { type: 'income' | 'expense' | 'writeoff' | 'inventory'; quantity: number; reason?: string };
     }) => productsApi.updateStock(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['products'] });
+    onMutate: async ({ id, data }) => {
+      await queryClient.cancelQueries({ queryKey: ['products'] });
+      const prev = queryClient.getQueriesData<PaginatedResponse<Product> | undefined>({ queryKey: ['products'] });
+      // Compute the optimistic delta for the row matching `id`. Inventory
+      // sets stock absolutely; income adds; expense / writeoff subtract.
+      queryClient.setQueriesData<PaginatedResponse<Product> | undefined>({ queryKey: ['products'] }, (old) => {
+        if (!old?.data) return old;
+        return {
+          ...old,
+          data: old.data.map((p) => {
+            if (p.id !== id) return p;
+            const next =
+              data.type === 'inventory'
+                ? data.quantity
+                : data.type === 'income'
+                  ? p.stock + data.quantity
+                  : p.stock - data.quantity;
+            return { ...p, stock: Math.max(0, next) };
+          }),
+        };
+      });
+      return { prev };
     },
-    onError: (err: any) =>
+    onError: (err: any, _vars, ctx) => {
+      ctx?.prev.forEach(([key, val]) => queryClient.setQueryData(key, val));
       Alert.alert(
         '\u041E\u0448\u0438\u0431\u043A\u0430',
         err?.response?.data?.message ||
           '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438 \u043E\u0441\u0442\u0430\u0442\u043A\u0430',
-      ),
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+    },
   });
 
   // Удаление/переименование папок и реордер на iOS отключены iter#12 —
@@ -1376,6 +1413,18 @@ export default function ProductsScreen() {
           </View>
         }
       />
+      {/* FreshnessBadge \u2014 HYBRID-perf plan. Pinned just under the header,
+          driven by the products + warehouses queries. Hidden when there
+          is no data yet (cold cache miss + first fetch) so we don't
+          stack a pulsing pill on top of the skeleton. */}
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge
+          queries={[
+            { isFetching, isLoading, dataUpdatedAt },
+            { isFetching: whIsFetching, isLoading: whIsLoading, dataUpdatedAt: whDataUpdatedAt },
+          ]}
+        />
+      </View>
       {/* Title-tap zone \u2014 owner spec: tapping the word "\u0421\u043A\u043B\u0430\u0434" itself
           opens the switcher. The IosScreenHeader doesn't expose a
           title-press hook, so we overlay an invisible Pressable that
@@ -1476,6 +1525,7 @@ export default function ProductsScreen() {
         <FlashList
           data={currentProducts}
           keyExtractor={productKey}
+          // FlashList v2 auto-measures rows; no estimatedItemSize prop.
           // Memoised module-level component renders the row; the
           // wrapper here is only a closure that wires per-screen state
           // (search, permissions, photo lightbox setter). React.memo on
@@ -2630,6 +2680,12 @@ const styles = StyleSheet.create({
   breadcrumbText: { fontSize: fontSize.xs, color: colors.primary[600], fontWeight: fontWeight.medium },
   breadcrumbTextActive: { color: colors.gray[900], fontWeight: fontWeight.bold },
   searchWrap: { paddingHorizontal: spacing[4] },
+  // FreshnessBadge slot — right-aligned, sits just below the header.
+  freshnessRow: {
+    paddingHorizontal: spacing[4],
+    alignItems: 'flex-end',
+    minHeight: 14,
+  },
   // iOS-grouped list: rows are flush — no gap, no horizontal padding (rows
   // own their gutter). The list itself sits on a slightly grey background
   // with a top hairline that meets the search bar.

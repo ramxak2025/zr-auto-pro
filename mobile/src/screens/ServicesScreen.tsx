@@ -253,7 +253,7 @@ export default function ServicesScreen() {
           </TouchableOpacity>
           {activePath.map((seg, i) => (
             <React.Fragment key={i}>
-              <Ionicons name="chevron-forward" size={12} color={colors.gray[300]} />
+              <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
               <TouchableOpacity
                 onPress={() => setActivePath((prev) => prev.slice(0, i + 1))}
                 style={styles.breadcrumbItem}
@@ -261,7 +261,8 @@ export default function ServicesScreen() {
                 <Text
                   style={[
                     styles.breadcrumbText,
-                    i === activePath.length - 1 && { color: colors.gray[900], fontWeight: '700' },
+                    { color: palette.text.secondary },
+                    i === activePath.length - 1 && { color: palette.text.primary, fontWeight: '700' },
                   ]}
                 >
                   {seg}
@@ -300,7 +301,9 @@ export default function ServicesScreen() {
           data={currentServices}
           keyExtractor={(item) => item.id}
           renderItem={renderService}
-          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+          contentContainerStyle={styles.list}
+          contentInset={{ bottom: tabBarHeight }}
+          scrollIndicatorInsets={{ bottom: tabBarHeight }}
           removeClippedSubviews
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />

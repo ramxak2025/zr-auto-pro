@@ -275,6 +275,15 @@ export default function ProductPickerModal({
   // warehouse (main / brak / used) has its own cache slot. Without the
   // warehouse filter we keep the legacy `['all-products-check']` key so the
   // login-time prefetch remains a hit.
+  // CRITICAL screen — the product picker MUST show fresh stock, not the
+  // cached snapshot. Picking products with stale `stock` numbers leads to
+  // the worst possible UX: ringing up an order with what the warehouse
+  // doesn't have. So we:
+  //   • disable `placeholderData` here (override the global SWR default);
+  //   • force `refetchOnMount: 'always'` so every picker open re-fetches.
+  // The login-time prefetch still warms the cache so the first frame
+  // shows something instead of an empty list, but the fresh data lands
+  // within ~150 ms and replaces it. See HYBRID-perf plan, part 3.
   const { data: allProducts, isLoading } = useQuery<Product[]>({
     queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
     queryFn: async () => {
@@ -284,8 +293,11 @@ export default function ProductPickerModal({
       return (res.data?.data || res.data) as Product[];
     },
     enabled: visible,
-    placeholderData: (prev) => prev,
-    staleTime: 5 * 60_000,
+    // No `placeholderData` — we want the user to see fresh stock numbers,
+    // not a stale snapshot, in the picker.
+    placeholderData: undefined,
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
 
   const { sortedProductFolders, visibleProducts } = useMemo(() => {

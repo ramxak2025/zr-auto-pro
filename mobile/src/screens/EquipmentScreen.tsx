@@ -126,16 +126,21 @@ function CenteredDialog({
   danger,
   children,
 }: CenteredDialogProps) {
+  const palette = useColors();
   return (
     <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       {/* The scrim is itself pressable: tap-outside-to-close. The inner card
           stops propagation so taps on it never close the dialog. */}
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={dialogStyles.kavRoot}>
         <TouchableOpacity activeOpacity={1} style={dialogStyles.scrim} onPress={onClose}>
-          <TouchableOpacity activeOpacity={1} style={dialogStyles.card} onPress={() => {}}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={[dialogStyles.card, { backgroundColor: palette.bg.elevated }]}
+            onPress={() => {}}
+          >
             <View style={dialogStyles.header}>
               <View style={dialogStyles.headerSpacer} />
-              <Text style={dialogStyles.headerTitle} numberOfLines={1}>
+              <Text style={[dialogStyles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
                 {title}
               </Text>
               <TouchableOpacity
@@ -143,9 +148,9 @@ function CenteredDialog({
                 hitSlop={12}
                 accessibilityRole="button"
                 accessibilityLabel="Закрыть"
-                style={dialogStyles.closeBtn}
+                style={[dialogStyles.closeBtn, { backgroundColor: palette.bg.muted }]}
               >
-                <Ionicons name="close" size={20} color={colors.gray[600]} />
+                <Ionicons name="close" size={20} color={palette.text.secondary} />
               </TouchableOpacity>
             </View>
 
@@ -159,14 +164,14 @@ function CenteredDialog({
             </ScrollView>
 
             {primaryText && (
-              <View style={dialogStyles.footer}>
+              <View style={[dialogStyles.footer, { borderTopColor: palette.border.subtle }]}>
                 {showCancel && (
                   <TouchableOpacity
                     onPress={onClose}
-                    style={[dialogStyles.btn, dialogStyles.btnSecondary]}
+                    style={[dialogStyles.btn, dialogStyles.btnSecondary, { backgroundColor: palette.bg.muted }]}
                     activeOpacity={0.85}
                   >
-                    <Text style={dialogStyles.btnSecondaryText}>Отменить</Text>
+                    <Text style={[dialogStyles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
                   </TouchableOpacity>
                 )}
                 <TouchableOpacity
@@ -628,6 +633,7 @@ function IssueModal({
   onClose: () => void;
   qc: any;
 }) {
+  const palette = useColors();
   const [name, setName] = useState('');
   const [cost, setCost] = useState('');
   const [categoryType, setCategoryType] = useState<CategoryType>('tools');
@@ -710,7 +716,7 @@ function IssueModal({
     >
       {storageItems.length > 0 && (
         <View style={{ marginBottom: spacing[3] }}>
-          <Text style={styles.fieldLabel}>Со склада (подсобки)</Text>
+          <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Со склада (подсобки)</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -719,11 +725,15 @@ function IssueModal({
             {storageItems
               .filter((s: any) => s.quantity > 0)
               .map((s: any) => (
-                <TouchableOpacity key={s.id} onPress={() => pickFromStorage(s)} style={styles.storageChip}>
-                  <Text style={styles.storageChipName} numberOfLines={1}>
+                <TouchableOpacity
+                  key={s.id}
+                  onPress={() => pickFromStorage(s)}
+                  style={[styles.storageChip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <Text style={[styles.storageChipName, { color: palette.text.primary }]} numberOfLines={1}>
                     {s.name}
                   </Text>
-                  <Text style={styles.storageChipMeta}>
+                  <Text style={[styles.storageChipMeta, { color: palette.text.tertiary }]}>
                     {formatMoney(s.purchasePrice)} · {s.quantity} шт
                   </Text>
                 </TouchableOpacity>
@@ -732,41 +742,50 @@ function IssueModal({
         </View>
       )}
 
-      <Text style={styles.fieldLabel}>Название</Text>
+      <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Название</Text>
       <TextInput
         value={name}
         onChangeText={setName}
-        style={styles.input}
+        style={[
+          styles.input,
+          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+        ]}
         placeholder="Набор ключей"
-        placeholderTextColor={colors.gray[400]}
+        placeholderTextColor={palette.text.tertiary}
       />
 
       <View style={styles.row2}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.fieldLabel}>Стоимость, ₽</Text>
+          <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Стоимость, ₽</Text>
           <TextInput
             value={cost}
             onChangeText={setCost}
-            style={styles.input}
+            style={[
+              styles.input,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="0"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             keyboardType="numeric"
           />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.fieldLabel}>Срок, мес.</Text>
+          <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Срок, мес.</Text>
           <TextInput
             value={serviceLife}
             onChangeText={setServiceLife}
-            style={styles.input}
+            style={[
+              styles.input,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="12"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             keyboardType="numeric"
           />
         </View>
       </View>
 
-      <Text style={styles.fieldLabel}>Категория</Text>
+      <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Категория</Text>
       <View style={styles.catRow}>
         {(
           [
@@ -781,21 +800,37 @@ function IssueModal({
               haptic('select');
               setCategoryType(ct.k);
             }}
-            style={[styles.catBtn, categoryType === ct.k && styles.catBtnActive]}
+            style={[
+              styles.catBtn,
+              { backgroundColor: palette.bg.muted },
+              categoryType === ct.k && styles.catBtnActive,
+            ]}
           >
-            <Text style={[styles.catBtnText, categoryType === ct.k && { color: colors.primary[700] }]}>{ct.l}</Text>
+            <Text
+              style={[
+                styles.catBtnText,
+                { color: palette.text.secondary },
+                categoryType === ct.k && { color: colors.primary[700] },
+              ]}
+            >
+              {ct.l}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      <Text style={styles.fieldLabel}>Фото</Text>
-      <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn} activeOpacity={0.85}>
+      <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Фото</Text>
+      <TouchableOpacity
+        onPress={pickPhoto}
+        style={[styles.photoPickBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        activeOpacity={0.85}
+      >
         {photo ? (
           <CachedImage source={{ uri: photo }} style={styles.photoPickImg} />
         ) : (
           <>
-            <Ionicons name="camera-outline" size={22} color={colors.gray[400]} />
-            <Text style={styles.photoPickHint}>Выбрать</Text>
+            <Ionicons name="camera-outline" size={22} color={palette.text.tertiary} />
+            <Text style={[styles.photoPickHint, { color: palette.text.tertiary }]}>Выбрать</Text>
           </>
         )}
       </TouchableOpacity>
@@ -806,6 +841,7 @@ function IssueModal({
 // ─── Create-folder dialog (Storage root FAB) ───────────────────────────────
 function CreateFolderDialog({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const qc = useQueryClient();
+  const palette = useColors();
   const [name, setName] = useState('');
 
   const createMut = useMutation({
@@ -841,13 +877,16 @@ function CreateFolderDialog({ visible, onClose }: { visible: boolean; onClose: (
       onPrimaryPress={submit}
       showCancel
     >
-      <Text style={styles.fieldLabel}>Название</Text>
+      <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Название</Text>
       <TextInput
         value={name}
         onChangeText={setName}
-        style={styles.input}
+        style={[
+          styles.input,
+          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+        ]}
         placeholder="Инструменты"
-        placeholderTextColor={colors.gray[400]}
+        placeholderTextColor={palette.text.tertiary}
         autoFocus
         returnKeyType="done"
         onSubmitEditing={submit}
@@ -867,6 +906,7 @@ function CreateStorageItemDialog({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const palette = useColors();
   const [name, setName] = useState('');
   const [purchasePrice, setPurchasePrice] = useState('');
   const [quantity, setQuantity] = useState('1');
@@ -940,35 +980,44 @@ function CreateStorageItemDialog({
       onPrimaryPress={submit}
       showCancel
     >
-      <Text style={styles.fieldLabel}>Название</Text>
+      <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Название</Text>
       <TextInput
         value={name}
         onChangeText={setName}
-        style={styles.input}
+        style={[
+          styles.input,
+          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+        ]}
         placeholder="Набор ключей"
-        placeholderTextColor={colors.gray[400]}
+        placeholderTextColor={palette.text.tertiary}
       />
 
       <View style={styles.row2}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.fieldLabel}>Цена, ₽</Text>
+          <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Цена, ₽</Text>
           <TextInput
             value={purchasePrice}
             onChangeText={setPurchasePrice}
-            style={styles.input}
+            style={[
+              styles.input,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="0"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             keyboardType="numeric"
           />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.fieldLabel}>Срок, мес.</Text>
+          <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Срок, мес.</Text>
           <TextInput
             value={serviceLife}
             onChangeText={setServiceLife}
-            style={styles.input}
+            style={[
+              styles.input,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="12"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             keyboardType="numeric"
           />
         </View>
@@ -976,36 +1025,46 @@ function CreateStorageItemDialog({
 
       <View style={styles.row2}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.fieldLabel}>Количество</Text>
+          <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Количество</Text>
           <TextInput
             value={quantity}
             onChangeText={setQuantity}
-            style={styles.input}
+            style={[
+              styles.input,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="1"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             keyboardType="numeric"
           />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.fieldLabel}>Единица</Text>
+          <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Единица</Text>
           <TextInput
             value={unit}
             onChangeText={setUnit}
-            style={styles.input}
+            style={[
+              styles.input,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
             placeholder="шт"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
       </View>
 
-      <Text style={styles.fieldLabel}>Фото</Text>
-      <TouchableOpacity onPress={pickPhoto} style={styles.photoPickBtn} activeOpacity={0.85}>
+      <Text style={[styles.fieldLabel, { color: palette.text.secondary }]}>Фото</Text>
+      <TouchableOpacity
+        onPress={pickPhoto}
+        style={[styles.photoPickBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        activeOpacity={0.85}
+      >
         {photo ? (
           <CachedImage source={{ uri: photo }} style={styles.photoPickImg} />
         ) : (
           <>
-            <Ionicons name="camera-outline" size={22} color={colors.gray[400]} />
-            <Text style={styles.photoPickHint}>Выбрать</Text>
+            <Ionicons name="camera-outline" size={22} color={palette.text.tertiary} />
+            <Text style={[styles.photoPickHint, { color: palette.text.tertiary }]}>Выбрать</Text>
           </>
         )}
       </TouchableOpacity>

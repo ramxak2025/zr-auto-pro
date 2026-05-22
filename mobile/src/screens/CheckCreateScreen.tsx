@@ -477,12 +477,12 @@ export default function CheckCreateScreen() {
     enabled: showServicePicker,
   });
 
-  // Products picker query — shares the cache key warmed by
-  // AuthContext.prefetchAfterLogin so the FIRST open of the picker
-  // shows the list instantly. `placeholderData` (global QueryClient
-  // default + explicit override here for safety) keeps the previous
-  // list visible while a stale-revalidate runs in the background —
-  // no flash of empty.
+  // Products picker query — CRITICAL screen. Stock numbers must NEVER
+  // be stale here: picking a product is the moment the user commits to
+  // "this is in the warehouse". A cached snapshot showing 5 items when
+  // we actually have 0 ends with a ring-out that can't be fulfilled.
+  // HYBRID-perf plan, part 3: override the global `placeholderData:
+  // prev => prev` and force a fresh fetch on every mount.
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: ['all-products-check'],
     queryFn: async () => {
@@ -490,8 +490,9 @@ export default function CheckCreateScreen() {
       return res.data.data || res.data;
     },
     enabled: showProductPicker,
-    placeholderData: (prev) => prev,
-    staleTime: 5 * 60_000,
+    placeholderData: undefined,
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
 
   // Warehouses for the in-cash picker switcher. Cached separately —
@@ -1510,7 +1511,10 @@ export default function CheckCreateScreen() {
                         source={{ uri: photo.photoUrl }}
                         style={styles.photoThumbImg}
                         contentFit="cover"
-                        transition={150}
+                        transition={200}
+                        placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
+                        placeholderContentFit="cover"
+                        cachePolicy="memory-disk"
                       />
                     </TouchableOpacity>
                   ))}
@@ -1527,7 +1531,10 @@ export default function CheckCreateScreen() {
                         source={{ uri }}
                         style={styles.photoThumbImg}
                         contentFit="cover"
-                        transition={120}
+                        transition={200}
+                        placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
+                        placeholderContentFit="cover"
+                        cachePolicy="memory-disk"
                       />
                       {uploadingUris.has(uri) && (
                         <View style={styles.photoUploadOverlay}>

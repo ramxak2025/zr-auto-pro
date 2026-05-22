@@ -239,6 +239,8 @@ interface MenuRowProps {
   labelColor: string;
   descColor: string;
   separatorColor: string;
+  /** Tertiary tone for chevron / lock — theme-aware. */
+  iconMutedColor: string;
 }
 
 const MenuRow = React.memo(function MenuRow({
@@ -249,15 +251,16 @@ const MenuRow = React.memo(function MenuRow({
   labelColor,
   descColor,
   separatorColor,
+  iconMutedColor,
 }: MenuRowProps) {
   return (
     <>
       <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.55}>
         <View style={[styles.menuIcon, { backgroundColor: item.iconBg }]}>
-          <Ionicons name={item.icon} size={20} color={locked ? colors.gray[400] : item.iconColor} />
+          <Ionicons name={item.icon} size={20} color={locked ? iconMutedColor : item.iconColor} />
         </View>
         <View style={styles.menuTextWrap}>
-          <Text style={[styles.menuLabel, { color: locked ? colors.gray[400] : labelColor }]} numberOfLines={1}>
+          <Text style={[styles.menuLabel, { color: locked ? iconMutedColor : labelColor }]} numberOfLines={1}>
             {item.label}
           </Text>
           <Text style={[styles.menuDesc, { color: descColor }]} numberOfLines={1}>
@@ -265,9 +268,9 @@ const MenuRow = React.memo(function MenuRow({
           </Text>
         </View>
         {locked ? (
-          <Ionicons name="lock-closed" size={14} color={colors.gray[300]} />
+          <Ionicons name="lock-closed" size={14} color={iconMutedColor} />
         ) : (
-          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+          <Ionicons name="chevron-forward" size={16} color={iconMutedColor} />
         )}
       </TouchableOpacity>
       {showDivider && <View style={[styles.separator, { backgroundColor: separatorColor }]} />}
@@ -430,6 +433,7 @@ export default function MoreScreen() {
                     labelColor={palette.text.primary}
                     descColor={palette.text.secondary}
                     separatorColor={palette.border.subtle}
+                    iconMutedColor={palette.text.tertiary}
                   />
                 ))}
               </View>

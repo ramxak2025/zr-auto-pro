@@ -111,6 +111,34 @@ const PERSISTED_KEYS = [
   // "month" snapshot keeps the screen instant on cold start.
   'expenses',
   'expense-categories',
+  // ── HYBRID-cache expansion (2026-05-23) ────────────────────────
+  // Owner picked HYBRID: critical screens fetch fresh, everything
+  // else renders persistent cache then shows the FreshnessBadge.
+  // First-segment matching means each entry below covers EVERY
+  // sub-variant (date params, filters, etc.). Search-volatile
+  // variants are filtered by `isSearchVolatile`.
+  //
+  // 'clients', 'suppliers', 'cars', 'schedule', 'equipment' (via
+  // 'eq-*'), 'marketing-dashboard', 'expenses' — already covered
+  // above. Entries below close the remaining gaps.
+  //
+  // CallsScreen reads ['calls', dateStr] — small per-day payload.
+  'calls',
+  // ReportsScreen reads ['defect-writeoff-report', from, to] +
+  // 'financial-report' (already above). Owner returns to the same
+  // default month often.
+  'defect-writeoff-report',
+  // MarketingScreen — reviews / integrations / platform links /
+  // settings / reminder-settings. All small reference payloads.
+  'marketing-reviews',
+  'marketing-integrations',
+  'marketing-platform-links',
+  'marketing-settings',
+  'reminder-settings',
+  // EquipmentScreen — trash and categories under 'eq-' family.
+  'eq-trash',
+  'eq-cats',
+  'eq-storage',
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];

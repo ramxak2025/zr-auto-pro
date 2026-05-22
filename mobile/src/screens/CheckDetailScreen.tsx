@@ -122,6 +122,13 @@ export default function CheckDetailScreen() {
       const res = await checksApi.getById(id);
       return res.data;
     },
+    // CRITICAL screen for an ACTIVE check — payment status must
+    // never be stale. Refetch on every mount so the owner can never
+    // mark a check as "paid" twice while looking at last week's
+    // cached payment row. The list-payload placeholder below still
+    // gives an instant visual transition from journal → detail, but
+    // the canonical query refetches in the background.
+    refetchOnMount: 'always',
     staleTime: 30_000,
     placeholderData: (prev) => {
       if (prev) return prev;
@@ -886,7 +893,15 @@ export default function CheckDetailScreen() {
                     delayLongPress={500}
                     activeOpacity={0.85}
                   >
-                    <Image source={{ uri: photo.photoUrl }} style={styles.photoThumb} contentFit="cover" />
+                    <Image
+                      source={{ uri: photo.photoUrl }}
+                      style={styles.photoThumb}
+                      contentFit="cover"
+                      transition={200}
+                      placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
+                      placeholderContentFit="cover"
+                      cachePolicy="memory-disk"
+                    />
                   </TouchableOpacity>
                 ))}
               </ScrollView>

@@ -182,8 +182,8 @@ function OverviewTab({ stats, tenants, plans }: { stats?: PlatformStats; tenants
         </View>
         {tenants.length === 0 ? (
           <View style={styles.emptyState}>
-            <Ionicons name="business-outline" size={40} color={colors.gray[300]} />
-            <Text style={styles.emptyText}>Нет клиентов</Text>
+            <Ionicons name="business-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Нет клиентов</Text>
           </View>
         ) : (
           tenants
@@ -298,7 +298,7 @@ function TenantDetailCard({
         <Ionicons
           name={expanded ? 'chevron-up' : 'chevron-down'}
           size={18}
-          color={colors.gray[400]}
+          color={palette.text.tertiary}
           style={{ marginLeft: spacing[2] }}
         />
       </TouchableOpacity>

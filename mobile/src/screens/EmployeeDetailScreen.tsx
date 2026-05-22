@@ -686,7 +686,15 @@ function Hero({
 function PhotoCircle({ url, size }: { url: string; size: number }) {
   return (
     <View style={{ width: size, height: size, borderRadius: size / 2, overflow: 'hidden' }}>
-      <ExpoImage source={{ uri: url }} style={{ width: size, height: size }} contentFit="cover" />
+      <ExpoImage
+        source={{ uri: url }}
+        style={{ width: size, height: size }}
+        contentFit="cover"
+        transition={200}
+        placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
+        placeholderContentFit="cover"
+        cachePolicy="memory-disk"
+      />
     </View>
   );
 }

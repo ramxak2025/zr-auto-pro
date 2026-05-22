@@ -21,6 +21,7 @@ import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Check, PaginatedResponse, User, StockMovement, Delivery } from '../../../shared/types';
 
@@ -144,6 +145,13 @@ interface CheckRowProps {
   canDelete: boolean;
   canViewProfit: boolean;
   onOpen: (checkId: string) => void;
+  /**
+   * Fires on `onPressIn` — kicks off the detail prefetch BEFORE the
+   * navigation push happens. By the time the CheckDetailScreen mounts,
+   * the canonical `['check', id]` query is already resolved (or at
+   * least in-flight). Net: detail view paints instantly on iPhone.
+   */
+  onPressIn: (checkId: string) => void;
   onDelete: (checkId: string, checkNumber: number) => void;
   palette: SemanticPalette;
 }
@@ -154,6 +162,7 @@ const CheckRow = React.memo(function CheckRow({
   canDelete,
   canViewProfit,
   onOpen,
+  onPressIn,
   onDelete,
   palette,
 }: CheckRowProps) {
@@ -187,6 +196,7 @@ const CheckRow = React.memo(function CheckRow({
           check.isDeferred && styles.checkCardDeferred,
         ]}
         onPress={() => onOpen(check.id)}
+        onPressIn={() => onPressIn(check.id)}
         activeOpacity={0.7}
       >
         <View
@@ -459,6 +469,8 @@ export default function ChecksScreen() {
   const {
     data: checksData,
     isLoading,
+    isFetching,
+    dataUpdatedAt,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
@@ -537,18 +549,52 @@ export default function ChecksScreen() {
     return docs;
   }, [movementsData, deliveriesData]);
 
+  // Optimistic delete — UX feels instant because the row disappears
+  // BEFORE the server confirms. The rollback path restores the cache
+  // snapshot if the network rejects (rare, but possible: 403 on a
+  // permission downgrade, 404 if someone else already deleted, etc.).
   const deleteMutation = useMutation({
     mutationFn: (id: string) => checksApi.remove(id),
-    onSuccess: () => {
-      // Cover both the legacy `['checks', ...]` key (used by paginated
-      // queries elsewhere — Reports / Salary etc.) and the new infinite
-      // key the journal owns. invalidateQueries with a prefix invalidates
-      // any longer key that starts with it, so this is intentional.
+    onMutate: async (id: string) => {
+      // Cancel anything in-flight against this list — otherwise the
+      // refetch lands after our local mutation and resurrects the row.
+      await queryClient.cancelQueries({ queryKey: ['checks-infinite'] });
+      const prev = queryClient.getQueriesData<{ pages?: { data?: Check[]; total?: number }[] }>({
+        queryKey: ['checks-infinite'],
+      });
+      // Eager remove across every page-set variant currently in cache.
+      // Each `data.pages[*].data[*]` is the flat per-page array.
+      queryClient.setQueriesData<{ pages?: { data?: Check[]; total?: number }[] } | undefined>(
+        { queryKey: ['checks-infinite'] },
+        (old) => {
+          if (!old?.pages) return old;
+          return {
+            ...old,
+            pages: old.pages.map((p) => ({
+              ...p,
+              data: (p?.data ?? []).filter((c) => c.id !== id),
+              total: (p?.total ?? 0) - ((p?.data ?? []).some((c) => c.id === id) ? 1 : 0),
+            })),
+          };
+        },
+      );
+      return { prev };
+    },
+    onError: (err: any, _id, ctx) => {
+      // Restore every variant we snapshotted in onMutate.
+      ctx?.prev.forEach(([key, val]) => queryClient.setQueryData(key, val));
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить');
+    },
+    onSettled: () => {
+      // Server is authoritative once the mutation settles. Cover both
+      // the legacy `['checks', ...]` key (used by paginated queries
+      // elsewhere — Reports / Salary etc.) and the new infinite key
+      // the journal owns. invalidateQueries with a prefix invalidates
+      // any longer key that starts with it.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
-    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить'),
   });
 
   const handleDelete = useCallback(
@@ -625,6 +671,25 @@ export default function ChecksScreen() {
     [navigation],
   );
 
+  // Prefetch-on-tap — fires on `onPressIn` (before the navigation push)
+  // so the detail screen mounts with the canonical query already
+  // in-flight. CheckDetailScreen forces `refetchOnMount: 'always'`
+  // because payment status is critical, but the prefetch shaves the
+  // network round-trip off the perceived load time.
+  const prefetchCheckDetail = useCallback(
+    (checkId: string) => {
+      queryClient.prefetchQuery({
+        queryKey: ['check', checkId],
+        queryFn: async () => {
+          const res = await checksApi.getById(checkId);
+          return res.data;
+        },
+        staleTime: 30_000,
+      });
+    },
+    [queryClient],
+  );
+
   const renderCheck = useCallback(
     ({ item: check, index }: { item: Check; index: number }) => (
       <CheckRow
@@ -634,11 +699,12 @@ export default function ChecksScreen() {
         canDelete={canDelete}
         canViewProfit={canViewProfit}
         onOpen={openCheckDetail}
+        onPressIn={prefetchCheckDetail}
         onDelete={handleDelete}
         palette={palette}
       />
     ),
-    [dateHeaderByIndex, canDelete, canViewProfit, openCheckDetail, handleDelete, palette],
+    [dateHeaderByIndex, canDelete, canViewProfit, openCheckDetail, prefetchCheckDetail, handleDelete, palette],
   );
 
   const renderWarehouseDoc = useCallback(
@@ -657,6 +723,15 @@ export default function ChecksScreen() {
       {/* Header removed per owner — the screen reads as Журнал from the
           tab-bar label already, and the count duplicates info shown at
           the bottom of the list (pagination). Less chrome → more list. */}
+
+      {/* Freshness pill — HYBRID-perf plan. ChecksScreen renders from
+          persistent cache instantly on cold start, so we expose the
+          "background refresh" state to the user as a 10pt secondary pill.
+          Position: above the search row, right-aligned, no chrome unless
+          actively fetching. */}
+      <View style={styles.freshnessRow}>
+        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+      </View>
 
       {/* Search + Filter */}
       <View style={styles.searchRow}>
@@ -956,6 +1031,7 @@ export default function ChecksScreen() {
               data={checks}
               keyExtractor={(item) => item.id}
               renderItem={renderCheck}
+              // FlashList v2 auto-measures rows; no estimatedItemSize.
               contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -1199,6 +1275,13 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: fontWeight.bold,
     color: colors.primary[600],
+  },
+  // FreshnessBadge slot — right-aligned, above the search row.
+  freshnessRow: {
+    paddingHorizontal: spacing[4],
+    alignItems: 'flex-end',
+    marginBottom: spacing[1],
+    minHeight: 14,
   },
   // ── Search + Filter row ─────────────────────────────────────────
   searchRow: {

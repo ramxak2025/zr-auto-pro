@@ -38,7 +38,9 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'arrow-back': { lucide: 'ArrowLeft', solid: true },
   'arrow-forward': { lucide: 'ArrowRight', solid: true },
   'arrow-up': { lucide: 'ArrowUp', solid: true },
+  'arrow-up-outline': { lucide: 'ArrowUp' },
   'arrow-down': { lucide: 'ArrowDown', solid: true },
+  'arrow-down-outline': { lucide: 'ArrowDown' },
   'arrow-up-circle': { lucide: 'ArrowUpCircle', solid: true },
   'arrow-undo': { lucide: 'Undo2', solid: true },
   'arrow-undo-outline': { lucide: 'Undo2' },
@@ -220,4 +222,90 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // Sync / pull-to-refresh affordances rendered as text icons in some lists.
   sync: { lucide: 'RotateCw', solid: true },
   'sync-outline': { lucide: 'RotateCw' },
+
+  // ── final dark-theme audit pass (2026-05) ─────────────────────────────
+  // Icons referenced in screens but previously falling back to Circle.
+  // Barcode / catalog / equipment scanning.
+  'barcode-outline': { lucide: 'Barcode' },
+  barcode: { lucide: 'Barcode', solid: true },
+  // Bookmark / favorite.
+  'bookmark-outline': { lucide: 'Bookmark' },
+  bookmark: { lucide: 'Bookmark', solid: true, fill: true },
+  // Upload / download / cloud sync affordances.
+  'cloud-upload-outline': { lucide: 'UploadCloud' },
+  'cloud-upload': { lucide: 'UploadCloud', solid: true },
+  'download-outline': { lucide: 'Download' },
+  download: { lucide: 'Download', solid: true },
+  'cloud-download-outline': { lucide: 'DownloadCloud' },
+  // Copy / clipboard duplicate.
+  'copy-outline': { lucide: 'Copy' },
+  copy: { lucide: 'Copy', solid: true },
+  // Fire / hot indicators (popular check, hot prospect).
+  flame: { lucide: 'Flame', solid: true, fill: true },
+  'flame-outline': { lucide: 'Flame' },
+  // Hammer — used in equipment / service controls.
+  hammer: { lucide: 'Hammer', solid: true },
+  'hammer-outline': { lucide: 'Hammer' },
+  // Multi-image picker.
+  'images-outline': { lucide: 'Images' },
+  images: { lucide: 'Images', solid: true, fill: true },
+  // Repeat / loop (recurring expenses, subscriptions).
+  'repeat-outline': { lucide: 'Repeat' },
+  repeat: { lucide: 'Repeat', solid: true },
+  // Share / system share-sheet trigger.
+  'share-outline': { lucide: 'Share' },
+  share: { lucide: 'Share', solid: true },
+  'share-social': { lucide: 'Share2', solid: true },
+  'share-social-outline': { lucide: 'Share2' },
+  // Star outline variant.
+  'star-outline': { lucide: 'Star' },
+  // Notifications bell.
+  'notifications-outline': { lucide: 'Bell' },
+  notifications: { lucide: 'Bell', solid: true, fill: true },
+  // Return / back affordance (CheckDetail return-to-supplier).
+  'return-down-back-outline': { lucide: 'CornerDownLeft' },
+  'return-down-back': { lucide: 'CornerDownLeft', solid: true },
+  // Generic plus aliases.
+  'add-outline': { lucide: 'Plus' },
+  'remove-circle': { lucide: 'MinusCircle', solid: true },
+  'remove-circle-outline': { lucide: 'MinusCircle' },
+  // Play / pause.
+  play: { lucide: 'Play', solid: true, fill: true },
+  'play-outline': { lucide: 'Play' },
+  pause: { lucide: 'Pause', solid: true, fill: true },
+  'pause-outline': { lucide: 'Pause' },
+  // Refresh.
+  refresh: { lucide: 'RefreshCw', solid: true },
+  // Mail.
+  mail: { lucide: 'Mail', solid: true, fill: true },
+  // Location.
+  location: { lucide: 'MapPin', solid: true, fill: true },
+  // Time.
+  time: { lucide: 'Clock', solid: true },
+  // Briefcase / work.
+  briefcase: { lucide: 'Briefcase', solid: true, fill: true },
+  'briefcase-outline': { lucide: 'Briefcase' },
+  // Wallet / card filled.
+  wallet: { lucide: 'Wallet', solid: true, fill: true },
+  card: { lucide: 'CreditCard', solid: true, fill: true },
+  // Link / hyperlink.
+  link: { lucide: 'Link', solid: true },
+  // Lock outline.
+  'lock-closed-outline': { lucide: 'Lock' },
+  // Cog alias for settings.
+  cog: { lucide: 'Settings', solid: true },
+  'cog-outline': { lucide: 'Settings' },
+  // Receipt outline filled.
+  'storefront': { lucide: 'Store', solid: true, fill: true },
+  // EquipmentScreen "Форма" section.
+  'shirt-outline': { lucide: 'Shirt' },
+  shirt: { lucide: 'Shirt', solid: true, fill: true },
+  // Play-circle variants (used in admin Activate buttons).
+  'play-circle': { lucide: 'PlayCircle', solid: true, fill: true },
+  'play-circle-outline': { lucide: 'PlayCircle' },
+  // Construct (alias of construct-outline).
+  construct: { lucide: 'Wrench', solid: true },
+  // Document/text variants for sheets.
+  document: { lucide: 'FileText', solid: true, fill: true },
+  'document-outline': { lucide: 'FileText' },
 };

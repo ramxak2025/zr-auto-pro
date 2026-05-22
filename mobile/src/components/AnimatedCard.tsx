@@ -11,6 +11,13 @@ interface AnimatedCardProps {
    * TouchableOpacity in both skip-animation and animated branches.
    */
   onLongPress?: () => void;
+  /**
+   * Optional `onPressIn` — fired on FINGER-DOWN, BEFORE `onPress`.
+   * Used to kick off detail-prefetches the moment the user starts a
+   * tap, so by the time the navigation push completes the next
+   * screen's data is already in cache. Forwarded to TouchableOpacity.
+   */
+  onPressIn?: () => void;
   activeOpacity?: number;
   /**
    * Force-disable the entrance animation regardless of index. Use this
@@ -49,6 +56,7 @@ export default function AnimatedCard({
   index = 0,
   onPress,
   onLongPress,
+  onPressIn,
   activeOpacity = 0.7,
   disableEntrance = false,
 }: AnimatedCardProps) {
@@ -93,7 +101,13 @@ export default function AnimatedCard({
   if (skipAnimation) {
     if (onPress) {
       return (
-        <TouchableOpacity style={style} onPress={onPress} onLongPress={onLongPress} activeOpacity={activeOpacity}>
+        <TouchableOpacity
+          style={style}
+          onPress={onPress}
+          onPressIn={onPressIn}
+          onLongPress={onLongPress}
+          activeOpacity={activeOpacity}
+        >
           {children}
         </TouchableOpacity>
       );
@@ -109,7 +123,13 @@ export default function AnimatedCard({
   if (onPress) {
     return (
       <Animated.View style={animatedStyle}>
-        <TouchableOpacity style={style} onPress={onPress} onLongPress={onLongPress} activeOpacity={activeOpacity}>
+        <TouchableOpacity
+          style={style}
+          onPress={onPress}
+          onPressIn={onPressIn}
+          onLongPress={onLongPress}
+          activeOpacity={activeOpacity}
+        >
           {children}
         </TouchableOpacity>
       </Animated.View>

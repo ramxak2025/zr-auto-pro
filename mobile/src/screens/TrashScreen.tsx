@@ -6,7 +6,6 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -14,6 +13,7 @@ import { productsApi } from '../api/services';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import SearchInput from '../components/SearchInput';
+import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -132,19 +132,8 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
   );
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
-      <View style={[styles.header, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
-        <TouchableOpacity onPress={() => (onClose ? onClose() : navigation.goBack())} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
-        </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <View style={styles.headerIcon}>
-            <Ionicons name="trash-bin-outline" size={16} color={colors.rose[600]} />
-          </View>
-          <Text style={[styles.title, { color: palette.text.primary }]}>Корзина склада</Text>
-        </View>
-        <View style={{ width: 40 }} />
-      </View>
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <IosScreenHeader title="Корзина склада" onBack={() => (onClose ? onClose() : navigation.goBack())} />
 
       <View style={styles.searchWrap}>
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск..." />
@@ -163,7 +152,9 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
             data={filtered}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
-            contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+            contentContainerStyle={styles.list}
+            contentInset={{ bottom: tabBarHeight }}
+            scrollIndicatorInsets={{ bottom: tabBarHeight }}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
@@ -178,7 +169,7 @@ export default function TrashScreen({ onClose }: TrashScreenProps = {}) {
           </View>
         </>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
