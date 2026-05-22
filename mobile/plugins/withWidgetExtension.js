@@ -20,6 +20,11 @@ const WIDGET_TARGET = 'AuTexaWidget';
 const APP_GROUP = 'group.com.autexa.mobile';
 const WIDGET_BUNDLE_ID = 'com.autexa.mobile.widget';
 const DEPLOYMENT_TARGET = '17.0';
+// Apple Developer Team — same as main app, configured in eas.json.
+// Setting this on the widget target via the plugin avoids the
+// "Signing for AuTexaWidget requires a development team" error in
+// Xcode after every prebuild --clean.
+const DEVELOPMENT_TEAM = '98SHYK65HQ';
 const SRC_DIR = path.join(__dirname, '..', 'ios-extensions', 'AuTexaWidget');
 
 function copyWidgetFiles(iosRoot) {
@@ -177,6 +182,9 @@ const withWidgetTarget = (config) =>
       bs.GENERATE_INFOPLIST_FILE = 'NO';
       bs.MARKETING_VERSION = '1.0';
       bs.CURRENT_PROJECT_VERSION = '1';
+      // Signing: Automatic, same team as main app
+      bs.DEVELOPMENT_TEAM = DEVELOPMENT_TEAM;
+      bs.CODE_SIGN_STYLE = 'Automatic';
     }
 
     // 6. Link WidgetKit + SwiftUI (target UUID, not name).
