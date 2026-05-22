@@ -197,6 +197,20 @@ const withWidgetTarget = (config) =>
       proj.addTargetDependency(mainTarget.uuid, [widgetTargetUuid]);
     }
 
+    // 8. Stamp DEVELOPMENT_TEAM + CODE_SIGN_STYLE on EVERY XCBuildConfiguration
+    //    (main app + widget). Expo's prebuild doesn't set DEVELOPMENT_TEAM on
+    //    the main Autexa target, so on a fresh `prebuild --clean` Xcode shows
+    //    "Signing for 'Autexa' requires a development team" until the owner
+    //    sets it by hand. This loop bakes the team in for both targets.
+    const allConfigsForTeam = proj.pbxXCBuildConfigurationSection();
+    for (const k of Object.keys(allConfigsForTeam)) {
+      const cfg = allConfigsForTeam[k];
+      if (!cfg || typeof cfg !== 'object' || !cfg.buildSettings) continue;
+      if (cfg.name !== 'Debug' && cfg.name !== 'Release') continue;
+      cfg.buildSettings.DEVELOPMENT_TEAM = DEVELOPMENT_TEAM;
+      cfg.buildSettings.CODE_SIGN_STYLE = 'Automatic';
+    }
+
     return mod;
   });
 
