@@ -88,6 +88,10 @@ export default function SupplierDetailScreen() {
   const [upName, setUpName] = useState('');
   const [upQty, setUpQty] = useState('');
   const [upPrice, setUpPrice] = useState('');
+  // Розничная цена — опционально. Если оставить пустым, товар уходит на
+  // склад Б/У с sellPrice=null и владелец установит цену позже через
+  // inline-CTA в ProductsScreen.
+  const [upSellPrice, setUpSellPrice] = useState('');
   const [upCategory, setUpCategory] = useState('');
   const [upNote, setUpNote] = useState('');
 
@@ -267,8 +271,7 @@ export default function SupplierDetailScreen() {
   // stock_movement with is_used_purchase=true, and grows the supplier's
   // debt by qty*price.
   const usedPurchaseMutation = useMutation({
-    mutationFn: (body: { productName: string; qty: number; purchasePrice: number; category?: string; note?: string }) =>
-      suppliersApi.usedPurchase(id, body),
+    mutationFn: (body: Parameters<typeof suppliersApi.usedPurchase>[1]) => suppliersApi.usedPurchase(id, body),
     onSuccess: (_data, vars) => {
       const debtIncrease = vars.qty * vars.purchasePrice;
       invalidateAll();
@@ -276,11 +279,16 @@ export default function SupplierDetailScreen() {
       setUpName('');
       setUpQty('');
       setUpPrice('');
+      setUpSellPrice('');
       setUpCategory('');
       setUpNote('');
       Alert.alert(
         'Товар добавлен',
-        `«${vars.productName}» (${vars.qty} шт) добавлен на склад Б/У.\nДолг вырос на ${formatMoney(debtIncrease)}.`,
+        `«${vars.productName}» (${vars.qty} шт) добавлен на склад Б/У.\nДолг вырос на ${formatMoney(debtIncrease)}.${
+          vars.sellPrice == null || vars.sellPrice === 0
+            ? '\nРозничная цена не задана — установите её позже на складе.'
+            : ''
+        }`,
       );
     },
     onError: (err: any) => {
@@ -305,10 +313,23 @@ export default function SupplierDetailScreen() {
       Alert.alert('Ошибка', 'Укажите корректную закупочную цену');
       return;
     }
+    // Sell price опционально: если пусто или 0 — отправляем sellPrice=null,
+    // бэк сохранит null. Если число > 0 — валидируем и шлём.
+    const sellPriceRaw = upSellPrice.trim();
+    let sellPrice: number | undefined;
+    if (sellPriceRaw) {
+      const parsed = Number(sellPriceRaw);
+      if (!isFinite(parsed) || parsed < 0) {
+        Alert.alert('Ошибка', 'Укажите корректную розничную цену или оставьте поле пустым.');
+        return;
+      }
+      sellPrice = parsed;
+    }
     usedPurchaseMutation.mutate({
       productName: name,
       qty,
       purchasePrice: price,
+      ...(sellPrice !== undefined ? { sellPrice } : {}),
       category: upCategory.trim() || undefined,
       note: upNote.trim() || undefined,
     });
@@ -522,6 +543,7 @@ export default function SupplierDetailScreen() {
               setUpName('');
               setUpQty('');
               setUpPrice('');
+              setUpSellPrice('');
               setUpCategory('');
               setUpNote('');
               setUsedPurchaseModalOpen(true);
@@ -646,17 +668,24 @@ export default function SupplierDetailScreen() {
 
         {tab === 'deliveries' && (
           <>
-            <TouchableOpacity
-              style={styles.actionBtn}
-              onPress={() => {
-                setDeliveryItems([]);
-                setDeliveryComment('');
-                setDeliveryModalOpen(true);
-              }}
-            >
-              <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
-              <Text style={styles.actionBtnText}>Новая поставка</Text>
-            </TouchableOpacity>
+            {/* Системный «Покупка б/у товара» поставщик ведёт свои поставки
+                автоматически — мы не даём заводить их руками. Для него выше
+                по экрану уже отрисован отдельный CTA «Покупка б/у товара»,
+                эта кнопка тут только запутает. На обычных поставщиках
+                ничего не меняется. */}
+            {!isUsedPurchaseSupplier && (
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => {
+                  setDeliveryItems([]);
+                  setDeliveryComment('');
+                  setDeliveryModalOpen(true);
+                }}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
+                <Text style={styles.actionBtnText}>Новая поставка</Text>
+              </TouchableOpacity>
+            )}
 
             {(deliveries || []).length === 0 && (
               <View style={styles.emptyState}>
@@ -794,10 +823,15 @@ export default function SupplierDetailScreen() {
 
         {tab === 'returns' && (
           <>
-            <TouchableOpacity style={styles.actionBtn} onPress={openReturnDefect}>
-              <Ionicons name="arrow-undo-outline" size={18} color={colors.primary[600]} />
-              <Text style={styles.actionBtnText}>Оформить возврат брака</Text>
-            </TouchableOpacity>
+            {/* Возврат брака — только для обычных поставщиков. У системного
+                «Покупка б/у» поставщика нет товаров с закупкой через
+                стандартный flow, поэтому возвращать им нечего. */}
+            {!isUsedPurchaseSupplier && (
+              <TouchableOpacity style={styles.actionBtn} onPress={openReturnDefect}>
+                <Ionicons name="arrow-undo-outline" size={18} color={colors.primary[600]} />
+                <Text style={styles.actionBtnText}>Оформить возврат брака</Text>
+              </TouchableOpacity>
+            )}
 
             {(defectReturns || []).length === 0 && (
               <View style={styles.emptyState}>
@@ -1022,6 +1056,24 @@ export default function SupplierDetailScreen() {
               placeholder="0"
               placeholderTextColor={colors.gray[400]}
             />
+          </View>
+          {/* Sell price — опционально. Если оставить пустым, бэк
+              запишет sellPrice=null, и в ProductsScreen Б/У-складе
+              появится CTA «Установить цену» на этой карточке. */}
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>Розничная цена, ₽</Text>
+            <TextInput
+              value={upSellPrice}
+              onChangeText={setUpSellPrice}
+              style={styles.formInput}
+              keyboardType="numeric"
+              placeholder="Необязательно — задайте позже"
+              placeholderTextColor={colors.gray[400]}
+            />
+            <Text style={{ fontSize: 11, color: colors.gray[500], marginTop: spacing[1] }}>
+              Если не заполнено, цена будет {Number(upPrice) > 0 ? `≈ ${formatMoney(Number(upPrice))} (= закупочной)` : 'не установлена'}.
+              {'\n'}Установите её позже на складе Б/У.
+            </Text>
           </View>
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Папка на складе Б/У</Text>

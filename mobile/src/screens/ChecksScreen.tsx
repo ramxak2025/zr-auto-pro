@@ -211,6 +211,16 @@ const CheckRow = React.memo(function CheckRow({
                   <Text style={styles.deferredText}>Отложен</Text>
                 </View>
               )}
+              {/* Возвращённый чек — красная плашка с иконкой стрелки.
+                  Стоит рядом с «Отложен», чтобы оба статуса читались
+                  с одной точки. Сам чек остаётся кликабельным — деталка
+                  откроется как обычно (см. openCheckDetail). */}
+              {check.isReturned && (
+                <View style={styles.returnedBadge}>
+                  <Ionicons name="arrow-undo" size={9} color={colors.white} />
+                  <Text style={styles.returnedBadgeText}>ВОЗВРАТ</Text>
+                </View>
+              )}
               <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
                 <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
                   {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
@@ -417,12 +427,18 @@ export default function ChecksScreen() {
   const [dateFrom, setDateFrom] = useState<Date | null>(null);
   const [dateTo, setDateTo] = useState<Date | null>(null);
   const [filterMasterId, setFilterMasterId] = useState('');
+  // «Возвраты» — chip-фильтр над списком. Когда активен, оставляем
+  // только чеки с isReturned=true. Реализован на клиенте через filter
+  // по уже загруженным страницам, чтобы не плодить новый serverside-
+  // param. Серверный фильтр потом можно добавить, когда появится
+  // отдельный endpoint /checks/returns.
+  const [returnsOnly, setReturnsOnly] = useState(false);
   const [showDateFromPicker, setShowDateFromPicker] = useState(false);
   const [showDateToPicker, setShowDateToPicker] = useState(false);
 
   const [selectedDoc, setSelectedDoc] = useState<WarehouseDoc | null>(null);
 
-  const activeFilterCount = (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0);
+  const activeFilterCount = (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0) + (returnsOnly ? 1 : 0);
 
   const { data: allUsers } = useQuery<User[]>({
     queryKey: ['users-for-filter'],
@@ -561,7 +577,18 @@ export default function ChecksScreen() {
   // Flatten all loaded pages — newest first comes from page 1, older
   // appended below from page 2+. The reduce avoids creating a fresh
   // array on every render unless the underlying pages change.
-  const checks = useMemo(() => (checksData?.pages ?? []).flatMap((p) => p?.data ?? []), [checksData?.pages]);
+  const allLoadedChecks = useMemo(
+    () => (checksData?.pages ?? []).flatMap((p) => p?.data ?? []),
+    [checksData?.pages],
+  );
+  // Returns-only фильтр работает на уже загруженных страницах. Бэк
+  // не отдаёт серверный isReturned-параметр (пока), но `placeholderData`
+  // + `checks-infinite` cache держат страницы тёплыми — клиентский
+  // filter мгновенный.
+  const checks = useMemo(
+    () => (returnsOnly ? allLoadedChecks.filter((c) => !!c.isReturned) : allLoadedChecks),
+    [allLoadedChecks, returnsOnly],
+  );
   const total = checksData?.pages?.[0]?.total ?? 0;
 
   // Group checks by date — precompute «у этого индекса нужен заголовок?»
@@ -664,6 +691,45 @@ export default function ChecksScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Quick "Возвраты" chip — clientside фильтр по isReturned.
+          Виден только во вкладке «Чеки» (склад-документы тоже могут
+          возвращаться, но это другой UX). Чип помечается badge'ем,
+          если активен — пользователь сразу видит что фильтр на. */}
+      {activeTab === 'checks' && (
+        <View style={styles.returnsChipRow}>
+          <TouchableOpacity
+            onPress={() => setReturnsOnly((v) => !v)}
+            activeOpacity={0.7}
+            style={[
+              styles.returnsChip,
+              {
+                backgroundColor: returnsOnly ? colors.red[500] : palette.bg.muted,
+                borderColor: returnsOnly ? colors.red[600] : palette.border.subtle,
+              },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel="Фильтр возвратов"
+          >
+            <Ionicons
+              name="arrow-undo-outline"
+              size={13}
+              color={returnsOnly ? colors.white : palette.text.secondary}
+            />
+            <Text
+              style={[
+                styles.returnsChipText,
+                { color: returnsOnly ? colors.white : palette.text.secondary },
+              ]}
+            >
+              Возвраты
+            </Text>
+            {returnsOnly && (
+              <Ionicons name="close" size={12} color={colors.white} style={{ marginLeft: 1 }} />
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Segmented control: Checks | Warehouse documents */}
       <View style={styles.segmentedWrap}>
@@ -835,6 +901,7 @@ export default function ChecksScreen() {
                 setDateFrom(null);
                 setDateTo(null);
                 setFilterMasterId('');
+                setReturnsOnly(false);
                 setPage(1);
               }}
             >
@@ -1182,6 +1249,25 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
 
+  // ── Returns quick-filter chip row ───────────────────────────────
+  // Тонкая полоска под поиском — chip-style, не нагружает экран
+  // когда фильтр выключен.
+  returnsChipRow: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[2],
+  },
+  returnsChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  returnsChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
+
   // ── Segmented Control ───────────────────────────────────────────
   segmentedWrap: {
     paddingHorizontal: spacing[4],
@@ -1313,6 +1399,19 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   deferredText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.red[700] },
+  // Возвращённый чек — насыщенно красная плашка с иконкой стрелки.
+  // Сильнее «Отложен», потому что возврат — терминальное состояние:
+  // редактировать чек больше нельзя.
+  returnedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: colors.red[500],
+    paddingHorizontal: spacing[1.5],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  returnedBadgeText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.3 },
   paymentBadge: { paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: borderRadius.full },
   paymentBadgeText: { fontSize: 10, fontWeight: fontWeight.medium },
   checkTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },

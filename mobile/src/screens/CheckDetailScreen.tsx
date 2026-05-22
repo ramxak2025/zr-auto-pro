@@ -1,5 +1,16 @@
-import React, { useRef, useEffect } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Animated, Modal as RNModal } from 'react-native';
+import React, { useRef, useEffect, useState, useMemo } from 'react';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+  Alert,
+  Animated,
+  Modal as RNModal,
+  ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
@@ -9,15 +20,20 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as ImagePicker from 'expo-image-picker';
-import { checksApi, myCompanyApi, checkPhotosApi } from '../api/services';
+import { checksApi, myCompanyApi, checkPhotosApi, returnsApi } from '../api/services';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import FeatureGate from '../components/FeatureGate';
+import Modal from '../components/Modal';
+import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Check, Tenant } from '../../../shared/types';
+
+type ReturnDestination = 'warehouse' | 'defect';
+type ReturnScope = 'full' | 'partial';
 
 function formatMoney(v: number) {
   return (
@@ -57,9 +73,25 @@ export default function CheckDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const palette = useColors();
   const { id } = route.params;
+  // ── Возврат заказ-наряда ────────────────────────────────────────────
+  // Видна только для директора / администратора / superadmin: оформление
+  // возврата — финансово ответственное действие, мастер не должен иметь
+  // к нему доступ. Mapping роли на permission — собственно роли (бэк
+  // PermissionGuard не проверяет наш новый endpoint, но UI-уровень
+  // отрезает мастеров сразу).
+  const canFileReturn =
+    user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  const [returnModalOpen, setReturnModalOpen] = useState(false);
+  const [returnScope, setReturnScope] = useState<ReturnScope>('full');
+  const [returnDestination, setReturnDestination] = useState<ReturnDestination>('warehouse');
+  const [returnReason, setReturnReason] = useState('');
+  const [returnRefundAmount, setReturnRefundAmount] = useState('');
+  // Map: stable line key → { selected, qty } для partial-режима. Ключ —
+  // `s-<id>` для услуг, `p-<id>` для товаров, чтобы не было коллизий.
+  const [returnLines, setReturnLines] = useState<Record<string, { selected: boolean; qty: number }>>({});
   // Floating tab bar covers the bottom edge (CheckDetail lives inside the
   // tab navigator's stack, so the bar IS visible). Reserve its height so
   // the last block can scroll fully into view + leaves a small breathing
@@ -261,6 +293,159 @@ export default function CheckDetailScreen() {
     },
   });
 
+  // ── Return mutation ──────────────────────────────────────────────
+  // POST /checks/:id/returns. На бэке атомарно:
+  //   1. Помечает чек `isReturned=true` + сохраняет reason / returnedAt.
+  //   2. По каждой возвращаемой строке товаров пишет stock_movement
+  //      типа 'income' (target = main warehouse) или 'defect_transfer'
+  //      (target = defect warehouse), в зависимости от destination.
+  //   3. Книжит supplier_payment-like запись с отрицательной суммой,
+  //      чтобы касса корректно отразила возврат денег клиенту.
+  // Мы инвалидируем все журналы, дашборды и продукты — UI обновляется
+  // сразу. Никакой optimistic-update: возврат — необратимое событие.
+  const returnMutation = useMutation({
+    mutationFn: (body: Parameters<typeof returnsApi.create>[1]) => returnsApi.create(id, body),
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['check', id] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      setReturnModalOpen(false);
+      Alert.alert('Возврат оформлен', 'Чек помечен как возвращённый.');
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось оформить возврат');
+    },
+  });
+
+  // ── Открытие модалки возврата ────────────────────────────────────
+  // Перезаполняем форму при каждом открытии: полный возврат, склад как
+  // дефолтное направление, refund = totalRevenue. Карту строк строим
+  // здесь же чтобы пользователь сразу мог переключиться в «частичный»
+  // и видеть актуальные строки чека.
+  const openReturnModal = () => {
+    if (!check) return;
+    haptic('select');
+    setReturnScope('full');
+    setReturnDestination('warehouse');
+    setReturnReason('');
+    setReturnRefundAmount(String(Math.round(check.totalRevenue)));
+    const lineMap: Record<string, { selected: boolean; qty: number }> = {};
+    (check.services ?? []).forEach((s, i) => {
+      const key = `s-${s.id ?? i}`;
+      lineMap[key] = { selected: false, qty: s.quantity };
+    });
+    (check.products ?? []).forEach((p, i) => {
+      const key = `p-${p.id ?? i}`;
+      lineMap[key] = { selected: false, qty: p.quantity };
+    });
+    setReturnLines(lineMap);
+    setReturnModalOpen(true);
+  };
+
+  // ── Авторасчёт refund для «частичного» режима ────────────────────
+  // Считаем только выбранные строки и пропорционально их qty. В full —
+  // показываем total чека. Пользователь всегда может отредактировать.
+  const partialRefundAuto = useMemo(() => {
+    if (!check || returnScope !== 'partial') return 0;
+    let sum = 0;
+    (check.services ?? []).forEach((s, i) => {
+      const key = `s-${s.id ?? i}`;
+      const row = returnLines[key];
+      if (row?.selected && s.quantity > 0) {
+        sum += (row.qty / s.quantity) * s.total;
+      }
+    });
+    (check.products ?? []).forEach((p, i) => {
+      const key = `p-${p.id ?? i}`;
+      const row = returnLines[key];
+      if (row?.selected && p.quantity > 0) {
+        sum += (row.qty / p.quantity) * p.totalSell;
+      }
+    });
+    return Math.round(sum);
+  }, [check, returnScope, returnLines]);
+
+  // Когда пользователь меняет состав строк в режиме partial — обновляем
+  // подсказку. В full — refund фиксирован = total. Авто-prefill отделён
+  // от ручного override: если пользователь начал править поле, мы его
+  // не топчем.
+  const refundAutoPrefillRef = useRef<string>('');
+  useEffect(() => {
+    if (!returnModalOpen) return;
+    const next = returnScope === 'full' ? String(Math.round(check?.totalRevenue ?? 0)) : String(partialRefundAuto);
+    // Топчем поле только когда оно ещё равно прошлому auto-значению —
+    // т.е. пользователь не вводил руками. Это разрешает менять чек-боксы
+    // и видеть пересчёт, но защищает от тёрки введённой вручную суммы.
+    if (returnRefundAmount === '' || returnRefundAmount === refundAutoPrefillRef.current) {
+      setReturnRefundAmount(next);
+    }
+    refundAutoPrefillRef.current = next;
+  }, [returnModalOpen, returnScope, partialRefundAuto, check?.totalRevenue]);
+
+  const toggleReturnLine = (key: string) => {
+    setReturnLines((prev) => {
+      const row = prev[key];
+      if (!row) return prev;
+      return { ...prev, [key]: { ...row, selected: !row.selected } };
+    });
+  };
+
+  const updateReturnLineQty = (key: string, delta: number, max: number) => {
+    setReturnLines((prev) => {
+      const row = prev[key];
+      if (!row) return prev;
+      const nextQty = Math.max(1, Math.min(max, row.qty + delta));
+      return { ...prev, [key]: { ...row, qty: nextQty } };
+    });
+  };
+
+  const handleSubmitReturn = () => {
+    if (!check) return;
+    if (returnDestination === 'defect' && !returnReason.trim()) {
+      haptic('warning');
+      Alert.alert('Ошибка', 'Укажите причину возврата в брак.');
+      return;
+    }
+    const refund = Number(returnRefundAmount);
+    if (!isFinite(refund) || refund < 0) {
+      haptic('warning');
+      Alert.alert('Ошибка', 'Сумма возврата должна быть положительной.');
+      return;
+    }
+    const body: Parameters<typeof returnsApi.create>[1] = {
+      destination: returnDestination,
+      scope: returnScope,
+      refundAmount: refund,
+      ...(returnReason.trim() ? { reason: returnReason.trim() } : {}),
+    };
+    if (returnScope === 'partial') {
+      const lines: NonNullable<Parameters<typeof returnsApi.create>[1]['lines']> = [];
+      (check.services ?? []).forEach((s, i) => {
+        const key = `s-${s.id ?? i}`;
+        const row = returnLines[key];
+        if (row?.selected && s.id) lines.push({ serviceLineId: s.id, quantity: row.qty });
+      });
+      (check.products ?? []).forEach((p, i) => {
+        const key = `p-${p.id ?? i}`;
+        const row = returnLines[key];
+        if (row?.selected && p.id) lines.push({ productLineId: p.id, quantity: row.qty });
+      });
+      if (lines.length === 0) {
+        haptic('warning');
+        Alert.alert('Ошибка', 'Выберите хотя бы одну позицию для возврата.');
+        return;
+      }
+      body.lines = lines;
+    }
+    returnMutation.mutate(body);
+  };
+
   if (isLoading) return <LoadingSpinner />;
   if (!check)
     return (
@@ -269,8 +454,13 @@ export default function CheckDetailScreen() {
       </Text>
     );
 
-  const canEdit = hasPermission('checks_edit');
-  const canDelete = hasPermission('checks_delete');
+  // Возвращённые чеки заморожены: ни редактировать, ни удалять, ни
+  // оформлять второй возврат. Permission остаётся, но UI его подавляет —
+  // защищает от случайной операции и совпадает с состоянием бэка
+  // (PATCH /checks/:id вернёт 409 на returned-чек).
+  const isReturned = !!check.isReturned;
+  const canEdit = hasPermission('checks_edit') && !isReturned;
+  const canDelete = hasPermission('checks_delete') && !isReturned;
   const canViewProfit = hasPermission('profit_view');
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = badgeColors[badgeKey];
@@ -284,9 +474,17 @@ export default function CheckDetailScreen() {
           <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={[styles.headerTitle, { color: palette.text.primary }]}>
-            {'\u0427\u0435\u043A'} #{check.number}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flexWrap: 'wrap' }}>
+            <Text style={[styles.headerTitle, { color: palette.text.primary }]}>
+              {'\u0427\u0435\u043A'} #{check.number}
+            </Text>
+            {isReturned && (
+              <View style={styles.returnedHeaderBadge}>
+                <Ionicons name="arrow-undo" size={11} color={colors.white} />
+                <Text style={styles.returnedHeaderBadgeText}>\u0412\u041E\u0417\u0412\u0420\u0410\u0429\u0401\u041D</Text>
+              </View>
+            )}
+          </View>
           <Text style={[styles.headerDate, { color: palette.text.tertiary }]}>{formatShortDate(check.date)}</Text>
         </View>
         <View style={styles.headerActions}>
@@ -742,7 +940,329 @@ export default function CheckDetailScreen() {
             </View>
           )}
         </View>
+
+        {/* Возврат заказ-наряда — финальный CTA внизу скролла.
+            Видна только директору/админу/superadmin. На уже возвращённом
+            чеке вместо кнопки рендерим disabled-плашку «Возврат оформлен»,
+            чтобы пользователь понимал почему действие недоступно. */}
+        {canFileReturn && (
+          isReturned ? (
+            <View
+              style={[
+                styles.returnDoneBanner,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+              ]}
+            >
+              <Ionicons name="arrow-undo" size={16} color={colors.red[600]} />
+              <Text style={[styles.returnDoneText, { color: palette.text.primary }]}>
+                Возврат оформлен. Дальнейшие изменения невозможны.
+              </Text>
+            </View>
+          ) : (
+            <TouchableOpacity
+              onPress={openReturnModal}
+              activeOpacity={0.85}
+              style={styles.returnCtaBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Сделать возврат"
+            >
+              <Ionicons name="arrow-undo-outline" size={18} color={colors.red[600]} />
+              <Text style={styles.returnCtaText}>Сделать возврат</Text>
+            </TouchableOpacity>
+          )
+        )}
       </Animated.ScrollView>
+
+      {/* Return modal — единый поток для full / partial.
+          Дизайн ориентируется на iOS sheet с сегментным переключателем
+          вверху, картами выбора направления и валидируемой формой. */}
+      <Modal visible={returnModalOpen} onClose={() => setReturnModalOpen(false)} title="Оформить возврат">
+        {/* Сегментный переключатель Полный / Частичный */}
+        <View style={[styles.returnScopeRow, { backgroundColor: palette.bg.muted }]}>
+          <TouchableOpacity
+            style={[
+              styles.returnScopeBtn,
+              returnScope === 'full' && [styles.returnScopeBtnActive, { backgroundColor: palette.bg.card }],
+            ]}
+            onPress={() => {
+              haptic('select');
+              setReturnScope('full');
+            }}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.returnScopeText,
+                { color: palette.text.secondary },
+                returnScope === 'full' && { color: palette.text.primary, fontWeight: fontWeight.semibold },
+              ]}
+            >
+              Полный возврат
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.returnScopeBtn,
+              returnScope === 'partial' && [styles.returnScopeBtnActive, { backgroundColor: palette.bg.card }],
+            ]}
+            onPress={() => {
+              haptic('select');
+              setReturnScope('partial');
+            }}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.returnScopeText,
+                { color: palette.text.secondary },
+                returnScope === 'partial' && { color: palette.text.primary, fontWeight: fontWeight.semibold },
+              ]}
+            >
+              Частичный
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Список строк (partial only). Каждая строка — тоггл + степпер */}
+        {returnScope === 'partial' && (
+          <View style={{ marginBottom: spacing[3] }}>
+            {(check.services ?? []).map((s, i) => {
+              const key = `s-${s.id ?? i}`;
+              const row = returnLines[key];
+              if (!row || !s.id) return null;
+              const max = s.quantity;
+              return (
+                <View
+                  key={key}
+                  style={[
+                    styles.returnLineRow,
+                    { borderBottomColor: palette.border.subtle, backgroundColor: palette.bg.card },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={styles.returnLineCheckRow}
+                    onPress={() => toggleReturnLine(key)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.returnLineCheckbox, row.selected && styles.returnLineCheckboxOn]}>
+                      {row.selected && <Ionicons name="checkmark" size={14} color={colors.white} />}
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.returnLineName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {s.name}
+                      </Text>
+                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>
+                        Услуга · из {max}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                  {row.selected && (
+                    <View style={styles.returnLineStepper}>
+                      <TouchableOpacity
+                        onPress={() => updateReturnLineQty(key, -1, max)}
+                        style={[styles.stepperBtn, { backgroundColor: palette.bg.muted }]}
+                        hitSlop={6}
+                      >
+                        <Ionicons name="remove" size={14} color={palette.text.secondary} />
+                      </TouchableOpacity>
+                      <Text style={[styles.stepperValue, { color: palette.text.primary }]}>{row.qty}</Text>
+                      <TouchableOpacity
+                        onPress={() => updateReturnLineQty(key, 1, max)}
+                        style={[styles.stepperBtn, { backgroundColor: palette.bg.muted }]}
+                        hitSlop={6}
+                      >
+                        <Ionicons name="add" size={14} color={palette.text.secondary} />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+            {(check.products ?? []).map((p, i) => {
+              const key = `p-${p.id ?? i}`;
+              const row = returnLines[key];
+              if (!row || !p.id) return null;
+              const max = p.quantity;
+              return (
+                <View
+                  key={key}
+                  style={[
+                    styles.returnLineRow,
+                    { borderBottomColor: palette.border.subtle, backgroundColor: palette.bg.card },
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={styles.returnLineCheckRow}
+                    onPress={() => toggleReturnLine(key)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.returnLineCheckbox, row.selected && styles.returnLineCheckboxOn]}>
+                      {row.selected && <Ionicons name="checkmark" size={14} color={colors.white} />}
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.returnLineName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {p.name}
+                      </Text>
+                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>
+                        Товар · из {max}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                  {row.selected && (
+                    <View style={styles.returnLineStepper}>
+                      <TouchableOpacity
+                        onPress={() => updateReturnLineQty(key, -1, max)}
+                        style={[styles.stepperBtn, { backgroundColor: palette.bg.muted }]}
+                        hitSlop={6}
+                      >
+                        <Ionicons name="remove" size={14} color={palette.text.secondary} />
+                      </TouchableOpacity>
+                      <Text style={[styles.stepperValue, { color: palette.text.primary }]}>{row.qty}</Text>
+                      <TouchableOpacity
+                        onPress={() => updateReturnLineQty(key, 1, max)}
+                        style={[styles.stepperBtn, { backgroundColor: palette.bg.muted }]}
+                        hitSlop={6}
+                      >
+                        <Ionicons name="add" size={14} color={palette.text.secondary} />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+            {((check.services?.length ?? 0) + (check.products?.length ?? 0)) === 0 && (
+              <Text style={{ textAlign: 'center', color: palette.text.tertiary, paddingVertical: spacing[3] }}>
+                Нет позиций для частичного возврата.
+              </Text>
+            )}
+          </View>
+        )}
+
+        {/* Destination chooser — две карты «На склад / В брак» */}
+        <Text style={[styles.returnSectionLabel, { color: palette.text.secondary }]}>Куда вернуть товары</Text>
+        <View style={styles.returnDestRow}>
+          <TouchableOpacity
+            style={[
+              styles.returnDestCard,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              returnDestination === 'warehouse' && {
+                borderColor: colors.primary[500],
+                backgroundColor: colors.primary[50],
+              },
+            ]}
+            onPress={() => {
+              haptic('tap');
+              setReturnDestination('warehouse');
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name="archive-outline"
+              size={24}
+              color={returnDestination === 'warehouse' ? colors.primary[600] : palette.text.tertiary}
+            />
+            <Text
+              style={[
+                styles.returnDestTitle,
+                { color: returnDestination === 'warehouse' ? colors.primary[700] : palette.text.primary },
+              ]}
+            >
+              На склад
+            </Text>
+            <Text style={[styles.returnDestSub, { color: palette.text.tertiary }]}>Товар как новый</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.returnDestCard,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              returnDestination === 'defect' && {
+                borderColor: colors.red[400],
+                backgroundColor: colors.red[50],
+              },
+            ]}
+            onPress={() => {
+              haptic('tap');
+              setReturnDestination('defect');
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name="warning-outline"
+              size={24}
+              color={returnDestination === 'defect' ? colors.red[600] : palette.text.tertiary}
+            />
+            <Text
+              style={[
+                styles.returnDestTitle,
+                { color: returnDestination === 'defect' ? colors.red[700] : palette.text.primary },
+              ]}
+            >
+              В брак
+            </Text>
+            <Text style={[styles.returnDestSub, { color: palette.text.tertiary }]}>Нужна причина</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Reason — обязательно для брака. */}
+        <View style={{ marginBottom: spacing[3] }}>
+          <Text style={[styles.returnSectionLabel, { color: palette.text.secondary }]}>
+            {returnDestination === 'defect' ? 'Причина возврата в брак *' : 'Комментарий'}
+          </Text>
+          <TextInput
+            value={returnReason}
+            onChangeText={setReturnReason}
+            style={[
+              styles.returnReasonInput,
+              {
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
+            multiline
+            placeholder={returnDestination === 'defect' ? 'Например: треснул корпус' : 'Необязательно'}
+            placeholderTextColor={palette.text.tertiary}
+          />
+        </View>
+
+        {/* Refund amount — авто-prefill, редактируемое */}
+        <View style={{ marginBottom: spacing[3] }}>
+          <Text style={[styles.returnSectionLabel, { color: palette.text.secondary }]}>Сумма возврата, ₽</Text>
+          <TextInput
+            value={returnRefundAmount}
+            onChangeText={setReturnRefundAmount}
+            style={[
+              styles.returnReasonInput,
+              {
+                height: 44,
+                textAlignVertical: 'center',
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={palette.text.tertiary}
+          />
+        </View>
+
+        <View style={[styles.returnFormActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.returnCancelBtn, { borderColor: palette.border.strong }]}
+            onPress={() => setReturnModalOpen(false)}
+          >
+            <Text style={[styles.returnCancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.returnSubmitBtn} onPress={handleSubmitReturn} activeOpacity={0.85}>
+            {returnMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.returnSubmitBtnText}>Подтвердить возврат</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1057,4 +1577,163 @@ const styles = StyleSheet.create({
   profitLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   profitLabel: { fontSize: fontSize.sm },
   profitValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold },
+
+  // ── Return: header badge + bottom CTA + done banner ───────────────
+  // Тёмно-красный pill в шапке — мгновенный сигнал «чек возвращён»;
+  // дублируется на карточке журнала, чтобы не приходилось открывать
+  // деталку для проверки статуса.
+  returnedHeaderBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.red[500],
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+  },
+  returnedHeaderBadgeText: {
+    fontSize: 10,
+    fontWeight: fontWeight.bold,
+    color: colors.white,
+    letterSpacing: 0.4,
+  },
+  returnCtaBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    borderColor: colors.red[200],
+    backgroundColor: colors.red[50],
+  },
+  returnCtaText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.red[700] },
+  returnDoneBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  returnDoneText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, flex: 1 },
+
+  // ── Return modal styles ───────────────────────────────────────────
+  returnScopeRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.gray[100],
+    borderRadius: borderRadius.xl,
+    padding: 3,
+    marginBottom: spacing[4],
+  },
+  returnScopeBtn: {
+    flex: 1,
+    paddingVertical: spacing[2],
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: borderRadius.lg,
+  },
+  returnScopeBtnActive: {
+    shadowColor: colors.black,
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  returnScopeText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  returnSectionLabel: {
+    fontSize: 11,
+    fontWeight: fontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: spacing[1.5],
+  },
+  returnDestRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    marginBottom: spacing[4],
+  },
+  returnDestCard: {
+    flex: 1,
+    borderWidth: 1.5,
+    borderRadius: borderRadius.xl,
+    padding: spacing[3],
+    alignItems: 'center',
+    gap: 6,
+  },
+  returnDestTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  returnDestSub: { fontSize: 11 },
+  returnLineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  returnLineCheckRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flex: 1, minWidth: 0 },
+  returnLineCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: colors.gray[300],
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  returnLineCheckboxOn: {
+    backgroundColor: colors.primary[600],
+    borderColor: colors.primary[600],
+  },
+  returnLineName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  returnLineSub: { fontSize: 11, marginTop: 1 },
+  returnLineStepper: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  stepperBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepperValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, minWidth: 20, textAlign: 'center' },
+  returnReasonInput: {
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+    color: colors.gray[900],
+    minHeight: 60,
+    textAlignVertical: 'top',
+  },
+  returnFormActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing[3],
+    paddingTop: spacing[4],
+    borderTopWidth: 1,
+  },
+  returnCancelBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  returnCancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  returnSubmitBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.red[600],
+    minWidth: 180,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  returnSubmitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
 });

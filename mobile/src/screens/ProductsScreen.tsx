@@ -154,6 +154,9 @@ interface ProductRowProps {
    *  Used by ProductsScreen to open the per-product action sheet (move to
    *  defect / Б-У) when viewing the main warehouse. */
   onLongPress?: (product: Product) => void;
+  /** "Установить цену" — inline-CTA для товаров на складе Б/У без
+   *  розничной цены. Когда передан, заменяет sellPrice в карточке. */
+  onSetSellPrice?: (product: Product) => void;
   /** Palette tokens — passed in so the memoised row picks up dark mode
    *  without subscribing to the theme context itself. */
   rowBg: string;
@@ -170,6 +173,7 @@ const ProductRow = React.memo(function ProductRow({
   onOpenEdit,
   onOpenPhoto,
   onLongPress,
+  onSetSellPrice,
   rowBg,
   separatorColor,
   textPrimary,
@@ -178,6 +182,9 @@ const ProductRow = React.memo(function ProductRow({
 }: ProductRowProps) {
   const lowStock = item.stock <= item.minStock && item.minStock > 0;
   const pUri = getImageUrl(item.photo);
+  // Товар «без цены» — пустой или нулевой sellPrice. Б/У-склад часто
+  // заводит товары с null'ом, чтобы владелец выставил цену позже.
+  const missingSellPrice = onSetSellPrice && (item.sellPrice == null || item.sellPrice === 0);
   return (
     <AnimatedCard
       index={index}
@@ -207,7 +214,19 @@ const ProductRow = React.memo(function ProductRow({
             <Text style={[styles.productCategory, { color: textTertiary }]}>{item.category.split('/').pop()}</Text>
           )}
           <View style={styles.productPrices}>
-            <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
+            {missingSellPrice ? (
+              <TouchableOpacity
+                onPress={() => onSetSellPrice!(item)}
+                style={styles.pricelessCta}
+                hitSlop={6}
+                accessibilityLabel="Установить розничную цену"
+              >
+                <Ionicons name="pricetag-outline" size={12} color={colors.amber[700]} />
+                <Text style={styles.pricelessCtaText}>Установить цену</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.productSellPrice}>{formatMoney(item.sellPrice)}</Text>
+            )}
             {canSeeCostPrice && (
               <Text style={[styles.productCostPrice, { color: textTertiary }]}>
                 Себест. {formatMoney(item.costPrice)}
@@ -306,12 +325,23 @@ export default function ProductsScreen() {
   // defect / move to used. Opened by long-press on a product row.
   const [actionsForProduct, setActionsForProduct] = useState<Product | null>(null);
 
+  // "Установить цену" — inline-редактор розничной цены для товаров
+  // склада Б/У. Открывается тапом по CTA «Установить цену» на карточке
+  // товара. Используется только в used-варианте, чтобы не дублировать
+  // полное окно редактирования товара.
+  const [sellPriceProduct, setSellPriceProduct] = useState<Product | null>(null);
+  const [sellPriceInput, setSellPriceInput] = useState('');
+
   // Transfer dialog state — used for both defect_transfer and
   // used_transfer because the body shape is identical (only the
   // movement type differs).
   const [transferTarget, setTransferTarget] = useState<'defect' | 'used' | null>(null);
   const [transferProduct, setTransferProduct] = useState<Product | null>(null);
   const [transferQty, setTransferQty] = useState('');
+  // Причина обязательна для defect_transfer (бэк требует) и валидируется
+  // на нашей стороне до отправки. Для used_transfer пока опционально —
+  // если бэк начнёт требовать, валидация поднимется здесь же.
+  const [transferReason, setTransferReason] = useState('');
 
   // Correction modal state
   const [showCorrectionPicker, setShowCorrectionPicker] = useState(false);
@@ -1023,6 +1053,42 @@ export default function ProductsScreen() {
     setTimeout(() => setShowInventoryModal(true), 300);
   };
 
+  // --- Sell price editor (Б/У warehouse) -----------------------------
+  // Открывает компактный модал-форму с одним полем «цена ₽». На submit
+  // вызывает productsApi.setSellPrice и инвалидирует products-cache —
+  // карточка моментально перерисуется с цифрой вместо CTA.
+  const openSellPriceEditor = useCallback((p: Product) => {
+    setSellPriceProduct(p);
+    // Если у товара уже есть какая-то цена (но мы её всё равно показали
+    // как «без цены», бывает при null'е) — заполним поле. В обычном
+    // null-кейсе поле остаётся пустым.
+    setSellPriceInput(p.sellPrice && p.sellPrice > 0 ? String(p.sellPrice) : '');
+  }, []);
+
+  const closeSellPriceEditor = () => {
+    setSellPriceProduct(null);
+    setSellPriceInput('');
+  };
+
+  const setSellPriceMutation = useMutation({
+    mutationFn: ({ id, price }: { id: string; price: number }) => productsApi.setSellPrice(id, price),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      closeSellPriceEditor();
+    },
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось установить цену'),
+  });
+
+  const handleSetSellPriceSubmit = () => {
+    if (!sellPriceProduct) return;
+    const price = Number(sellPriceInput);
+    if (!isFinite(price) || price <= 0) {
+      Alert.alert('Ошибка', 'Цена должна быть больше 0.');
+      return;
+    }
+    setSellPriceMutation.mutate({ id: sellPriceProduct.id, price });
+  };
+
   // --- Transfer handlers (main → defect / used) ----------------------
   // Long-press on a product row (main warehouse only) opens the action
   // sheet `actionsForProduct`. Selecting one of the transfer actions
@@ -1034,6 +1100,7 @@ export default function ProductsScreen() {
     setTransferTarget(target);
     setTransferProduct(product);
     setTransferQty('');
+    setTransferReason('');
     setActionsForProduct(null);
   };
 
@@ -1041,6 +1108,7 @@ export default function ProductsScreen() {
     setTransferTarget(null);
     setTransferProduct(null);
     setTransferQty('');
+    setTransferReason('');
   };
 
   const handleTransferSubmit = async () => {
@@ -1064,16 +1132,35 @@ export default function ProductsScreen() {
       Alert.alert('Ошибка', 'Не удалось определить склад');
       return;
     }
+    const reasonTrimmed = transferReason.trim();
+    // Для defect — причина обязательна. У used_transfer оставляем
+    // её опциональной, чтобы не ломать привычку владельца.
+    if (transferTarget === 'defect' && !reasonTrimmed) {
+      Alert.alert('Ошибка', 'Укажите причину переноса в брак.');
+      return;
+    }
 
     try {
-      await stockMovementsApi.create({
-        type: transferTarget === 'defect' ? 'defect_transfer' : 'used_transfer',
-        sourceWarehouseId: source.id,
-        targetWarehouseId: target.id,
-        productId: transferProduct.id,
-        quantity: qty,
-        purchasePrice: transferProduct.costPrice || 0,
-      });
+      if (transferTarget === 'defect') {
+        // Используем удобный wrapper — UI явно говорит «перевод в брак»,
+        // и в кодовой базе одно место, которое отвечает за этот flow.
+        await stockMovementsApi.transferToDefect({
+          productId: transferProduct.id,
+          fromWarehouseId: source.id,
+          quantity: qty,
+          reason: reasonTrimmed,
+        });
+      } else {
+        await stockMovementsApi.create({
+          type: 'used_transfer',
+          sourceWarehouseId: source.id,
+          targetWarehouseId: target.id,
+          productId: transferProduct.id,
+          quantity: qty,
+          purchasePrice: transferProduct.costPrice || 0,
+          ...(reasonTrimmed ? { reason: reasonTrimmed } : {}),
+        });
+      }
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
       const targetLabel = transferTarget === 'defect' ? 'брак' : 'Б/У';
@@ -1198,6 +1285,11 @@ export default function ProductsScreen() {
   const openActionsForProduct = useCallback((p: Product) => {
     setActionsForProduct(p);
   }, []);
+  // Б/У-склад — единственное место, где имеет смысл inline-редактор
+  // розничной цены: товары там создаются с null-ом цены, чтобы владелец
+  // выставил её позже. На основном складе цена всегда задаётся при
+  // создании, поэтому CTA не показываем.
+  const isUsedWarehouse = activeWarehouse?.kind === 'used';
   const renderProductItem = useCallback(
     ({ item, index }: { item: Product; index: number }) => (
       <ProductRow
@@ -1210,6 +1302,7 @@ export default function ProductsScreen() {
         // Long-press only enabled on the main warehouse — moving FROM
         // defect/used isn't a defined movement type yet.
         onLongPress={isMainWarehouse && canManageWarehouse ? openActionsForProduct : undefined}
+        onSetSellPrice={isUsedWarehouse && canManageWarehouse ? openSellPriceEditor : undefined}
         rowBg={palette.bg.card}
         separatorColor={palette.border.subtle}
         textPrimary={palette.text.primary}
@@ -1225,8 +1318,10 @@ export default function ProductsScreen() {
       canSeeCostPrice,
       openEdit,
       isMainWarehouse,
+      isUsedWarehouse,
       canManageWarehouse,
       openActionsForProduct,
+      openSellPriceEditor,
       palette.bg.card,
       palette.bg.muted,
       palette.border.subtle,
@@ -1267,7 +1362,13 @@ export default function ProductsScreen() {
                 <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
               </TouchableOpacity>
             )}
-            {hasPermission('warehouse_access') && (
+            {/* «+» создаёт товар в текущем складе. На складе брака этого
+                делать нельзя: товары туда попадают только переводом со
+                склада или возвратом от клиента (бэк бы 400'нул). Скрываем
+                кнопку, чтобы UI не путал владельца. На used (Б/У) товары
+                заводятся через «Покупка б/у» у системного поставщика,
+                поэтому на used-складе тоже прячем создание. */}
+            {hasPermission('warehouse_access') && activeWarehouse?.kind === 'main' && (
               <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
                 <Ionicons name="add" size={18} color={colors.white} />
               </TouchableOpacity>
@@ -1333,6 +1434,19 @@ export default function ProductsScreen() {
         />
       </View>
 
+      {/* \u0418\u043D\u0444\u043E\u0440\u043C\u0430\u0446\u0438\u043E\u043D\u043D\u0430\u044F \u043F\u043B\u0430\u0448\u043A\u0430 \u0434\u043B\u044F defect-\u0441\u043A\u043B\u0430\u0434\u0430. \u0422\u043E\u0432\u0430\u0440\u044B \u0442\u0443\u0434\u0430 \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442
+          \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043D\u043E\u0441 / \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u2014 UI \u044D\u0442\u043E \u043E\u0431\u044A\u044F\u0441\u043D\u044F\u0435\u0442, \u0447\u0442\u043E\u0431\u044B
+          \u0432\u043B\u0430\u0434\u0435\u043B\u0435\u0446 \u043D\u0435 \u0438\u0441\u043A\u0430\u043B \u043A\u043D\u043E\u043F\u043A\u0443 \u00AB+\u00BB. \u0412\u0438\u0434\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043A\u043E\u0440\u043D\u0435 \u0441\u043A\u043B\u0430\u0434\u0430,
+          \u043D\u0435 \u0434\u0443\u0431\u043B\u0438\u0440\u0443\u0435\u0442\u0441\u044F \u043D\u0430 \u043F\u043E\u0434\u043F\u0430\u043F\u043A\u0430\u0445, \u0447\u0442\u043E\u0431\u044B \u043D\u0435 \u0437\u0430\u0433\u0440\u043E\u043C\u043E\u0436\u0434\u0430\u0442\u044C \u0441\u043F\u0438\u0441\u043E\u043A. */}
+      {activeWarehouse?.kind === 'defect' && activePath.length === 0 && !search && (
+        <View style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Ionicons name="information-circle-outline" size={16} color={colors.orange[600]} />
+          <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
+            \u0422\u043E\u0432\u0430\u0440\u044B \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442 \u0432 \u0431\u0440\u0430\u043A \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u0435 \u0441\u043E \u0441\u043A\u043B\u0430\u0434\u0430 \u0438\u043B\u0438 \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u043E\u0442 \u043A\u043B\u0438\u0435\u043D\u0442\u0430
+          </Text>
+        </View>
+      )}
+
       {/* Loading: show skeleton when no data yet (cold start, no cache hit). */}
       {/* Empty state only fires when query has resolved (data !== undefined) */}
       {/* AND the result is genuinely empty \u2014 never on a stale-undefined flash. */}
@@ -1342,12 +1456,18 @@ export default function ProductsScreen() {
         <EmptyState
           title={'\u041D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432'}
           description={
-            activePath.length > 0
-              ? '\u0412 \u044D\u0442\u043E\u0439 \u043F\u0430\u043F\u043A\u0435 \u043F\u0443\u0441\u0442\u043E'
-              : '\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043F\u0435\u0440\u0432\u044B\u0439 \u0442\u043E\u0432\u0430\u0440'
+            activeWarehouse?.kind === 'defect'
+              ? '\u0422\u043E\u0432\u0430\u0440\u044B \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442 \u0432 \u0431\u0440\u0430\u043A \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u0435 \u0441\u043E \u0441\u043A\u043B\u0430\u0434\u0430 \u0438\u043B\u0438 \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u043E\u0442 \u043A\u043B\u0438\u0435\u043D\u0442\u0430'
+              : activeWarehouse?.kind === 'used'
+                ? '\u0411/\u0423 \u0442\u043E\u0432\u0430\u0440\u044B \u0434\u043E\u0431\u0430\u0432\u043B\u044F\u044E\u0442\u0441\u044F \u0447\u0435\u0440\u0435\u0437 \u0441\u0438\u0441\u0442\u0435\u043C\u043D\u043E\u0433\u043E \u043F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0430 \u00AB\u041F\u043E\u043A\u0443\u043F\u043A\u0430 \u0431/\u0443\u00BB'
+                : activePath.length > 0
+                  ? '\u0412 \u044D\u0442\u043E\u0439 \u043F\u0430\u043F\u043A\u0435 \u043F\u0443\u0441\u0442\u043E'
+                  : '\u0414\u043E\u0431\u0430\u0432\u044C\u0442\u0435 \u043F\u0435\u0440\u0432\u044B\u0439 \u0442\u043E\u0432\u0430\u0440'
           }
           action={
-            !activePath.length
+            // Action-\u043A\u043D\u043E\u043F\u043A\u0430 \u00AB\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C\u00BB \u2014 \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u043C \u0441\u043A\u043B\u0430\u0434\u0435:
+            // \u043D\u0430 defect/used \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435 \u0438\u0434\u0451\u0442 \u0434\u0440\u0443\u0433\u0438\u043C \u043F\u0443\u0442\u0451\u043C.
+            !activePath.length && activeWarehouse?.kind === 'main'
               ? { label: '\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C', onPress: openCreate }
               : undefined
           }
@@ -2296,6 +2416,35 @@ export default function ProductsScreen() {
               />
             </View>
 
+            {/* Reason — обязательное для брака. Размечаем * только когда
+                target=defect; для used_transfer оставляем чистый «опционально». */}
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+                {transferTarget === 'defect' ? 'Причина переноса *' : 'Причина / комментарий'}
+              </Text>
+              <TextInput
+                value={transferReason}
+                onChangeText={setTransferReason}
+                style={[
+                  styles.formInput,
+                  {
+                    minHeight: 64,
+                    textAlignVertical: 'top',
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
+                ]}
+                multiline
+                placeholder={
+                  transferTarget === 'defect'
+                    ? 'Например: повреждена упаковка, не подлежит продаже'
+                    : 'Необязательно'
+                }
+                placeholderTextColor={palette.text.tertiary}
+              />
+            </View>
+
             <View style={styles.formActions}>
               <TouchableOpacity
                 style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
@@ -2311,6 +2460,57 @@ export default function ProductsScreen() {
                 onPress={handleTransferSubmit}
               >
                 <Text style={styles.submitBtnText}>{'Перенести'}</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </Modal>
+
+      {/* Установить розничную цену — мини-модал для Б/У товаров.
+          Видим только когда `sellPriceProduct` не null. Один input + две
+          кнопки; productsApi.setSellPrice обновит сервер. */}
+      <Modal
+        visible={!!sellPriceProduct}
+        onClose={closeSellPriceEditor}
+        title={sellPriceProduct ? `Цена: ${sellPriceProduct.name}` : 'Установить цену'}
+      >
+        {sellPriceProduct && (
+          <>
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Розничная цена, ₽</Text>
+              <TextInput
+                value={sellPriceInput}
+                onChangeText={setSellPriceInput}
+                style={[
+                  styles.formInput,
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
+                ]}
+                keyboardType="numeric"
+                placeholder="0"
+                placeholderTextColor={palette.text.tertiary}
+                autoFocus
+              />
+              <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+                Себестоимость: {formatMoney(sellPriceProduct.costPrice || 0)}
+              </Text>
+            </View>
+            <View style={styles.formActions}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+                onPress={closeSellPriceEditor}
+              >
+                <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.submitBtn} onPress={handleSetSellPriceSubmit} activeOpacity={0.85}>
+                {setSellPriceMutation.isPending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={styles.submitBtnText}>Сохранить</Text>
+                )}
               </TouchableOpacity>
             </View>
           </>
@@ -2857,4 +3057,37 @@ const styles = StyleSheet.create({
   invFullEmptyText: { fontSize: fontSize.sm, color: colors.gray[400] },
   // Correction
   correctionDiffRow: { marginTop: spacing[1.5] },
+  // ── Defect / used warehouse hint banner ─────────────────────────
+  // Тонкая полоска под поиском в браке: объясняет, как товары туда
+  // попадают. Не «alert», а информационный nudge — без тяжёлого фона.
+  defectInfoHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginHorizontal: spacing[4],
+    marginTop: spacing[2],
+    marginBottom: spacing[1],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  defectInfoHintText: { fontSize: 12, lineHeight: 16, flex: 1 },
+  // ── Used warehouse: inline "Установить цену" CTA ────────────────
+  // Под товарами на складе Б/У с sellPrice == null/0 показываем
+  // компактный CTA вместо суммы. По нажатию открывается inline
+  // редактор-prompt; цена правится через productsApi.setSellPrice.
+  pricelessCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 4,
+    borderRadius: borderRadius.md,
+    backgroundColor: colors.amber[50],
+    borderWidth: 1,
+    borderColor: colors.amber[200],
+    alignSelf: 'flex-start',
+  },
+  pricelessCtaText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.amber[700] },
 });
