@@ -24,6 +24,9 @@ import type {
   TodayEmployeeStatus, MarketingDashboard, ReviewResponse, ReviewAlert,
   MessagingIntegration, ReviewPlatformLink, ReviewSettings, PublicReviewData,
   Warehouse, WarrantyClaim, CheckPhoto, CheckTemplate, CallFunnel, ReminderSettings,
+  CheckReturn, ScheduleSettings, EmployeeProfile, EmployeeDocument,
+  EmployeeAchievement, EmployeeFullProfile, DashboardV2, ClientsNewVsReturning,
+  OwnerAlert, BestDayOfWeek, RecentReview, RetentionStats,
 } from '../types';
 import type {
   LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams,
@@ -144,6 +147,9 @@ export function createProductsApi(api: HttpClient) {
     getById: (id: string) => api.get<Product>(`/products/${id}`),
     create: (data: CreateProductRequest) => api.post<Product>('/products', data),
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
+    /** Set just the sell price on an existing product. */
+    setSellPrice: (id: string, sellPrice: number) =>
+      api.patch<Product>(`/products/${id}/sell-price`, { sellPrice }),
     remove: (id: string) => api.delete(`/products/${id}`),
     // ── Trash bin ─────────────────────────────────────────────────────
     // Soft-deleted products live in the trash. They stay searchable here
@@ -232,7 +238,15 @@ export function createSuppliersApi(api: HttpClient) {
      */
     usedPurchase: (
       id: string,
-      body: { productName: string; qty: number; purchasePrice: number; category?: string; note?: string },
+      body: {
+        productName: string;
+        qty: number;
+        purchasePrice: number;
+        /** Optional — owner can defer setting the markup. */
+        sellPrice?: number | null;
+        category?: string;
+        note?: string;
+      },
     ) =>
       api.post<{
         id: string;
@@ -279,6 +293,18 @@ export function createReportsApi(api: HttpClient) {
       }>('/reports/defect-writeoff', { params }),
     callFunnel: (params: { dateFrom?: string; dateTo?: string }) =>
       api.get<CallFunnel>('/reports/call-funnel', { params }),
+    /** Owner dashboard v2 — net profit, cash position, margin, deferred sum, etc. */
+    dashboardV2: (params?: { period?: 'today' | 'week' | 'month' | 'year' }) =>
+      api.get<DashboardV2>('/reports/dashboard-v2', { params }),
+    clientsNewVsReturning: (params: { from: string; to: string }) =>
+      api.get<ClientsNewVsReturning>('/reports/clients-new-vs-returning', { params }),
+    alerts: () => api.get<OwnerAlert[]>('/reports/alerts'),
+    bestDayOfWeek: (params: { from: string; to: string }) =>
+      api.get<BestDayOfWeek>('/reports/best-day-of-week', { params }),
+    recentReviews: (limit?: number) =>
+      api.get<RecentReview[]>('/reports/recent-reviews', { params: { limit } }),
+    retention: (params: { period: 'week' | 'month' | 'year' }) =>
+      api.get<RetentionStats>('/reports/retention', { params }),
   };
 }
 
@@ -321,6 +347,17 @@ export function createStockMovementsApi(api: HttpClient) {
       supplierId?: string;
       recordAsExpense?: boolean;
     }) => api.post<{ id: string }>('/stock-movements', body),
+    /**
+     * Convenience wrapper for the most common "transfer to defect" flow:
+     * provide source warehouse + product + qty + reason. Backend resolves
+     * the defect warehouse from kind='defect' for the tenant.
+     */
+    transferToDefect: (body: {
+      productId: string;
+      fromWarehouseId: string;
+      quantity: number;
+      reason: string;
+    }) => api.post<{ id: string }>('/stock-movements/transfer-to-defect', body),
   };
 }
 
@@ -488,6 +525,72 @@ export function createPushApi(api: HttpClient) {
       api.post('/push/token', { token, platform }),
     unregister: (token: string) =>
       api.delete('/push/token', { data: { token } } as unknown),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Returns API — full or partial returns of a check.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createReturnsApi(api: HttpClient) {
+  return {
+    list: (params?: { from?: string; to?: string }) =>
+      api.get<CheckReturn[]>('/returns', { params }),
+    create: (
+      checkId: string,
+      body: {
+        destination: 'warehouse' | 'defect';
+        reason?: string;
+        scope: 'full' | 'partial';
+        refundAmount?: number;
+        lines?: { productLineId?: string; serviceLineId?: string; quantity?: number }[];
+      },
+    ) => api.post<CheckReturn>(`/returns/${checkId}`, body),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Schedule settings (which attendance statuses count as a shift)
+// ───────────────────────────────────────────────────────────────────────
+
+export function createScheduleSettingsApi(api: HttpClient) {
+  return {
+    get: () => api.get<ScheduleSettings>('/schedule/settings'),
+    update: (data: Partial<ScheduleSettings>) =>
+      api.post<ScheduleSettings>('/schedule/settings', data),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Employees — extended profile, photo, documents, achievements
+// ───────────────────────────────────────────────────────────────────────
+
+export function createEmployeesApi(api: HttpClient) {
+  return {
+    update: (id: string, body: Partial<EmployeeProfile>) =>
+      api.patch<EmployeeProfile>(`/employees/${id}`, body),
+    uploadPhoto: (id: string, form: unknown) =>
+      api.post<{ photoUrl: string }>(`/employees/${id}/photo`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      } as unknown),
+    fullProfile: (id: string) =>
+      api.get<EmployeeFullProfile>(`/employees/${id}/full-profile`),
+    documents: (id: string) =>
+      api.get<EmployeeDocument[]>(`/employees/${id}/documents`),
+    uploadDocument: (id: string, form: unknown) =>
+      api.post<EmployeeDocument>(`/employees/${id}/documents`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      } as unknown),
+    deleteDocument: (id: string, docId: string) =>
+      api.delete(`/employees/${id}/documents/${docId}`),
+    achievements: (id: string) =>
+      api.get<EmployeeAchievement[]>(`/employees/${id}/achievements`),
+    addAchievement: (
+      id: string,
+      body: { name: string; description?: string; icon?: string; color?: string },
+    ) => api.post<EmployeeAchievement>(`/employees/${id}/achievements`, body),
+    removeAchievement: (id: string, achId: string) =>
+      api.delete(`/employees/${id}/achievements/${achId}`),
   };
 }
 

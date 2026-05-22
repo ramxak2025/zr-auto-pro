@@ -12,6 +12,7 @@ import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
+import { parseFields, filterShape } from '../common/field-filter';
 
 // Only tables we explicitly want to allow as targets of cross-tenant
 // assertions. Keeping this as an allow-list (not a string the caller
@@ -100,6 +101,12 @@ export class ChecksService {
       productSalaryTotal: parseFloat(row.product_salary_total) || 0,
       totalCost: parseFloat(row.total_cost) || 0,
       profit: parseFloat(row.profit) || 0,
+      // Returns metadata: 040 added is_returned + returned_at + return_destination + return_scope.
+      // FE renders a strikethrough / red badge on returned checks in the journal.
+      isReturned: !!row.is_returned,
+      returnedAt: row.returned_at ?? null,
+      returnDestination: row.return_destination ?? null,
+      returnScope: row.return_scope ?? null,
       createdAt: row.created_at,
     };
   }
@@ -167,6 +174,7 @@ export class ChecksService {
       params,
     );
 
+    const fields = parseFields(query.fields);
     const checks = rows.map((row) => {
       const ch = this.mapCheck(row);
       if (row.master_id) {
@@ -178,7 +186,11 @@ export class ChecksService {
       if (row.car_id) {
         (ch as any).car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
       }
-      return ch;
+      // Slim payload: list view never carries inline service / product line
+      // arrays — they belong to the detail endpoint. Caller can opt in to a
+      // subset via ?fields=. Counts are intentionally not included; the FE
+      // already has serviceTotal + productTotal in the row.
+      return filterShape(ch as Record<string, unknown>, fields);
     });
 
     return { data: checks, total, page, limit };

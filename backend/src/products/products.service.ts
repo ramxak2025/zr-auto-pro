@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { parseFields, filterShape } from '../common/field-filter';
 
 @Injectable()
 export class ProductsService {
@@ -47,16 +48,25 @@ export class ProductsService {
    *   - null / undefined → fall back to the tenant's "main" warehouse.
    *
    * Returns the resolved id or throws BadRequest for a foreign / unknown
-   * warehouse.
+   * warehouse. `forCreate=true` additionally rejects direct creation on
+   * the defect warehouse (you can only land there via a defect transfer
+   * / return).
    */
-  private async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
+  private async resolveWarehouseId(
+    tenantID: string,
+    warehouseId?: string | null,
+    opts: { forCreate?: boolean } = {},
+  ): Promise<string | null> {
     if (warehouseId) {
-      const { rows } = await this.pool.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
-        warehouseId,
-        tenantID,
-      ]);
+      const { rows } = await this.pool.query(
+        'SELECT id, kind FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+        [warehouseId, tenantID],
+      );
       if (rows.length === 0) {
         throw new BadRequestException({ message: 'Склад не найден' });
+      }
+      if (opts.forCreate && rows[0].kind === 'defect') {
+        throw new BadRequestException({ message: 'Нельзя добавлять товары напрямую в склад брака' });
       }
       return rows[0].id;
     }
@@ -105,7 +115,14 @@ export class ProductsService {
       params,
     );
 
-    return { data: rows.map(this.mapProduct), total, page, limit };
+    // Slim payload for list responses unless explicit fields were requested.
+    // `description` and `notes` are not on the products table today, but
+    // future migrations might add them; the FE can already pass `fields=`
+    // to opt-in to specific subsets. Caller passes `?fields=*` (or omits
+    // entirely) to get the full mapping for backwards compatibility.
+    const fields = parseFields(query.fields);
+    const data = rows.map((r) => filterShape(this.mapProduct(r), fields));
+    return { data, total, page, limit };
   }
 
   async getLowStock(tenantID: string) {
@@ -217,7 +234,7 @@ export class ProductsService {
     if (dto.supplierId) {
       await this.assertSupplierInTenant(dto.supplierId, tenantID);
     }
-    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId);
+    const warehouseId = await this.resolveWarehouseId(tenantID, dto.warehouseId, { forCreate: true });
     const warrantyDays = this.normalizeWarrantyDays(dto.warrantyDays);
     const { rows } = await this.pool.query(
       `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit, is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
@@ -356,6 +373,48 @@ export class ProductsService {
           [id, oldCost, newCost, oldSell, newSell, userID || null, tenantID],
         );
       }
+    }
+
+    return this.mapProduct(rows[0]);
+  }
+
+  /**
+   * Set just the sell price of a product. Lightweight endpoint used by the
+   * used-purchase flow where the product is initially created with sell_price
+   * defaulted to the purchase price (sell price unknown at intake time) and
+   * needs to be set later when the owner decides what to charge.
+   */
+  async setSellPrice(id: string, tenantID: string, sellPrice: number, userID?: string) {
+    if (sellPrice === undefined || sellPrice === null) {
+      throw new BadRequestException({ message: 'Цена продажи обязательна' });
+    }
+    const numeric = parseFloat(String(sellPrice));
+    if (!isFinite(numeric) || numeric < 0) {
+      throw new BadRequestException({ message: 'Неверная цена' });
+    }
+
+    const { rows: current } = await this.pool.query(
+      'SELECT cost_price, sell_price FROM products WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
+      [id, tenantID],
+    );
+    if (current.length === 0) {
+      throw new NotFoundException({ message: 'Товар не найден' });
+    }
+
+    const oldCost = parseFloat(current[0].cost_price) || 0;
+    const oldSell = parseFloat(current[0].sell_price) || 0;
+
+    const { rows } = await this.pool.query(
+      `UPDATE products SET sell_price=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+      [numeric, id, tenantID],
+    );
+
+    if (oldSell !== numeric) {
+      await this.pool.query(
+        `INSERT INTO price_history (product_id, cost_price_before, cost_price_after, sell_price_before, sell_price_after, user_id, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, oldCost, oldCost, oldSell, numeric, userID || null, tenantID],
+      );
     }
 
     return this.mapProduct(rows[0]);

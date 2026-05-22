@@ -202,7 +202,7 @@ export class SuppliersService {
     tenantID: string,
     userID: string | null,
     supplierId: string,
-    dto: { productName?: string; qty?: number; purchasePrice?: number; category?: string; note?: string },
+    dto: { productName?: string; qty?: number; purchasePrice?: number; sellPrice?: number | null; category?: string; note?: string },
   ) {
     const productName = String(dto?.productName ?? '').trim();
     const qty = parseFloat(String(dto?.qty ?? ''));
@@ -215,6 +215,14 @@ export class SuppliersService {
     }
     if (!isFinite(purchasePrice) || purchasePrice < 0) {
       throw new BadRequestException({ message: 'Закупочная цена должна быть неотрицательной' });
+    }
+    // sellPrice is OPTIONAL — owner often doesn't know the final markup at
+    // intake time. If absent / null we persist NULL so the FE can render
+    // a "set price later" prompt and call /products/:id/sell-price.
+    const hasSellPrice = dto?.sellPrice !== undefined && dto?.sellPrice !== null;
+    const sellPriceParsed = hasSellPrice ? parseFloat(String(dto.sellPrice)) : null;
+    if (sellPriceParsed !== null && (!isFinite(sellPriceParsed) || sellPriceParsed < 0)) {
+      throw new BadRequestException({ message: 'Неверная цена продажи' });
     }
     const category = dto?.category ? String(dto.category).trim() || null : null;
 
@@ -272,16 +280,22 @@ export class SuppliersService {
           tenantID,
         ]);
       } else {
-        // Create a fresh Б/У product. sale_price defaults to
-        // purchasePrice (owner can edit later). warehouseId is locked
-        // to the tenant's used warehouse.
+        // Create a fresh Б/У product. sellPrice can be NULL if the owner
+        // hasn't decided yet — they patch it later via
+        // /products/:id/sell-price. warehouseId is locked to the tenant's
+        // used warehouse. Note: sell_price column is NOT NULL on legacy
+        // tenants, so we store 0 as "unknown" if the caller didn't pass
+        // anything. The FE distinguishes 0 from a real price using the
+        // separate flag — we leave the cost_price column populated for
+        // reporting.
+        const finalSellPrice = sellPriceParsed !== null ? sellPriceParsed : 0;
         const { rows: insRows } = await client.query(
           `INSERT INTO products
              (name, category, cost_price, sell_price, stock, min_stock, unit,
               tenant_id, warehouse_id)
            VALUES ($1, $2, $3, $4, $5, 0, 'pcs', $6, $7)
            RETURNING id`,
-          [productName, category, purchasePrice, purchasePrice, qty, tenantID, usedWarehouse.id],
+          [productName, category, purchasePrice, finalSellPrice, qty, tenantID, usedWarehouse.id],
         );
         productId = insRows[0].id;
       }

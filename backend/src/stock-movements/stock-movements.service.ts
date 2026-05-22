@@ -141,6 +141,27 @@ export class StockMovementsService {
     if (!isFinite(qty) || qty <= 0) {
       throw new BadRequestException({ message: 'Количество должно быть положительным' });
     }
+    // Reason is mandatory for any movement that ends up on the defect
+    // warehouse — otherwise we lose the diagnostic trail. Checked early so
+    // the caller never opens a transaction.
+    const reason = (dto.reason ?? '').trim();
+    if (dto.type === 'defect_transfer' && !reason) {
+      throw new BadRequestException({ message: 'Укажите причину перемещения в брак' });
+    }
+    if (dto.type === 'defect_return_to_supplier' && !reason) {
+      throw new BadRequestException({ message: 'Укажите причину возврата поставщику' });
+    }
+    // For arbitrary income/inventory/expense with explicit defect target
+    // (unusual but possible via direct API), require reason too.
+    if (dto.targetWarehouseId && dto.type !== 'defect_transfer') {
+      const { rows } = await this.pool.query('SELECT kind FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
+        dto.targetWarehouseId,
+        tenantID,
+      ]);
+      if (rows[0]?.kind === 'defect' && !reason) {
+        throw new BadRequestException({ message: 'Укажите причину для склада брака' });
+      }
+    }
 
     const client = await this.pool.connect();
     try {

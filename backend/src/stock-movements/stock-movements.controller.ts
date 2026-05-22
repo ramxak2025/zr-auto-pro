@@ -80,4 +80,24 @@ export class StockMovementsController {
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateStockMovementDto) {
     return this.movementsService.create(user.tenantID, user.userID, dto);
   }
+
+  // Convenience: ergonomic shortcut for "transfer to defect" so the FE
+  // doesn't need to construct a full stock-movement payload with the
+  // generic POST /. Body is intentionally minimal (productId, source,
+  // qty, reason). Reason is required by the underlying service for
+  // defect_transfer movements.
+  @Roles('director', 'admin', 'superadmin')
+  @Post('transfer-to-defect')
+  transferToDefect(
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { productId: string; fromWarehouseId: string; quantity: number; reason: string },
+  ) {
+    return this.movementsService.create(user.tenantID, user.userID, {
+      type: 'defect_transfer',
+      productId: body?.productId,
+      quantity: body?.quantity,
+      sourceWarehouseId: body?.fromWarehouseId,
+      reason: body?.reason,
+    });
+  }
 }

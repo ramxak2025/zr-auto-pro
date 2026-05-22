@@ -58,10 +58,20 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
   private var panStartTabX: CGFloat = 0
 
   // MARK: - Layout constants
+  //
+  // The droplet is locked to the SAME size as the central Kassa button
+  // (KASSA_SIZE = 52pt on the JS side). It never grows with the slot
+  // width — that produced an oversized capsule on wide bars and an
+  // obvious overlap mismatch with the round Kassa button in the centre
+  // slot. A fixed 52×52 pill with a 26pt corner radius reads as a
+  // perfectly round capsule when the droplet sits over the Kassa slot,
+  // and as a tight pill-shaped highlight when it sits over any other
+  // slot — visually consistent across all five tabs and on every iPhone
+  // width.
 
-  private let dropletInset: CGFloat = 4   // padding from bar's top/bottom edges
-  private let dropletSidePadding: CGFloat = 8 // narrower than slot
-  private let dropletCornerRadius: CGFloat = 22
+  private let dropletSize: CGFloat = 52       // matches KASSA_SIZE on JS
+  private let dropletCornerRadius: CGFloat = 26 // half-height → full pill / circle
+  private let dropletInset: CGFloat = 4         // (BAR_HEIGHT - KASSA_SIZE) / 2 = 4
 
   // The visible bar geometry — bar floats with 14pt horizontal margin and
   // is 58pt tall. JS sets these via the RN style on the wrapper, but we
@@ -85,7 +95,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
     self.dropletView = UIView()
     self.dropletView.layer.cornerCurve = .continuous
-    self.dropletView.layer.cornerRadius = 18
+    self.dropletView.layer.cornerRadius = 26 // == dropletCornerRadius
     self.dropletView.backgroundColor = .clear
     self.dropletView.isUserInteractionEnabled = false
     self.dropletView.layer.shadowColor = UIColor.black.cgColor
@@ -111,7 +121,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     self.dropletGradient.startPoint = CGPoint(x: 0.5, y: 0.0)
     self.dropletGradient.endPoint = CGPoint(x: 0.5, y: 1.0)
     self.dropletGradient.cornerCurve = .continuous
-    self.dropletGradient.cornerRadius = 18
+    self.dropletGradient.cornerRadius = 26
 
     self.panGesture = UIPanGestureRecognizer()
     self.tapGesture = UITapGestureRecognizer()
@@ -222,15 +232,27 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
   private func dropletFrame(forIndex index: Int) -> CGRect {
     guard tabCount > 0 else { return .zero }
-    // Droplet sits inside the icon row only — bottomInset (the home-
-    // indicator safe-area) is the bar's lower portion, glass-only.
+    // Droplet is a fixed 52×52 pill — matches KASSA_SIZE so the
+    // highlight reads identically over the centre slot (where Kassa
+    // lives) and over every other slot. We compute the slot centre and
+    // place the 52pt square symmetrically around it; if the slot is
+    // wider than 52 (typical on 5-tab phones) there is intentional empty
+    // space on either side of the pill, which is exactly the desired
+    // look. Vertically, dropletInset = (BAR_HEIGHT - KASSA_SIZE) / 2 so
+    // the pill is centred between the bar's top and the start of the
+    // home-indicator safe-area area (bottomInset).
     let iconAreaH = bounds.height - bottomInset
     let slotW = bounds.width / CGFloat(tabCount)
-    let dropletW = slotW - dropletSidePadding * 2
-    let dropletH = max(0, iconAreaH - dropletInset * 2)
-    let x = CGFloat(index) * slotW + dropletSidePadding
-    let y = dropletInset
-    return CGRect(x: x, y: y, width: dropletW, height: dropletH)
+    let centerX = slotW * (CGFloat(index) + 0.5)
+    let width = dropletSize
+    let height = min(dropletSize, max(0, iconAreaH - dropletInset * 2))
+    // Clamp horizontally so the pill never bleeds past the rounded
+    // island edges, even on a hypothetical 1-tab bar.
+    let minX: CGFloat = 0
+    let maxX = max(0, bounds.width - width)
+    let x = min(max(minX, centerX - width / 2), maxX)
+    let y = (iconAreaH - height) / 2
+    return CGRect(x: x, y: y, width: width, height: height)
   }
 
   // MARK: - Pan gesture — droplet follows finger live (Apple Music feel)
@@ -238,12 +260,14 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
   // Apple Music's bottom controls have a few signature touches when you
   // drag across them:
   //   1. The capsule "presses down" slightly on touch begin (scale 0.96)
-  //   2. While dragging fast, it stretches horizontally (>1) and squishes
-  //      vertically (<1) — like a real water droplet under acceleration
-  //   3. On release it springs back with critical-damping (no overshoot)
-  //
-  // We model the same behaviour here using direct frame writes during
-  // pan (driven by gesture velocity) and a UIView spring on release.
+  //      so the user FEELS the touch land before they start moving.
+  //   2. While dragging, the capsule's centre tracks the finger 1-to-1
+  //      with no easing lag. Its SIZE stays fixed (52×52, matching the
+  //      Kassa CTA) — earlier velocity-driven stretch/squish was
+  //      removed because it allowed the pill to overflow the rounded
+  //      island edges on quick swipes.
+  //   3. On release it springs back to the resting slot with critical
+  //      damping (no overshoot).
 
   @objc private func handlePan(_ gr: UIPanGestureRecognizer) {
     let location = gr.location(in: self)
@@ -259,36 +283,33 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
       selectionFeedback.selectionChanged()
 
     case .changed:
-      // Move droplet so its center tracks the finger; clamp to bar bounds
+      // Move droplet so its center tracks the finger; clamp to bar
+      // bounds. The pill's WIDTH and HEIGHT are LOCKED to 52×52 — we
+      // no longer stretch/squish on velocity. The fixed size matches
+      // the central Kassa button so the highlight never overflows the
+      // rounded island edges nor visually grows past the Kassa CTA
+      // when the finger crosses the middle slot.
       let slotW = bounds.width / CGFloat(max(1, tabCount))
-      let baseW = slotW - dropletSidePadding * 2
       let iconAreaH = bounds.height - bottomInset
-      let baseH = max(0, iconAreaH - dropletInset * 2)
+      let dropletW = dropletSize
+      let dropletH = min(dropletSize, max(0, iconAreaH - dropletInset * 2))
 
-      // Velocity-driven liquid stretch. Wider when moving fast, slightly
-      // shorter vertically (water-like deformation). Capped so it never
-      // looks cartoony.
-      let vx = abs(gr.velocity(in: self).x)
-      let stretchX = min(1.22, 1 + vx / 3500)
-      let squishY = max(0.88, 1 - vx / 7000)
-
-      let dropletW = baseW * stretchX
-      let dropletH = baseH * squishY
-
-      let minX = dropletSidePadding
-      let maxX = bounds.width - dropletSidePadding - dropletW
+      let minX: CGFloat = 0
+      let maxX = max(0, bounds.width - dropletW)
       let proposedX = max(minX, min(maxX, location.x - dropletW / 2))
-      let yOffset = (baseH - dropletH) / 2 // keep vertical center fixed
+      let y = (iconAreaH - dropletH) / 2
 
       // Direct frame write — no UIView animation block here (we want
-      // strict 1-to-1 finger tracking, no easing lag).
+      // strict 1-to-1 finger tracking, no easing lag). The press-down
+      // scale (0.96) applied in .began stays on `transform`; we do not
+      // overwrite it during the drag so the user keeps feeling the
+      // tactile pressed state.
       dropletView.frame = CGRect(
         x: proposedX,
-        y: dropletInset + yOffset,
+        y: y,
         width: dropletW,
         height: dropletH
       )
-      dropletView.transform = .identity
       dropletGradient.frame = dropletView.bounds
 
       // While dragging, fire a subtle selection haptic each time the

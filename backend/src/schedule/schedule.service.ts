@@ -2,9 +2,119 @@ import { Injectable, Inject, NotFoundException, BadRequestException } from '@nes
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 
+// Valid statuses for the schedule_settings.shift_statuses array.
+// Anything outside this set is ignored on write so a manipulated DTO can't
+// poison the column. UI keys → emoji + label:
+//   worked  ✅ Смена
+//   dayoff  😴 Выходной
+//   sick    🤒 Больничный
+//   short   ⏰ <1ч
+//   long    🚨 >1ч
+//   absent  ❌ Прогул
+const ALLOWED_SHIFT_STATUSES = new Set(['worked', 'dayoff', 'sick', 'short', 'long', 'absent']);
+const DEFAULT_SHIFT_STATUSES = ['worked', 'short'];
+
 @Injectable()
 export class ScheduleService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * Return the per-tenant schedule settings; auto-create a default row if
+   * the tenant has never opened the screen. Cached only in transit (a
+   * cheap SELECT) — no in-memory cache because the FE itself caches the
+   * settings query.
+   */
+  async getSettings(tenantID: string) {
+    const { rows } = await this.pool.query(
+      'SELECT shift_statuses FROM schedule_settings WHERE tenant_id=$1 LIMIT 1',
+      [tenantID],
+    );
+    if (rows.length === 0) {
+      await this.pool.query(
+        `INSERT INTO schedule_settings (tenant_id, shift_statuses)
+         VALUES ($1, $2::jsonb)
+         ON CONFLICT (tenant_id) DO NOTHING`,
+        [tenantID, JSON.stringify(DEFAULT_SHIFT_STATUSES)],
+      );
+      return { shiftStatuses: DEFAULT_SHIFT_STATUSES };
+    }
+    const raw = rows[0].shift_statuses;
+    const arr: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const statuses = Array.isArray(arr)
+      ? arr.filter((s): s is string => typeof s === 'string' && ALLOWED_SHIFT_STATUSES.has(s))
+      : DEFAULT_SHIFT_STATUSES;
+    return { shiftStatuses: statuses };
+  }
+
+  /**
+   * Replace the per-tenant shift statuses. Unknown values are silently
+   * dropped; empty array means "nothing counts as a shift" — caller's
+   * responsibility, not ours.
+   */
+  async updateSettings(tenantID: string, dto: { shiftStatuses?: string[] }) {
+    const incoming = Array.isArray(dto?.shiftStatuses) ? dto.shiftStatuses : [];
+    const cleaned: string[] = [];
+    for (const s of incoming) {
+      if (typeof s === 'string' && ALLOWED_SHIFT_STATUSES.has(s) && !cleaned.includes(s)) {
+        cleaned.push(s);
+      }
+    }
+    await this.pool.query(
+      `INSERT INTO schedule_settings (tenant_id, shift_statuses, updated_at)
+       VALUES ($1, $2::jsonb, now())
+       ON CONFLICT (tenant_id) DO UPDATE SET shift_statuses = EXCLUDED.shift_statuses, updated_at = now()`,
+      [tenantID, JSON.stringify(cleaned)],
+    );
+    return { shiftStatuses: cleaned };
+  }
+
+  /**
+   * Map a `schedule_settings.shift_statuses` array into a SQL fragment that
+   * filters schedule_entries to count only the statuses that the tenant has
+   * marked as "real shift". Returns `{ sql, params }` where sql is a
+   * complete condition that can be ANDed into an existing WHERE.
+   *
+   * Returns `null` when the tenant counts nothing as a shift — in that case
+   * the caller can decide whether to short-circuit or apply a never-matches
+   * filter. Today every screen treats null as "always-false".
+   */
+  async buildShiftFilter(tenantID: string): Promise<{ sql: string; params: string[] } | null> {
+    const { shiftStatuses } = await this.getSettings(tenantID);
+    if (shiftStatuses.length === 0) return null;
+    const clauses: string[] = [];
+    const params: string[] = [];
+    // Status → SQL predicate over schedule_entries rows.
+    for (const s of shiftStatuses) {
+      switch (s) {
+        case 'worked':
+          // worked = the user actually showed up (actual_arrival set) and
+          // wasn't tagged as late_major (which is "long" bucket below).
+          clauses.push(`(actual_arrival IS NOT NULL AND COALESCE(late_status, '') <> 'late_major')`);
+          break;
+        case 'dayoff':
+          clauses.push(`(is_day_off = true)`);
+          break;
+        case 'sick':
+          // Reuse late_status='sick'. If a tenant never used it the bucket
+          // is just empty — non-failing.
+          clauses.push(`(late_status = 'sick')`);
+          break;
+        case 'short':
+          clauses.push(`(late_status = 'late_minor')`);
+          break;
+        case 'long':
+          clauses.push(`(late_status = 'late_major')`);
+          break;
+        case 'absent':
+          // Absent = scheduled work day, didn't show up, not marked day-off.
+          clauses.push(
+            `(is_day_off = false AND actual_arrival IS NULL AND COALESCE(late_status, '') NOT IN ('late_minor','late_major'))`,
+          );
+          break;
+      }
+    }
+    return clauses.length > 0 ? { sql: `(${clauses.join(' OR ')})`, params } : null;
+  }
 
   private async assertUserInTenant(userID: string, tenantID: string): Promise<void> {
     if (!userID) {

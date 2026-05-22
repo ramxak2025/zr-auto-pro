@@ -94,6 +94,19 @@ export class ProductsController {
     return this.productsService.update(id, user.tenantID, dto, user.userID);
   }
 
+  // Set just the sell price on an existing product. Designed for the
+  // used-purchase flow — the owner intake doesn't always know the future
+  // sell price, so the product is initially created with sell_price equal
+  // to purchasePrice and updated later when the owner sets the markup.
+  @Patch(':id/sell-price')
+  setSellPrice(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() body: { sellPrice: number },
+  ) {
+    return this.productsService.setSellPrice(id, user.tenantID, body?.sellPrice, user.userID);
+  }
+
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.remove(id, user.tenantID);

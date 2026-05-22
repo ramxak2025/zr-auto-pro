@@ -29,6 +29,18 @@ export class ScheduleController {
     return this.scheduleService.getWorkModes(user.tenantID);
   }
 
+  // ── Per-tenant schedule settings (which statuses count as a shift) ─────
+  @Get('settings')
+  getSettings(@CurrentUser() user: JwtPayload) {
+    return this.scheduleService.getSettings(user.tenantID);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Post('settings')
+  updateSettings(@CurrentUser() user: JwtPayload, @Body() body: { shiftStatuses?: string[] }) {
+    return this.scheduleService.updateSettings(user.tenantID, body);
+  }
+
   @Roles('director', 'admin', 'superadmin')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {

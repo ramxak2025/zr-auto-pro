@@ -30,6 +30,8 @@ import { StockMovementsModule } from './stock-movements/stock-movements.module';
 import { PushModule } from './push/push.module';
 import { CheckPhotosModule } from './check-photos/check-photos.module';
 import { CheckTemplatesModule } from './check-templates/check-templates.module';
+import { ReturnsModule } from './returns/returns.module';
+import { EmployeesModule } from './employees/employees.module';
 
 @Module({
   imports: [
@@ -63,6 +65,8 @@ import { CheckTemplatesModule } from './check-templates/check-templates.module';
     PushModule,
     CheckPhotosModule,
     CheckTemplatesModule,
+    ReturnsModule,
+    EmployeesModule,
   ],
   providers: [MigrationRunner],
 })

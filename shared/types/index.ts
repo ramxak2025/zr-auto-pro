@@ -249,6 +249,11 @@ export interface Check {
   profit: number;
   /** Warranties spawned by this check (only populated by /checks/:id). */
   warrantyClaims?: WarrantyClaim[];
+  /** Set when the check has been returned (full or partial). FE renders a strikethrough + badge in the journal. */
+  isReturned?: boolean;
+  returnedAt?: string | null;
+  returnDestination?: 'warehouse' | 'defect' | null;
+  returnScope?: 'full' | 'partial' | null;
   createdAt: string;
 }
 
@@ -614,4 +619,181 @@ export interface ReminderSettings {
   monthsInterval: number;
   messageTemplate: string;
   lastRunAt?: string | null;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Returns
+// ───────────────────────────────────────────────────────────────────────
+
+export interface CheckReturn {
+  id: string;
+  checkId: string;
+  destination: 'warehouse' | 'defect';
+  reason?: string | null;
+  refundAmount: number;
+  scope: 'full' | 'partial';
+  returnedBy?: string | null;
+  createdAt: string;
+  /** Joined from checks for journal display. */
+  checkNumber?: number;
+  checkTotal?: number;
+  clientName?: string | null;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Schedule settings (which attendance statuses count as a real shift)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface ScheduleSettings {
+  /**
+   * Subset of allowed statuses: 'worked' | 'dayoff' | 'sick' | 'short' |
+   * 'long' | 'absent'. Defaults to ['worked', 'short'].
+   */
+  shiftStatuses: string[];
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Employee profile / achievements / full profile composite
+// ───────────────────────────────────────────────────────────────────────
+
+export interface EmployeeProfile {
+  id: string;
+  fullName: string;
+  role: string;
+  hireDate?: string | null;
+  specializations: string[];
+  positionTitle?: string | null;
+  customTitle?: string | null;
+  monthlyKpiRevenue?: number | null;
+  monthlyKpiChecks?: number | null;
+  ownerNotes?: string | null;
+  photoUrl?: string | null;
+  whatsapp?: string | null;
+}
+
+export interface EmployeeDocument {
+  id: string;
+  type: string;
+  name?: string | null;
+  fileUrl: string;
+  uploadedAt: string;
+  expiresAt?: string | null;
+}
+
+export interface EmployeeAchievement {
+  id: string;
+  key: string;
+  name: string;
+  description?: string | null;
+  icon?: string | null;
+  color?: string | null;
+  type: 'auto' | 'custom';
+  awardedBy?: string | null;
+  awardedAt: string;
+}
+
+export interface EmployeeFullProfile {
+  profile: EmployeeProfile;
+  stats: {
+    efficiency: number;
+    discipline: number;
+    activity: number;
+    rating: number;
+    quality: number;
+  };
+  streaks: {
+    disciplineStreak: number;
+    fiveStarStreak: number;
+    checksStreak: number;
+  };
+  lifetime: {
+    totalChecks: number;
+    totalRevenue: number;
+    clientsServed: number;
+    bestDay?: { date: string; value: number };
+    bestMonth?: { ym: string; value: number };
+    topCarBrands: { brand: string; count: number }[];
+  };
+  yearHeatmap: { day: string; checks: number; revenue: number }[];
+  teamRank: {
+    revenueRank: number;
+    disciplineRank: number;
+    ratingRank: number;
+    total: number;
+  };
+  serviceMastery: {
+    serviceId: string;
+    name: string;
+    count: number;
+    tier: 'bronze' | 'silver' | 'gold' | 'platinum';
+  }[];
+  careerTimeline: {
+    date: string;
+    kind: 'hire' | 'promotion' | 'top_month' | 'custom';
+    title: string;
+    description?: string;
+  }[];
+  achievements: EmployeeAchievement[];
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Owner dashboard v2 + supporting analytics
+// ───────────────────────────────────────────────────────────────────────
+
+export interface DashboardV2 {
+  revenueToday: number;
+  revenueMonth: number;
+  checksToday: number;
+  netProfitToday: number;
+  netProfitMonth: number;
+  cashPosition: { cash: number; card: number; warranty: number; total: number };
+  marginPct: number;
+  marginPctChange: number;
+  marginSpark: number[];
+  deferredSum: { count: number; sum: number };
+  personalRecord: {
+    bestDay?: { date: string; value: number };
+    bestMonth?: { ym: string; value: number };
+  };
+  monthForecast: number;
+  /** Returns recorded today (count + total refund amount). */
+  returnsToday: number;
+  returnsAmount: number;
+  period: 'today' | 'week' | 'month' | 'year';
+}
+
+export interface ClientsNewVsReturning {
+  newCount: number;
+  returningCount: number;
+  newRevenue: number;
+  returningRevenue: number;
+  period: { from: string; to: string };
+}
+
+export interface OwnerAlert {
+  type: 'low_stock' | 'low_review' | 'warranty' | 'late_master' | 'pending_return';
+  severity: 'info' | 'warn' | 'crit';
+  message: string;
+  link?: string;
+}
+
+export interface BestDayOfWeek {
+  days: { weekday: number; revenue: number; count: number }[];
+  best: number;
+  worst: number;
+}
+
+export interface RecentReview {
+  id: string;
+  rating: number;
+  comment?: string | null;
+  clientName?: string | null;
+  employeeName?: string | null;
+  createdAt: string;
+}
+
+export interface RetentionStats {
+  returningRate: number;
+  avgLtv: number;
+  avgDaysBetweenVisits: number;
 }

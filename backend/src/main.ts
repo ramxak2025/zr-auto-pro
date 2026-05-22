@@ -6,6 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
+import compression from 'compression';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ETagInterceptor } from './common/interceptors/etag.interceptor';
@@ -22,6 +23,12 @@ async function bootstrap() {
   // Raise JSON body limit to 50 MB — bulk imports, CSV uploads, etc.
   app.use(json({ limit: '50mb' }));
   app.use(urlencoded({ extended: true, limit: '50mb' }));
+
+  // gzip / deflate JSON responses — every client sends Accept-Encoding: gzip
+  // by default. Mostly noticeable on list endpoints (products, checks,
+  // schedule) where payloads run into tens of KB. Header response (304,
+  // small responses < 1KB) are skipped automatically by the middleware.
+  app.use(compression());
 
   // Trust the reverse proxy (nginx) so request.ip reflects the real client IP.
   app.set('trust proxy', 'loopback, linklocal, uniquelocal');

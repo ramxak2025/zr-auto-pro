@@ -38,4 +38,45 @@ export class ReportsController {
   getCallFunnel(@CurrentUser() user: JwtPayload, @Query() query: { dateFrom?: string; dateTo?: string }) {
     return this.reportsService.getCallFunnel(user.tenantID, query);
   }
+
+  // ── Owner dashboard v2 ───────────────────────────────────────────────
+  // Augments /checks/dashboard with net profit, cash position, margin,
+  // deferred sum, personal records, month forecast. Cached 30s.
+  @Get('dashboard-v2')
+  async dashboardV2(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: { period?: 'today' | 'week' | 'month' | 'year' },
+  ) {
+    const period = (query?.period ?? 'month') as 'today' | 'week' | 'month' | 'year';
+    const [base, returns] = await Promise.all([
+      this.reportsService.dashboardV2(user.tenantID, period),
+      this.reportsService.returnsSummaryForDashboard(user.tenantID),
+    ]);
+    return { ...base, ...returns };
+  }
+
+  @Get('clients-new-vs-returning')
+  clientsNewVsReturning(@CurrentUser() user: JwtPayload, @Query() query: { from: string; to: string }) {
+    return this.reportsService.clientsNewVsReturning(user.tenantID, query);
+  }
+
+  @Get('alerts')
+  alerts(@CurrentUser() user: JwtPayload) {
+    return this.reportsService.alerts(user.tenantID);
+  }
+
+  @Get('best-day-of-week')
+  bestDayOfWeek(@CurrentUser() user: JwtPayload, @Query() query: { from: string; to: string }) {
+    return this.reportsService.bestDayOfWeek(user.tenantID, query);
+  }
+
+  @Get('recent-reviews')
+  recentReviews(@CurrentUser() user: JwtPayload, @Query('limit') limit?: string) {
+    return this.reportsService.recentReviews(user.tenantID, limit ? parseInt(limit) : 5);
+  }
+
+  @Get('retention')
+  retention(@CurrentUser() user: JwtPayload, @Query() query: { period?: 'week' | 'month' | 'year' }) {
+    return this.reportsService.retention(user.tenantID, query?.period ?? 'month');
+  }
 }
