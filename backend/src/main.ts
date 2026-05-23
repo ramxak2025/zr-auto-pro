@@ -6,7 +6,11 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
-import compression from 'compression';
+// `compression` ships as CommonJS without a default export — using a
+// default import compiles to `compression_1.default()` which is undefined
+// in production. require() avoids the interop wrapper entirely.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const compression = require('compression');
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ETagInterceptor } from './common/interceptors/etag.interceptor';
