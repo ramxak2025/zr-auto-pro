@@ -31,6 +31,9 @@ import {
   createReturnsApi,
   createScheduleSettingsApi,
   createEmployeesApi,
+  createWarehouseAnalyticsApi,
+  createClientSourcesApi,
+  createJournalApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -65,6 +68,9 @@ export const pushApi = createPushApi(api);
 export const returnsApi = createReturnsApi(api);
 export const scheduleSettingsApi = createScheduleSettingsApi(api);
 export const employeesApi = createEmployeesApi(api);
+export const warehouseAnalyticsApi = createWarehouseAnalyticsApi(api);
+export const clientSourcesApi = createClientSourcesApi(api);
+export const journalApi = createJournalApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {
