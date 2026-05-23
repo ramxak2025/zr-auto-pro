@@ -11,6 +11,7 @@ import {
   PanResponder,
   Platform,
 } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming, Easing } from 'react-native-reanimated';
 import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -1642,8 +1643,8 @@ function WarehouseAnalyticsWidget() {
   const tone: 'up' | 'down' | 'flat' = deltaValue > 0 ? 'up' : deltaValue < 0 ? 'down' : 'flat';
   // Growing stock value = green (capital rising); shrinking = red (capital
   // leaving the warehouse, usually because nothing is being replenished).
-  // Owner's POV: "Денег застряло в товаре" — рост ≠ хорошо, но визуально
-  // green/red остаётся читаемым потому что подписан как «застряло».
+  // Owner's POV: «Капитал в товаре» — рост ≠ всегда хорошо, но визуально
+  // green/red остаётся читаемым.
   const deltaColor = tone === 'up' ? colors.green[600] : tone === 'down' ? colors.red[600] : palette.text.tertiary;
   const deltaBg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : palette.bg.muted;
 
@@ -1694,7 +1695,7 @@ function WarehouseAnalyticsWidget() {
               {formatMoney(totalValue)}
             </Text>
             <Text style={[styles.warehouseHeroCaption, { color: palette.text.tertiary }]}>
-              Денег застряло в товаре
+              Капитал в товаре
             </Text>
           </View>
           {summary && (
@@ -1803,8 +1804,12 @@ function WarehouseAnalyticsWidget() {
 }
 
 // ── 5. Clients New vs Returning ─────────────────────────────────────────────
+// Premium analytics-style widget: matches OwnerAnalyticsChart visual language
+// — segmented period control, hero total with two-tone delta, animated split
+// bar, and icon-decorated revenue legend. Tap → Clients screen.
 function ClientsNewVsReturningCard() {
   const palette = useColors();
+  const navigation = useNavigation<any>();
   // Локальный picker: today / yesterday / scrollable day window / week /
   // month / year. Базовое состояние — month (как видит владелец дашборд по
   // умолчанию). dayOffset нужен только при mode === 'day'.
@@ -1839,6 +1844,18 @@ function ClientsNewVsReturningCard() {
   const total = newCount + returningCount;
   const ratioNew = total > 0 ? newCount / total : 0;
 
+  // Smoothly tween the split-bar widths when the user switches period or new
+  // data arrives. Shared values stay on the UI thread — no JS-thread bridge
+  // traffic on each frame.
+  const newFlex = useSharedValue(ratioNew);
+  const returnFlex = useSharedValue(1 - ratioNew);
+  useEffect(() => {
+    newFlex.value = withTiming(ratioNew, { duration: 480, easing: Easing.out(Easing.cubic) });
+    returnFlex.value = withTiming(1 - ratioNew, { duration: 480, easing: Easing.out(Easing.cubic) });
+  }, [ratioNew, newFlex, returnFlex]);
+  const newBarStyle = useAnimatedStyle(() => ({ flex: Math.max(newFlex.value, 0.0001) }));
+  const returnBarStyle = useAnimatedStyle(() => ({ flex: Math.max(returnFlex.value, 0.0001) }));
+
   // Динамически собираем 7-day window (от -3 до +3 от текущего offset),
   // но clamp по [-30, 0] так, чтобы окно "ползло" и не уходило в будущее.
   const dayWindow = useMemo(() => {
@@ -1859,146 +1876,208 @@ function ClientsNewVsReturningCard() {
     return `${d.getDate()}.${String(d.getMonth() + 1).padStart(2, '0')}`;
   };
 
+  // Human-readable period subtitle ("За месяц", "Сегодня" etc.) — mirrors
+  // OwnerAnalyticsChart's getOffsetLabel feel.
+  const periodLabel = (): string => {
+    if (mode === 'week') return 'За неделю';
+    if (mode === 'year') return 'За год';
+    if (mode === 'month') return 'За месяц';
+    if (dayOffset === 0) return 'Сегодня';
+    if (dayOffset === -1) return 'Вчера';
+    return formatDayLabel(dayOffset);
+  };
+
+  const openClients = () => {
+    haptic('tap');
+    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Clients' } });
+  };
+
   return (
     <AnimatedCard
       index={9}
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={openClients}
+      activeOpacity={0.92}
     >
-      <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.purple[50] }]}>
-          <Ionicons name="people-outline" size={16} color={colors.purple[600]} />
+      {/* Hero header — same rhythm as OwnerAnalyticsChart */}
+      <View style={styles.chartHeaderRow}>
+        <View>
+          <Text style={[styles.chartHeaderTitle, { color: palette.text.primary }]}>Клиенты</Text>
+          <Text style={[styles.chartHeaderSub, { color: palette.text.secondary }]}>{periodLabel()}</Text>
         </View>
-        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>КЛИЕНТЫ</Text>
+        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
       </View>
-      {/* Mode chips: Сегодня · Вчера · ← День → · Неделя · Месяц · Год */}
-      <View style={styles.clientsModeRow}>
-        <TouchableOpacity
-          style={[styles.modeChip, mode === 'day' && dayOffset === 0 && styles.modeChipActive]}
-          onPress={() => {
-            haptic('select');
-            setMode('day');
-            setDayOffset(0);
-          }}
-        >
-          <Text style={[styles.modeChipText, mode === 'day' && dayOffset === 0 && styles.modeChipTextActive]}>Сегодня</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.modeChip, mode === 'day' && dayOffset === -1 && styles.modeChipActive]}
-          onPress={() => {
-            haptic('select');
-            setMode('day');
-            setDayOffset(-1);
-          }}
-        >
-          <Text style={[styles.modeChipText, mode === 'day' && dayOffset === -1 && styles.modeChipTextActive]}>Вчера</Text>
-        </TouchableOpacity>
-        {(['week', 'month', 'year'] as const).map((m) => (
-          <TouchableOpacity
-            key={m}
-            style={[styles.modeChip, mode === m && styles.modeChipActive]}
-            onPress={() => {
-              haptic('select');
-              setMode(m);
-            }}
-          >
-            <Text style={[styles.modeChipText, mode === m && styles.modeChipTextActive]}>
-              {m === 'week' ? 'Неделя' : m === 'month' ? 'Месяц' : 'Год'}
-            </Text>
-          </TouchableOpacity>
-        ))}
+
+      {/* iOS-segmented period control — same shape as the analytics chart */}
+      <View style={[styles.segCtl, { backgroundColor: palette.bg.muted }]}>
+        {(
+          [
+            { key: 'today', label: 'Сегодня' },
+            { key: 'yesterday', label: 'Вчера' },
+            { key: 'week', label: 'Неделя' },
+            { key: 'month', label: 'Месяц' },
+            { key: 'year', label: 'Год' },
+          ] as const
+        ).map((p) => {
+          const active =
+            (p.key === 'today' && mode === 'day' && dayOffset === 0) ||
+            (p.key === 'yesterday' && mode === 'day' && dayOffset === -1) ||
+            (p.key === 'week' && mode === 'week') ||
+            (p.key === 'month' && mode === 'month') ||
+            (p.key === 'year' && mode === 'year');
+          return (
+            <TouchableOpacity
+              key={p.key}
+              style={[styles.segCtlBtn, active && [styles.segCtlBtnActive, { backgroundColor: palette.bg.card }]]}
+              onPress={() => {
+                haptic('select');
+                if (p.key === 'today') {
+                  setMode('day');
+                  setDayOffset(0);
+                } else if (p.key === 'yesterday') {
+                  setMode('day');
+                  setDayOffset(-1);
+                } else {
+                  setMode(p.key as Mode);
+                }
+              }}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.segCtlText,
+                  { color: palette.text.secondary },
+                  active && [styles.segCtlTextActive, { color: palette.text.primary }],
+                ]}
+              >
+                {p.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
-      {/* Scrollable day picker — shown only when mode === 'day'. */}
-      {mode === 'day' && (
-        <View style={styles.dayPickerRow}>
-          <TouchableOpacity
-            style={[styles.dayArrow, { backgroundColor: palette.bg.muted }]}
-            onPress={() => {
-              haptic('tap');
-              setDayOffset((o) => Math.max(o - 1, -30));
-            }}
-            hitSlop={6}
-          >
-            <Ionicons name="chevron-back" size={14} color={palette.text.secondary} />
-          </TouchableOpacity>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: spacing[1.5], paddingHorizontal: spacing[2] }}
-          >
-            {dayWindow.map((off) => {
-              const active = off === dayOffset;
-              return (
-                <TouchableOpacity
-                  key={off}
-                  style={[
-                    styles.dayChip,
-                    { backgroundColor: active ? colors.primary[600] : palette.bg.muted },
-                  ]}
-                  onPress={() => {
-                    haptic('tap');
-                    setDayOffset(off);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text
-                    style={[
-                      styles.dayChipText,
-                      { color: active ? colors.white : palette.text.secondary },
-                    ]}
-                  >
-                    {formatDayLabel(off)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-          <TouchableOpacity
-            style={[styles.dayArrow, { backgroundColor: palette.bg.muted }, dayOffset >= 0 && { opacity: 0.4 }]}
-            onPress={() => {
-              haptic('tap');
-              setDayOffset((o) => Math.min(o + 1, 0));
-            }}
-            disabled={dayOffset >= 0}
-            hitSlop={6}
-          >
-            <Ionicons name="chevron-forward" size={14} color={palette.text.secondary} />
-          </TouchableOpacity>
-        </View>
-      )}
+
       {/* Numbers + stacked bar */}
       {isLoading && !data ? (
         <View style={{ gap: spacing[2] }}>
-          <Skeleton width={'100%'} height={40} radius={8} />
-          <Skeleton width={'80%'} height={12} radius={4} />
+          <Skeleton width={'60%'} height={44} radius={10} />
+          <Skeleton width={'100%'} height={12} radius={6} />
+          <Skeleton width={'80%'} height={16} radius={6} />
         </View>
       ) : (
         <>
-          <View style={styles.clientsCountsRow}>
+          {/* Hero total — big number + sub-caption */}
+          <View style={styles.clientsHeroRow}>
             <View style={{ flex: 1 }}>
-              <Text style={[styles.clientsCount, { color: colors.purple[700] }]}>{newCount}</Text>
-              <Text style={[styles.clientsCountLabel, { color: palette.text.tertiary }]}>новых клиентов</Text>
+              <Text style={[styles.clientsHeroValue, { color: palette.text.primary }]}>{total}</Text>
+              <Text style={[styles.clientsHeroCaption, { color: palette.text.tertiary }]}>
+                {total === 1 ? 'клиент за период' : total < 5 && total > 0 ? 'клиента за период' : 'клиентов за период'}
+              </Text>
             </View>
-            <View style={{ width: 1, backgroundColor: palette.border.subtle, marginHorizontal: spacing[3] }} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.clientsCount, { color: colors.primary[600] }]}>{returningCount}</Text>
-              <Text style={[styles.clientsCountLabel, { color: palette.text.tertiary }]}>вернулись</Text>
+            {total > 0 && (
+              <View style={[styles.clientsRatioChip, { backgroundColor: colors.purple[50] }]}>
+                <Ionicons name="sparkles" size={11} color={colors.purple[600]} />
+                <Text style={[styles.clientsRatioChipText, { color: colors.purple[700] }]}>
+                  {`${Math.round(ratioNew * 100)}% новых`}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Animated split bar — flex tween via Reanimated UI-thread */}
+          <View style={[styles.clientsSplitBar, { backgroundColor: palette.bg.muted }]}>
+            {total > 0 ? (
+              <>
+                <Animated.View style={[{ backgroundColor: colors.purple[600] }, newBarStyle]} />
+                <Animated.View style={[{ backgroundColor: colors.primary[500] }, returnBarStyle]} />
+              </>
+            ) : null}
+          </View>
+
+          {/* Legend with icon decoration — premium feel */}
+          <View style={styles.clientsLegendRow}>
+            <View style={styles.clientsLegendItem}>
+              <View style={[styles.clientsLegendDot, { backgroundColor: colors.purple[600] }]}>
+                <Ionicons name="bulb-outline" size={10} color={colors.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.clientsLegendLabel, { color: palette.text.secondary }]}>Новые</Text>
+                <Text style={[styles.clientsLegendValue, { color: palette.text.primary }]} numberOfLines={1}>
+                  {`${newCount} · ${formatMoney(newRevenue)}`}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.clientsLegendItem}>
+              <View style={[styles.clientsLegendDot, { backgroundColor: colors.primary[500] }]}>
+                <Ionicons name="refresh" size={10} color={colors.white} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.clientsLegendLabel, { color: palette.text.secondary }]}>Постоянные</Text>
+                <Text style={[styles.clientsLegendValue, { color: palette.text.primary }]} numberOfLines={1}>
+                  {`${returningCount} · ${formatMoney(returningRevenue)}`}
+                </Text>
+              </View>
             </View>
           </View>
-          {total > 0 && (
-            <View style={[styles.stackedBar, { backgroundColor: palette.bg.muted }]}>
-              <View style={{ flex: ratioNew, backgroundColor: colors.purple[600] }} />
-              <View style={{ flex: 1 - ratioNew, backgroundColor: colors.primary[500] }} />
+
+          {/* Day picker — surface only when user lands on a non-canonical day */}
+          {mode === 'day' && dayOffset < -1 && (
+            <View style={[styles.dayPickerRow, { marginTop: spacing[3] }]}>
+              <TouchableOpacity
+                style={[styles.dayArrow, { backgroundColor: palette.bg.muted }]}
+                onPress={() => {
+                  haptic('tap');
+                  setDayOffset((o) => Math.max(o - 1, -30));
+                }}
+                hitSlop={6}
+              >
+                <Ionicons name="chevron-back" size={14} color={palette.text.secondary} />
+              </TouchableOpacity>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={{ gap: spacing[1.5], paddingHorizontal: spacing[2] }}
+              >
+                {dayWindow.map((off) => {
+                  const active = off === dayOffset;
+                  return (
+                    <TouchableOpacity
+                      key={off}
+                      style={[
+                        styles.dayChip,
+                        { backgroundColor: active ? colors.primary[600] : palette.bg.muted },
+                      ]}
+                      onPress={() => {
+                        haptic('tap');
+                        setDayOffset(off);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[
+                          styles.dayChipText,
+                          { color: active ? colors.white : palette.text.secondary },
+                        ]}
+                      >
+                        {formatDayLabel(off)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+              <TouchableOpacity
+                style={[styles.dayArrow, { backgroundColor: palette.bg.muted }, dayOffset >= 0 && { opacity: 0.4 }]}
+                onPress={() => {
+                  haptic('tap');
+                  setDayOffset((o) => Math.min(o + 1, 0));
+                }}
+                disabled={dayOffset >= 0}
+                hitSlop={6}
+              >
+                <Ionicons name="chevron-forward" size={14} color={palette.text.secondary} />
+              </TouchableOpacity>
             </View>
           )}
-          <View style={styles.clientsRevenueRow}>
-            <Text style={[styles.clientsRevenueText, { color: palette.text.tertiary }]}>
-              Новые: <Text style={{ fontWeight: '700', color: palette.text.primary }}>{formatMoney(newRevenue)}</Text>
-            </Text>
-            <Text style={[styles.clientsRevenueText, { color: palette.text.tertiary }]}>
-              Постоянные:{' '}
-              <Text style={{ fontWeight: '700', color: palette.text.primary }}>{formatMoney(returningRevenue)}</Text>
-            </Text>
-          </View>
         </>
       )}
     </AnimatedCard>
@@ -3881,7 +3960,7 @@ const styles = StyleSheet.create({
   warehouseReorderMeta: { fontSize: 11, marginTop: 2 },
   warehouseReorderQty: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
 
-  // Clients new vs returning
+  // Clients new vs returning — premium analytics-style
   clientsModeRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -3913,6 +3992,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   dayChipText: { fontSize: 11, fontWeight: '700' },
+  // Legacy keys retained for any external reference; new layout uses the
+  // *Hero*, *SplitBar*, *Legend* keys below.
   clientsCountsRow: { flexDirection: 'row', alignItems: 'flex-end', marginBottom: spacing[2.5] },
   clientsCount: {
     fontSize: 28,
@@ -3934,6 +4015,73 @@ const styles = StyleSheet.create({
     gap: spacing[3],
   },
   clientsRevenueText: { fontSize: 12 },
+  // Premium layout
+  clientsHeroRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing[3],
+    gap: spacing[2],
+  },
+  clientsHeroValue: {
+    fontSize: 34,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+    fontVariant: ['tabular-nums'],
+    lineHeight: 38,
+  },
+  clientsHeroCaption: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  clientsRatioChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 5,
+    borderRadius: borderRadius.full,
+  },
+  clientsRatioChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: -0.1,
+  },
+  clientsSplitBar: {
+    flexDirection: 'row',
+    height: 10,
+    borderRadius: 5,
+    overflow: 'hidden',
+    marginBottom: spacing[3],
+  },
+  clientsLegendRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+  },
+  clientsLegendItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  clientsLegendDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clientsLegendLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: -0.1,
+  },
+  clientsLegendValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+    fontVariant: ['tabular-nums'],
+    marginTop: 1,
+  },
 
   // Period chips (used by Retention + BestDayOfWeek)
   periodChipsRow: {

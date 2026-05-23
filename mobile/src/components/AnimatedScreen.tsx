@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, ReactNode } from 'react';
-import { Animated, StyleSheet, ViewStyle } from 'react-native';
+import { Animated, Easing, StyleSheet, ViewStyle } from 'react-native';
 
 interface AnimatedScreenProps {
   children: ReactNode;
@@ -8,24 +8,19 @@ interface AnimatedScreenProps {
 }
 
 export default function AnimatedScreen({ children, style, delay = 0 }: AnimatedScreenProps) {
+  // Calm fade-in only — no Y-translation bounce. Premium iOS-style
+  // screens shouldn't "slide up" on every mount; that reads as
+  // springy. Sub-200ms ease-out feels like the screen just appears.
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(16)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 400,
-        delay,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 400,
-        delay,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 200,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
   }, []);
 
   return (
@@ -35,7 +30,6 @@ export default function AnimatedScreen({ children, style, delay = 0 }: AnimatedS
         style,
         {
           opacity: fadeAnim,
-          transform: [{ translateY: slideAnim }],
         },
       ]}
     >

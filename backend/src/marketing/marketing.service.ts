@@ -305,16 +305,28 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateSettings(tenantId: string, dto: any) {
+    // motivation_message is optional; allow empty string to clear it.
+    // We treat `undefined` as "leave unchanged" and `""` as "clear".
+    const motivation =
+      typeof dto.motivationMessage === 'string' ? dto.motivationMessage : null;
     await this.pool.query(
-      `INSERT INTO review_settings (tenant_id, send_time, feedback_delay_hours, auto_send_enabled, message_template)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO review_settings (tenant_id, send_time, feedback_delay_hours, auto_send_enabled, message_template, motivation_message)
+       VALUES ($1, $2, $3, $4, $5, COALESCE($6, ''))
        ON CONFLICT (tenant_id) DO UPDATE SET
          send_time=COALESCE($2, review_settings.send_time),
          feedback_delay_hours=COALESCE($3, review_settings.feedback_delay_hours),
          auto_send_enabled=COALESCE($4, review_settings.auto_send_enabled),
          message_template=COALESCE($5, review_settings.message_template),
+         motivation_message=COALESCE($6, review_settings.motivation_message),
          updated_at=now()`,
-      [tenantId, dto.sendTime, dto.feedbackDelayHours, dto.autoSendEnabled, dto.messageTemplate],
+      [
+        tenantId,
+        dto.sendTime,
+        dto.feedbackDelayHours,
+        dto.autoSendEnabled,
+        dto.messageTemplate,
+        motivation,
+      ],
     );
     return this.getSettings(tenantId);
   }
@@ -325,6 +337,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       feedbackDelayHours: r.feedback_delay_hours,
       autoSendEnabled: r.auto_send_enabled,
       messageTemplate: r.message_template,
+      motivationMessage: r.motivation_message ?? '',
     };
   }
 
@@ -346,11 +359,20 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     if (new Date(r.expires_at) < new Date()) throw new BadRequestException({ message: 'Ссылка истекла' });
 
     const links = await this.getPlatformLinks(r.tenant_id);
+    // Surface the owner's motivational message (e.g. "Замена фильтра в
+    // подарок за честный отзыв") so the public landing page can render
+    // it above the rating stars.
+    const { rows: settingsRows } = await this.pool.query(
+      `SELECT motivation_message FROM review_settings WHERE tenant_id=$1`,
+      [r.tenant_id],
+    );
+    const motivationMessage = settingsRows[0]?.motivation_message ?? '';
     return {
       tenantName: r.tenant_name,
       clientName: r.client_name,
       employeeName: r.employee_name,
       platformLinks: links,
+      motivationMessage,
     };
   }
 
@@ -655,7 +677,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
           // Build message from template
           const { rows: settingsRows } = await this.pool.query(
-            `SELECT message_template FROM review_settings WHERE tenant_id=$1`,
+            `SELECT message_template, motivation_message FROM review_settings WHERE tenant_id=$1`,
             [job.tenant_id],
           );
           const { rows: tenantRows } = await this.pool.query(`SELECT name FROM tenants WHERE id=$1`, [job.tenant_id]);
@@ -664,15 +686,19 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           ]);
 
           const template = settingsRows[0]?.message_template || 'Оцените обслуживание: {reviewLink}';
+          const motivationMessage = settingsRows[0]?.motivation_message || '';
           // Public review URL must be served by our own domain so clients
           // don't see a placeholder like "crm.app" in their SMS / WhatsApp.
           // Honour an explicit override (`APP_URL`) for any per-environment
           // tweak (staging, dev), but fall back to the production domain.
           const reviewLink = `${process.env.APP_URL || 'https://autexa.pw'}/review/${token}`;
           const message = template
-            .replace('{clientName}', clientRows[0]?.full_name || 'клиент')
-            .replace('{tenantName}', tenantRows[0]?.name || '')
-            .replace('{reviewLink}', reviewLink);
+            .replace(/\{clientName\}/g, clientRows[0]?.full_name || 'клиент')
+            .replace(/\{tenantName\}/g, tenantRows[0]?.name || '')
+            .replace(/\{reviewLink\}/g, reviewLink)
+            // {motivation} — owner's "gift for review" sentence. If the
+            // template doesn't reference it, the substitution is a no-op.
+            .replace(/\{motivation\}/g, motivationMessage);
 
           await adapter.sendMessage(job.client_phone, message);
           await this.pool.query(`UPDATE review_jobs SET status='sent' WHERE id=$1`, [job.id]);

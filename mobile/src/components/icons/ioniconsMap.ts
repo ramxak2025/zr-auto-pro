@@ -308,4 +308,60 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // Document/text variants for sheets.
   document: { lucide: 'FileText', solid: true, fill: true },
   'document-outline': { lucide: 'FileText' },
+
+  // ── Reports / Salary / Schedule cosmetic-bug audit (2026-05) ───────────
+  // Trends → pair the outline variant already present with a solid
+  // glyph (used in the Reports HERO when net profit is negative).
+  'trending-down': { lucide: 'TrendingDown', solid: true },
+  // Picture/image variants — Reports has an "Картинка" export tile that
+  // previously fell back to Circle.
+  'image-outline': { lucide: 'Image' },
+  image: { lucide: 'Image', solid: true, fill: true },
+  // Pulse — used in Reports AI-insights for "revenue up but profit
+  // lagging" insight; we previously rendered Circle for it.
+  'pulse-outline': { lucide: 'Activity' },
+  pulse: { lucide: 'Activity', solid: true },
+  // Ribbon — Salary screen "Премии за месяц" section + "Добавить премию"
+  // CTA + premium row icon. Was rendering as a Circle blob.
+  ribbon: { lucide: 'Ribbon', solid: true, fill: true },
+  'ribbon-outline': { lucide: 'Ribbon' },
+  // Wallet filled — Salary screen "Выдать зарплату" CTA. Outline already
+  // present, this is the solid variant matching the gradient pill.
+  // The owner explicitly asked for a CLEAN stroke version for the give-
+  // salary button, so we keep it non-filled and reuse `wallet-outline`
+  // weight instead. The filled wallet stays available for places that
+  // really need the heavy glyph.
+  // Flash (filled) — Salary screen "Аванс" pill on a coloured gradient.
+  flash: { lucide: 'Zap', solid: true, fill: true },
+  // Save (outline) — Schedule settings tab Сохранить button. The
+  // previously-rendered Circle blob was the reason owner saw "save shows
+  // a circle".
+  'save-outline': { lucide: 'Save' },
+  save: { lucide: 'Save', solid: true },
+  // Arrow-up-circle — kept as outline-only since we use it as a "send up
+  // / pay out" affordance in Salary. Filled version handled separately.
+  'arrow-up-circle-outline': { lucide: 'ArrowUpCircle' },
+
+  // ── Marketing / Mailings / Integrations audit (2026-05) ───────────────
+  // Active variants of tabs that previously fell back to Circle when the
+  // screen stripped the `-outline` suffix at runtime. `pie-chart-outline`
+  // is intentionally not redeclared here — it's already mapped earlier.
+  chatbubbles: { lucide: 'MessagesSquare', solid: true, fill: true },
+  chatbox: { lucide: 'MessageSquare', solid: true, fill: true },
+  // Active variants of the Mailings tab segmented control + the manual
+  // review-request CTA inside MarketingScreen.
+  'paper-plane': { lucide: 'Send', solid: true, fill: true },
+  // MoreScreen "Интеграции" menu entry — owner reported a circle. The
+  // SF-Symbols-equivalent is "puzzlepiece.extension".
+  'extension-puzzle-outline': { lucide: 'Puzzle' },
+  'extension-puzzle': { lucide: 'Puzzle', solid: true, fill: true },
+  // IntegrationsScreen — "Мегафон ВАТС" card icon owner reported missing.
+  'cellular-outline': { lucide: 'Signal' },
+  cellular: { lucide: 'Signal', solid: true },
+  // IntegrationsScreen — modal "Журнал событий" header icon was a circle.
+  'terminal-outline': { lucide: 'Terminal' },
+  terminal: { lucide: 'Terminal', solid: true },
+  // Logo-google — Lucide has no brand mark; render as a globe so the
+  // status card still has a visible affordance.
+  'logo-google': { lucide: 'Globe', solid: true, fill: false },
 };

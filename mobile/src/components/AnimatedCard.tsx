@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, ReactNode } from 'react';
-import { AccessibilityInfo, Animated, TouchableOpacity, ViewStyle } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, TouchableOpacity, ViewStyle } from 'react-native';
 
 interface AnimatedCardProps {
   children: ReactNode;
@@ -65,34 +65,22 @@ export default function AnimatedCard({
   // no per-frame UI-thread updates, no native animation handles.
   const skipAnimation = disableEntrance || reduceMotionEnabled || index >= STAGGER_LIMIT;
 
+  // Premium entry = calm opacity fade-in. No scale-up, no Y-translation
+  // bounce — those read as "springy" / "bouncy" and clash with the iOS-
+  // native materials this app uses. The stagger is kept so cards still
+  // appear sequentially, just calmly.
   const fadeAnim = useRef(new Animated.Value(skipAnimation ? 1 : 0)).current;
-  const slideAnim = useRef(new Animated.Value(skipAnimation ? 0 : 20)).current;
-  const scaleAnim = useRef(new Animated.Value(skipAnimation ? 1 : 0.96)).current;
 
   useEffect(() => {
     if (skipAnimation) return;
-    const delay = Math.min(index * 60, 300);
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 350,
-        delay,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 350,
-        delay,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 8,
-        tension: 40,
-        delay,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    const delay = Math.min(index * 40, 240);
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 180,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
     // Anim values are stable refs; we intentionally only depend on
     // `skipAnimation` and `index` so we don't re-fire on parent re-renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -117,7 +105,6 @@ export default function AnimatedCard({
 
   const animatedStyle = {
     opacity: fadeAnim,
-    transform: [{ translateY: slideAnim }, { scale: scaleAnim }],
   };
 
   if (onPress) {

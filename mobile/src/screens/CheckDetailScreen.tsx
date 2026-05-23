@@ -488,7 +488,7 @@ export default function CheckDetailScreen() {
             {isReturned && (
               <View style={styles.returnedHeaderBadge}>
                 <Ionicons name="arrow-undo" size={11} color={colors.white} />
-                <Text style={styles.returnedHeaderBadgeText}>\u0412\u041E\u0417\u0412\u0420\u0410\u0429\u0401\u041D</Text>
+                <Text style={styles.returnedHeaderBadgeText}>ВОЗВРАЩЁН</Text>
               </View>
             )}
           </View>

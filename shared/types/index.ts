@@ -575,7 +575,10 @@ export interface ReviewAlert {
 
 export interface MessagingIntegration {
   id: string;
-  providerType: 'whatsapp' | 'sms' | 'email';
+  // Mirrors the messaging_integrations.provider_type CHECK constraint —
+  // migration 008 already widened the DB to include smsru / moizvonki.
+  // Anything outside this union will be rejected by the backend DTO.
+  providerType: 'whatsapp' | 'sms' | 'smsru' | 'moizvonki' | 'email';
   senderName?: string;
   senderPhone?: string;
   webhookUrl?: string;
@@ -585,7 +588,10 @@ export interface MessagingIntegration {
 
 export interface ReviewPlatformLink {
   id: string;
-  platform: 'google' | 'yandex' | '2gis';
+  // Avito joined the list (migration 054). When extending — sync the
+  // DB CHECK constraint AND the IntegrationsScreen / web ReviewPublic
+  // platform map at the same time.
+  platform: 'google' | 'yandex' | '2gis' | 'avito';
   url: string;
   isActive: boolean;
 }
@@ -595,6 +601,10 @@ export interface ReviewSettings {
   feedbackDelayHours: number;
   autoSendEnabled: boolean;
   messageTemplate: string;
+  // "Подарок за отзыв" — single sentence the owner promises to clients
+  // who leave honest reviews. Surfaced on the public landing page and
+  // via the `{motivation}` variable in message templates.
+  motivationMessage: string;
 }
 
 export interface PublicReviewData {
@@ -602,6 +612,8 @@ export interface PublicReviewData {
   clientName?: string;
   employeeName?: string;
   platformLinks: ReviewPlatformLink[];
+  // Optional — empty string when the tenant hasn't set anything.
+  motivationMessage?: string;
 }
 
 export interface CheckPhoto {

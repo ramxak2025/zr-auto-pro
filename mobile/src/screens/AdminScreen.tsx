@@ -665,7 +665,7 @@ function PlansTab({ plans, tenants }: { plans: Plan[]; tenants: Tenant[] }) {
                 <Text style={[styles.planPriceValue, { color: palette.text.primary }]}>
                   {plan.monthlyPrice.toLocaleString('ru-RU')}
                 </Text>
-                <Text style={[styles.planPriceSuffix, { color: palette.text.secondary }]}> \u20BD/мес</Text>
+                <Text style={[styles.planPriceSuffix, { color: palette.text.secondary }]}> ₽/мес</Text>
               </View>
 
               {/* Stats */}

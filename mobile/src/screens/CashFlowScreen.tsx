@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -12,8 +12,8 @@ import {
   UIManager,
   ActivityIndicator,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -37,14 +37,19 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
-type Period = 'day' | 'week' | 'month' | 'year';
+type Period = 'day' | 'week' | 'month' | 'year' | 'custom';
 type Mode = 'all' | 'employee';
+
+// Только 4 "регулярных" чипа в шапке. 'custom' — отдельная кнопка
+// "Произвольный диапазон" под шапкой, чтобы не загромождать переключатель.
+const HEADER_PERIODS: Exclude<Period, 'custom'>[] = ['day', 'week', 'month', 'year'];
 
 const PERIOD_LABELS: Record<Period, string> = {
   day: 'День',
   week: 'Неделя',
   month: 'Месяц',
   year: 'Год',
+  custom: 'Диапазон',
 };
 
 const MONTH_LABELS = [
@@ -111,7 +116,7 @@ function endOfYear(d: Date): Date {
   return new Date(d.getFullYear(), 11, 31);
 }
 
-function rangeForPeriod(period: Period, anchor: Date): { from: Date; to: Date } {
+function rangeForPeriod(period: Exclude<Period, 'custom'>, anchor: Date): { from: Date; to: Date } {
   if (period === 'day') return { from: anchor, to: anchor };
   if (period === 'week') {
     const from = startOfWeek(anchor);
@@ -121,15 +126,37 @@ function rangeForPeriod(period: Period, anchor: Date): { from: Date; to: Date } 
   return { from: startOfYear(anchor), to: endOfYear(anchor) };
 }
 
-function shiftPeriod(period: Period, anchor: Date, dir: -1 | 1): Date {
+function shiftPeriod(period: Exclude<Period, 'custom'>, anchor: Date, dir: -1 | 1): Date {
   if (period === 'day') return addDays(anchor, dir);
   if (period === 'week') return addDays(anchor, dir * 7);
   if (period === 'month') return new Date(anchor.getFullYear(), anchor.getMonth() + dir, 1);
   return new Date(anchor.getFullYear() + dir, 0, 1);
 }
 
-function periodRangeLabel(period: Period, anchor: Date): string {
+function periodRangeLabel(period: Period, anchor: Date, customFrom?: Date, customTo?: Date): string {
+  if (period === 'custom') {
+    if (!customFrom || !customTo) return 'Диапазон';
+    const sameYear = customFrom.getFullYear() === customTo.getFullYear();
+    const fromStr = customFrom.toLocaleDateString(
+      'ru-RU',
+      sameYear ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' },
+    );
+    const toStr = customTo.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+    // Тот же день → одиночная дата.
+    if (fmt(customFrom) === fmt(customTo)) return toStr;
+    return `${fromStr} – ${toStr}`;
+  }
   if (period === 'day') {
+    // Краткая "якорная" подпись — "Сегодня" / "Вчера" / "Завтра" — иначе
+    // длинная дата. Соответствует общим текстовым подсказкам в приложении.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const day = new Date(anchor);
+    day.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((day.getTime() - today.getTime()) / 86_400_000);
+    if (diffDays === 0) return 'Сегодня';
+    if (diffDays === -1) return 'Вчера';
+    if (diffDays === 1) return 'Завтра';
     return anchor.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
   }
   if (period === 'week') {
@@ -154,26 +181,6 @@ function formatMoney(v: number) {
       .toString()
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
-}
-
-function dayChipLabel(d: Date) {
-  // "Сегодня" / "Вчера" / "Завтра" — quick mental anchor near the centre
-  // of the scroll. Otherwise short "12 мая".
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const day = new Date(d);
-  day.setHours(0, 0, 0, 0);
-  const diffDays = Math.round((day.getTime() - today.getTime()) / 86_400_000);
-  if (diffDays === 0) return 'Сегодня';
-  if (diffDays === -1) return 'Вчера';
-  if (diffDays === 1) return 'Завтра';
-  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-}
-
-function dayWeekday(d: Date): string {
-  const wd = d.toLocaleDateString('ru-RU', { weekday: 'short' });
-  // Capitalise first letter of e.g. "пн" → "Пн".
-  return wd.charAt(0).toUpperCase() + wd.slice(1);
 }
 
 // ── EmployeePickerRow ──────────────────────────────────────────────────
@@ -223,9 +230,10 @@ export default function CashFlowScreen() {
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
 
-  // Period + anchor date — these two together drive dateFrom/dateTo. The
-  // anchor is the SELECTED point inside the period (a date for "day", any
-  // date in the week/month/year for the others).
+  // Period + anchor date — эти два состояния вместе дают dateFrom/dateTo.
+  // anchor — выбранная точка внутри периода (день для 'day', любая дата
+  // внутри недели/месяца/года для остальных). Для 'custom' используются
+  // customFrom / customTo напрямую.
   const today = useMemo(() => {
     const t = new Date();
     t.setHours(0, 0, 0, 0);
@@ -233,6 +241,12 @@ export default function CashFlowScreen() {
   }, []);
   const [period, setPeriod] = useState<Period>('day');
   const [anchor, setAnchor] = useState<Date>(today);
+
+  // Custom range. Инициализируется текущим месяцем, активируется только
+  // когда period === 'custom' (после нажатия "Произвольный диапазон").
+  const [customFrom, setCustomFrom] = useState<Date>(() => startOfMonth(today));
+  const [customTo, setCustomTo] = useState<Date>(() => endOfMonth(today));
+  const [datePickerMode, setDatePickerMode] = useState<'customFrom' | 'customTo' | null>(null);
 
   // Filter mode + employee selection.
   const [mode, setMode] = useState<Mode>('all');
@@ -244,36 +258,14 @@ export default function CashFlowScreen() {
   // scroll content predictable + checks fetched lazily).
   const [expandedDay, setExpandedDay] = useState<string | null>(null);
 
-  // Derived range
-  const { from: rangeFrom, to: rangeTo } = useMemo(() => rangeForPeriod(period, anchor), [period, anchor]);
+  // Derived range. Для 'custom' используем кастомные даты напрямую,
+  // иначе считаем по anchor через rangeForPeriod.
+  const { from: rangeFrom, to: rangeTo } = useMemo(() => {
+    if (period === 'custom') return { from: customFrom, to: customTo };
+    return rangeForPeriod(period, anchor);
+  }, [period, anchor, customFrom, customTo]);
   const dateFrom = useMemo(() => fmt(rangeFrom), [rangeFrom]);
   const dateTo = useMemo(() => fmt(rangeTo), [rangeTo]);
-
-  // Day chip range (period === 'day') — ±30 days around today, snapping
-  // to the selected day.
-  const dayChips = useMemo(() => {
-    const out: Date[] = [];
-    for (let i = -30; i <= 30; i++) out.push(addDays(today, i));
-    return out;
-  }, [today]);
-  const dayScrollRef = useRef<ScrollView | null>(null);
-  const DAY_CHIP_WIDTH = 64;
-  const DAY_CHIP_GAP = spacing[2];
-
-  useEffect(() => {
-    if (period !== 'day') return;
-    // Snap horizontal scroller to the selected day. We compute the index
-    // relative to today (which sits at offset 30 in `dayChips`).
-    const idx = 30 + Math.round((anchor.getTime() - today.getTime()) / 86_400_000);
-    const x = Math.max(0, idx * (DAY_CHIP_WIDTH + DAY_CHIP_GAP) - 100);
-    requestAnimationFrame(() => {
-      try {
-        dayScrollRef.current?.scrollTo({ x, animated: true });
-      } catch {
-        // ignore
-      }
-    });
-  }, [anchor, today, period]);
 
   // ── Queries ──────────────────────────────────────────────────────────
   const { data: employees } = useQuery<any[]>({
@@ -321,20 +313,26 @@ export default function CashFlowScreen() {
     setRefreshing(false);
   };
 
-  const handlePickPeriod = useCallback((p: Period) => {
+  const handlePickPeriod = useCallback((p: Exclude<Period, 'custom'>) => {
     haptic('select');
     setPeriod(p);
+    // При возврате к "регулярному" периоду сбрасываем якорь на сегодня —
+    // иначе пользователь видит "May 2020" после долгого custom-диапазона.
     setExpandedDay(null);
   }, []);
 
-  const handlePickDay = useCallback((d: Date) => {
-    haptic('select');
-    setAnchor(d);
+  const handleOpenCustomRange = useCallback(() => {
+    haptic('tap');
+    setPeriod('custom');
     setExpandedDay(null);
+    setDatePickerMode('customFrom');
   }, []);
 
   const handleShift = useCallback(
     (dir: -1 | 1) => {
+      // Стрелки активны только для регулярных периодов. Для 'custom'
+      // пользователь редактирует диапазон через календарь.
+      if (period === 'custom') return;
       haptic('tap');
       setAnchor((prev) => shiftPeriod(period, prev, dir));
       setExpandedDay(null);
@@ -342,14 +340,30 @@ export default function CashFlowScreen() {
     [period],
   );
 
+  const handleConfirmDate = useCallback(
+    (d: Date) => {
+      if (datePickerMode === 'customFrom') {
+        // Если выбрали from > to — выровнять to.
+        setCustomFrom(d);
+        setCustomTo((prev) => (prev < d ? d : prev));
+      } else if (datePickerMode === 'customTo') {
+        setCustomTo(d);
+        setCustomFrom((prev) => (prev > d ? d : prev));
+      }
+      setDatePickerMode(null);
+      setExpandedDay(null);
+    },
+    [datePickerMode],
+  );
+
   const handlePickMode = useCallback(
     (m: Mode) => {
       haptic('select');
       if (m === 'employee') {
-        // Selecting "По сотруднику" opens the picker. If no one was picked,
-        // we stay in 'all' mode (the user must actually choose someone).
+        // "По сотруднику" всегда открывает пикер — даже если уже выбран
+        // кто-то, владелец может захотеть поменять выбор без сброса
+        // через "Все сотрудники".
         setShowEmployeePicker(true);
-        if (employeeId) setMode('employee');
         return;
       }
       setMode('all');
@@ -357,10 +371,19 @@ export default function CashFlowScreen() {
       setEmployeeName('');
       setExpandedDay(null);
     },
-    [employeeId],
+    [],
   );
 
+  const handleClearEmployee = useCallback(() => {
+    haptic('select');
+    setMode('all');
+    setEmployeeId('');
+    setEmployeeName('');
+    setExpandedDay(null);
+  }, []);
+
   const pickEmployee = useCallback((id: string, fullName: string) => {
+    haptic('select');
     setEmployeeId(id);
     setEmployeeName(fullName);
     setMode('employee');
@@ -430,9 +453,12 @@ export default function CashFlowScreen() {
   );
 
   // ── Trailing slot: 4-segment period switcher ─────────────────────────
+  // Только 4 регулярных чипа: День / Неделя / Месяц / Год. Произвольный
+  // диапазон вынесен отдельной кнопкой ниже, чтобы не загромождать
+  // переключатель пятым редко используемым состоянием.
   const periodSwitcher = (
     <View style={[styles.periodSeg, { backgroundColor: palette.bg.muted }]}>
-      {(Object.keys(PERIOD_LABELS) as Period[]).map((p) => {
+      {HEADER_PERIODS.map((p) => {
         const active = period === p;
         return (
           <TouchableOpacity
@@ -474,55 +500,15 @@ export default function CashFlowScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
-        {/* ── Period sub-header ──────────────────────────────────────── */}
-        {period === 'day' ? (
-          <ScrollView
-            ref={dayScrollRef}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.dayChipsRow}
-            decelerationRate="fast"
-            snapToInterval={DAY_CHIP_WIDTH + DAY_CHIP_GAP}
-            snapToAlignment="start"
-          >
-            {dayChips.map((d) => {
-              const iso = fmt(d);
-              const active = iso === dateFrom;
-              return (
-                <TouchableOpacity
-                  key={iso}
-                  style={[
-                    styles.dayChip,
-                    {
-                      backgroundColor: active ? palette.accent.primary : palette.bg.card,
-                      borderColor: active ? palette.accent.primary : palette.border.subtle,
-                    },
-                  ]}
-                  onPress={() => handlePickDay(d)}
-                  activeOpacity={0.7}
-                >
-                  <Text
-                    style={[
-                      styles.dayChipWeekday,
-                      { color: active ? colors.white : palette.text.tertiary },
-                    ]}
-                  >
-                    {dayWeekday(d)}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.dayChipLabel,
-                      { color: active ? colors.white : palette.text.primary },
-                    ]}
-                  >
-                    {dayChipLabel(d)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        ) : (
-          <View style={styles.rangeRow}>
+        {/* ── Period sub-header: arrows + central label ───────────────
+            Один и тот же контрол для day / week / month / year — пользователю
+            не нужно держать в голове два разных способа листать. Для
+            'custom' стрелки скрываются (там диапазон редактируется через
+            календарь, листать стрелками неоднозначно). */}
+        <View style={styles.rangeRow}>
+          {period === 'custom' ? (
+            <View style={styles.rangeArrowSpacer} />
+          ) : (
             <TouchableOpacity
               style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => handleShift(-1)}
@@ -531,13 +517,20 @@ export default function CashFlowScreen() {
             >
               <Ionicons name="chevron-back" size={18} color={palette.text.primary} />
             </TouchableOpacity>
-            <View
-              style={[styles.rangeChip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            >
-              <Text style={[styles.rangeChipText, { color: palette.text.primary }]} numberOfLines={1}>
-                {periodRangeLabel(period, anchor)}
-              </Text>
-            </View>
+          )}
+          <TouchableOpacity
+            style={[styles.rangeChip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            onPress={period === 'custom' ? () => setDatePickerMode('customFrom') : undefined}
+            activeOpacity={period === 'custom' ? 0.7 : 1}
+            accessibilityRole={period === 'custom' ? 'button' : undefined}
+          >
+            <Text style={[styles.rangeChipText, { color: palette.text.primary }]} numberOfLines={1}>
+              {periodRangeLabel(period, anchor, customFrom, customTo)}
+            </Text>
+          </TouchableOpacity>
+          {period === 'custom' ? (
+            <View style={styles.rangeArrowSpacer} />
+          ) : (
             <TouchableOpacity
               style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => handleShift(1)}
@@ -546,8 +539,38 @@ export default function CashFlowScreen() {
             >
               <Ionicons name="chevron-forward" size={18} color={palette.text.primary} />
             </TouchableOpacity>
-          </View>
-        )}
+          )}
+        </View>
+
+        {/* ── Произвольный диапазон ────────────────────────────────────
+            Один низкоприоритетный текстовый action под строкой периода:
+            спрятан в чип, чтобы не загромождать переключатель в шапке.
+            Для уже активного 'custom' предлагает редактировать диапазон. */}
+        <TouchableOpacity
+          style={[
+            styles.customRangeBtn,
+            {
+              backgroundColor: period === 'custom' ? palette.bg.card : 'transparent',
+              borderColor: palette.border.subtle,
+            },
+          ]}
+          onPress={handleOpenCustomRange}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="calendar-outline"
+            size={14}
+            color={period === 'custom' ? colors.primary[600] : palette.text.tertiary}
+          />
+          <Text
+            style={[
+              styles.customRangeBtnText,
+              { color: period === 'custom' ? colors.primary[600] : palette.text.tertiary },
+            ]}
+          >
+            {period === 'custom' ? 'Изменить диапазон' : 'Произвольный диапазон'}
+          </Text>
+        </TouchableOpacity>
 
         {/* ── Mode tabs: all employees / by employee ─────────────────── */}
         {canFilterByEmployee && (
@@ -596,8 +619,18 @@ export default function CashFlowScreen() {
               >
                 {mode === 'employee' && employeeName ? employeeName : 'По сотруднику'}
               </Text>
-              {mode === 'employee' && employeeName ? (
-                <Ionicons name="chevron-down" size={12} color={palette.text.secondary} />
+              {/* Кнопка-сброс × появляется только когда сотрудник реально
+                  выбран — иначе чип «По сотруднику» работает как кнопка
+                  «открыть пикер». hitSlop увеличен, чтобы можно было
+                  попасть пальцем рядом с надписью. */}
+              {mode === 'employee' && employeeId ? (
+                <TouchableOpacity
+                  onPress={handleClearEmployee}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Сбросить выбор сотрудника"
+                >
+                  <Ionicons name="close-circle" size={14} color={palette.text.secondary} />
+                </TouchableOpacity>
               ) : null}
             </TouchableOpacity>
           </View>
@@ -802,25 +835,45 @@ export default function CashFlowScreen() {
                 Все сотрудники
               </Text>
             </TouchableOpacity>
-            <View style={{ maxHeight: 320 }}>
-              <FlashList
-                data={employees || []}
-                keyExtractor={(item: any) => item.id}
-                extraData={employeeId}
-                renderItem={({ item }: { item: any }) => (
-                  <EmployeePickerRow
-                    id={item.id}
-                    fullName={item.fullName}
-                    active={employeeId === item.id}
-                    onPick={pickEmployee}
-                    palette={palette}
-                  />
-                )}
-              />
-            </View>
+            {/* Сотрудников в тенанте редко больше 10-15, поэтому FlashList
+                здесь приносит больше хлопот (estimatedItemSize в маленьком
+                Modal'е иногда схлопывает контейнер до 0), чем пользы.
+                Обычный ScrollView гарантирует, что строки видны и пресс
+                по любой из них срабатывает. */}
+            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+              {(employees || []).map((item: any) => (
+                <EmployeePickerRow
+                  key={item.id}
+                  id={item.id}
+                  fullName={item.fullName}
+                  active={employeeId === item.id}
+                  onPick={pickEmployee}
+                  palette={palette}
+                />
+              ))}
+            </ScrollView>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      {/* Календарь — два независимых пика: from, потом to. После from
+          автоматически открываем to, чтобы не приходилось дважды
+          нажимать "Произвольный диапазон". */}
+      <DateTimePickerModal
+        visible={datePickerMode !== null}
+        value={datePickerMode === 'customTo' ? customTo : customFrom}
+        mode="date"
+        onConfirm={(d) => {
+          const wasFrom = datePickerMode === 'customFrom';
+          handleConfirmDate(d);
+          // После выбора начала сразу открываем выбор конца — естественная
+          // pattern для range-picker'а на одной модалке.
+          if (wasFrom) {
+            requestAnimationFrame(() => setDatePickerMode('customTo'));
+          }
+        }}
+        onCancel={() => setDatePickerMode(null)}
+      />
     </View>
   );
 }
@@ -939,38 +992,10 @@ const styles = StyleSheet.create({
   },
   periodSegTextActive: { color: colors.gray[900], fontWeight: '700' },
 
-  // Day chips (period === 'day')
-  dayChipsRow: {
-    paddingVertical: spacing[1],
-    gap: spacing[2],
-  },
-  dayChip: {
-    width: 64,
-    paddingVertical: spacing[2],
-    paddingHorizontal: 8,
-    borderRadius: borderRadius.xl,
-    borderWidth: StyleSheet.hairlineWidth,
-    backgroundColor: colors.white,
-    borderColor: colors.gray[200],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dayChipWeekday: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: colors.gray[500],
-    letterSpacing: 0.2,
-    textTransform: 'uppercase',
-    marginBottom: 2,
-  },
-  dayChipLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.gray[900],
-    letterSpacing: -0.1,
-  },
-
-  // Range chip + arrows (period !== 'day')
+  // Range chip + arrows — единый контрол для всех периодов, включая
+  // 'day'. Прежний горизонтальный карусель день-чипов удалён: владелец
+  // считал её "over-engineered", стрелка ← Сегодня → читается быстрее
+  // и масштабируется одинаково на день / неделю / месяц / год.
   rangeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   rangeArrow: {
     width: 40,
@@ -982,6 +1007,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Placeholder ровно той же ширины, что и rangeArrow — нужен в
+  // 'custom'-режиме, чтобы центральная подпись осталась по центру
+  // строки, а не уехала к краю.
+  rangeArrowSpacer: { width: 40, height: 40 },
   rangeChip: {
     flex: 1,
     height: 40,
@@ -998,6 +1027,23 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.semibold,
     color: colors.gray[900],
     textTransform: 'capitalize',
+  },
+
+  // Произвольный диапазон — тонкая пилюля под строкой периода
+  customRangeBtn: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  customRangeBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: -0.1,
   },
 
   // Mode tabs (all / by employee)

@@ -1,20 +1,25 @@
 /**
  * MarketingScreen — "Отзывы и репутация".
  *
- * Refocused: the screen used to be a multi-tab Marketing hub (dashboard +
- * reviews + integrations + reminders + settings). Integrations and SMS
- * reminders moved out to their own screens (`IntegrationsScreen`,
- * `MailingsScreen`). This screen now hosts ONLY review-side concerns:
+ * Two tabs:
+ *   • Сводка   — manual-request CTA, motivational-gift editor, KPI grid,
+ *                negative-alerts highlight, platform list, funnel,
+ *                employee ranking.
+ *   • Отзывы   — month-paginated review feed.
  *
- *   • Сводка   — KPI grid + new-negative alerts card + per-platform rating
- *                (from `getPlatformLinks`) + funnel + employee rankings.
- *   • Отзывы   — per-month list of submitted reviews.
+ * Header trailing slot opens a one-off SMS / WhatsApp review request to a
+ * picked client (RequestReviewModal).
  *
- * Top-bar trailing slot exposes "Запросить отзыв" — opens a sheet to pick
- * an existing client and fire a one-off SMS via `marketingApi.sendSms`.
- *
- * The route name in the navigator stays `Marketing` so the existing
- * MoreScreen link doesn't break.
+ * Owner-reported fixes (2026-05):
+ *   1. Tab icons rendered as circles because the resolver stripped the
+ *      `-outline` suffix to a name that wasn't mapped. Active glyphs now
+ *      have explicit map entries (chatbubbles → MessagesSquare,
+ *      pie-chart → PieChart, etc.).
+ *   2. "Запросить отзыв" CTA gets a visible paper-plane glyph (the bare
+ *      `paper-plane` name was unmapped → circle; now added to map).
+ *   3. New "🎁 Подарок за отзыв" card lets the owner write the
+ *      motivational sentence shown to clients on the public landing
+ *      page and embeddable via `{motivation}` in templates.
  */
 import React, { useMemo, useState } from 'react';
 import {
@@ -40,7 +45,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { Client, ReviewAlert, ReviewPlatformLink } from '../../../shared/types';
+import type { Client, ReviewAlert, ReviewPlatformLink, ReviewSettings } from '../../../shared/types';
 
 type TabKey = 'dashboard' | 'reviews';
 
@@ -70,10 +75,6 @@ function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
  * Memoised review row. Extracted to module scope so the `.map(...)` in
  * `ReviewsTab` doesn't recreate one JSX tree per review per parent
  * re-render (search-state flip, month switch, theme toggle, etc.).
- * The review payload is stable while it's on screen — only the palette
- * changes on theme toggle, and the palette object identity is itself
- * memoised inside `ThemeContext.tsx`, so React.memo's default shallow
- * compare correctly keeps the row out of the reconciler.
  */
 interface ReviewItemProps {
   review: {
@@ -118,6 +119,129 @@ const ReviewItem = React.memo(function ReviewItem({ review, index, palette }: Re
     </AnimatedCard>
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────
+//  Motivational-message editor card
+// ─────────────────────────────────────────────────────────────────────
+
+function MotivationCard() {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<string>('');
+  const [dirty, setDirty] = useState(false);
+
+  const settingsQuery = useQuery({
+    queryKey: ['marketing-review-settings'],
+    queryFn: async () => (await marketingApi.getSettings()).data,
+    staleTime: 60_000,
+  });
+
+  // Sync local draft with server state — but only when we're not mid-edit
+  // (otherwise typing would be clobbered every time React Query revalidates).
+  React.useEffect(() => {
+    if (settingsQuery.data && !dirty) {
+      setDraft(settingsQuery.data.motivationMessage ?? '');
+    }
+  }, [settingsQuery.data, dirty]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      marketingApi.updateSettings({ motivationMessage: draft.trim() } as Partial<ReviewSettings>),
+    onSuccess: () => {
+      haptic('success');
+      setDirty(false);
+      queryClient.invalidateQueries({ queryKey: ['marketing-review-settings'] });
+      Alert.alert('Сохранено', 'Сообщение будет показано клиенту на странице отзыва');
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось сохранить');
+    },
+  });
+
+  const placeholder = 'Например: «Замена воздушного фильтра в подарок за честный отзыв»';
+
+  return (
+    <AnimatedCard
+      index={0}
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.sectionHeaderRow}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+          <View style={[styles.giftBadge, { backgroundColor: colors.amber[50] }]}>
+            <Ionicons name="gift-outline" size={16} color={colors.amber[700]} />
+          </View>
+          <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>
+            Подарок за отзыв
+          </Text>
+        </View>
+        {settingsQuery.data?.motivationMessage ? (
+          <View style={styles.motivationActiveDot} />
+        ) : null}
+      </View>
+
+      <Text style={[styles.motivationHint, { color: palette.text.tertiary }]}>
+        Эта фраза будет показана клиенту на странице оценки, а также подставлена в шаблон сообщения вместо
+        {' '}{'{motivation}'}.
+      </Text>
+
+      <TextInput
+        value={draft}
+        onChangeText={(t) => {
+          setDraft(t);
+          if (!dirty) setDirty(true);
+        }}
+        multiline
+        numberOfLines={3}
+        placeholder={placeholder}
+        placeholderTextColor={palette.text.tertiary}
+        style={[
+          styles.motivationInput,
+          {
+            backgroundColor: palette.bg.muted,
+            borderColor: dirty ? palette.accent.primary : palette.border.subtle,
+            color: palette.text.primary,
+          },
+        ]}
+      />
+
+      <TouchableOpacity
+        style={[
+          styles.motivationSaveBtn,
+          {
+            backgroundColor: dirty ? palette.accent.primary : palette.bg.muted,
+          },
+          (!dirty || save.isPending) && { opacity: 0.7 },
+        ]}
+        disabled={!dirty || save.isPending}
+        onPress={() => {
+          haptic('tap');
+          save.mutate();
+        }}
+      >
+        {save.isPending ? (
+          <ActivityIndicator size="small" color={dirty ? colors.white : palette.text.tertiary} />
+        ) : (
+          <>
+            <Ionicons
+              name="checkmark-circle"
+              size={16}
+              color={dirty ? colors.white : palette.text.tertiary}
+            />
+            <Text
+              style={[
+                styles.motivationSaveText,
+                { color: dirty ? colors.white : palette.text.tertiary },
+              ]}
+            >
+              {dirty ? 'Сохранить' : 'Без изменений'}
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </AnimatedCard>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────
 //  Сводка
@@ -220,6 +344,9 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
         <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
       </Pressable>
 
+      {/* Motivational gift editor */}
+      <MotivationCard />
+
       {/* Negative alerts highlight */}
       {unreadNegative > 0 && (
         <AnimatedCard index={0} style={[styles.alertCard]}>
@@ -265,7 +392,7 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
         </View>
         {platforms.length === 0 ? (
           <Text style={[styles.platformsHint, { color: palette.text.tertiary }]}>
-            Площадки не подключены. Откройте «Интеграции», чтобы добавить ссылки на Google / Яндекс / 2GIS.
+            Площадки не подключены. Откройте «Интеграции», чтобы добавить ссылки на Google / Яндекс / 2GIS / Авито.
           </Text>
         ) : (
           platforms.map((p, idx) => (
@@ -487,6 +614,17 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
   const [selected, setSelected] = useState<Client | null>(null);
   const [channel, setChannel] = useState<'sms' | 'whatsapp'>('sms');
 
+  // Preview the motivational gift sentence — the owner has it on Сводка,
+  // but showing it here too removes the "wait, what message will the
+  // client actually see?" anxiety.
+  const settingsQuery = useQuery({
+    queryKey: ['marketing-review-settings'],
+    queryFn: async () => (await marketingApi.getSettings()).data,
+    staleTime: 60_000,
+    enabled: visible,
+  });
+  const motivation = settingsQuery.data?.motivationMessage?.trim() || '';
+
   // Debounce-ish: refetch on every change but staleTime swallows duplicates.
   const clientsQuery = useQuery({
     queryKey: ['marketing-request-clients', search],
@@ -502,6 +640,14 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
       marketingApi.sendSms({ phone, text }),
   });
 
+  const buildText = (client: Client): string => {
+    const firstName = client.fullName.split(' ')[0] || client.fullName;
+    const greeting = channel === 'whatsapp'
+      ? `Здравствуйте, ${firstName}! Будем благодарны за отзыв о нашем сервисе.`
+      : `Здравствуйте, ${firstName}! Оставьте, пожалуйста, отзыв о работе сервиса. Ссылка придёт отдельным сообщением.`;
+    return motivation ? `${greeting}\n\n${motivation}` : greeting;
+  };
+
   const handleSend = () => {
     if (!selected) {
       Alert.alert('Выберите клиента', 'Сначала выберите клиента из списка');
@@ -511,12 +657,8 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
       Alert.alert('Нет телефона', 'У клиента не указан номер телефона');
       return;
     }
-    const text =
-      channel === 'whatsapp'
-        ? `Здравствуйте, ${selected.fullName.split(' ')[0]}! Будем благодарны за отзыв о нашем сервисе.`
-        : `Здравствуйте, ${selected.fullName.split(' ')[0]}! Оставьте, пожалуйста, отзыв о работе сервиса. Ссылка придёт отдельным сообщением.`;
     sendSms.mutate(
-      { phone: selected.phone, text },
+      { phone: selected.phone, text: buildText(selected) },
       {
         onSuccess: () => {
           haptic('success');
@@ -535,6 +677,24 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
 
   return (
     <Modal visible={visible} onClose={onClose} title="Запросить отзыв">
+      {/* Motivation preview — what the client will actually see */}
+      {motivation ? (
+        <View
+          style={[
+            styles.motivationPreview,
+            { borderColor: colors.amber[200], backgroundColor: colors.amber[50] },
+          ]}
+        >
+          <View style={[styles.giftBadge, { backgroundColor: colors.amber[100] }]}>
+            <Ionicons name="gift-outline" size={14} color={colors.amber[700]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.motivationPreviewLabel, { color: colors.amber[800] }]}>Клиент увидит</Text>
+            <Text style={[styles.motivationPreviewText, { color: colors.amber[800] }]}>{motivation}</Text>
+          </View>
+        </View>
+      ) : null}
+
       {/* Channel */}
       <View style={styles.formField}>
         <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Канал</Text>
@@ -656,7 +816,7 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
           <ActivityIndicator size="small" color={colors.white} />
         ) : (
           <>
-            <Ionicons name="send" size={16} color={colors.white} />
+            <Ionicons name="paper-plane" size={16} color={colors.white} />
             <Text style={styles.primaryBtnText}>Отправить запрос</Text>
           </>
         )}
@@ -678,9 +838,17 @@ export default function MarketingScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [requestOpen, setRequestOpen] = useState(false);
 
-  const tabs: { key: TabKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-    { key: 'dashboard', label: 'Сводка', icon: 'pie-chart-outline' },
-    { key: 'reviews', label: 'Отзывы', icon: 'chatbubbles-outline' },
+  // Tab definition. Active variants are the bare names (no `-outline`)
+  // — these MUST exist in `mobile/src/components/icons/ioniconsMap.ts`
+  // or the Lucide shim falls back to Circle.
+  const tabs: {
+    key: TabKey;
+    label: string;
+    iconOutline: keyof typeof Ionicons.glyphMap;
+    iconSolid: keyof typeof Ionicons.glyphMap;
+  }[] = [
+    { key: 'dashboard', label: 'Сводка', iconOutline: 'stats-chart-outline', iconSolid: 'stats-chart' },
+    { key: 'reviews', label: 'Отзывы', iconOutline: 'chatbubbles-outline', iconSolid: 'chatbubbles' },
   ];
 
   const onRefresh = async () => {
@@ -690,6 +858,7 @@ export default function MarketingScreen() {
       queryClient.invalidateQueries({ queryKey: ['marketing-alerts'] }),
       queryClient.invalidateQueries({ queryKey: ['marketing-platform-links'] }),
       queryClient.invalidateQueries({ queryKey: ['marketing-reviews'] }),
+      queryClient.invalidateQueries({ queryKey: ['marketing-review-settings'] }),
     ]);
     setRefreshing(false);
   };
@@ -736,7 +905,7 @@ export default function MarketingScreen() {
               }}
             >
               <Ionicons
-                name={(active ? tab.icon.replace('-outline', '') : tab.icon) as any}
+                name={active ? tab.iconSolid : tab.iconOutline}
                 size={18}
                 color={active ? palette.accent.primary : palette.text.tertiary}
               />
@@ -828,6 +997,67 @@ const styles = StyleSheet.create({
   },
   ctaTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.3 },
   ctaSub: { fontSize: fontSize.xs, marginTop: 2 },
+
+  // Motivational gift card
+  giftBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  motivationActiveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.green[500],
+  },
+  motivationHint: {
+    fontSize: fontSize.xs,
+    lineHeight: 18,
+    marginBottom: spacing[3],
+  },
+  motivationInput: {
+    borderWidth: 1.5,
+    borderRadius: borderRadius.xl,
+    padding: spacing[3],
+    fontSize: fontSize.sm,
+    minHeight: 86,
+    textAlignVertical: 'top',
+    marginBottom: spacing[3],
+  },
+  motivationSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+  },
+  motivationSaveText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+
+  // Motivation preview inside RequestReviewModal
+  motivationPreview: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2.5],
+    borderWidth: 1,
+    borderRadius: borderRadius.xl,
+    padding: spacing[3],
+    marginBottom: spacing[3],
+  },
+  motivationPreviewLabel: {
+    fontSize: 10,
+    fontWeight: fontWeight.bold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  motivationPreviewText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    lineHeight: 19,
+  },
 
   // Alert
   alertCard: {

@@ -50,6 +50,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import FreshnessBadge from '../components/FreshnessBadge';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import ProgressLoader from '../components/ProgressLoader';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
@@ -322,6 +323,10 @@ export default function ReportsScreen() {
   const [compareEnabled, setCompareEnabled] = useState(false);
   const [showTargetsModal, setShowTargetsModal] = useState(false);
   const [pnlOpen, setPnlOpen] = useState(false);
+  // Export-in-progress overlay. The HTML build + PDF rasterisation can take
+  // 1-3s on real devices; we surface a premium ProgressLoader instead of
+  // letting the user think the app froze.
+  const [exporting, setExporting] = useState<null | 'pdf' | 'table' | 'image'>(null);
 
   const range = useMemo<DateRange>(
     () => (period === 'custom' ? customRange : getDateRange(period)),
@@ -428,6 +433,7 @@ export default function ReportsScreen() {
   const exportPdf = useCallback(async () => {
     if (!report) return;
     haptic('tap');
+    setExporting('pdf');
     const html = buildReportHtml({
       title: 'Финансовый отчёт',
       range,
@@ -447,12 +453,15 @@ export default function ReportsScreen() {
       }
     } catch {
       Alert.alert('Ошибка', 'Не удалось создать PDF');
+    } finally {
+      setExporting(null);
     }
   }, [report, prevReport, compareEnabled, expensesByCategory, range]);
 
   const exportTablePdf = useCallback(async () => {
     if (!report) return;
     haptic('tap');
+    setExporting('table');
     // Табличный лэйаут — для тех, кто хочет открыть в Numbers/Excel
     // (PDF с таблицей нормально импортируется через copy-paste).
     const html = buildTableHtml({
@@ -473,12 +482,15 @@ export default function ReportsScreen() {
       }
     } catch {
       Alert.alert('Ошибка', 'Не удалось создать таблицу');
+    } finally {
+      setExporting(null);
     }
   }, [report, prevReport, compareEnabled, expensesByCategory, range]);
 
   const exportImage = useCallback(async () => {
     if (!captureViewRef.current) return;
     haptic('tap');
+    setExporting('image');
     try {
       const uri = await captureRef(captureViewRef as any, {
         format: 'png',
@@ -489,6 +501,8 @@ export default function ReportsScreen() {
       }
     } catch {
       Alert.alert('Ошибка', 'Не удалось сохранить изображение');
+    } finally {
+      setExporting(null);
     }
   }, []);
 
@@ -1161,6 +1175,22 @@ export default function ReportsScreen() {
           setShowCustomPicker(null);
         }}
         onCancel={() => setShowCustomPicker(null)}
+      />
+
+      {/* Premium export progress — surfaces during the 1-3s gap between tap
+          and Share-sheet. Title is fixed per kind so the user knows what's
+          being prepared. */}
+      <ProgressLoader
+        visible={exporting !== null}
+        title={
+          exporting === 'pdf'
+            ? 'Готовим PDF...'
+            : exporting === 'table'
+              ? 'Готовим таблицу...'
+              : exporting === 'image'
+                ? 'Сохраняем картинку...'
+                : undefined
+        }
       />
     </View>
   );

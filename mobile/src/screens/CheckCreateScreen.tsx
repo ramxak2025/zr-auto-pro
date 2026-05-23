@@ -929,8 +929,28 @@ export default function CheckCreateScreen() {
   // press and the mutation entering its pending state. The ref closes it.
   const submittingRef = useRef(false);
 
+  // If the previous submit attempt was interrupted (component unmount,
+  // navigation pop with mutation still in flight, dev fast-refresh), the
+  // ref can stay stuck on `true` and silently no-op every subsequent
+  // press. Reset whenever the screen regains focus so the user is never
+  // stranded.
+  useEffect(() => {
+    const unsub = navigation.addListener?.('focus', () => {
+      submittingRef.current = false;
+    });
+    return () => {
+      if (typeof unsub === 'function') unsub();
+    };
+  }, [navigation]);
+
   const createMutation = useMutation({
     mutationFn: (data: any) => (editId ? checksApi.update(editId, data) : checksApi.create(data)),
+    // Defensive: if the mutation is cancelled / aborted (e.g. component
+    // unmounts while in-flight), TanStack Query will not call onError or
+    // onSuccess. Clear the guard so the next mount can submit.
+    onSettled: () => {
+      submittingRef.current = false;
+    },
     onSuccess: async (res: any) => {
       submittingRef.current = false;
       queryClient.invalidateQueries({ queryKey: ['checks'] });
@@ -976,7 +996,24 @@ export default function CheckCreateScreen() {
     },
     onError: (err: any) => {
       submittingRef.current = false;
-      Alert.alert('Ошибка', err?.response?.data?.message || err?.response?.data?.error || 'Не удалось сохранить чек');
+      // Surface the real reason — owners report "ничего не происходит" in
+      // production; without the raw payload we can't tell whether it's a
+      // missing master, a stock conflict, or a backend 500. Always show
+      // SOMETHING, fall back to JSON when the server didn't give a
+      // friendly string. Mobile logs (Console.app on Mac, sentry on
+      // server) keep the full breadcrumb.
+      // eslint-disable-next-line no-console
+      console.error('[CheckCreate] submit error', err?.response?.status, err?.response?.data, err?.message);
+      const status = err?.response?.status;
+      const data = err?.response?.data;
+      const friendly =
+        data?.message ||
+        data?.error ||
+        (typeof data === 'string' ? data : null) ||
+        err?.message ||
+        (data ? JSON.stringify(data) : null) ||
+        (status ? `Сервер вернул код ${status}` : 'Не удалось сохранить чек');
+      Alert.alert('Ошибка', String(friendly));
     },
   });
 
@@ -1104,6 +1141,29 @@ export default function CheckCreateScreen() {
       return;
     }
 
+    // ── Master fallback safety net ─────────────────────────────────────
+    // Backend REQUIRES masterId (BadRequestException otherwise). The
+    // default is the authenticated user's id, but if for any reason that
+    // is empty (auth not yet hydrated, or the user record was cleared in
+    // a previous session), pick the first active master from the cached
+    // users query. Last-resort: bail with a clear Alert instead of
+    // silently no-opping the press.
+    let resolvedMasterId = defaultMasterId;
+    if (!resolvedMasterId) {
+      const fallback = masters[0]?.id;
+      if (fallback) {
+        // eslint-disable-next-line no-console
+        console.warn('[CheckCreate] defaultMasterId empty, falling back to first master', fallback);
+        resolvedMasterId = fallback;
+      } else {
+        Alert.alert(
+          'Не выбран мастер',
+          'Не удалось определить мастера для чека. Откройте экран «Сотрудники» и убедитесь, что есть хотя бы один активный мастер.',
+        );
+        return;
+      }
+    }
+
     let finalCash = 0;
     let finalCard = 0;
     if (paymentMethod === ('cash' as PaymentMethod)) {
@@ -1118,7 +1178,7 @@ export default function CheckCreateScreen() {
     const payload = {
       clientId: clientId || undefined,
       carId: carId || undefined,
-      masterId: defaultMasterId,
+      masterId: resolvedMasterId,
       date: checkDate.toISOString(),
       mileage: mileage ? Number(mileage) : undefined,
       comment: comment || undefined,
@@ -1129,7 +1189,7 @@ export default function CheckCreateScreen() {
       isDeferred: shouldDefer,
       services: serviceLines.map((l) => ({
         serviceId: l.serviceId,
-        masterId: l.lineMasterId || l.masterId || defaultMasterId,
+        masterId: l.lineMasterId || l.masterId || resolvedMasterId,
         name: l.name,
         price: l.price,
         quantity: l.quantity,

@@ -1491,7 +1491,7 @@ export default function ProductsScreen() {
         <View style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           <Ionicons name="information-circle-outline" size={16} color={colors.orange[600]} />
           <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
-            \u0422\u043E\u0432\u0430\u0440\u044B \u043F\u043E\u043F\u0430\u0434\u0430\u044E\u0442 \u0432 \u0431\u0440\u0430\u043A \u0442\u043E\u043B\u044C\u043A\u043E \u0447\u0435\u0440\u0435\u0437 \u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u0438\u0435 \u0441\u043E \u0441\u043A\u043B\u0430\u0434\u0430 \u0438\u043B\u0438 \u0432\u043E\u0437\u0432\u0440\u0430\u0442 \u043E\u0442 \u043A\u043B\u0438\u0435\u043D\u0442\u0430
+            Товары попадают в брак только через перемещение со склада или возврат от клиента
           </Text>
         </View>
       )}

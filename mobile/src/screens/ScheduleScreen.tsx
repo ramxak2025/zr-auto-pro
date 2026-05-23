@@ -255,12 +255,15 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
       bgDark: 'rgba(148, 163, 184, 0.15)',
       label: '',
     };
-  // 4. Опоздание >1ч
+  // 4. Опоздание >1ч — clean triangle-warning stroke. Previously the
+  //    Ionicons `alert-circle` mapped to a heavy filled circle that the
+  //    owner reported as "красный кружок вместо иконки". Swap to the
+  //    outline triangle which reads as "warning" with a clean stroke.
   if (entry.lateStatus === 'late_major' || lateMin >= 60)
     return {
       key: 'long',
       hasEntry: true,
-      icon: 'alert-circle',
+      icon: 'warning-outline',
       dotColor: colors.red[500],
       bgColor: colors.red[50],
       bgDark: 'rgba(239, 68, 68, 0.15)',
@@ -277,19 +280,22 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
       bgDark: 'rgba(217, 119, 6, 0.18)',
       label: '',
     };
-  // 6. Открыл смену вовремя — показываем время только если оно осмысленное.
-  // Используем `checkmark` (тонкая галочка без круга) вместо filled
-  // `checkmark-circle` — последний на ярко-зелёном фоне читался как
-  // тяжёлый «зелёный жирный кружок».
+  // 6. Открыл смену вовремя (FACT) — saturated green background + light
+  //    pastel-green check. Owner explicitly wanted this to read as "yes,
+  //    this shift was actually worked" at-a-glance, distinct from a
+  //    merely-planned green outline cell (case #8 below). Time is shown
+  //    only when it differs from the default start.
   if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
     const startHHMM = entry.shiftStart.slice(0, 5);
     return {
       key: 'worked',
       hasEntry: true,
       icon: 'checkmark',
-      dotColor: colors.green[700],
-      bgColor: colors.green[50],
-      bgDark: 'rgba(22, 163, 74, 0.18)',
+      // Light pastel check on saturated green canvas — high contrast,
+      // owner can sweep the grid and instantly see what was confirmed.
+      dotColor: colors.green[100],
+      bgColor: colors.green[600],
+      bgDark: 'rgba(22, 163, 74, 0.55)',
       label: startHHMM === DEFAULT_SHIFT_START ? '' : startHHMM,
     };
   }
@@ -305,7 +311,9 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
       label: '',
     };
   }
-  // 8. Запланирована смена (сегодня или будущее) — зелёная галочка
+  // 8. Запланирована смена (сегодня или будущее) — мягкий зелёный
+  //    outline-style cell. Контраст с case #6 даёт владельцу мгновенно
+  //    отличить «запланировано» от «отмечено как отработано».
   if (entry.shiftStart) {
     return {
       key: 'worked',
@@ -1064,22 +1072,30 @@ function GridTab() {
 
       {/* Legend — icon-based, mirrors the SF-Health-inspired cell
           glyphs. Emojis are intentionally absent: the grid reads as a
-          native iOS app, not a chat-bot transcript. */}
-      <View style={styles.legendRow}>
+          native iOS app, not a chat-bot transcript.
+          Horizontal-scroll so the row never wraps awkwardly on small
+          devices; each item gets a soft tinted background so the icon
+          + label read as a single legible chip. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.legendRow}
+      >
         {[
-          { icon: 'checkmark' as const, color: colors.green[700], label: 'Смена' },
-          { icon: 'moon-outline' as const, color: colors.gray[500], label: 'Вых' },
-          { icon: 'medkit-outline' as const, color: colors.orange[600], label: 'Б/Л' },
-          { icon: 'time-outline' as const, color: colors.amber[600], label: '<1ч' },
-          { icon: 'alert-circle' as const, color: colors.red[500], label: '>1ч' },
-          { icon: 'close' as const, color: colors.red[600], label: 'Прогул' },
+          { icon: 'checkmark' as const, color: colors.green[100], bg: colors.green[600], label: 'Отработано' },
+          { icon: 'checkmark' as const, color: colors.green[700], bg: colors.green[50], label: 'Смена' },
+          { icon: 'moon-outline' as const, color: colors.gray[500], bg: colors.gray[100], label: 'Вых' },
+          { icon: 'medkit-outline' as const, color: colors.orange[600], bg: colors.orange[50], label: 'Б/Л' },
+          { icon: 'time-outline' as const, color: colors.amber[600], bg: colors.amber[50], label: '<1ч' },
+          { icon: 'warning-outline' as const, color: colors.red[500], bg: colors.red[50], label: '>1ч' },
+          { icon: 'close' as const, color: colors.red[600], bg: colors.red[50], label: 'Прогул' },
         ].map((item) => (
-          <View key={item.label} style={styles.legendItem}>
-            <Ionicons name={item.icon} size={13} color={item.color} />
+          <View key={item.label} style={[styles.legendItem, { backgroundColor: item.bg }]}>
+            <Ionicons name={item.icon} size={12} color={item.color} />
             <Text style={[styles.legendText, { color: palette.text.secondary }]}>{item.label}</Text>
           </View>
         ))}
-      </View>
+      </ScrollView>
 
       {/* Schedule states:
           1. We don't yet have ANY user info (neither cached usersData nor
@@ -2992,22 +3008,31 @@ const styles = StyleSheet.create({
   },
 
   // ── Legend ──
+  // Horizontal-scroll strip of chip-style legend items. Each chip carries
+  // its own soft tint so the icon + label read as one legible unit. The
+  // row never wraps — overflow is handled by horizontal scroll, matching
+  // the warehouse-screen chip strip pattern.
   legendRow: {
     flexDirection: 'row',
     paddingHorizontal: spacing[4],
-    paddingBottom: spacing[2.5],
-    gap: spacing[3],
-    flexWrap: 'wrap',
+    paddingBottom: spacing[3],
+    paddingTop: spacing[1],
+    gap: spacing[2],
+    alignItems: 'center',
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: 5,
+    borderRadius: 999,
   },
   legendText: {
     fontSize: 11,
-    color: colors.gray[500],
-    fontWeight: fontWeight.medium,
+    color: colors.gray[600],
+    fontWeight: fontWeight.semibold,
+    letterSpacing: -0.1,
   },
 
   // ── Sticky Column ──

@@ -62,7 +62,9 @@ interface MenuSection {
 //   • КОМАНДА     — people: Employees, Schedule, Users, Salary.
 //   • ФИНАНСЫ     — owner-facing money: CashFlow, Expenses, Reports.
 //   • СКЛАД       — warehouse-side ops: Suppliers, Equipment, Analytics.
-//   • КЛИЕНТЫ     — customer CRM: Clients, Cars.
+//   • КЛИЕНТЫ     — single entry "Клиенты": customers + cars are now
+//                   unified inside the Clients screen (two-tab UX), so
+//                   there's no longer a separate "Авто" menu item.
 //   • МАРКЕТИНГ   — outreach: Marketing (reviews), Calls, Mailings, Integrations.
 //   • НАСТРОЙКИ   — admin of the tenant itself: Company, Subscription, Trash.
 //   • АДМИН       — superadmin-only platform tools.
@@ -183,21 +185,14 @@ const menuSections: MenuSection[] = [
     items: [
       {
         label: 'Клиенты',
-        description: 'База клиентов и история',
+        // Owner requested clients + cars in ONE section. The combined
+        // Clients screen now hosts a "Клиенты / Авто" tab switcher, so
+        // a separate "Авто" menu entry is intentionally gone.
+        description: 'Клиенты, авто и история',
         screen: 'Clients',
         permission: 'clients_view',
         featureKey: 'clients_view',
         icon: 'people-outline',
-        iconBg: colors.blue[50],
-        iconColor: colors.blue[600],
-      },
-      {
-        label: 'Авто',
-        description: 'Автомобили клиентов',
-        screen: 'Cars',
-        permission: 'clients_view',
-        featureKey: 'clients_view',
-        icon: 'car-sport-outline',
         iconBg: colors.blue[50],
         iconColor: colors.blue[600],
       },
@@ -237,7 +232,10 @@ const menuSections: MenuSection[] = [
         description: 'Телефония, мессенджеры, CRM',
         screen: 'Integrations',
         roles: ['director', 'superadmin'],
-        icon: 'git-network-outline',
+        // `git-network-outline` resolved to Circle in our Lucide shim
+        // (owner saw a blank dot). `extension-puzzle-outline` maps to
+        // Lucide's Puzzle which renders properly.
+        icon: 'extension-puzzle-outline',
         iconBg: colors.slate[100],
         iconColor: colors.slate[600],
       },

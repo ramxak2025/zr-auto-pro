@@ -1973,8 +1973,14 @@ const styles = StyleSheet.create({
   },
 
   // List
+  // ВАЖНО: paddingHorizontal: 0 — иначе оно складывается с
+  // marginHorizontal: spacing[4] на заголовочных блоках (heroWrapper,
+  // periodWrapper, breakdownCard, …), и весь экран съезжает на 16+16=32px
+  // от краёв, что выглядит уже, чем все остальные экраны (где иначе
+  // унифицировано 16px). Здесь — единый 16px из marginHorizontal на
+  // карточках строк / заголовочных блоках.
   list: {
-    paddingHorizontal: spacing[4],
+    paddingHorizontal: 0,
     paddingBottom: spacing[8],
   },
   card: {
@@ -1983,6 +1989,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.gray[100],
     overflow: 'hidden',
+    marginHorizontal: spacing[4],
     marginBottom: spacing[2],
   },
   cardInner: {

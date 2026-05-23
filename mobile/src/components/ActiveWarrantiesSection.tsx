@@ -86,15 +86,27 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
   const palette = useColors();
   const isDark = palette.mode === 'dark';
 
-  const { data } = useQuery<ActiveWarranty[]>({
+  const { data, error } = useQuery<ActiveWarranty[]>({
     queryKey: ['active-warranties', clientId, carId],
     queryFn: async () => {
       const res = await warrantyApi.active({ clientId, carId });
-      return res.data || [];
+      const list = res.data || [];
+      // Diagnostic: surface the count so we can debug "owner expected
+      // warranties to appear but they didn't". With no logs we can't
+      // tell whether the API returned [] or the section was simply
+      // not mounted. Mobile console / Console.app picks this up.
+      // eslint-disable-next-line no-console
+      console.log('[Warranty] active for client', clientId, 'car', carId, '→', list.length, 'items');
+      return list;
     },
     enabled: !!clientId,
     staleTime: 30_000,
   });
+
+  if (error) {
+    // eslint-disable-next-line no-console
+    console.error('[Warranty] active fetch error', (error as any)?.response?.status, (error as any)?.response?.data);
+  }
 
   if (!clientId) return null;
   const items = data || [];

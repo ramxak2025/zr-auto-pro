@@ -35,7 +35,7 @@ import SourcePickerSheet from '../components/SourcePickerSheet';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import type { Client, PaginatedResponse } from '../../../shared/types';
+import type { Client, Car, PaginatedResponse } from '../../../shared/types';
 
 // ─── Avatar helpers (mirror ClientDetailScreen so initials/colour match) ───
 function getInitials(name: string): string {
@@ -63,6 +63,13 @@ function getAvatarColor(name: string): string {
 
 type ClientFilter = 'all' | 'regular' | 'new' | 'source';
 
+// Top-level tab inside the unified Clients screen — owner asked to
+// merge "Клиенты" and "Авто" into a single section, so the screen now
+// hosts a segmented switcher right under the header. Persist nothing —
+// the user almost always re-enters from /Ещё/Клиенты and wants the
+// people view first.
+type ClientsView = 'clients' | 'cars';
+
 // "Постоянные" / "Новые" thresholds — derived from createdAt only.
 // "Новые" = created within the last 30 days. "Постоянные" = client
 // where the local cars[] array reports any car at all (proxy for
@@ -79,6 +86,9 @@ export default function ClientsScreen() {
   const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
   const tabBarHeight = useTabBarHeight();
 
+  // Tab switcher state — see ClientsView. Default: people.
+  const [view, setView] = useState<ClientsView>('clients');
+
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<ClientFilter>('all');
@@ -87,6 +97,13 @@ export default function ClientsScreen() {
   // create-modal's source picker reuse the same sheet component.
   const [sourceFilterOpen, setSourceFilterOpen] = useState(false);
   const [formSourceOpen, setFormSourceOpen] = useState(false);
+
+  // Авто-tab keeps its own search query so switching tabs doesn't lose
+  // either context. It also has a smaller page-size to match the
+  // previous standalone CarsScreen behaviour.
+  const [carSearch, setCarSearch] = useState('');
+  const [carPage, setCarPage] = useState(1);
+  const carLimit = 30;
 
   const limit = 20;
   const [refreshing, setRefreshing] = useState(false);
@@ -113,6 +130,20 @@ export default function ClientsScreen() {
       return res.data;
     },
     placeholderData: (prev) => prev,
+  });
+
+  // Авто-tab data. Only fires when the user actually switches to that
+  // view — keeps the people-tab cold-start free of an extra request.
+  // The shape used to be either `Car[]` or `{ data, total }` depending
+  // on the backend pagination path; preserve that flexibility.
+  const carsQuery = useQuery<{ data: Car[]; total: number } | Car[]>({
+    queryKey: ['cars', { search: carSearch, page: carPage, limit: carLimit }],
+    queryFn: async () => {
+      const res = await carsApi.getAll({ search: carSearch, page: carPage, limit: carLimit });
+      return res.data;
+    },
+    placeholderData: (prev) => prev,
+    enabled: view === 'cars',
   });
 
   // Client+optional-car create. Mirror the previous behaviour but with
@@ -290,8 +321,21 @@ export default function ClientsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries({ queryKey: ['clients'] });
+    if (view === 'cars') {
+      await queryClient.invalidateQueries({ queryKey: ['cars'] });
+    } else {
+      await queryClient.invalidateQueries({ queryKey: ['clients'] });
+    }
     setRefreshing(false);
+  };
+
+  // Tab switch — fire a soft selection haptic, mirroring the iOS
+  // UISegmentedControl feel. Resets neither search nor pagination so
+  // the user keeps their state per tab.
+  const switchView = (next: ClientsView) => {
+    if (next === view) return;
+    haptic('select');
+    setView(next);
   };
 
   const rawClients = data?.data || [];
@@ -343,12 +387,47 @@ export default function ClientsScreen() {
     [rawClients],
   );
 
-  const showRetailPin = !search && filter === 'all';
+  // Retail pin visibility — owner asked for the retail-buyer hero to
+  // appear in BOTH tabs, since it's the gateway to retail-check
+  // history regardless of which lens (people / cars) you're using.
+  // On the people tab we suppress it during search / non-"Все" filter
+  // so the pin doesn't compete with active filtering. On the cars
+  // tab we only suppress it during plate search — otherwise the pin
+  // sits permanently at the top.
+  const showRetailPin =
+    view === 'clients'
+      ? !search && filter === 'all'
+      : !carSearch;
 
   // FlashList data — without the retail row (it lives outside the
   // virtual list as a sticky hero). Keep memoised so the virtualiser
   // doesn't see a new reference on every parent re-render.
   const displayClients = useMemo<Client[]>(() => filteredClients, [filteredClients]);
+
+  // ── Авто-tab derivations ──────────────────────────────────────────
+  // Pagination response is either an array (legacy) or a `{data,total}`
+  // envelope; normalise into `rawCars` so the list renderer doesn't
+  // care. Plate-priority sort mirrors the standalone CarsScreen so a
+  // partial plate query like "Х80" surfaces matching cars first even if
+  // the backend ranking would put a makeModel substring above them.
+  const carsData = carsQuery.data;
+  const rawCars = useMemo<Car[]>(
+    () => (Array.isArray(carsData) ? (carsData as Car[]) : ((carsData as any)?.data ?? [])),
+    [carsData],
+  );
+  const carsTotal = Array.isArray(carsData) ? rawCars.length : ((carsData as any)?.total ?? rawCars.length);
+  const carsHasMore = carPage * carLimit < carsTotal;
+
+  const sortedCars = useMemo<Car[]>(() => {
+    if (!carSearch || !looksLikePlateQuery(carSearch)) return rawCars;
+    const q = normalizePlateQuery(carSearch);
+    const hits: Car[] = [];
+    const misses: Car[] = [];
+    for (const car of rawCars) {
+      (plateMatches(car.plateNumber, q) ? hits : misses).push(car);
+    }
+    return [...hits, ...misses];
+  }, [rawCars, carSearch]);
 
   // Prefetch-on-tap — same idea as before.
   const prefetchClientDetail = useCallback(
@@ -448,6 +527,69 @@ export default function ClientsScreen() {
     [canDelete, navigation, palette, prefetchClientDetail],
   );
 
+  // Авто-tab row renderer. Plate is the visual anchor (a vehicle is
+  // identified by its plate first, owner second). Tap navigates to the
+  // owning ClientDetail and asks it to scroll-and-expand this car via
+  // `focusCarId` so the flow "Авто → tap → see this car's checks" is
+  // one tap end-to-end. Cars without an owner just fall back to a
+  // muted state — they shouldn't be tappable.
+  const renderCar = useCallback(
+    ({ item }: { item: Car }) => {
+      const ownerName = item.client?.fullName;
+      const ownerId = item.clientId;
+      const isOrphan = !ownerId;
+      return (
+        <TouchableOpacity
+          style={[styles.carRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
+          activeOpacity={isOrphan ? 1 : 0.6}
+          disabled={isOrphan}
+          onPress={() => {
+            if (isOrphan) return;
+            navigation.navigate('ClientDetail', { id: ownerId, focusCarId: item.id });
+          }}
+          onPressIn={() => {
+            if (!isOrphan) prefetchClientDetail(ownerId);
+          }}
+        >
+          <View style={styles.carPlateColumn}>
+            {item.plateNumber ? (
+              <View style={[styles.carPlateBadge, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+                <Text style={[styles.carPlateText, { color: palette.text.primary }]}>{item.plateNumber}</Text>
+              </View>
+            ) : (
+              <View style={[styles.carIconBox, { backgroundColor: palette.accent.primarySoft }]}>
+                <Ionicons name="car-sport-outline" size={20} color={palette.accent.primary} />
+              </View>
+            )}
+          </View>
+          <View style={styles.info}>
+            <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
+              {item.makeModel || 'Без модели'}
+            </Text>
+            <View style={styles.subLine}>
+              {ownerName ? (
+                <>
+                  <Ionicons name="person-outline" size={11} color={palette.text.tertiary} />
+                  <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
+                    {ownerName}
+                  </Text>
+                </>
+              ) : (
+                <Text style={[styles.cardSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  Без владельца
+                </Text>
+              )}
+            </View>
+          </View>
+          {isOrphan ? null : (
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
+          )}
+        </TouchableOpacity>
+      );
+    },
+    [navigation, palette, prefetchClientDetail],
+  );
+
   // Retail-pin hero — gradient card pinned above the FlashList. The pin
   // is OUTSIDE the virtualised list so it never collides with row keys
   // and FlashList can stay homogenous.
@@ -479,6 +621,18 @@ export default function ClientsScreen() {
     );
   };
 
+  // Pick the freshness signal for the active tab so the badge doesn't
+  // lie when the user is on Авто but the underlying clients query is
+  // still loading.
+  const activeFreshness =
+    view === 'cars'
+      ? {
+          isFetching: carsQuery.isFetching,
+          isLoading: carsQuery.isLoading,
+          dataUpdatedAt: carsQuery.dataUpdatedAt,
+        }
+      : { isFetching, isLoading, dataUpdatedAt };
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
@@ -497,127 +651,210 @@ export default function ClientsScreen() {
       />
 
       <View style={styles.freshnessRow}>
-        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+        <FreshnessBadge query={activeFreshness} />
       </View>
 
-      <View style={styles.searchWrap}>
-        <SearchInput
-          value={search}
-          onChange={(v) => {
-            setSearch(v);
-            setPage(1);
-          }}
-          placeholder="Госномер, телефон или имя"
-        />
-      </View>
-
-      {/* Filter chips — Все / По источнику / Постоянные / Новые. */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsRow}
-      >
-        <FilterChip
-          active={filter === 'all'}
-          label="Все"
-          icon="apps-outline"
-          onPress={() => {
-            haptic('select');
-            setFilter('all');
-            setSourceFilter(null);
-          }}
-          palette={palette}
-        />
-        <FilterChip
-          active={filter === 'source'}
-          label={
-            filter === 'source' && sourceFilter
-              ? `Источник: ${sourceFilter}`
-              : 'По источнику'
-          }
-          icon="pricetag-outline"
-          onPress={() => {
-            haptic('select');
-            setSourceFilterOpen(true);
-          }}
-          palette={palette}
-          dismissable={filter === 'source'}
-          onDismiss={
-            filter === 'source'
-              ? () => {
-                  setFilter('all');
-                  setSourceFilter(null);
-                }
-              : undefined
-          }
-        />
-        <FilterChip
-          active={filter === 'regular'}
-          label="Постоянные"
-          icon="repeat-outline"
-          onPress={() => {
-            haptic('select');
-            setFilter('regular');
-            setSourceFilter(null);
-          }}
-          palette={palette}
-        />
-        <FilterChip
-          active={filter === 'new'}
-          label="Новые"
-          icon="sparkles-outline"
-          onPress={() => {
-            haptic('select');
-            setFilter('new');
-            setSourceFilter(null);
-          }}
-          palette={palette}
-        />
-      </ScrollView>
-
-      {data === undefined ? (
-        <ListSkeleton count={8} />
-      ) : filteredClients.length === 0 && !search && !isLoading && filter === 'all' ? (
-        <View style={{ flex: 1 }}>
-          <View style={{ paddingHorizontal: spacing[4] }}>
-            <RetailPin />
-          </View>
-          <EmptyState
-            title="Нет клиентов"
-            description="Добавьте первого клиента"
-            action={{ label: 'Добавить клиента', onPress: openCreateModal }}
+      {/* Segmented switcher — Клиенты / Авто. iOS-style pill with a
+          single sliding selection. Owner asked to unify the two screens
+          but keep both perspectives accessible without leaving Клиенты. */}
+      <View style={styles.segmentedWrap}>
+        <View style={[styles.segmented, { backgroundColor: palette.bg.muted }]}>
+          <SegmentButton
+            label="Клиенты"
+            icon="people-outline"
+            active={view === 'clients'}
+            onPress={() => switchView('clients')}
+            palette={palette}
+          />
+          <SegmentButton
+            label="Авто"
+            icon="car-sport-outline"
+            active={view === 'cars'}
+            onPress={() => switchView('cars')}
+            palette={palette}
           />
         </View>
-      ) : (
-        <FlashList
-          data={displayClients}
-          keyExtractor={(item) => item.id}
-          renderItem={renderClient}
-          ListHeaderComponent={
-            showRetailPin ? (
+      </View>
+
+      {view === 'clients' ? (
+        <>
+          <View style={styles.searchWrap}>
+            <SearchInput
+              value={search}
+              onChange={(v) => {
+                setSearch(v);
+                setPage(1);
+              }}
+              placeholder="Госномер, имя или телефон"
+            />
+          </View>
+
+          {/* Filter chips — Все / По источнику / Постоянные / Новые. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipsRow}
+          >
+            <FilterChip
+              active={filter === 'all'}
+              label="Все"
+              icon="apps-outline"
+              onPress={() => {
+                haptic('select');
+                setFilter('all');
+                setSourceFilter(null);
+              }}
+              palette={palette}
+            />
+            <FilterChip
+              active={filter === 'source'}
+              label={
+                filter === 'source' && sourceFilter
+                  ? `Источник: ${sourceFilter}`
+                  : 'По источнику'
+              }
+              icon="pricetag-outline"
+              onPress={() => {
+                haptic('select');
+                setSourceFilterOpen(true);
+              }}
+              palette={palette}
+              dismissable={filter === 'source'}
+              onDismiss={
+                filter === 'source'
+                  ? () => {
+                      setFilter('all');
+                      setSourceFilter(null);
+                    }
+                  : undefined
+              }
+            />
+            <FilterChip
+              active={filter === 'regular'}
+              label="Постоянные"
+              icon="repeat-outline"
+              onPress={() => {
+                haptic('select');
+                setFilter('regular');
+                setSourceFilter(null);
+              }}
+              palette={palette}
+            />
+            <FilterChip
+              active={filter === 'new'}
+              label="Новые"
+              icon="sparkles-outline"
+              onPress={() => {
+                haptic('select');
+                setFilter('new');
+                setSourceFilter(null);
+              }}
+              palette={palette}
+            />
+          </ScrollView>
+
+          {data === undefined ? (
+            <ListSkeleton count={8} />
+          ) : filteredClients.length === 0 && !search && !isLoading && filter === 'all' ? (
+            <View style={{ flex: 1 }}>
               <View style={{ paddingHorizontal: spacing[4] }}>
                 <RetailPin />
               </View>
-            ) : null
-          }
-          ListEmptyComponent={
-            !isLoading ? (
               <EmptyState
-                title={filter === 'new' ? 'Нет новых клиентов' : filter === 'regular' ? 'Нет постоянных клиентов' : 'Ничего не найдено'}
-                description={search ? `Запрос: «${search}»` : undefined}
+                title="Нет клиентов"
+                description="Добавьте первого клиента"
+                action={{ label: 'Добавить клиента', onPress: openCreateModal }}
               />
-            ) : null
-          }
-          contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
-          removeClippedSubviews
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-          }
-          onEndReached={() => {
-            if (hasMore) setPage((p) => p + 1);
-          }}
-          onEndReachedThreshold={0.5}
-        />
+            </View>
+          ) : (
+            <FlashList
+              data={displayClients}
+              keyExtractor={(item) => item.id}
+              renderItem={renderClient}
+              ListHeaderComponent={
+                showRetailPin ? (
+                  <View style={{ paddingHorizontal: spacing[4] }}>
+                    <RetailPin />
+                  </View>
+                ) : null
+              }
+              ListEmptyComponent={
+                !isLoading ? (
+                  <EmptyState
+                    title={filter === 'new' ? 'Нет новых клиентов' : filter === 'regular' ? 'Нет постоянных клиентов' : 'Ничего не найдено'}
+                    description={search ? `Запрос: «${search}»` : undefined}
+                  />
+                ) : null
+              }
+              contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+              removeClippedSubviews
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+              }
+              onEndReached={() => {
+                if (hasMore) setPage((p) => p + 1);
+              }}
+              onEndReachedThreshold={0.5}
+            />
+          )}
+        </>
+      ) : (
+        // ── Авто view ────────────────────────────────────────────────
+        // Same iosCard rhythm as the people view. Retail pin still
+        // sits at the top — it's the gateway to retail-check history
+        // regardless of which lens the owner is currently using.
+        <>
+          <View style={styles.searchWrap}>
+            <SearchInput
+              value={carSearch}
+              onChange={(v) => {
+                setCarSearch(v);
+                setCarPage(1);
+              }}
+              placeholder="Госномер или марка"
+            />
+          </View>
+
+          {carsData === undefined ? (
+            <ListSkeleton count={8} />
+          ) : sortedCars.length === 0 && !carsQuery.isLoading ? (
+            <View style={{ flex: 1 }}>
+              <View style={{ paddingHorizontal: spacing[4] }}>
+                <RetailPin />
+              </View>
+              <EmptyState
+                title={carSearch ? 'Ничего не найдено' : 'Нет автомобилей'}
+                description={
+                  carSearch
+                    ? `Запрос: «${carSearch}»`
+                    : 'Автомобили появятся после добавления к клиентам'
+                }
+              />
+            </View>
+          ) : (
+            <FlashList
+              data={sortedCars}
+              keyExtractor={(item) => item.id}
+              renderItem={renderCar}
+              ListHeaderComponent={
+                showRetailPin ? (
+                  <View style={{ paddingHorizontal: spacing[4] }}>
+                    <RetailPin />
+                  </View>
+                ) : null
+              }
+              contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+              removeClippedSubviews
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+              }
+              onEndReached={() => {
+                if (carsHasMore) setCarPage((p) => p + 1);
+              }}
+              onEndReachedThreshold={0.5}
+            />
+          )}
+        </>
       )}
 
       {/* Create/Edit Modal */}
@@ -828,6 +1065,48 @@ export default function ClientsScreen() {
   );
 }
 
+interface SegmentButtonProps {
+  active: boolean;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  palette: ReturnType<typeof useColors>;
+}
+
+// Segmented switcher button — visually mimics iOS UISegmentedControl
+// "thumb": active pill rides on the muted track, casts a soft shadow,
+// and lifts the text/icon into accent colour. Keep this internal —
+// it's tightly coupled to the segmented track styles.
+function SegmentButton({ active, label, icon, onPress, palette }: SegmentButtonProps) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={[
+        cnStyles.segmentBtn,
+        active && [cnStyles.segmentBtnActive, { backgroundColor: palette.bg.card }],
+      ]}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+    >
+      <Ionicons
+        name={icon}
+        size={14}
+        color={active ? palette.accent.primary : palette.text.secondary}
+      />
+      <Text
+        style={[
+          cnStyles.segmentBtnText,
+          { color: active ? palette.text.primary : palette.text.secondary },
+        ]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
 interface FilterChipProps {
   active: boolean;
   label: string;
@@ -890,6 +1169,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     alignItems: 'flex-end',
     minHeight: 14,
+  },
+  // Segmented tab switcher container. Sits between the freshness row
+  // and the per-tab search bar so the user can flip Клиенты ↔ Авто
+  // without scrolling the list.
+  segmentedWrap: {
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[1],
+    paddingBottom: spacing[2.5],
+  },
+  segmented: {
+    flexDirection: 'row',
+    borderRadius: borderRadius.full,
+    padding: 3,
+    alignItems: 'stretch',
   },
   list: { paddingHorizontal: 0, paddingBottom: spacing[8] },
 
@@ -974,6 +1267,36 @@ const styles = StyleSheet.create({
     backgroundColor: colors.gray[100],
   },
   sourceTagText: { fontSize: 10, fontWeight: '600' },
+
+  // Авто-tab row — same overall shape as the people row but the plate
+  // sits in a dedicated column on the left as the visual anchor (cars
+  // are identified by plate first, owner second), and there's no
+  // source tag / swipe actions.
+  carRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    backgroundColor: colors.white,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.gray[200],
+  },
+  carPlateColumn: { minWidth: 96, alignItems: 'flex-start' },
+  carPlateBadge: {
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: 6,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+  },
+  carPlateText: { fontSize: 14, fontWeight: '700', letterSpacing: 0.7 },
+  carIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Swipe
   swipeActionsRow: { flexDirection: 'row' },
@@ -1063,6 +1386,29 @@ const cnStyles = StyleSheet.create({
   },
   chipLabel: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
   chipDismiss: { marginLeft: 2 },
+
+  // Segment button — iOS-style "thumb" on a muted track. Active state
+  // is supplied via inline backgroundColor (palette.bg.card) so the
+  // pill picks up the screen's elevated surface in both light and
+  // dark themes.
+  segmentBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  segmentBtnActive: {
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  segmentBtnText: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
 
   inlineCarBlock: {
     marginTop: spacing[2],

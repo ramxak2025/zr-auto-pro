@@ -347,6 +347,15 @@ export default function SalaryScreen() {
   // state sync).
   const [detailId, setDetailId] = useState<string | null>(null);
 
+  // Form target — the master the user is paying / awarding for. Stored
+  // separately from `detailId` because we MUST close the BottomSheet
+  // before opening a follow-up `<Modal />`: iOS does not render two
+  // stacked `RNModal`s at the same time — the inner one is silently
+  // invisible. So we capture the master here, drop the sheet, and
+  // submit handlers read from `formMasterId` instead of `detailMaster`.
+  const [formMasterId, setFormMasterId] = useState<string | null>(null);
+  const [formMasterName, setFormMasterName] = useState<string>('');
+
   // Payment form state.
   const [payModalVisible, setPayModalVisible] = useState(false);
   const [payType, setPayType] = useState<'salary' | 'advance'>('salary');
@@ -406,17 +415,37 @@ export default function SalaryScreen() {
       setPayModalVisible(false);
       setPayComment('');
       setPayAmount('');
-      // Drop the detail sheet too — the envelope deserves a clean stage.
-      const masterName = detailMaster?.masterName || '';
+      // Snapshot the recipient name BEFORE clearing the stashed form
+      // target so the envelope caption renders the right person.
+      const masterName = formMasterName || detailMaster?.masterName || '';
+      // Drop the detail sheet too (already dropped on openPayForm, but
+      // belt-and-suspenders for the path where the user reopened it) —
+      // the envelope deserves a clean stage.
       setDetailId(null);
       setEnvelopeAmount(vars.amount);
       setEnvelopeName(masterName);
-      setEnvelopeVisible(true);
+      // Defer envelope by a tick on iOS — the just-dismissed <Modal/>
+      // for the form needs to complete its hide animation before the
+      // envelope's own RNModal can present cleanly.
+      setTimeout(
+        () => {
+          setEnvelopeVisible(true);
+        },
+        Platform.OS === 'ios' ? 220 : 0,
+      );
+      setFormMasterId(null);
       queryClient.invalidateQueries({ queryKey: ['salary'] });
     },
-    onError: () => {
+    onError: (err: any) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось создать выплату');
+      // eslint-disable-next-line no-console
+      console.error('[Salary] payment error', err?.response?.status, err?.response?.data, err?.message);
+      const friendly =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'Не удалось создать выплату';
+      Alert.alert('Ошибка', String(friendly));
     },
   });
 
@@ -434,12 +463,20 @@ export default function SalaryScreen() {
       setPremiumAmount('');
       setPremiumPercent('');
       setPremiumReason('');
+      setFormMasterId(null);
       haptic('success');
       queryClient.invalidateQueries({ queryKey: ['salary'] });
     },
-    onError: () => {
+    onError: (err: any) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось добавить премию');
+      // eslint-disable-next-line no-console
+      console.error('[Salary] premium error', err?.response?.status, err?.response?.data, err?.message);
+      const friendly =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'Не удалось добавить премию';
+      Alert.alert('Ошибка', String(friendly));
     },
   });
 
@@ -457,25 +494,39 @@ export default function SalaryScreen() {
     (kind: 'salary' | 'advance') => {
       if (!detailMaster) return;
       haptic('tap');
+      // Stash the master BEFORE closing the sheet — submitPayment reads
+      // from formMaster* (not detailMaster) because once we drop the
+      // sheet detailId goes null.
+      setFormMasterId(detailMaster.masterId);
+      setFormMasterName(detailMaster.masterName);
       setPayType(kind);
       setPayAmount(String(Math.max(0, Math.round(detailMaster.remainingAmount))));
       setPayComment('');
-      setPayModalVisible(true);
+      // iOS cannot show two RNModals stacked: close the detail
+      // BottomSheet first, then open the form on the next tick so the
+      // first modal has time to dismiss before the second mounts.
+      setDetailId(null);
+      setTimeout(() => setPayModalVisible(true), Platform.OS === 'ios' ? 220 : 0);
     },
     [detailMaster],
   );
 
   const openPremiumForm = useCallback(() => {
+    if (!detailMaster) return;
     haptic('tap');
+    setFormMasterId(detailMaster.masterId);
+    setFormMasterName(detailMaster.masterName);
     setPremiumType('cash');
     setPremiumAmount('');
     setPremiumPercent('');
     setPremiumReason('');
-    setPremiumModalVisible(true);
-  }, []);
+    // Same modal-stacking constraint as openPayForm.
+    setDetailId(null);
+    setTimeout(() => setPremiumModalVisible(true), Platform.OS === 'ios' ? 220 : 0);
+  }, [detailMaster]);
 
   const submitPayment = useCallback(() => {
-    if (!detailMaster) return;
+    if (!formMasterId) return;
     const amt = parseFloat(payAmount.replace(/\s+/g, '').replace(',', '.'));
     if (!Number.isFinite(amt) || amt <= 0) {
       Alert.alert('Ошибка', 'Укажите корректную сумму');
@@ -484,7 +535,7 @@ export default function SalaryScreen() {
     setPayPendingFlag(true);
     paymentMutation.mutate(
       {
-        userId: detailMaster.masterId,
+        userId: formMasterId,
         amount: amt,
         monthYear,
         type: payType,
@@ -494,10 +545,10 @@ export default function SalaryScreen() {
         onSettled: () => setPayPendingFlag(false),
       },
     );
-  }, [detailMaster, payAmount, payType, payComment, monthYear, paymentMutation]);
+  }, [formMasterId, payAmount, payType, payComment, monthYear, paymentMutation]);
 
   const submitPremium = useCallback(() => {
-    if (!detailMaster) return;
+    if (!formMasterId) return;
     if (!premiumReason.trim()) {
       Alert.alert('Ошибка', 'Опишите причину премии');
       return;
@@ -509,7 +560,7 @@ export default function SalaryScreen() {
         return;
       }
       premiumMutation.mutate({
-        userId: detailMaster.masterId,
+        userId: formMasterId,
         type: 'cash',
         amount: amt,
         reason: premiumReason.trim(),
@@ -522,14 +573,14 @@ export default function SalaryScreen() {
         return;
       }
       premiumMutation.mutate({
-        userId: detailMaster.masterId,
+        userId: formMasterId,
         type: 'rate_bonus',
         bonusPercent: pct,
         reason: premiumReason.trim(),
         periodMonthYear: monthYear,
       });
     }
-  }, [detailMaster, premiumReason, premiumType, premiumAmount, premiumPercent, monthYear, premiumMutation]);
+  }, [formMasterId, premiumReason, premiumType, premiumAmount, premiumPercent, monthYear, premiumMutation]);
 
   // ── Summary totals ───────────────────────────────────────────────────────
 
@@ -588,20 +639,35 @@ export default function SalaryScreen() {
 
   const keyExtractor = useCallback((item: MasterSalary) => item.masterId, []);
 
-  // Compact header summary — single line, sticky over the list.
-  const stickyHeader = (
-    <View style={[styles.stickySummary, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}>
+  // Summary card — three-column compact card. Renders as the first
+  // ListHeaderComponent so it scrolls away with content; owner asked for
+  // the FOT / Выплачено / К выплате row NOT to stick (it was hiding the
+  // freshest rows when paging down). The card is built on `iosCard`
+  // primitive so it sits inside the gray-50 canvas like every other
+  // section card in the app.
+  const summaryHeader = (
+    <View style={[styles.summaryCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
       <View style={styles.summaryRow}>
         <View style={styles.summaryCell}>
-          <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>ФОТ</Text>
-          <Text style={[styles.summaryCellValue, { color: palette.text.primary }]} numberOfLines={1}>
+          <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>ФОТ месяца</Text>
+          <Text
+            style={[styles.summaryCellValue, { color: palette.text.primary }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+          >
             {formatMoney(totals.earnings)}
           </Text>
         </View>
         <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
         <View style={styles.summaryCell}>
           <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>Выплачено</Text>
-          <Text style={[styles.summaryCellValue, { color: colors.green[600] }]} numberOfLines={1}>
+          <Text
+            style={[styles.summaryCellValue, { color: colors.green[600] }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
+          >
             {formatMoney(totals.paid)}
           </Text>
         </View>
@@ -614,6 +680,8 @@ export default function SalaryScreen() {
               { color: totals.remaining > 0.5 ? colors.amber[700] : palette.text.secondary },
             ]}
             numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
           >
             {formatMoney(totals.remaining)}
           </Text>
@@ -626,8 +694,6 @@ export default function SalaryScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Зарплата" onBack={() => navigation.goBack()} trailing={trailingMonthChip} />
 
-      {stickyHeader}
-
       {salaries === undefined ? (
         <LoadingSpinner />
       ) : salaries.length === 0 && !isLoading ? (
@@ -637,8 +703,10 @@ export default function SalaryScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
           }
           showsVerticalScrollIndicator={false}
+          contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
         >
-          <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+          {summaryHeader}
+          <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted, marginTop: spacing[8] }]}>
             <Ionicons name="wallet-outline" size={36} color={palette.text.tertiary} />
           </View>
           <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Нет данных за этот месяц</Text>
@@ -651,6 +719,10 @@ export default function SalaryScreen() {
           data={salaries}
           keyExtractor={keyExtractor}
           renderItem={renderItem}
+          // Summary card scrolls AWAY with content — owner explicitly
+          // asked for non-sticky behaviour. The previous on-screen
+          // sticky bar was obscuring rows when paging down on iPhone SE.
+          ListHeaderComponent={summaryHeader}
           contentContainerStyle={{
             paddingHorizontal: spacing[4],
             paddingTop: spacing[3],
@@ -682,8 +754,14 @@ export default function SalaryScreen() {
       {/* Payment form modal */}
       <Modal
         visible={payModalVisible}
-        onClose={() => setPayModalVisible(false)}
-        title={payType === 'salary' ? 'Выдать зарплату' : 'Выдать аванс'}
+        onClose={() => {
+          setPayModalVisible(false);
+          setFormMasterId(null);
+        }}
+        title={
+          (payType === 'salary' ? 'Выдать зарплату' : 'Выдать аванс') +
+          (formMasterName ? ' — ' + formMasterName : '')
+        }
       >
         <PaymentForm
           palette={palette}
@@ -695,15 +773,21 @@ export default function SalaryScreen() {
           setComment={setPayComment}
           submit={submitPayment}
           pending={paymentMutation.isPending || payPendingFlag}
-          cancel={() => setPayModalVisible(false)}
+          cancel={() => {
+            setPayModalVisible(false);
+            setFormMasterId(null);
+          }}
         />
       </Modal>
 
       {/* Premium form modal */}
       <Modal
         visible={premiumModalVisible}
-        onClose={() => setPremiumModalVisible(false)}
-        title="Премия сотруднику"
+        onClose={() => {
+          setPremiumModalVisible(false);
+          setFormMasterId(null);
+        }}
+        title={'Премия сотруднику' + (formMasterName ? ' — ' + formMasterName : '')}
       >
         <PremiumForm
           palette={palette}
@@ -717,7 +801,10 @@ export default function SalaryScreen() {
           setReason={setPremiumReason}
           submit={submitPremium}
           pending={premiumMutation.isPending}
-          cancel={() => setPremiumModalVisible(false)}
+          cancel={() => {
+            setPremiumModalVisible(false);
+            setFormMasterId(null);
+          }}
         />
       </Modal>
 
@@ -827,7 +914,7 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
       {/* Premiums list */}
       <CollapsibleSection
         title="Премии за месяц"
-        icon="ribbon-outline"
+        icon="gift-outline"
         expanded={showPremiums}
         onToggle={() => setShowPremiums((v) => !v)}
         palette={palette}
@@ -874,7 +961,10 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
             >
-              <Ionicons name="wallet" size={18} color={colors.white} />
+              {/* Outline send glyph — owner explicitly asked NOT to use
+                  the heavy filled wallet here. Clean stroke reads better
+                  on the green gradient. */}
+              <Ionicons name="paper-plane-outline" size={18} color={colors.white} />
               <Text style={styles.ctaPrimaryText}>Выдать зарплату</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -885,7 +975,10 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
             >
-              <Ionicons name="flash" size={18} color={colors.white} />
+              {/* Card-outline reads as "выдать наличные / аванс"
+                  unambiguously — and is in the icon map. The previous
+                  `flash` was filled and rendered as a heavy blob. */}
+              <Ionicons name="card-outline" size={18} color={colors.white} />
               <Text style={styles.ctaPrimaryText}>Аванс</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -895,7 +988,10 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
       {canManage ? (
         <TouchableOpacity style={styles.premiumCta} activeOpacity={0.8} onPress={onPremium}>
           <View style={[styles.premiumCtaInner, { borderColor: palette.border.strong }]}>
-            <Ionicons name="ribbon" size={18} color={colors.rose[600]} />
+            {/* Gift-outline already mapped — used as the canonical
+                "премия" affordance across the app. `ribbon` filled was
+                rendering as a Circle blob before today's icon-map update. */}
+            <Ionicons name="gift-outline" size={18} color={colors.rose[600]} />
             <Text style={[styles.premiumCtaText, { color: palette.text.primary }]}>Добавить премию</Text>
           </View>
         </TouchableOpacity>
@@ -1393,11 +1489,23 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
 
-  // Sticky summary row
-  stickySummary: {
+  // Summary card — three-column compact card. Lives as the first
+  // ListHeaderComponent inside the FlashList; it intentionally scrolls
+  // away with content (owner wanted to see the freshest rows when paging
+  // down). Hairline border + soft elevation matches `iosCard`.
+  summaryCard: {
+    marginHorizontal: spacing[4],
+    marginTop: spacing[3],
+    marginBottom: spacing[2],
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    ...(Platform.OS === 'android' ? { elevation: 1 } : null),
   },
   summaryRow: {
     flexDirection: 'row',
@@ -1406,11 +1514,11 @@ const styles = StyleSheet.create({
   summaryCell: {
     flex: 1,
     alignItems: 'flex-start',
-    gap: 2,
+    gap: 4,
   },
   summaryDivider: {
     width: StyleSheet.hairlineWidth,
-    height: 28,
+    height: 32,
     marginHorizontal: spacing[3],
   },
   summaryCellLabel: {
@@ -1421,8 +1529,10 @@ const styles = StyleSheet.create({
   },
   summaryCellValue: {
     fontSize: fontSize.base,
+    lineHeight: 22,
     fontWeight: fontWeight.bold,
     letterSpacing: -0.3,
+    includeFontPadding: false,
   },
 
   // Empty state
@@ -1532,11 +1642,16 @@ const styles = StyleSheet.create({
   },
 
   // Detail hero
+  // Owner reported "верх суммы обрезан" inside the employee detail
+  // sheet — the 36pt number under "Май 2026" was getting clipped at
+  // the top edge of its Text box. lineHeight ≈ fontSize × 1.2 fixes
+  // it; minHeight prevents the same regression if the wrapping View
+  // ever picks up a fixed height.
   detailHero: {
     alignItems: 'center',
-    paddingTop: spacing[1],
+    paddingTop: spacing[3],
     paddingBottom: spacing[4],
-    gap: 4,
+    gap: 6,
   },
   detailHeroMonth: {
     fontSize: fontSize.xs,
@@ -1546,8 +1661,11 @@ const styles = StyleSheet.create({
   },
   detailHeroAmount: {
     fontSize: 36,
+    lineHeight: 44,
     fontWeight: fontWeight.bold,
     letterSpacing: -1,
+    includeFontPadding: false,
+    paddingTop: 2,
   },
   detailHeroPill: {
     marginTop: spacing[2],

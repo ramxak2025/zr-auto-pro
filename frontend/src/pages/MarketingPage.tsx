@@ -672,10 +672,24 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
           className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-none"
         />
         <div className="flex flex-wrap gap-1.5">
-          {['{clientName}', '{tenantName}', '{reviewLink}'].map(tag => (
+          {['{clientName}', '{tenantName}', '{reviewLink}', '{motivation}'].map(tag => (
             <span key={tag} className="text-xs bg-violet-50 text-violet-600 px-2 py-0.5 rounded-full font-mono">{tag}</span>
           ))}
         </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-gray-900">Подарок за отзыв</h3>
+        <p className="text-xs text-gray-500">
+          Эта фраза показывается клиенту на странице оценки и подставляется вместо <code>{'{motivation}'}</code> в шаблоне.
+        </p>
+        <textarea
+          rows={3}
+          value={form.motivationMessage || ''}
+          onChange={e => update({ motivationMessage: e.target.value })}
+          placeholder="Например: Замена воздушного фильтра в подарок за честный отзыв"
+          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-none"
+        />
       </div>
 
       {dirty && (

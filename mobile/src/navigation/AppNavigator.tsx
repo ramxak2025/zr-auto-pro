@@ -102,7 +102,15 @@ export type RootStackParamList = {
   Main: undefined;
   CheckCreate: { id?: string } | undefined;
   CheckDetail: { id: string };
-  ClientDetail: { id: string };
+  /**
+   * `focusCarId` — set when the caller (typically the Clients screen
+   * "Авто" tab) wants the detail screen to auto-expand a specific car
+   * row and scroll the user to it. Detail screen consumes the flag once
+   * via useEffect; if absent or stale, no scrolling happens. We DON'T
+   * navigate.setParams() to clear it — re-mounts are rare and the
+   * useEffect is gated on the value identity.
+   */
+  ClientDetail: { id: string; focusCarId?: string };
   /**
    * `openDefectReturn` — set when the caller (typically the suppliers
    * list "Возврат брака" header CTA) wants the detail screen to

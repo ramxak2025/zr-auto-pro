@@ -16,12 +16,18 @@
  *   • toggle the integration on/off;
  *   • delete an existing connection.
  *
- * Backend constraints:
+ * Backend constraints (after migration 054):
  *   • messaging_integrations.provider_type ∈
  *     ('whatsapp','sms','smsru','moizvonki','email')
  *     We pick the most appropriate enum for each card.
- *   • review_platform_links.platform ∈ ('google','yandex','2gis').
- *     Avito has no DB row yet — its card renders a "coming soon" state.
+ *   • review_platform_links.platform ∈ ('google','yandex','2gis','avito').
+ *     Avito is a first-class platform now — owner pastes a profile URL.
+ *
+ * Owner-reported fixes (2026-05):
+ *   • "Нет значка раздела Интеграции, нет значка Мегафон ВАТС" — both
+ *     used Ionicons names that resolved to `Circle` in our Lucide shim.
+ *     Switched Мегафон to `cellular-outline` (now mapped → Signal).
+ *     MoreScreen entry now uses `extension-puzzle-outline` (Puzzle).
  */
 import React, { useMemo, useState } from 'react';
 import {
@@ -124,20 +130,38 @@ interface PlatformDef {
   supported: boolean;
 }
 
+// Placeholder + hint per platform — picked to match the canonical
+// profile URL format the owner is most likely to paste, so the input
+// hints at what's expected without forcing format validation.
+const PLATFORM_PLACEHOLDERS: Record<string, string> = {
+  google: 'https://maps.google.com/...',
+  yandex: 'https://yandex.ru/maps/org/...',
+  '2gis': 'https://2gis.ru/...',
+  avito: 'https://www.avito.ru/avtomoyka_xxx',
+};
+const PLATFORM_HINTS: Record<string, string> = {
+  avito: 'Откройте свой профиль на Авито и скопируйте URL из адресной строки',
+  google: 'Откройте свою карточку в Google Maps и скопируйте URL',
+  yandex: 'Откройте свою карточку в Яндекс.Картах и скопируйте URL',
+  '2gis': 'Откройте свою карточку в 2GIS и скопируйте URL',
+};
+
 const PLATFORMS: PlatformDef[] = [
   {
     key: 'google',
     name: 'Google Business',
     description: 'Профиль компании в Google Maps',
-    iconName: 'location-outline',
-    tone: { bg: '#fef3c7', fg: '#b45309' },
+    // Lucide has no Google brand mark — fall back to a globe which our
+    // shim already maps. `logo-google` resolves to Globe via the map.
+    iconName: 'logo-google',
+    tone: { bg: '#dbeafe', fg: '#1d4ed8' },
     supported: true,
   },
   {
     key: 'yandex',
     name: 'Яндекс Бизнес',
     description: 'Карточка в Яндекс Картах',
-    iconName: 'navigate-outline',
+    iconName: 'globe-outline',
     tone: { bg: '#fee2e2', fg: '#b91c1c' },
     supported: true,
   },
@@ -152,10 +176,12 @@ const PLATFORMS: PlatformDef[] = [
   {
     key: 'avito',
     name: 'Авито',
-    description: 'Автоуслуги на Авито',
-    iconName: 'cart-outline',
+    description: 'Профиль автосервиса на Авито',
+    iconName: 'storefront-outline',
     tone: { bg: '#dbeafe', fg: '#2563eb' },
-    supported: false,
+    // Migration 054 added 'avito' to the platform CHECK constraint —
+    // it's a first-class platform now.
+    supported: true,
   },
 ];
 
@@ -300,11 +326,6 @@ function PlatformCard({ platform, link, onPress, index }: PlatformCardProps) {
             {connected && link?.url && (
               <Text style={[styles.providerActive, { color: palette.text.tertiary }]} numberOfLines={1}>
                 · {link.url.replace(/^https?:\/\//, '').slice(0, 30)}
-              </Text>
-            )}
-            {!platform.supported && (
-              <Text style={[styles.providerActive, { color: palette.text.tertiary }]} numberOfLines={1}>
-                · Скоро
               </Text>
             )}
           </View>
@@ -721,6 +742,10 @@ function PlatformModal({
 
   if (!platform) return null;
 
+  // Dead branch in 2026-05 — all current platforms are `supported: true`
+  // after migration 054 added Avito to the CHECK constraint. Kept as a
+  // safety net so a future "we added a platform but its DB enum isn't
+  // ready yet" doesn't crash the modal — it just shows a notice.
   if (!platform.supported) {
     return (
       <Modal visible={!!platform} onClose={onClose} title={platform.name}>
@@ -737,7 +762,7 @@ function PlatformModal({
         <View style={[styles.notice, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}>
           <Ionicons name="information-circle-outline" size={16} color={palette.text.secondary} />
           <Text style={[styles.noticeText, { color: palette.text.secondary }]}>
-            Интеграция с Авито в разработке. Пока добавьте ссылку на ваш профиль в карточку клиента вручную.
+            Эта интеграция временно недоступна. Попробуйте позже.
           </Text>
         </View>
       </Modal>
@@ -775,9 +800,14 @@ function PlatformModal({
           autoCapitalize="none"
           autoCorrect={false}
           keyboardType="url"
-          placeholder="https://..."
+          placeholder={PLATFORM_PLACEHOLDERS[platform.key] || 'https://...'}
           placeholderTextColor={palette.text.tertiary}
         />
+        {PLATFORM_HINTS[platform.key] ? (
+          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+            {PLATFORM_HINTS[platform.key]}
+          </Text>
+        ) : null}
       </View>
 
       <TouchableOpacity

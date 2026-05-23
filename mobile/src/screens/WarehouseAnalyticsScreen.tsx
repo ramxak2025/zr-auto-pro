@@ -1244,10 +1244,18 @@ const styles = StyleSheet.create({
   },
 
   // ── 1. Hero card ──
+  // Owner reported "верх суммы обрезан" on the WarehouseAnalytics hero.
+  // The fix is twofold: explicit `lineHeight ≈ fontSize × 1.2` so the
+  // text box reserves space for the cap-height of digits, and a
+  // `minHeight` on the card (via extra paddingTop) instead of relying
+  // on a fixed shape. Same pattern applied to gmroiValue / dynamicsValue
+  // / deadStockChipCount below.
   heroCard: {
     ...iosCard,
-    paddingVertical: spacing[4],
     paddingHorizontal: spacing[4],
+    paddingTop: spacing[4] + 2,
+    paddingBottom: spacing[4],
+    minHeight: 0,
   },
   heroHeaderRow: {
     flexDirection: 'row',
@@ -1257,8 +1265,10 @@ const styles = StyleSheet.create({
   },
   heroValue: {
     fontSize: 34,
+    lineHeight: 42,
     fontWeight: '800',
     letterSpacing: -0.8,
+    includeFontPadding: false,
   },
   heroCaption: {
     fontSize: fontSize.sm,
@@ -1314,8 +1324,10 @@ const styles = StyleSheet.create({
   },
   dynamicsValue: {
     fontSize: fontSize.lg,
+    lineHeight: 24,
     fontWeight: '600',
     marginTop: 2,
+    includeFontPadding: false,
   },
   dynamicsArrowCol: {
     alignItems: 'center',
@@ -1449,7 +1461,9 @@ const styles = StyleSheet.create({
   },
   deadStockChipCount: {
     fontSize: fontSize.lg,
+    lineHeight: 24,
     fontWeight: '700',
+    includeFontPadding: false,
   },
   deadStockChipValue: {
     fontSize: 11,
@@ -1499,8 +1513,10 @@ const styles = StyleSheet.create({
   },
   gmroiValue: {
     fontSize: 38,
+    lineHeight: 46,
     fontWeight: '800',
     letterSpacing: -1,
+    includeFontPadding: false,
   },
   gmroiVerdict: {
     paddingHorizontal: spacing[2.5],

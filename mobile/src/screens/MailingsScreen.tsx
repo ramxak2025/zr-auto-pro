@@ -1,18 +1,21 @@
 /**
  * MailingsScreen — "Рассылки".
  *
- * Three tabs:
- *   • SMS-напоминания — toggle / interval / template / "Отправить сейчас"
- *                       (moved here from MarketingScreen).
- *   • Ручная рассылка — pick clients, choose channel + template, send.
- *   • История          — past mailings list (best-effort; stubs when the
- *                        backend doesn't yet expose history).
+ * Owner feedback ("сам дизайн ux ui не нравится, надо сделать современный
+ * и удобный и убрать тавтологию в словах") drove a full UI rebuild:
  *
- * The «Ручная рассылка» / «История» tabs are forward-looking — the backend
- * exposes `marketingApi.sendSms` (single recipient) today, so we batch
- * client-side and surface a clear "Отправлено N / ошибок M" toast. As soon
- * as a real `/marketing/mailings` endpoint lands we can swap the loop for
- * one call without changing the UX.
+ *   • Round segmented control tabs (capsule, not square chips).
+ *   • Tab labels deduplicated: "Авто-напоминания" / "Ручная" / "История".
+ *     The word «рассылка» is no longer repeated on every tab.
+ *   • Step-based "Ручная" tab — Получатели → Сообщение → Отправить.
+ *   • Polished history rows with channel icon + delivery status pill.
+ *   • All Ionicons names verified to have explicit map entries (active
+ *     variants get a `tab.iconSolid` so the runtime never has to strip
+ *     `-outline` and hit the Circle fallback).
+ *
+ * Backend stays unchanged — manual bulk send still loops `sendSms` per
+ * recipient client-side; history is in-memory until `/marketing/mailings`
+ * ships server-side.
  */
 import React, { useMemo, useState } from 'react';
 import {
@@ -24,6 +27,8 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  Pressable,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -38,7 +43,7 @@ import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { Client } from '../../../shared/types';
 
-type TabKey = 'reminders' | 'manual' | 'history';
+type TabKey = 'auto' | 'manual' | 'history';
 
 const TEMPLATES: { id: string; title: string; body: string }[] = [
   {
@@ -64,10 +69,10 @@ const TEMPLATES: { id: string; title: string; body: string }[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────
-//  SMS-напоминания
+//  Авто-напоминания
 // ─────────────────────────────────────────────────────────────────────
 
-function RemindersTab() {
+function AutoTab() {
   const palette = useColors();
 
   const [enabled, setEnabled] = useState(false);
@@ -81,7 +86,6 @@ function RemindersTab() {
     staleTime: 60_000,
   });
 
-  // Sync local state once settings arrive
   React.useEffect(() => {
     if (settings) {
       setEnabled(settings.enabled);
@@ -95,11 +99,11 @@ function RemindersTab() {
     onSuccess: () => {
       haptic('success');
       refetchSettings();
-      Alert.alert('Готово', 'Настройки сохранены');
+      Alert.alert('Сохранено', 'Настройки применены');
     },
     onError: () => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось сохранить настройки');
+      Alert.alert('Ошибка', 'Не удалось сохранить');
     },
   });
 
@@ -112,152 +116,185 @@ function RemindersTab() {
     },
     onError: () => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось отправить напоминания');
+      Alert.alert('Ошибка', 'Не удалось отправить');
     },
   });
 
+  const insertVariable = (variable: string) => {
+    haptic('select');
+    setMessageTemplate((prev) => `${prev}${variable}`);
+  };
+
   return (
-    <View style={{ gap: spacing[4] }}>
+    <View style={{ gap: spacing[3] }}>
+      {/* Big enable row */}
       <AnimatedCard
         index={0}
+        style={[styles.bigToggleCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <View style={[styles.bigToggleIcon, { backgroundColor: enabled ? colors.green[50] : palette.bg.muted }]}>
+          <Ionicons
+            name={enabled ? 'notifications' : 'notifications-outline'}
+            size={20}
+            color={enabled ? colors.green[600] : palette.text.tertiary}
+          />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.bigToggleTitle, { color: palette.text.primary }]}>Авто-напоминания о ТО</Text>
+          <Text style={[styles.bigToggleSub, { color: palette.text.tertiary }]}>
+            {enabled ? 'Включены — клиенты получают раз в N месяцев' : 'Отключены — никому не пишем'}
+          </Text>
+        </View>
+        <Pressable
+          onPress={() => {
+            haptic('select');
+            setEnabled((v) => !v);
+          }}
+          style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}
+          hitSlop={8}
+        >
+          <View
+            style={[
+              styles.switchTrack,
+              { backgroundColor: enabled ? palette.accent.primary : palette.border.strong },
+            ]}
+          >
+            <View style={[styles.switchThumb, { transform: [{ translateX: enabled ? 20 : 2 }] }]} />
+          </View>
+        </Pressable>
+      </AnimatedCard>
+
+      {/* Interval */}
+      <AnimatedCard
+        index={1}
         style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       >
-        <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: spacing[3] }]}>
-          Авто-напоминания клиентам
-        </Text>
-
-        {/* Toggle row */}
-        <View style={[styles.settingsRow, { borderBottomColor: palette.border.subtle }]}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.settingsRowLabel, { color: palette.text.primary }]}>
-              Авто-напоминания включены
-            </Text>
-            <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: 2 }}>
-              Рассылка клиентам, давно не посещавшим сервис
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={[
-              styles.toggleBtn,
-              { backgroundColor: enabled ? palette.accent.primary : palette.bg.muted },
-            ]}
-            onPress={() => {
-              haptic('select');
-              setEnabled((v) => !v);
-            }}
-          >
-            <Text
-              style={{
-                fontSize: 12,
-                fontWeight: '600',
-                color: enabled ? colors.white : palette.text.tertiary,
-              }}
-            >
-              {enabled ? 'Вкл' : 'Выкл'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Interval */}
-        <View style={{ marginTop: spacing[3] }}>
-          <Text
-            style={[styles.settingsRowLabel, { color: palette.text.secondary, marginBottom: spacing[2] }]}
-          >
-            Интервал (месяцев с визита)
-          </Text>
-          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-            {[3, 6, 12].map((m) => {
-              const active = monthsInterval === m;
-              return (
-                <TouchableOpacity
-                  key={m}
-                  style={[
-                    styles.intervalChip,
-                    {
-                      backgroundColor: active ? palette.accent.primary : palette.bg.muted,
-                      borderColor: active ? palette.accent.primary : palette.border.subtle,
-                    },
-                  ]}
-                  onPress={() => {
-                    haptic('select');
-                    setMonthsInterval(m);
+        <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Раз в N месяцев</Text>
+        <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+          {[3, 6, 12].map((m) => {
+            const active = monthsInterval === m;
+            return (
+              <TouchableOpacity
+                key={m}
+                style={[
+                  styles.intervalChip,
+                  {
+                    backgroundColor: active ? palette.accent.primary : palette.bg.muted,
+                    borderColor: active ? palette.accent.primary : palette.border.subtle,
+                  },
+                ]}
+                onPress={() => {
+                  haptic('select');
+                  setMonthsInterval(m);
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: fontSize.sm,
+                    fontWeight: fontWeight.bold,
+                    color: active ? colors.white : palette.text.secondary,
                   }}
                 >
-                  <Text
-                    style={{
-                      fontSize: 13,
-                      fontWeight: '600',
-                      color: active ? colors.white : palette.text.secondary,
-                    }}
-                  >
-                    {m} мес.
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+                  {m}
+                </Text>
+                <Text
+                  style={{
+                    fontSize: 11,
+                    color: active ? colors.white : palette.text.tertiary,
+                  }}
+                >
+                  {m === 3 ? 'месяца' : 'месяцев'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </AnimatedCard>
+
+      {/* Template */}
+      <AnimatedCard
+        index={2}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <View style={styles.sectionHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+            <Ionicons name="document-text-outline" size={16} color={palette.text.secondary} />
+            <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>
+              Шаблон сообщения
+            </Text>
           </View>
         </View>
 
-        {/* Template */}
-        <View style={{ marginTop: spacing[3] }}>
-          <Text
-            style={[styles.settingsRowLabel, { color: palette.text.secondary, marginBottom: spacing[1.5] }]}
-          >
-            Шаблон сообщения
-          </Text>
-          <TextInput
-            value={messageTemplate}
-            onChangeText={setMessageTemplate}
-            style={[
-              styles.textArea,
-              {
-                backgroundColor: palette.bg.muted,
-                borderColor: palette.border.subtle,
-                color: palette.text.primary,
-              },
-            ]}
-            multiline
-            numberOfLines={4}
-            placeholder="Привет, {name}! Прошло {months} месяцев с вашего последнего визита. Ждём вас в сервисе!"
-            placeholderTextColor={palette.text.tertiary}
-          />
-          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
-            Переменные: {'{name}'} — имя, {'{months}'} — месяцев, {'{car}'} — авто
-          </Text>
-        </View>
+        <TextInput
+          value={messageTemplate}
+          onChangeText={setMessageTemplate}
+          style={[
+            styles.textArea,
+            {
+              backgroundColor: palette.bg.muted,
+              borderColor: palette.border.subtle,
+              color: palette.text.primary,
+            },
+          ]}
+          multiline
+          numberOfLines={4}
+          placeholder="Здравствуйте, {имя}! Прошло {месяцы} месяцев с вашего последнего визита. Ждём вас!"
+          placeholderTextColor={palette.text.tertiary}
+        />
 
+        <Text style={[styles.varHint, { color: palette.text.tertiary }]}>
+          Переменные — нажмите, чтобы вставить
+        </Text>
+        <View style={styles.varRow}>
+          {[
+            { label: '{имя}', insert: '{имя}' },
+            { label: '{авто}', insert: '{авто}' },
+            { label: '{месяцы}', insert: '{месяцы}' },
+          ].map((v) => (
+            <TouchableOpacity
+              key={v.label}
+              onPress={() => insertVariable(v.insert)}
+              style={[
+                styles.varChip,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+              ]}
+            >
+              <Text style={{ fontSize: 12, color: palette.accent.primary, fontWeight: '600' }}>
+                {v.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </AnimatedCard>
+
+      {/* Actions */}
+      <View style={styles.actionsRow}>
         <TouchableOpacity
           style={[
-            styles.primaryBtn,
+            styles.actionBtnPrimary,
             { backgroundColor: palette.accent.primary },
-            saveSettings.isPending && { opacity: 0.6 },
+            saveSettings.isPending && { opacity: 0.7 },
           ]}
-          onPress={() => saveSettings.mutate()}
+          onPress={() => {
+            haptic('tap');
+            saveSettings.mutate();
+          }}
           disabled={saveSettings.isPending}
         >
           {saveSettings.isPending ? (
             <ActivityIndicator size="small" color={colors.white} />
           ) : (
             <>
-              <Ionicons name="checkmark-circle" size={18} color={colors.white} />
-              <Text style={styles.primaryBtnText}>Сохранить</Text>
+              <Ionicons name="checkmark-circle" size={16} color={colors.white} />
+              <Text style={styles.actionBtnPrimaryText}>Сохранить</Text>
             </>
           )}
         </TouchableOpacity>
-
-        <View
-          style={{
-            height: StyleSheet.hairlineWidth,
-            backgroundColor: palette.border.subtle,
-            marginVertical: spacing[3],
-          }}
-        />
-
         <TouchableOpacity
           style={[
-            styles.secondaryBtn,
-            { backgroundColor: colors.orange[50], borderColor: colors.orange[400] },
-            sendNow.isPending && { opacity: 0.6 },
+            styles.actionBtnSecondary,
+            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            sendNow.isPending && { opacity: 0.7 },
           ]}
           onPress={() => {
             haptic('tap');
@@ -267,36 +304,27 @@ function RemindersTab() {
           disabled={sendNow.isPending}
         >
           {sendNow.isPending ? (
-            <ActivityIndicator size="small" color={colors.orange[600]} />
+            <ActivityIndicator size="small" color={palette.text.primary} />
           ) : (
             <>
-              <Ionicons name="send-outline" size={16} color={colors.orange[600]} />
-              <Text style={{ fontSize: 14, fontWeight: '600', color: colors.orange[700] }}>
+              <Ionicons name="paper-plane-outline" size={16} color={palette.text.primary} />
+              <Text style={[styles.actionBtnSecondaryText, { color: palette.text.primary }]}>
                 Отправить сейчас
               </Text>
             </>
           )}
         </TouchableOpacity>
+      </View>
 
-        {sendResult ? (
-          <Text
-            style={{
-              fontSize: 12,
-              color: palette.text.secondary,
-              textAlign: 'center',
-              marginTop: spacing[2],
-            }}
-          >
-            {sendResult}
-          </Text>
-        ) : null}
-      </AnimatedCard>
+      {sendResult ? (
+        <Text style={[styles.resultText, { color: palette.text.tertiary }]}>{sendResult}</Text>
+      ) : null}
     </View>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  Ручная рассылка
+//  Ручная
 // ─────────────────────────────────────────────────────────────────────
 
 function ManualTab({
@@ -340,8 +368,6 @@ function ManualTab({
 
   const send = useMutation({
     mutationFn: async () => {
-      // No backend bulk endpoint yet — fire one SMS per recipient in
-      // sequence so a single failure doesn't abort the whole batch.
       let sent = 0;
       let errors = 0;
       for (const id of pickedIds) {
@@ -382,23 +408,43 @@ function ManualTab({
     },
     onError: () => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось отправить рассылку');
+      Alert.alert('Ошибка', 'Не удалось отправить');
     },
   });
 
   const canSend = pickedIds.length > 0 && message.trim().length > 0 && !send.isPending;
 
   return (
-    <View style={{ gap: spacing[4] }}>
-      {/* Recipients */}
-      <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>
-            Получатели
-          </Text>
-          <Text style={[styles.sectionAside, { color: palette.text.tertiary }]}>
-            выбрано: {pickedIds.length}
-          </Text>
+    <View style={{ gap: spacing[3] }}>
+      {/* Step 1 — Получатели */}
+      <AnimatedCard
+        index={0}
+        style={[styles.stepCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <View style={styles.stepHeader}>
+          <View style={[styles.stepNumber, { backgroundColor: palette.accent.primary }]}>
+            <Text style={styles.stepNumberText}>1</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
+              <Ionicons name="people-outline" size={15} color={palette.text.primary} />
+              <Text style={[styles.stepTitle, { color: palette.text.primary }]}>Получатели</Text>
+            </View>
+            <Text style={[styles.stepCount, { color: palette.text.tertiary }]}>
+              Выбрано: {pickedIds.length}
+            </Text>
+          </View>
+          {pickedIds.length > 0 && (
+            <TouchableOpacity
+              onPress={() => {
+                haptic('tap');
+                setPicked({});
+              }}
+              hitSlop={6}
+            >
+              <Text style={[styles.stepClear, { color: palette.accent.primary }]}>Сбросить</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={[styles.searchRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
@@ -413,11 +459,11 @@ function ManualTab({
           />
         </View>
 
-        <View style={{ maxHeight: 260, marginTop: spacing[2] }}>
+        <View style={{ maxHeight: 240, marginTop: spacing[2] }}>
           {clientsQuery.isLoading && clients.length === 0 ? (
             <ActivityIndicator color={palette.accent.primary} style={{ marginVertical: spacing[4] }} />
           ) : clients.length === 0 ? (
-            <Text style={[styles.helperText, { color: palette.text.tertiary }]}>Ничего не найдено</Text>
+            <Text style={[styles.helperText, { color: palette.text.tertiary }]}>Никого не нашли</Text>
           ) : (
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
               {clients.map((c) => {
@@ -458,11 +504,27 @@ function ManualTab({
             </ScrollView>
           )}
         </View>
-      </View>
+      </AnimatedCard>
 
-      {/* Channel + templates */}
-      <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-        <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Сообщение</Text>
+      {/* Step 2 — Сообщение */}
+      <AnimatedCard
+        index={1}
+        style={[styles.stepCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <View style={styles.stepHeader}>
+          <View style={[styles.stepNumber, { backgroundColor: palette.accent.primary }]}>
+            <Text style={styles.stepNumberText}>2</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
+              <Ionicons name="document-text-outline" size={15} color={palette.text.primary} />
+              <Text style={[styles.stepTitle, { color: palette.text.primary }]}>Сообщение</Text>
+            </View>
+            <Text style={[styles.stepCount, { color: palette.text.tertiary }]}>
+              Канал · {channel === 'sms' ? 'SMS' : 'WhatsApp'}
+            </Text>
+          </View>
+        </View>
 
         <View style={{ flexDirection: 'row', gap: spacing[2], marginBottom: spacing[3] }}>
           {(['sms', 'whatsapp'] as const).map((c) => {
@@ -540,36 +602,47 @@ function ManualTab({
           placeholder="Введите сообщение или выберите шаблон выше"
           placeholderTextColor={palette.text.tertiary}
         />
-        <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
-          Переменные: {'{имя}'}, {'{авто}'} — будут подставлены для каждого получателя
+        <Text style={[styles.varHint, { color: palette.text.tertiary }]}>
+          Переменные {'{имя}'}, {'{авто}'} подставятся для каждого получателя
         </Text>
+      </AnimatedCard>
 
-        <TouchableOpacity
-          style={[
-            styles.primaryBtn,
-            { backgroundColor: palette.accent.primary, marginTop: spacing[3] },
-            !canSend && { opacity: 0.55 },
-          ]}
-          disabled={!canSend}
-          onPress={() => {
-            haptic('tap');
-            send.mutate();
-          }}
-        >
-          {send.isPending ? (
-            <ActivityIndicator size="small" color={colors.white} />
-          ) : (
-            <>
-              <Ionicons name="send" size={16} color={colors.white} />
-              <Text style={styles.primaryBtnText}>
-                Отправить{pickedIds.length > 0 ? ` (${pickedIds.length})` : ''}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
+      {/* Step 3 — Send */}
+      <TouchableOpacity
+        style={[
+          styles.bigSendBtn,
+          { backgroundColor: palette.accent.primary },
+          !canSend && { opacity: 0.5 },
+        ]}
+        disabled={!canSend}
+        onPress={() => {
+          haptic('tap');
+          send.mutate();
+        }}
+      >
+        {send.isPending ? (
+          <ActivityIndicator size="small" color={colors.white} />
+        ) : (
+          <>
+            <Ionicons name="paper-plane" size={18} color={colors.white} />
+            <Text style={styles.bigSendBtnText}>
+              {pickedIds.length > 0
+                ? `Отправить ${pickedIds.length} ${pluralize(pickedIds.length)}`
+                : 'Выберите получателей'}
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
     </View>
   );
+}
+
+function pluralize(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'сообщение';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'сообщения';
+  return 'сообщений';
 }
 
 function renderTemplate(tpl: string, client: Client): string {
@@ -605,9 +678,9 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
         <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
           <Ionicons name="time-outline" size={28} color={palette.text.tertiary} />
         </View>
-        <Text style={[styles.emptyTitle, { color: palette.text.primary }]}>История пуста</Text>
+        <Text style={[styles.emptyTitle, { color: palette.text.primary }]}>Здесь будут отправленные рассылки</Text>
         <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>
-          История появится после первой рассылки
+          История появится после первой отправки
         </Text>
       </View>
     );
@@ -618,14 +691,22 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
         <AnimatedCard
           key={h.id}
           index={idx}
-          style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          style={[styles.histCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
-            <View style={[styles.histIcon, { backgroundColor: palette.accent.primarySoft }]}>
+            <View
+              style={[
+                styles.histIcon,
+                {
+                  backgroundColor:
+                    h.channel === 'whatsapp' ? '#dcf8c6' : palette.accent.primarySoft,
+                },
+              ]}
+            >
               <Ionicons
                 name={h.channel === 'whatsapp' ? 'logo-whatsapp' : 'chatbox'}
                 size={18}
-                color={palette.accent.primary}
+                color={h.channel === 'whatsapp' ? '#075E54' : palette.accent.primary}
               />
             </View>
             <View style={{ flex: 1 }}>
@@ -638,7 +719,7 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
                 })}
               </Text>
               <Text style={[styles.histSub, { color: palette.text.tertiary }]}>
-                {h.audience} получателей · доставлено {h.delivered}
+                {h.audience} {pluralize(h.audience)} · доставлено {h.delivered}
                 {h.failed > 0 ? `, ошибок ${h.failed}` : ''}
               </Text>
             </View>
@@ -678,16 +759,21 @@ export default function MailingsScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TabKey>('reminders');
+  const [activeTab, setActiveTab] = useState<TabKey>('auto');
   const [refreshing, setRefreshing] = useState(false);
   // History is in-memory only until the backend ships a real endpoint.
   const [history, setHistory] = useState<ManualHistoryEntry[]>([]);
 
-  const tabs: { key: TabKey; label: string; icon: keyof typeof Ionicons.glyphMap }[] = useMemo(
+  const tabs: {
+    key: TabKey;
+    label: string;
+    iconOutline: keyof typeof Ionicons.glyphMap;
+    iconSolid: keyof typeof Ionicons.glyphMap;
+  }[] = useMemo(
     () => [
-      { key: 'reminders', label: 'Напоминания', icon: 'notifications-outline' },
-      { key: 'manual', label: 'Рассылка', icon: 'paper-plane-outline' },
-      { key: 'history', label: 'История', icon: 'time-outline' },
+      { key: 'auto', label: 'Авто-напоминания', iconOutline: 'notifications-outline', iconSolid: 'notifications' },
+      { key: 'manual', label: 'Ручная', iconOutline: 'paper-plane-outline', iconSolid: 'paper-plane' },
+      { key: 'history', label: 'История', iconOutline: 'time-outline', iconSolid: 'time' },
     ],
     [],
   );
@@ -703,43 +789,45 @@ export default function MailingsScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Рассылки" onBack={() => navigation.goBack()} />
 
-      <View style={styles.tabBar}>
-        {tabs.map((tab) => {
-          const active = activeTab === tab.key;
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              style={[
-                styles.tab,
-                { backgroundColor: palette.bg.muted },
-                active && {
-                  backgroundColor: palette.accent.primarySoft,
-                  borderWidth: 1,
-                  borderColor: palette.accent.primary,
-                },
-              ]}
-              onPress={() => {
-                haptic('select');
-                setActiveTab(tab.key);
-              }}
-            >
-              <Ionicons
-                name={(active ? tab.icon.replace('-outline', '') : tab.icon) as any}
-                size={16}
-                color={active ? palette.accent.primary : palette.text.tertiary}
-              />
-              <Text
+      {/* Round capsule segmented control */}
+      <View style={styles.tabBarWrap}>
+        <View style={[styles.tabBar, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          {tabs.map((tab) => {
+            const active = activeTab === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
                 style={[
-                  styles.tabText,
-                  { color: active ? palette.accent.primary : palette.text.tertiary },
-                  active && { fontWeight: fontWeight.bold },
+                  styles.tab,
+                  active && [styles.tabActive, { backgroundColor: palette.bg.card }],
                 ]}
+                onPress={() => {
+                  haptic('select');
+                  setActiveTab(tab.key);
+                }}
+                activeOpacity={0.7}
               >
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
+                <Ionicons
+                  name={active ? tab.iconSolid : tab.iconOutline}
+                  size={15}
+                  color={active ? palette.accent.primary : palette.text.tertiary}
+                />
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.tabText,
+                    {
+                      color: active ? palette.text.primary : palette.text.tertiary,
+                      fontWeight: active ? fontWeight.bold : fontWeight.medium,
+                    },
+                  ]}
+                >
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
       <ScrollView
@@ -750,7 +838,7 @@ export default function MailingsScreen() {
         }
         keyboardShouldPersistTaps="handled"
       >
-        {activeTab === 'reminders' && <RemindersTab />}
+        {activeTab === 'auto' && <AutoTab />}
         {activeTab === 'manual' && <ManualTab history={history} setHistory={setHistory} />}
         {activeTab === 'history' && <HistoryTab history={history} />}
       </ScrollView>
@@ -764,33 +852,51 @@ export default function MailingsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+
+  // Round capsule segmented control
+  tabBarWrap: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[2.5],
+  },
   tabBar: {
     flexDirection: 'row',
-    paddingHorizontal: spacing[3],
-    paddingBottom: spacing[2],
-    gap: spacing[2],
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 4,
+    gap: 4,
   },
   tab: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing[1.5],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.xl,
+    gap: 6,
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.full,
   },
-  tabText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  tabActive: {
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.08,
+        shadowRadius: 2,
+      },
+      android: { elevation: 1 },
+    }),
+  },
+  tabText: { fontSize: 12.5 },
 
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4] },
 
+  // Generic card
   card: {
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     padding: spacing[4],
   },
   sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, marginBottom: spacing[3] },
-  sectionAside: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -798,38 +904,118 @@ const styles = StyleSheet.create({
     marginBottom: spacing[3],
   },
 
-  // Settings rows
-  settingsRow: {
+  // Big toggle card (Авто-напоминания master switch)
+  bigToggleCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingBottom: spacing[3],
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: spacing[3],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    padding: spacing[4],
   },
-  settingsRowLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  toggleBtn: {
+  bigToggleIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bigToggleTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+  bigToggleSub: { fontSize: 12, marginTop: 2 },
+
+  // iOS-style switch
+  switchTrack: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+  },
+  switchThumb: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#ffffff',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.15,
+        shadowRadius: 2,
+      },
+      android: { elevation: 2 },
+    }),
+  },
+
+  // Interval chips
+  intervalChip: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 0,
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+
+  // Variables
+  varHint: { fontSize: 11, marginTop: spacing[2], marginBottom: spacing[2] },
+  varRow: { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
+  varChip: {
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1.5],
     borderRadius: borderRadius.full,
-    minWidth: 56,
-    alignItems: 'center',
-  },
-  intervalChip: {
-    flex: 1,
     borderWidth: 1,
-    borderRadius: borderRadius.lg,
-    paddingVertical: spacing[2],
-    alignItems: 'center',
   },
 
-  textArea: {
-    borderWidth: 1,
+  // Action row (Save + Send now)
+  actionsRow: { flexDirection: 'row', gap: spacing[2] },
+  actionBtnPrimary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
     borderRadius: borderRadius.xl,
-    padding: spacing[3],
-    fontSize: fontSize.sm,
-    textAlignVertical: 'top',
-    minHeight: 100,
+    paddingVertical: spacing[3.5],
   },
-  helperText: { fontSize: fontSize.xs, paddingVertical: spacing[3] },
+  actionBtnPrimaryText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  actionBtnSecondary: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingVertical: spacing[3.5],
+  },
+  actionBtnSecondaryText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+
+  resultText: { fontSize: 12, textAlign: 'center', marginTop: spacing[2] },
+
+  // Step cards
+  stepCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    padding: spacing[4],
+  },
+  stepHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    marginBottom: spacing[3],
+  },
+  stepNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepNumberText: { color: colors.white, fontSize: 13, fontWeight: '700' },
+  stepTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+  stepCount: { fontSize: 11, marginTop: 2 },
+  stepClear: { fontSize: 12, fontWeight: '600' },
 
   // Search
   searchRow: {
@@ -842,6 +1028,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
   },
   searchInput: { flex: 1, fontSize: fontSize.sm, padding: 0 },
+  helperText: { fontSize: fontSize.xs, paddingVertical: spacing[3], textAlign: 'center' },
 
   // Client picker rows
   clientRow: {
@@ -888,27 +1075,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
 
-  // Buttons
-  primaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    borderRadius: borderRadius.xl,
-    paddingVertical: spacing[3.5],
-  },
-  primaryBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
-  secondaryBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
+  textArea: {
     borderWidth: 1,
     borderRadius: borderRadius.xl,
-    paddingVertical: spacing[3],
+    padding: spacing[3],
+    fontSize: fontSize.sm,
+    textAlignVertical: 'top',
+    minHeight: 110,
   },
 
+  // Big send button at bottom of step flow
+  bigSendBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[4],
+  },
+  bigSendBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.bold },
+
   // History
+  histCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    padding: spacing[4],
+  },
   histIcon: {
     width: 38,
     height: 38,

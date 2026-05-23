@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Star, ExternalLink, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Star, ExternalLink, Loader2, CheckCircle, XCircle, Gift } from 'lucide-react';
 import { publicReviewApi } from '../api/services';
 import type { PublicReviewData, ReviewPlatformLink } from '../types';
 
@@ -8,12 +8,14 @@ const platformLabels: Record<string, string> = {
   google: 'Google Maps',
   yandex: 'Яндекс Карты',
   '2gis': '2ГИС',
+  avito: 'Авито',
 };
 
 const platformColors: Record<string, { bg: string; text: string; border: string }> = {
   google: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
   yandex: { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-200' },
   '2gis': { bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200' },
+  avito: { bg: 'bg-sky-50', text: 'text-sky-700', border: 'border-sky-200' },
 };
 
 export default function ReviewPublicPage() {
@@ -142,6 +144,23 @@ export default function ReviewPublicPage() {
             <p className="text-sm text-gray-500">Оцените качество обслуживания</p>
           )}
         </div>
+
+        {/* Motivational gift banner — set by the owner in MarketingScreen */}
+        {data?.motivationMessage && data.motivationMessage.trim() ? (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
+              <Gift className="w-4 h-4 text-amber-700" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700 mb-1">
+                Подарок за отзыв
+              </p>
+              <p className="text-sm font-semibold text-amber-900 leading-snug">
+                {data.motivationMessage}
+              </p>
+            </div>
+          </div>
+        ) : null}
 
         {/* Rating stars */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-4">

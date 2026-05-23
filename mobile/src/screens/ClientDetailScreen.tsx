@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -168,10 +168,19 @@ export default function ClientDetailScreen() {
   // director (a workshop boss can want to tag a client too) and for
   // superadmin (test/debug).
   const canEditMeta = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
-  const { id } = route.params;
+  const { id, focusCarId } = route.params as { id: string; focusCarId?: string };
   const isRetail = id === '__retail__';
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCarId, setSelectedCarId] = useState<string | null>(null);
+
+  // Scroll target — referenced when we arrive from the unified Clients
+  // screen "Авто" tab. We track Y per car row in `carRowYs` and call
+  // scrollTo() once the layout has settled. Guarded by `focusHandled`
+  // so a re-render doesn't re-jump after the user has already scrolled
+  // elsewhere.
+  const scrollRef = useRef<ScrollView | null>(null);
+  const carRowYs = useRef<Record<string, number>>({});
+  const focusHandled = useRef(false);
 
   // Car modal state
   const [carModalOpen, setCarModalOpen] = useState(false);
@@ -440,6 +449,33 @@ export default function ClientDetailScreen() {
     else setNotesDraft('');
   }, [client?.ownerNotes]);
 
+  // Auto-expand + scroll to the focused car when arriving from the
+  // Авто tab of ClientsScreen. We wait for both the client (so the
+  // car exists in client.cars) AND the per-car checks (so the inline
+  // panel renders correctly when expanded). Layout-measured Y is the
+  // single source of truth — RN doesn't expose a "scroll to mounted
+  // child" primitive, so we collect Y per row in onLayout, then jump.
+  useEffect(() => {
+    if (!focusCarId || focusHandled.current) return;
+    if (!client) return;
+    const car = (client.cars || []).find((c) => c.id === focusCarId);
+    if (!car) return;
+    setSelectedCarId(focusCarId);
+    // Defer the actual scroll until the next frame so onLayout has
+    // populated carRowYs for the (now visible) car row. Two frames
+    // is enough on iOS to absorb both the state update and the
+    // expansion layout pass.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const y = carRowYs.current[focusCarId];
+        if (typeof y === 'number' && scrollRef.current) {
+          scrollRef.current.scrollTo({ y: Math.max(0, y - 12), animated: true });
+          focusHandled.current = true;
+        }
+      });
+    });
+  }, [focusCarId, client, checksByCar]);
+
   // ── RETAIL BUYER VIEW (virtual) ────────────────────────────────────
   if (isRetail) {
     const retailTotal = (checks || []).reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
@@ -561,6 +597,7 @@ export default function ClientDetailScreen() {
       <IosScreenHeader title={client.fullName} onBack={() => navigation.goBack()} centerTitle />
 
       <ScrollView
+        ref={scrollRef}
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
@@ -749,27 +786,33 @@ export default function ClientDetailScreen() {
           </View>
         ) : (
           cars.map((car, idx) => (
-            <CarRow
+            <View
               key={car.id}
-              car={car}
-              palette={palette}
-              index={idx}
-              checks={(checksByCar || []).find((g) => g.carId === car.id)?.checks || []}
-              expanded={selectedCarId === car.id}
-              onToggle={() => {
-                haptic('select');
-                setSelectedCarId((prev) => (prev === car.id ? null : car.id));
+              onLayout={(e) => {
+                carRowYs.current[car.id] = e.nativeEvent.layout.y;
               }}
-              onEdit={() => openEditCar(car)}
-              onDelete={() => setDeleteCarId(car.id)}
-              canEdit={canEditMeta}
-              onOpenCheck={(checkId) =>
-                navigation.navigate('Main', {
-                  screen: 'Checks',
-                  params: { screen: 'CheckDetail', params: { id: checkId } },
-                })
-              }
-            />
+            >
+              <CarRow
+                car={car}
+                palette={palette}
+                index={idx}
+                checks={(checksByCar || []).find((g) => g.carId === car.id)?.checks || []}
+                expanded={selectedCarId === car.id}
+                onToggle={() => {
+                  haptic('select');
+                  setSelectedCarId((prev) => (prev === car.id ? null : car.id));
+                }}
+                onEdit={() => openEditCar(car)}
+                onDelete={() => setDeleteCarId(car.id)}
+                canEdit={canEditMeta}
+                onOpenCheck={(checkId) =>
+                  navigation.navigate('Main', {
+                    screen: 'Checks',
+                    params: { screen: 'CheckDetail', params: { id: checkId } },
+                  })
+                }
+              />
+            </View>
           ))
         )}
 
