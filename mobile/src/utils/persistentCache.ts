@@ -228,17 +228,28 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     if (ourKeys.length === 0) return;
     const pairs = await AsyncStorage.multiGet(ourKeys);
     const now = Date.now();
-    for (const [, raw] of pairs) {
-      if (!raw) continue;
-      try {
-        const parsed: StoredEntry = JSON.parse(raw);
-        if (!parsed?.queryKey || parsed.data === undefined) continue;
-        if (now - (parsed.storedAt ?? 0) > MAX_STALE_MS) continue;
-        const f = firstKey(parsed.queryKey);
-        if (!isPersisted(f)) continue;
-        qc.setQueryData(parsed.queryKey, parsed.data);
-      } catch {
-        // skip corrupted entry
+    // Chunk JSON.parse + setQueryData so we don't hog the JS thread on a
+    // cold start. 25+ entries × ~5 KB each can otherwise block UI for ~100ms,
+    // dropping the first paint frame. setTimeout(0) yields to the event
+    // loop between chunks so RN can draw + handle input meanwhile.
+    const CHUNK = 5;
+    for (let i = 0; i < pairs.length; i += CHUNK) {
+      const slice = pairs.slice(i, i + CHUNK);
+      for (const [, raw] of slice) {
+        if (!raw) continue;
+        try {
+          const parsed: StoredEntry = JSON.parse(raw);
+          if (!parsed?.queryKey || parsed.data === undefined) continue;
+          if (now - (parsed.storedAt ?? 0) > MAX_STALE_MS) continue;
+          const f = firstKey(parsed.queryKey);
+          if (!isPersisted(f)) continue;
+          qc.setQueryData(parsed.queryKey, parsed.data);
+        } catch {
+          // skip corrupted entry
+        }
+      }
+      if (i + CHUNK < pairs.length) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
     }
   } catch {

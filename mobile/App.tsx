@@ -55,10 +55,20 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    // Subscribe to cache updates IMMEDIATELY so queries that fire while
+    // hydration is still in progress get persisted on success. Previously
+    // we waited for hydration to finish before subscribing, which meant
+    // the first batch of post-login queries silently bypassed the cache.
+    persistenceCleanup.current = attachPersistence(queryClient);
+    // Hydration runs in the background — we do NOT gate the first render
+    // on it. With an expanded whitelist (~25 keys), the AsyncStorage
+    // multiGet + JSON.parse loop costs ~200-500ms on a cold start. While
+    // it runs, the UI is already interactive; once a cached entry is
+    // hydrated, `setQueryData` flips any active `useQuery` to that data
+    // instantly (no flicker, no loading state — global `placeholderData`
+    // covers the transition).
     hydrateCache(queryClient).finally(() => {
-      if (cancelled) return;
-      persistenceCleanup.current = attachPersistence(queryClient);
-      setCacheReady(true);
+      if (!cancelled) setCacheReady(true);
     });
     return () => {
       cancelled = true;
@@ -101,7 +111,10 @@ export default function App() {
     return () => sub.remove();
   }, []);
 
-  const showSplash = !cacheReady || !authResolved || !fontsReady;
+  // Splash is gated only on auth resolution + font load. Persistent cache
+  // hydration is decoupled — it runs in the background and updates queries
+  // as it progresses. See the effect above for rationale.
+  const showSplash = !authResolved || !fontsReady;
 
   return (
     <ErrorBoundary>
@@ -160,7 +173,7 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
               backgroundColor="transparent"
               translucent
             />
-            {cacheReady && fontsReady && <AppNavigator />}
+            {fontsReady && <AppNavigator />}
             {showSplash && <SplashOverlay />}
           </NavigationContainer>
         </AuthProvider>
