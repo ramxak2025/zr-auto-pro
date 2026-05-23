@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
-  Animated,
   Dimensions,
   PanResponder,
   Platform,
@@ -216,15 +215,20 @@ function OwnerHero({ name }: { name: string }) {
   const isLoading = v2.data === undefined && v2.isLoading;
 
   // Sync widget data whenever today's profit/revenue changes.
+  // Deps are the three numeric primitives that matter — NOT `v2.data`,
+  // because TanStack returns a fresh data reference on every successful
+  // refetch (even with `placeholderData: prev => prev`), which would
+  // otherwise fire `updateWidgetData` on every 60 s background poll.
+  const hasV2 = v2.data !== undefined;
   useEffect(() => {
-    if (!v2.data) return;
+    if (!hasV2) return;
     updateWidgetData({
       revenue: revenueToday,
       checksCount: checksToday,
       profitToday,
       shiftOpen: false,
     });
-  }, [revenueToday, checksToday, profitToday, v2.data]);
+  }, [hasV2, revenueToday, checksToday, profitToday]);
 
   // Theme-aware hero gradient. Light mode keeps the brand-blue look
   // already shipped; dark mode swaps in a deep indigo→near-black ramp
@@ -608,7 +612,6 @@ function buildSparkAreaPath(values: number[], w: number, h: number): string {
 function OwnerAnalyticsChart() {
   const [period, setPeriod] = useState<ChartPeriod>('week');
   const [offset, setOffset] = useState(0);
-  const animWidth = useRef(new Animated.Value(0)).current;
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const palette = useColors();
 
@@ -618,16 +621,12 @@ function OwnerAnalyticsChart() {
     staleTime: 30_000,
   });
 
-  // Entrance tween — keyed on points-LENGTH not data, per hardening in
-  // commit 2c6e4da. `data` is a fresh reference on every SWR refetch even
-  // when values are identical, so depending on it would re-fire the
-  // Animated.timing on every poll (wasted work + a known source of jank
-  // and update-depth crashes).
+  // Note: a previous iteration carried an `animWidth` Animated.Value that
+  // tweened 0→1 with `useNativeDriver: false` whenever `pointsLen` changed,
+  // but the value was never read anywhere in the JSX. It was effectively a
+  // dead 800 ms JS-driven animation that ran on every chart refresh,
+  // burning JS-thread cycles for no visible effect. Removed.
   const pointsLen = data?.points?.length ?? 0;
-  useEffect(() => {
-    Animated.timing(animWidth, { toValue: 1, duration: 800, useNativeDriver: false }).start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pointsLen]);
 
   useEffect(() => {
     setSelectedIdx((prev) => (prev === null ? prev : null));
@@ -719,10 +718,28 @@ function OwnerAnalyticsChart() {
   // iter#13: 200pt height (was 160) — chart reads as a primary surface,
   // not a thumbnail.
   const svgH = 200;
-  const revVals = points.map((p: any) => p.revenue || 0);
-  const profVals = points.map((p: any) => p.profit || 0);
-  const maxProfit = Math.max(...profVals, 1);
-  const overallMax = Math.max(maxValue, maxProfit, 1);
+  // Memoise the derived per-point series. Without this, `points.map(...)`
+  // ran twice on every render (revenue + profit), and every scrub move
+  // re-walked the points array. With the memo the two series are stable
+  // across scrub state, so the SVG path-strings below also stay stable
+  // (Path d="..." reconciles by string identity, no re-rasterisation).
+  const revVals = useMemo(() => points.map((p: any) => p.revenue || 0), [points]);
+  const profVals = useMemo(() => points.map((p: any) => p.profit || 0), [points]);
+  const maxProfit = useMemo(() => Math.max(...profVals, 1), [profVals]);
+  const overallMax = useMemo(() => Math.max(maxValue, maxProfit, 1), [maxValue, maxProfit]);
+
+  // Precompute the four path strings so they don't get rebuilt on every
+  // scrub move (which fires `setSelectedIdx` → render → JS work).
+  const revAreaPath = useMemo(() => buildAreaPath(revVals, svgW, svgH, overallMax), [revVals, svgW, svgH, overallMax]);
+  const revLinePath = useMemo(() => buildWavePath(revVals, svgW, svgH, overallMax), [revVals, svgW, svgH, overallMax]);
+  const profAreaPath = useMemo(
+    () => buildAreaPath(profVals, svgW, svgH, overallMax),
+    [profVals, svgW, svgH, overallMax],
+  );
+  const profLinePath = useMemo(
+    () => buildWavePath(profVals, svgW, svgH, overallMax),
+    [profVals, svgW, svgH, overallMax],
+  );
 
   const panResponder = useMemo(
     () =>
@@ -884,17 +901,17 @@ function OwnerAnalyticsChart() {
                   strokeWidth={1}
                 />
               ))}
-              <Path d={buildAreaPath(revVals, svgW, svgH, overallMax)} fill="url(#revGradLight)" />
+              <Path d={revAreaPath} fill="url(#revGradLight)" />
               <Path
-                d={buildWavePath(revVals, svgW, svgH, overallMax)}
+                d={revLinePath}
                 stroke={colors.primary[600]}
                 strokeWidth={3}
                 strokeLinecap="round"
                 fill="none"
               />
-              <Path d={buildAreaPath(profVals, svgW, svgH, overallMax)} fill="url(#profGradLight)" />
+              <Path d={profAreaPath} fill="url(#profGradLight)" />
               <Path
-                d={buildWavePath(profVals, svgW, svgH, overallMax)}
+                d={profLinePath}
                 stroke={colors.cyan[600]}
                 strokeWidth={2}
                 strokeLinecap="round"
@@ -3154,6 +3171,22 @@ export default function DashboardScreen() {
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
+        // Offscreen culling — owner Dashboard renders 15 stacked widget
+        // cards (Hero / KPI strip / Chart / TodaySnapshot / Cash / Margin
+        // / Deferred / WarehouseAnalytics / ClientsNvR / CallFunnel /
+        // Retention / BestDayWeek / RecentReviews / PersonalRecord /
+        // MonthForecast). Without removeClippedSubviews every offscreen
+        // card kept its SVG paths + Animated values mounted, contributing
+        // to UI-thread cost on every scroll frame. With it on, iOS
+        // detaches the offscreen cards' native views from the window so
+        // only the visible viewport composites per frame. Net: scroll
+        // fps stabilises to display refresh on a 6.7" iPhone.
+        removeClippedSubviews
+        // 16 ms throttle = 60fps event budget. Default `0` fires onScroll
+        // on every JS-tick which is wasteful for a screen that doesn't
+        // currently subscribe to scroll position — but RN still benefits
+        // from throttled native dispatch (less bridge work).
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }

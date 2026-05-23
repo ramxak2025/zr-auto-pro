@@ -397,6 +397,13 @@ export default function WarehouseAnalyticsScreen() {
         contentInset={{ bottom: tabBarHeight }}
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
+        // Offscreen culling — this screen stacks 11 analytics cards, most
+        // of them painting an inline SVG chart. Without removeClippedSubviews
+        // every card stays composited even when scrolled out of view, so
+        // scroll frames pay for paths that aren't on screen. Toggling this
+        // on lets iOS detach the offscreen subviews from the window.
+        removeClippedSubviews
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}

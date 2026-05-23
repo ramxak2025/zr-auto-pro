@@ -66,6 +66,59 @@ function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
   return <View style={{ flexDirection: 'row', gap: 1 }}>{stars}</View>;
 }
 
+/**
+ * Memoised review row. Extracted to module scope so the `.map(...)` in
+ * `ReviewsTab` doesn't recreate one JSX tree per review per parent
+ * re-render (search-state flip, month switch, theme toggle, etc.).
+ * The review payload is stable while it's on screen — only the palette
+ * changes on theme toggle, and the palette object identity is itself
+ * memoised inside `ThemeContext.tsx`, so React.memo's default shallow
+ * compare correctly keeps the row out of the reconciler.
+ */
+interface ReviewItemProps {
+  review: {
+    id?: string;
+    clientName?: string;
+    createdAt: string;
+    rating: number;
+    comment?: string;
+    employeeName?: string;
+  };
+  index: number;
+  palette: ReturnType<typeof useColors>;
+}
+const ReviewItem = React.memo(function ReviewItem({ review, index, palette }: ReviewItemProps) {
+  return (
+    <AnimatedCard
+      index={index}
+      style={[styles.reviewCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.reviewHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.reviewClientName, { color: palette.text.primary }]}>
+            {review.clientName || 'Клиент'}
+          </Text>
+          <Text style={[styles.reviewDate, { color: palette.text.tertiary }]}>
+            {new Date(review.createdAt).toLocaleDateString('ru-RU')}
+          </Text>
+        </View>
+        <StarRating rating={review.rating} size={16} />
+      </View>
+      {review.comment && (
+        <Text style={[styles.reviewComment, { color: palette.text.secondary }]}>{review.comment}</Text>
+      )}
+      {review.employeeName && (
+        <View style={[styles.reviewEmployeeTag, { borderTopColor: palette.border.subtle }]}>
+          <Ionicons name="person-outline" size={12} color={palette.text.tertiary} />
+          <Text style={[styles.reviewEmployeeText, { color: palette.text.tertiary }]}>
+            {review.employeeName}
+          </Text>
+        </View>
+      )}
+    </AnimatedCard>
+  );
+});
+
 // ─────────────────────────────────────────────────────────────────────
 //  Сводка
 // ─────────────────────────────────────────────────────────────────────
@@ -417,34 +470,7 @@ function ReviewsTab() {
         </View>
       ) : (
         reviews.map((review, idx) => (
-          <AnimatedCard
-            key={review.id || idx}
-            index={idx}
-            style={[styles.reviewCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          >
-            <View style={styles.reviewHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.reviewClientName, { color: palette.text.primary }]}>
-                  {review.clientName || 'Клиент'}
-                </Text>
-                <Text style={[styles.reviewDate, { color: palette.text.tertiary }]}>
-                  {new Date(review.createdAt).toLocaleDateString('ru-RU')}
-                </Text>
-              </View>
-              <StarRating rating={review.rating} size={16} />
-            </View>
-            {review.comment && (
-              <Text style={[styles.reviewComment, { color: palette.text.secondary }]}>{review.comment}</Text>
-            )}
-            {review.employeeName && (
-              <View style={[styles.reviewEmployeeTag, { borderTopColor: palette.border.subtle }]}>
-                <Ionicons name="person-outline" size={12} color={palette.text.tertiary} />
-                <Text style={[styles.reviewEmployeeText, { color: palette.text.tertiary }]}>
-                  {review.employeeName}
-                </Text>
-              </View>
-            )}
-          </AnimatedCard>
+          <ReviewItem key={review.id || idx} review={review} index={idx} palette={palette} />
         ))
       )}
     </View>
@@ -734,6 +760,8 @@ export default function MarketingScreen() {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
+        removeClippedSubviews
+        scrollEventThrottle={16}
       >
         {activeTab === 'dashboard' && <DashboardTab onRequestReview={() => setRequestOpen(true)} />}
         {activeTab === 'reviews' && <ReviewsTab />}

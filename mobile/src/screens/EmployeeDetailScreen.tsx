@@ -409,6 +409,10 @@ export default function EmployeeDetailScreen() {
           <RefreshControl refreshing={isRefetching} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
         showsVerticalScrollIndicator={false}
+        // 8+ sections with charts, achievements, timelines, brand chips —
+        // offscreen culling so scroll frames don't pay for unseen cards.
+        removeClippedSubviews
+        scrollEventThrottle={16}
       >
         {/* ── HERO ───────────────────────────────────────────────────── */}
         <Hero

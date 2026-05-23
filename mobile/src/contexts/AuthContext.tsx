@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
@@ -322,49 +322,69 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     });
   }, [queryClient]);
 
-  const login = async (phone: string, password: string) => {
-    const res = await authApi.login({ phone, password });
-    const { token: t, user: u } = res.data;
-    await AsyncStorage.setItem('token', t);
-    setToken(t);
-    setUser(u);
-    if (queryClient) prefetchAfterLogin(queryClient);
-  };
+  // Stabilise the auth API surface — every consumer of `useAuth()` reads
+  // these callbacks, and a fresh function identity on every AuthProvider
+  // render would invalidate any `useMemo`/`useCallback` depending on
+  // them downstream. Wrapping in `useCallback` keeps the identities
+  // stable across renders, so re-renders only fire on actual auth-state
+  // change (login, logout, 401, refreshUser).
+  const login = useCallback(
+    async (phone: string, password: string) => {
+      const res = await authApi.login({ phone, password });
+      const { token: t, user: u } = res.data;
+      await AsyncStorage.setItem('token', t);
+      setToken(t);
+      setUser(u);
+      if (queryClient) prefetchAfterLogin(queryClient);
+    },
+    [queryClient],
+  );
 
-  const refreshUser = async () => {
+  const refreshUser = useCallback(async () => {
     try {
       const res = await authApi.me();
       setUser(res.data);
     } catch {
       // ignore
     }
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     authApi.logout().catch(() => {});
     await AsyncStorage.removeItem('token');
     await clearPersistentCache().catch(() => {});
     queryClient?.clear();
     setToken(null);
     setUser(null);
-  };
+  }, [queryClient]);
 
-  const hasPermission = (perm: keyof UserPermissions): boolean => {
-    if (!user) return false;
-    if (user.role === 'superadmin' || user.role === 'director') return true;
-    return !!user.permissions?.[perm];
-  };
-
-  const isRole = (...roles: UserRole[]): boolean => {
-    if (!user) return false;
-    return roles.includes(user.role);
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout, refreshUser, hasPermission, isRole }}>
-      {children}
-    </AuthContext.Provider>
+  const hasPermission = useCallback(
+    (perm: keyof UserPermissions): boolean => {
+      if (!user) return false;
+      if (user.role === 'superadmin' || user.role === 'director') return true;
+      return !!user.permissions?.[perm];
+    },
+    [user],
   );
+
+  const isRole = useCallback(
+    (...roles: UserRole[]): boolean => {
+      if (!user) return false;
+      return roles.includes(user.role);
+    },
+    [user],
+  );
+
+  // Memoise the context value so AuthContext.Provider doesn't broadcast a
+  // fresh object reference on every AuthProvider render (e.g. when only
+  // `loading` flips). With the memo, consumers see a stable value as
+  // long as user/token/loading don't actually change.
+  const value = useMemo<AuthContextType>(
+    () => ({ user, token, loading, login, logout, refreshUser, hasPermission, isRole }),
+    [user, token, loading, login, logout, refreshUser, hasPermission, isRole],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextType {

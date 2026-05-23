@@ -597,6 +597,11 @@ export default function ReportsScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
         showsVerticalScrollIndicator={false}
+        // Reports stacks ActivityRings, FunnelRows, PnLRows, sparklines
+        // and YoY/Forecast SVGs — keeping offscreen sections composited
+        // burnt UI-thread time on every scroll frame. Cull them.
+        removeClippedSubviews
+        scrollEventThrottle={16}
       >
         <View ref={captureViewRef} collapsable={false} style={{ gap: spacing[3] }}>
           {/* PERIOD SWITCHER */}
