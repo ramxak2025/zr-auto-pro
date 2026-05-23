@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -9,10 +9,13 @@ import {
   Alert,
   ActivityIndicator,
   RefreshControl,
+  Linking,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { clientsApi, carsApi, checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -22,9 +25,13 @@ import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
+import SourcePickerSheet from '../components/SourcePickerSheet';
+import { UserRole } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Client, Car, Check } from '../../../shared/types';
+import type { Client, Car, Check, PerCarChecks } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { haptic } from '../platform/haptics';
+import { processPlateMainInput } from '../utils/plateMask';
 
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -33,17 +40,17 @@ const paymentLabels: Record<string, string> = {
   cash_card: 'Нал/Карта',
 };
 
-function formatMoney(v: number) {
+function formatMoney(v: number): string {
   return (
     Math.round(v)
       .toString()
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
 }
-function formatDate(d: string) {
+function formatDate(d: string): string {
   return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
-function formatDateGroup(d: string) {
+function formatDateGroup(d: string): string {
   const dt = new Date(d);
   const today = new Date();
   const yesterday = new Date();
@@ -91,18 +98,77 @@ function getCarColor(id: string): string {
   return carIconColors[Math.abs(hash) % carIconColors.length];
 }
 
+/**
+ * Strip "+" / spaces / dashes from a phone string for tel: / sms: / wa.me URLs.
+ * Keeps a single leading "+" so the system dialer recognises the
+ * international format on iOS. wa.me needs only digits.
+ */
+function rawPhoneDigits(phone: string): string {
+  return (phone || '').replace(/[^\d]/g, '');
+}
+function telHref(phone: string): string {
+  const digits = rawPhoneDigits(phone);
+  return `tel:${digits.length > 0 ? '+' + digits : ''}`;
+}
+function smsHref(phone: string): string {
+  const digits = rawPhoneDigits(phone);
+  return `sms:${digits.length > 0 ? '+' + digits : ''}`;
+}
+function whatsappHref(phone: string): string {
+  const digits = rawPhoneDigits(phone);
+  return `https://wa.me/${digits}`;
+}
+
+/** Compact sparkline drawn with overlapping bars — no SVG dep needed. */
+function MonthlySparkline({
+  months,
+  height = 36,
+  bar = 6,
+  gap = 4,
+  color,
+}: {
+  months: number[];
+  height?: number;
+  bar?: number;
+  gap?: number;
+  color: string;
+}) {
+  const max = Math.max(1, ...months);
+  return (
+    <View style={[sparkStyles.row, { height, gap }]}>
+      {months.map((v, i) => {
+        const ratio = Math.max(0.06, v / max);
+        return (
+          <View
+            key={i}
+            style={[
+              sparkStyles.bar,
+              { width: bar, height: Math.max(2, height * ratio), backgroundColor: color, opacity: 0.4 + 0.6 * ratio },
+            ]}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+const sparkStyles = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'flex-end' },
+  bar: { borderRadius: 2 },
+});
+
 export default function ClientDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, isRole } = useAuth();
   const palette = useColors();
   const canViewProfit = hasPermission('profit_view');
+  // Notes / source — owner-only. We still render the section for
+  // director (a workshop boss can want to tag a client too) and for
+  // superadmin (test/debug).
+  const canEditMeta = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
   const { id } = route.params;
-  // Virtual retail buyer sentinel — when navigated to with id === '__retail__',
-  // we don't fetch a real client record; we render the retail-buyer entity
-  // (all checks with client_id IS NULL) using the existing `retail=true`
-  // backend filter. No new endpoints, no API contract changes.
   const isRetail = id === '__retail__';
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCarId, setSelectedCarId] = useState<string | null>(null);
@@ -114,7 +180,11 @@ export default function ClientDetailScreen() {
   const [makeModel, setMakeModel] = useState('');
   const [carComment, setCarComment] = useState('');
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
-  // Duplicate-by-plate dialog state.
+  // Notes editor (owner-only) state — local copy until "Сохранить".
+  const [notesModalOpen, setNotesModalOpen] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
+  // Source picker visibility.
+  const [sourceOpen, setSourceOpen] = useState(false);
   const [duplicateCar, setDuplicateCar] = useState<{
     id: string;
     plateNumber: string;
@@ -130,19 +200,118 @@ export default function ClientDetailScreen() {
       const res = await clientsApi.getById(id);
       return res.data;
     },
-    // Retail buyer is virtual — never fetch a real client row.
     enabled: !isRetail,
   });
 
+  // Fall back to legacy `client-checks` shape (flat list) when we use
+  // it as the primary source for analytics + history rendering.
   const { data: checks } = useQuery<Check[]>({
     queryKey: isRetail ? ['retail-checks'] : ['client-checks', id],
     queryFn: async () => {
       const res = isRetail
-        ? await checksApi.getAll({ retail: 'true', limit: 50 })
-        : await checksApi.getAll({ clientId: id, limit: 50 });
-      return res.data.data || res.data;
+        ? await checksApi.getAll({ retail: 'true', limit: 200 })
+        : await checksApi.getAll({ clientId: id, limit: 200 });
+      const raw = res.data as { data?: Check[] } | Check[];
+      return Array.isArray(raw) ? raw : raw.data || [];
     },
   });
+
+  // Per-car aggregation — pre-grouped by backend so we don't repeat
+  // the work in JS. Used for the "Авто клиента" inline-expansion.
+  const { data: checksByCar } = useQuery<PerCarChecks[]>({
+    queryKey: ['client-checks-by-car', id],
+    queryFn: async () => {
+      const res = await clientsApi.checksByCar(id);
+      return res.data;
+    },
+    enabled: !isRetail,
+    staleTime: 60_000,
+  });
+
+  // ── Derived analytics (memoised) ──────────────────────────────────
+  // Numbers we surface in the hero / analytics sections. Avoid
+  // recomputing on every render so the rich detail screen feels
+  // instant when the user scrolls or expands a section.
+  const stats = useMemo(() => {
+    const list = checks || [];
+    const total = list.reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
+    const count = list.length;
+    const avg = count > 0 ? total / count : 0;
+    // Last visit date — checks come ordered DESC by date from
+    // backend, but never trust ordering on the wire.
+    let lastVisit: Date | null = null;
+    for (const c of list) {
+      const t = new Date(c.date);
+      if (!lastVisit || t > lastVisit) lastVisit = t;
+    }
+    // Risk: more than 6 months without a visit, or never.
+    const sixMo = 6 * 30 * 24 * 60 * 60 * 1000;
+    const fourMo = 4 * 30 * 24 * 60 * 60 * 1000;
+    const sinceLast = lastVisit ? Date.now() - lastVisit.getTime() : Infinity;
+    const risk: 'lost' | 'fade' | 'ok' = sinceLast > sixMo ? 'lost' : sinceLast > fourMo ? 'fade' : 'ok';
+
+    // Average interval between visits (used to estimate "следующий визит").
+    const sortedDates = list
+      .map((c) => new Date(c.date).getTime())
+      .filter(Boolean)
+      .sort((a, b) => a - b);
+    let avgIntervalDays: number | null = null;
+    if (sortedDates.length >= 2) {
+      const span = sortedDates[sortedDates.length - 1] - sortedDates[0];
+      avgIntervalDays = span / (sortedDates.length - 1) / (24 * 60 * 60 * 1000);
+    }
+    const nextVisitEta = lastVisit && avgIntervalDays
+      ? new Date(lastVisit.getTime() + avgIntervalDays * 24 * 60 * 60 * 1000)
+      : null;
+
+    // Top services — name → total revenue, top 3.
+    const svcMap = new Map<string, number>();
+    for (const c of list) {
+      for (const s of c.services || []) {
+        if (!s.name) continue;
+        svcMap.set(s.name, (svcMap.get(s.name) || 0) + (s.total || s.price * s.quantity || 0));
+      }
+    }
+    const topServices = Array.from(svcMap.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+
+    // Favourite master — name → count.
+    const masterMap = new Map<string, { name: string; count: number }>();
+    for (const c of list) {
+      const name = c.master?.fullName;
+      if (!name) continue;
+      const cur = masterMap.get(name) ?? { name, count: 0 };
+      cur.count += 1;
+      masterMap.set(name, cur);
+    }
+    const favoriteMaster = Array.from(masterMap.values()).sort((a, b) => b.count - a.count)[0];
+
+    // Monthly revenue for the last 12 months — used by sparkline.
+    const months: number[] = Array(12).fill(0);
+    const now = new Date();
+    for (const c of list) {
+      const d = new Date(c.date);
+      const monthsAgo =
+        (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+      if (monthsAgo >= 0 && monthsAgo < 12) {
+        months[11 - monthsAgo] += c.totalRevenue || 0;
+      }
+    }
+
+    return {
+      total,
+      count,
+      avg,
+      lastVisit,
+      risk,
+      avgIntervalDays,
+      nextVisitEta,
+      topServices,
+      favoriteMaster,
+      months,
+    };
+  }, [checks]);
 
   const filteredChecks = useMemo(() => {
     if (!checks) return [];
@@ -150,14 +319,11 @@ export default function ClientDetailScreen() {
     return checks.filter((c) => c.car?.id === selectedCarId);
   }, [checks, selectedCarId]);
 
-  const totalSpent = useMemo(() => {
-    return (checks || []).reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
-  }, [checks]);
-
   const createCarMutation = useMutation({
     mutationFn: (d: any) => carsApi.create(d),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['client', id] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
       closeCarModal();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании авто'),
@@ -176,6 +342,28 @@ export default function ClientDetailScreen() {
     mutationFn: (carId: string) => carsApi.remove(carId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['client', id] }),
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении авто'),
+  });
+
+  // Notes save — owner-only. Fires the dedicated endpoint so we don't
+  // pay the cost of revalidating other fields on the server.
+  const notesMutation = useMutation({
+    mutationFn: (notes: string | null) => clientsApi.updateNotes(id, notes),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client', id] });
+      setNotesModalOpen(false);
+      haptic('success');
+    },
+    onError: () => Alert.alert('Ошибка', 'Не удалось сохранить заметки'),
+  });
+
+  const sourceMutation = useMutation({
+    mutationFn: (source: string | null) => clientsApi.updateSource(id, source),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client', id] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      haptic('success');
+    },
+    onError: () => Alert.alert('Ошибка', 'Не удалось сохранить источник'),
   });
 
   const closeCarModal = () => {
@@ -205,7 +393,6 @@ export default function ClientDetailScreen() {
       updateCarMutation.mutate({ carId: editingCar.id, data: payload });
       return;
     }
-    // Pre-create duplicate check by plate.
     setCarSubmitting(true);
     try {
       const res = await carsApi.lookupByPlate(plateNumber);
@@ -224,12 +411,7 @@ export default function ClientDetailScreen() {
 
   const handleCreateCarAnyway = () => {
     setDuplicateCar(null);
-    createCarMutation.mutate({
-      plateNumber,
-      makeModel,
-      comment: carComment || undefined,
-      clientId: id,
-    });
+    createCarMutation.mutate({ plateNumber, makeModel, comment: carComment || undefined, clientId: id });
   };
 
   const handleOpenExistingCar = () => {
@@ -246,11 +428,19 @@ export default function ClientDetailScreen() {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['client', id] });
     await queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
+    await queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
     setRefreshing(false);
   };
 
-  // Retail buyer view — virtual entity, no edit/delete, no cars section.
-  // We reuse the same "checks grouped by date" layout as a real client.
+  // Sync notes draft when the underlying client loads so opening the
+  // editor for the first time shows the saved value, not the empty
+  // string we initialised with.
+  useEffect(() => {
+    if (client?.ownerNotes) setNotesDraft(client.ownerNotes);
+    else setNotesDraft('');
+  }, [client?.ownerNotes]);
+
+  // ── RETAIL BUYER VIEW (virtual) ────────────────────────────────────
   if (isRetail) {
     const retailTotal = (checks || []).reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
     const retailGrouped: { label: string; checks: Check[] }[] = [];
@@ -282,33 +472,29 @@ export default function ClientDetailScreen() {
             />
           }
         >
-          <AnimatedCard
-            style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            index={0}
+          <LinearGradient
+            colors={[colors.primary[500], colors.primary[700]]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.retailHero}
           >
-            <View style={styles.avatarSection}>
-              <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
-                <Ionicons name="storefront-outline" size={26} color={colors.primary[600]} />
-              </View>
-              <Text style={[styles.clientName, { color: palette.text.primary }]}>Розничный покупатель</Text>
+            <View style={styles.retailHeroIcon}>
+              <Ionicons name="cart-outline" size={28} color={colors.white} />
             </View>
-            <View style={[styles.statsRow, { backgroundColor: palette.bg.muted }]}>
-              <View style={styles.statItem}>
-                <Text style={[styles.statValue, { color: palette.text.primary }]}>{checks?.length || 0}</Text>
-                <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>чеков</Text>
+            <Text style={styles.retailHeroTitle}>Розничный покупатель</Text>
+            <Text style={styles.retailHeroSub}>Все чеки без клиента</Text>
+            <View style={styles.retailStatsRow}>
+              <View style={styles.retailStatItem}>
+                <Text style={styles.retailStatValue}>{checks?.length || 0}</Text>
+                <Text style={styles.retailStatLabel}>чеков</Text>
               </View>
-              <View style={[styles.statDivider, { backgroundColor: palette.border.subtle }]} />
-              <View style={styles.statItem}>
-                <Text style={[styles.statValue, { color: palette.text.primary }]}>{formatMoney(retailTotal)}</Text>
-                <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>выручка</Text>
+              <View style={styles.retailStatDivider} />
+              <View style={styles.retailStatItem}>
+                <Text style={styles.retailStatValue}>{formatMoney(retailTotal)}</Text>
+                <Text style={styles.retailStatLabel}>выручка</Text>
               </View>
             </View>
-            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-              <Ionicons name="information-circle-outline" size={15} color={palette.text.tertiary} />
-              <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Тип</Text>
-              <Text style={[styles.infoValue, { color: palette.text.primary }]}>Все чеки без клиента</Text>
-            </View>
-          </AnimatedCard>
+          </LinearGradient>
 
           <View style={styles.sectionHeader}>
             <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Чеки ({checks?.length || 0})</Text>
@@ -327,96 +513,20 @@ export default function ClientDetailScreen() {
                   <Text style={[styles.dateGroupText, { color: palette.text.tertiary }]}>{group.label}</Text>
                   <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
                 </View>
-                {group.checks.map((check) => {
-                  const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-                  const badge = badgeColors[badgeKey];
-                  return (
-                    <TouchableOpacity
-                      key={check.id}
-                      style={[
-                        styles.checkCard,
-                        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                        check.isDeferred && styles.checkCardDeferred,
-                      ]}
-                      onPress={() =>
-                        navigation.navigate('Main', {
-                          screen: 'Checks',
-                          params: { screen: 'CheckDetail', params: { id: check.id } },
-                        })
-                      }
-                      activeOpacity={0.7}
-                    >
-                      <View
-                        style={[
-                          styles.accentBar,
-                          check.isDeferred
-                            ? { backgroundColor: colors.red[400] }
-                            : { backgroundColor: colors.primary[400] },
-                        ]}
-                      />
-                      <View style={styles.checkContent}>
-                        <View style={styles.checkHeader}>
-                          <View style={styles.checkHeaderLeft}>
-                            <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
-                            {check.isDeferred && (
-                              <View style={styles.deferredBadge}>
-                                <Text style={styles.deferredText}>Отложен</Text>
-                              </View>
-                            )}
-                            <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
-                              <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                                {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
-                              </Text>
-                            </View>
-                          </View>
-                          <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
-                            {formatMoney(check.totalRevenue)}
-                          </Text>
-                        </View>
-                        {check.car && (
-                          <View style={styles.checkInfoRow}>
-                            <View style={styles.infoChip}>
-                              <Ionicons name="car-outline" size={11} color={palette.text.tertiary} />
-                              <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
-                                {check.car.makeModel}
-                              </Text>
-                              {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
-                            </View>
-                          </View>
-                        )}
-                        {check.comment && (
-                          <Text style={styles.commentText} numberOfLines={1}>
-                            {check.comment}
-                          </Text>
-                        )}
-                        <View style={styles.checkFooter}>
-                          <Text style={[styles.footerTime, { color: palette.text.tertiary }]}>
-                            {new Date(check.date).toLocaleTimeString('ru-RU', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </Text>
-                          {check.master && (
-                            <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>
-                              {check.master.fullName}
-                            </Text>
-                          )}
-                          {canViewProfit && check.profit !== undefined && (
-                            <Text
-                              style={[
-                                styles.footerProfit,
-                                check.profit >= 0 ? styles.profitPositive : styles.profitNegative,
-                              ]}
-                            >
-                              {check.profit >= 0 ? '+' : ''}
-                              {formatMoney(check.profit)}
-                            </Text>
-                          )}
-                        </View>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
+                {group.checks.map((check) => (
+                  <CheckRow
+                    key={check.id}
+                    check={check}
+                    palette={palette}
+                    canViewProfit={canViewProfit}
+                    onPress={() =>
+                      navigation.navigate('Main', {
+                        screen: 'Checks',
+                        params: { screen: 'CheckDetail', params: { id: check.id } },
+                      })
+                    }
+                  />
+                ))}
               </View>
             ))
           )}
@@ -429,7 +539,7 @@ export default function ClientDetailScreen() {
   if (!client)
     return <Text style={{ padding: 20, textAlign: 'center', color: palette.text.secondary }}>Клиент не найден</Text>;
 
-  // Group filtered checks by date
+  // Group filtered checks by date for the history section.
   const groupedChecks: { label: string; checks: Check[] }[] = [];
   let lastGroup = '';
   for (const check of filteredChecks) {
@@ -453,57 +563,176 @@ export default function ClientDetailScreen() {
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
       >
-        {/* Client info card */}
+        {/* HERO — avatar, source badge, first-visit date + 3 stat tiles. */}
         <AnimatedCard
-          style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          style={[styles.heroCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           index={0}
         >
-          {/* Avatar + name */}
-          <View style={styles.avatarSection}>
+          <View style={styles.heroTop}>
             <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
-            <Text style={[styles.clientName, { color: palette.text.primary }]}>{client.fullName}</Text>
+            <View style={styles.heroInfo}>
+              <Text style={[styles.clientName, { color: palette.text.primary }]} numberOfLines={1}>
+                {client.fullName}
+              </Text>
+              <View style={styles.heroBadgesRow}>
+                {client.source ? (
+                  <TouchableOpacity
+                    onPress={() => canEditMeta && setSourceOpen(true)}
+                    activeOpacity={canEditMeta ? 0.7 : 1}
+                    style={[styles.sourceBadge, { backgroundColor: palette.accent.primarySoft }]}
+                  >
+                    <Ionicons name="pricetag" size={11} color={palette.accent.primaryText} />
+                    <Text style={[styles.sourceBadgeText, { color: palette.accent.primaryText }]}>
+                      {client.source}
+                    </Text>
+                  </TouchableOpacity>
+                ) : canEditMeta ? (
+                  <TouchableOpacity
+                    onPress={() => setSourceOpen(true)}
+                    activeOpacity={0.7}
+                    style={[styles.sourceBadgeEmpty, { borderColor: palette.border.strong }]}
+                  >
+                    <Ionicons name="add" size={12} color={palette.text.tertiary} />
+                    <Text style={[styles.sourceBadgeEmptyText, { color: palette.text.tertiary }]}>
+                      Источник
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+                <Text style={[styles.heroDate, { color: palette.text.tertiary }]}>
+                  Клиент с {formatDate(client.createdAt)}
+                </Text>
+              </View>
+            </View>
           </View>
 
-          {/* Stats row */}
-          <View style={[styles.statsRow, { backgroundColor: palette.bg.muted }]}>
-            <View style={styles.statItem}>
-              <Text style={[styles.statValue, { color: palette.text.primary }]}>{checks?.length || 0}</Text>
-              <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>чеков</Text>
-            </View>
-            <View style={[styles.statDivider, { backgroundColor: palette.border.subtle }]} />
-            <View style={styles.statItem}>
-              <Text style={[styles.statValue, { color: palette.text.primary }]}>{formatMoney(totalSpent)}</Text>
-              <Text style={[styles.statLabel, { color: palette.text.tertiary }]}>потрачено</Text>
-            </View>
+          <View style={[styles.statTilesRow]}>
+            <StatTile label="Чеков" value={String(stats.count)} palette={palette} />
+            <StatTile label="LTV" value={formatMoney(stats.total)} palette={palette} />
+            <StatTile
+              label="Средний"
+              value={stats.count > 0 ? formatMoney(stats.avg) : '—'}
+              palette={palette}
+            />
           </View>
+        </AnimatedCard>
 
-          {/* Info rows */}
+        {/* QUICK ACTIONS — call / WhatsApp / SMS / history */}
+        <View style={styles.quickActionsRow}>
+          <QuickAction
+            icon="call-outline"
+            label="Позвонить"
+            color={colors.green[600]}
+            disabled={!client.phone}
+            onPress={() => {
+              haptic('tap');
+              Linking.openURL(telHref(client.phone)).catch(() => Alert.alert('Не удалось открыть телефон'));
+            }}
+            palette={palette}
+          />
+          <QuickAction
+            icon="logo-whatsapp"
+            label="WhatsApp"
+            color="#25D366"
+            disabled={!client.phone}
+            onPress={() => {
+              haptic('tap');
+              Linking.openURL(whatsappHref(client.phone)).catch(() =>
+                Alert.alert('WhatsApp не установлен'),
+              );
+            }}
+            palette={palette}
+          />
+          <QuickAction
+            icon="chatbox-outline"
+            label="SMS"
+            color={colors.blue[600]}
+            disabled={!client.phone}
+            onPress={() => {
+              haptic('tap');
+              Linking.openURL(smsHref(client.phone)).catch(() => Alert.alert('Не удалось открыть SMS'));
+            }}
+            palette={palette}
+          />
+          <QuickAction
+            icon="time-outline"
+            label="История"
+            color={colors.purple[700]}
+            onPress={() => {
+              haptic('tap');
+              setSelectedCarId(null);
+            }}
+            palette={palette}
+          />
+        </View>
+
+        {/* OWNER-ONLY: notes + source */}
+        {canEditMeta && (
+          <AnimatedCard
+            style={[styles.metaCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            index={1}
+          >
+            <View style={styles.metaHeader}>
+              <Ionicons name="lock-closed-outline" size={14} color={palette.text.tertiary} />
+              <Text style={[styles.metaHeaderText, { color: palette.text.tertiary }]}>Только для владельца</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.metaRow, { borderBottomColor: palette.border.subtle }]}
+              activeOpacity={0.7}
+              onPress={() => setNotesModalOpen(true)}
+            >
+              <Ionicons name="document-text-outline" size={16} color={palette.text.tertiary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Заметки владельца</Text>
+                <Text
+                  style={[styles.metaValue, { color: palette.text.primary }]}
+                  numberOfLines={2}
+                >
+                  {client.ownerNotes || 'Нажмите, чтобы добавить'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.metaRow, { borderBottomWidth: 0 }]}
+              activeOpacity={0.7}
+              onPress={() => setSourceOpen(true)}
+            >
+              <Ionicons name="pricetag-outline" size={16} color={palette.text.tertiary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Источник</Text>
+                <Text style={[styles.metaValue, { color: palette.text.primary }]}>
+                  {client.source || 'Не указан'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          </AnimatedCard>
+        )}
+
+        {/* INFO ROW — phone + comment */}
+        <AnimatedCard
+          style={[styles.infoCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          index={2}
+        >
           <View style={[styles.infoRow, { borderBottomColor: palette.border.subtle }]}>
             <Ionicons name="call-outline" size={15} color={palette.text.tertiary} />
             <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Телефон</Text>
             <Text style={[styles.infoValue, { color: palette.text.primary }]}>{formatPhone(client.phone)}</Text>
           </View>
-          {client.comment && (
-            <View style={[styles.infoRow, { borderBottomColor: palette.border.subtle }]}>
+          {client.comment ? (
+            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
               <Ionicons name="chatbubble-outline" size={15} color={palette.text.tertiary} />
               <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Комментарий</Text>
               <Text style={[styles.infoValue, { color: palette.text.primary }]}>{client.comment}</Text>
             </View>
-          )}
-          <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-            <Ionicons name="calendar-outline" size={15} color={palette.text.tertiary} />
-            <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Дата</Text>
-            <Text style={[styles.infoValue, { color: palette.text.primary }]}>{formatDate(client.createdAt)}</Text>
-          </View>
+          ) : null}
         </AnimatedCard>
 
-        {/* Cars */}
+        {/* CARS — expandable rows showing inline checks per car */}
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Автомобили ({cars.length})</Text>
           <TouchableOpacity style={[styles.smallBtn, { backgroundColor: palette.accent.primary }]} onPress={openAddCar}>
@@ -511,46 +740,153 @@ export default function ClientDetailScreen() {
           </TouchableOpacity>
         </View>
 
-        {cars.map((car, idx) => {
-          const carColor = getCarColor(car.id);
-          return (
-            <AnimatedCard
+        {cars.length === 0 ? (
+          <View style={[styles.emptyCars, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <Ionicons name="car-sport-outline" size={24} color={palette.text.tertiary} />
+            <Text style={[styles.emptyCarsText, { color: palette.text.secondary }]}>
+              У клиента ещё нет автомобилей
+            </Text>
+          </View>
+        ) : (
+          cars.map((car, idx) => (
+            <CarRow
               key={car.id}
-              style={[styles.carCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              index={idx + 1}
-            >
-              <View style={styles.carTop}>
-                <View style={styles.carInfo}>
-                  <View style={[styles.carIconWrap, { backgroundColor: carColor + '18' }]}>
-                    <Ionicons name="car-sport" size={16} color={carColor} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.carModel, { color: palette.text.primary }]} numberOfLines={1}>
-                      {car.makeModel}
+              car={car}
+              palette={palette}
+              index={idx}
+              checks={(checksByCar || []).find((g) => g.carId === car.id)?.checks || []}
+              expanded={selectedCarId === car.id}
+              onToggle={() => {
+                haptic('select');
+                setSelectedCarId((prev) => (prev === car.id ? null : car.id));
+              }}
+              onEdit={() => openEditCar(car)}
+              onDelete={() => setDeleteCarId(car.id)}
+              canEdit={canEditMeta}
+              onOpenCheck={(checkId) =>
+                navigation.navigate('Main', {
+                  screen: 'Checks',
+                  params: { screen: 'CheckDetail', params: { id: checkId } },
+                })
+              }
+            />
+          ))
+        )}
+
+        {/* ANALYTICS — sparkline + insights */}
+        {stats.count > 0 && (
+          <AnimatedCard
+            style={[styles.analyticsCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            index={3}
+          >
+            <View style={styles.analyticsHeader}>
+              <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Аналитика</Text>
+              <View
+                style={[
+                  styles.riskBadge,
+                  {
+                    backgroundColor:
+                      stats.risk === 'lost'
+                        ? colors.red[50]
+                        : stats.risk === 'fade'
+                          ? colors.amber[50]
+                          : colors.green[50],
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={stats.risk === 'ok' ? 'checkmark-circle' : 'alert-circle'}
+                  size={12}
+                  color={
+                    stats.risk === 'lost'
+                      ? colors.red[600]
+                      : stats.risk === 'fade'
+                        ? colors.amber[600]
+                        : colors.green[600]
+                  }
+                />
+                <Text
+                  style={[
+                    styles.riskBadgeText,
+                    {
+                      color:
+                        stats.risk === 'lost'
+                          ? colors.red[700]
+                          : stats.risk === 'fade'
+                            ? colors.amber[700]
+                            : colors.green[700],
+                    },
+                  ]}
+                >
+                  {stats.risk === 'lost'
+                    ? 'Не был более 6 мес'
+                    : stats.risk === 'fade'
+                      ? 'Не был 4+ мес'
+                      : 'Активный'}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={[styles.analyticsCaption, { color: palette.text.tertiary }]}>
+              Выручка по месяцам (12 мес)
+            </Text>
+            <MonthlySparkline months={stats.months} color={palette.accent.primary} />
+
+            <View style={styles.analyticsRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Последний визит</Text>
+                <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
+                  {stats.lastVisit ? formatDate(stats.lastVisit.toISOString()) : '—'}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Следующий визит (≈)</Text>
+                <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
+                  {stats.nextVisitEta ? formatDate(stats.nextVisitEta.toISOString()) : '—'}
+                </Text>
+              </View>
+            </View>
+
+            {stats.topServices.length > 0 && (
+              <View style={styles.analyticsBlock}>
+                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Что заказывает чаще всего</Text>
+                {stats.topServices.map(([name, revenue]) => (
+                  <View key={name} style={[styles.serviceRow, { borderBottomColor: palette.border.subtle }]}>
+                    <Text style={[styles.serviceName, { color: palette.text.primary }]} numberOfLines={1}>
+                      {name}
                     </Text>
-                    <Text style={[styles.carPlate, { color: palette.text.secondary }]}>{car.plateNumber}</Text>
+                    <Text style={[styles.serviceRevenue, { color: palette.text.secondary }]}>
+                      {formatMoney(revenue)}
+                    </Text>
                   </View>
-                </View>
-                <View style={styles.carActions}>
-                  <TouchableOpacity onPress={() => openEditCar(car)} style={styles.iconBtn}>
-                    <Ionicons name="create-outline" size={15} color={palette.text.tertiary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => setDeleteCarId(car.id)} style={styles.iconBtn}>
-                    <Ionicons name="trash-outline" size={15} color={colors.red[400]} />
-                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {stats.favoriteMaster && (
+              <View style={styles.analyticsBlock}>
+                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Любимый мастер</Text>
+                <View style={styles.favMasterRow}>
+                  <Ionicons name="person-circle-outline" size={18} color={palette.text.secondary} />
+                  <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
+                    {stats.favoriteMaster.name}
+                  </Text>
+                  <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>
+                    {stats.favoriteMaster.count} раз
+                  </Text>
                 </View>
               </View>
-              {car.comment && <Text style={[styles.carComment, { color: palette.text.tertiary }]}>{car.comment}</Text>}
-            </AnimatedCard>
-          );
-        })}
+            )}
+          </AnimatedCard>
+        )}
 
-        {/* Checks section */}
+        {/* HISTORY — toggle (all / per-car) then a grouped list */}
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Чеки ({filteredChecks.length})</Text>
+          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>
+            История чеков ({filteredChecks.length})
+          </Text>
         </View>
 
-        {/* Car filter chips */}
         {cars.length > 0 && (
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.carChipsScroll}>
             <View style={styles.carChipsRow}>
@@ -598,7 +934,6 @@ export default function ClientDetailScreen() {
           </ScrollView>
         )}
 
-        {/* Grouped checks list */}
         {filteredChecks.length === 0 ? (
           <View style={styles.emptyChecks}>
             <Ionicons name="receipt-outline" size={32} color={palette.text.tertiary} />
@@ -607,109 +942,25 @@ export default function ClientDetailScreen() {
         ) : (
           groupedChecks.map((group, gi) => (
             <View key={group.label + gi}>
-              {/* Date group header */}
               <View style={styles.dateGroupHeader}>
                 <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
                 <Text style={[styles.dateGroupText, { color: palette.text.tertiary }]}>{group.label}</Text>
                 <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
               </View>
-
-              {group.checks.map((check, ci) => {
-                const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-                const badge = badgeColors[badgeKey];
-                return (
-                  <TouchableOpacity
-                    key={check.id}
-                    style={[
-                      styles.checkCard,
-                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                      check.isDeferred && styles.checkCardDeferred,
-                    ]}
-                    onPress={() =>
-                      navigation.navigate('Main', {
-                        screen: 'Checks',
-                        params: { screen: 'CheckDetail', params: { id: check.id } },
-                      })
-                    }
-                    activeOpacity={0.7}
-                  >
-                    {/* Left accent bar */}
-                    <View
-                      style={[
-                        styles.accentBar,
-                        check.isDeferred
-                          ? { backgroundColor: colors.red[400] }
-                          : { backgroundColor: colors.primary[400] },
-                      ]}
-                    />
-
-                    <View style={styles.checkContent}>
-                      {/* Top row: number + badges | total */}
-                      <View style={styles.checkHeader}>
-                        <View style={styles.checkHeaderLeft}>
-                          <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
-                          {check.isDeferred && (
-                            <View style={styles.deferredBadge}>
-                              <Text style={styles.deferredText}>Отложен</Text>
-                            </View>
-                          )}
-                          <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
-                            <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                              {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
-                          {formatMoney(check.totalRevenue)}
-                        </Text>
-                      </View>
-
-                      {/* Middle: car info chip */}
-                      {check.car && (
-                        <View style={styles.checkInfoRow}>
-                          <View style={styles.infoChip}>
-                            <Ionicons name="car-outline" size={11} color={palette.text.tertiary} />
-                            <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
-                              {check.car.makeModel}
-                            </Text>
-                            {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
-                          </View>
-                        </View>
-                      )}
-
-                      {/* Comment preview */}
-                      {check.comment && (
-                        <Text style={styles.commentText} numberOfLines={1}>
-                          {check.comment}
-                        </Text>
-                      )}
-
-                      {/* Footer: time | master | profit */}
-                      <View style={styles.checkFooter}>
-                        <Text style={[styles.footerTime, { color: palette.text.tertiary }]}>
-                          {new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
-                        </Text>
-                        {check.master && (
-                          <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>
-                            {check.master.fullName}
-                          </Text>
-                        )}
-                        {canViewProfit && check.profit !== undefined && (
-                          <Text
-                            style={[
-                              styles.footerProfit,
-                              check.profit >= 0 ? styles.profitPositive : styles.profitNegative,
-                            ]}
-                          >
-                            {check.profit >= 0 ? '+' : ''}
-                            {formatMoney(check.profit)}
-                          </Text>
-                        )}
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
+              {group.checks.map((check) => (
+                <CheckRow
+                  key={check.id}
+                  check={check}
+                  palette={palette}
+                  canViewProfit={canViewProfit}
+                  onPress={() =>
+                    navigation.navigate('Main', {
+                      screen: 'Checks',
+                      params: { screen: 'CheckDetail', params: { id: check.id } },
+                    })
+                  }
+                />
+              ))}
             </View>
           ))
         )}
@@ -721,12 +972,12 @@ export default function ClientDetailScreen() {
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Гос. номер</Text>
           <TextInput
             value={plateNumber}
-            onChangeText={setPlateNumber}
+            onChangeText={(t) => setPlateNumber(processPlateMainInput(t.replace(/\s/g, '')))}
             style={[
               styles.formInput,
               { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
             ]}
-            placeholder="А000АА 00"
+            placeholder="А000АА"
             autoCapitalize="characters"
             placeholderTextColor={palette.text.tertiary}
           />
@@ -771,13 +1022,76 @@ export default function ClientDetailScreen() {
           <TouchableOpacity
             style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
             onPress={handleCarSubmit}
+            disabled={carSubmitting || createCarMutation.isPending || updateCarMutation.isPending}
           >
-            <Text style={styles.submitBtnText}>{editingCar ? 'Сохранить' : 'Добавить'}</Text>
+            {carSubmitting || createCarMutation.isPending || updateCarMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.submitBtnText}>{editingCar ? 'Сохранить' : 'Добавить'}</Text>
+            )}
           </TouchableOpacity>
         </View>
       </Modal>
 
-      {/* Delete car confirm */}
+      {/* Notes editor — owner only. */}
+      <Modal visible={notesModalOpen} onClose={() => setNotesModalOpen(false)} title="Заметки владельца">
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+            Внутренние заметки (видны только владельцу)
+          </Text>
+          <TextInput
+            value={notesDraft}
+            onChangeText={setNotesDraft}
+            style={[
+              styles.formInput,
+              {
+                height: 140,
+                textAlignVertical: 'top',
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
+            multiline
+            maxLength={4000}
+            placeholder="Например: предпочитает Mobil 1, обычно платит картой..."
+            placeholderTextColor={palette.text.tertiary}
+          />
+          <Text style={[styles.helperText, { color: palette.text.tertiary }]}>
+            {notesDraft.length}/4000
+          </Text>
+        </View>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+            onPress={() => setNotesModalOpen(false)}
+            disabled={notesMutation.isPending}
+          >
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
+            onPress={() => notesMutation.mutate(notesDraft.trim() ? notesDraft.trim() : null)}
+            disabled={notesMutation.isPending}
+          >
+            {notesMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.submitBtnText}>Сохранить</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Source picker */}
+      <SourcePickerSheet
+        visible={sourceOpen}
+        onClose={() => setSourceOpen(false)}
+        selected={client.source ?? null}
+        onPick={(value) => sourceMutation.mutate(value)}
+        title="Источник клиента"
+      />
+
       <ConfirmDialog
         visible={!!deleteCarId}
         onClose={() => setDeleteCarId(null)}
@@ -810,51 +1124,388 @@ export default function ClientDetailScreen() {
   );
 }
 
+// ── Sub-components ────────────────────────────────────────────────────
+
+interface StatTileProps {
+  label: string;
+  value: string;
+  palette: ReturnType<typeof useColors>;
+}
+function StatTile({ label, value, palette }: StatTileProps) {
+  return (
+    <View style={[styles.statTile, { backgroundColor: palette.bg.muted }]}>
+      <Text style={[styles.statTileValue, { color: palette.text.primary }]} numberOfLines={1}>
+        {value}
+      </Text>
+      <Text style={[styles.statTileLabel, { color: palette.text.tertiary }]}>{label}</Text>
+    </View>
+  );
+}
+
+interface QuickActionProps {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  color: string;
+  disabled?: boolean;
+  onPress: () => void;
+  palette: ReturnType<typeof useColors>;
+}
+function QuickAction({ icon, label, color, disabled, onPress, palette }: QuickActionProps) {
+  return (
+    <TouchableOpacity
+      style={[styles.quickAction, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      disabled={disabled}
+    >
+      <View
+        style={[
+          styles.quickActionIcon,
+          { backgroundColor: disabled ? palette.bg.muted : color + '18' },
+        ]}
+      >
+        <Ionicons name={icon} size={18} color={disabled ? palette.text.tertiary : color} />
+      </View>
+      <Text
+        style={[
+          styles.quickActionLabel,
+          { color: disabled ? palette.text.tertiary : palette.text.primary },
+        ]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+interface CarRowProps {
+  car: Car;
+  palette: ReturnType<typeof useColors>;
+  index: number;
+  checks: PerCarChecks['checks'];
+  expanded: boolean;
+  onToggle: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  canEdit: boolean;
+  onOpenCheck: (checkId: string) => void;
+}
+function CarRow({ car, palette, index, checks, expanded, onToggle, onEdit, onDelete, canEdit, onOpenCheck }: CarRowProps) {
+  const carColor = getCarColor(car.id);
+  return (
+    <AnimatedCard
+      style={[styles.carCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      index={index + 1}
+    >
+      <TouchableOpacity onPress={onToggle} activeOpacity={0.7} style={styles.carTop}>
+        <View style={styles.carInfo}>
+          <View style={[styles.carIconWrap, { backgroundColor: carColor + '18' }]}>
+            <Ionicons name="car-sport" size={16} color={carColor} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.carModel, { color: palette.text.primary }]} numberOfLines={1}>
+              {car.makeModel || '—'}
+            </Text>
+            <View style={[styles.plateBadgeRow, { backgroundColor: palette.bg.muted }]}>
+              <Text style={[styles.plateBadgeText, { color: palette.text.primary }]}>{car.plateNumber}</Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.carActions}>
+          {canEdit ? (
+            <>
+              <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
+                <Ionicons name="create-outline" size={15} color={palette.text.tertiary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onDelete} style={styles.iconBtn} hitSlop={8}>
+                <Ionicons name="trash-outline" size={15} color={colors.red[400]} />
+              </TouchableOpacity>
+            </>
+          ) : null}
+          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={palette.text.tertiary} />
+        </View>
+      </TouchableOpacity>
+      {car.comment ? (
+        <Text style={[styles.carComment, { color: palette.text.tertiary }]}>{car.comment}</Text>
+      ) : null}
+      {expanded && (
+        <View style={[styles.carInlineChecks, { borderTopColor: palette.border.subtle }]}>
+          {checks.length === 0 ? (
+            <Text style={[styles.carInlineEmpty, { color: palette.text.tertiary }]}>Нет чеков для этого авто</Text>
+          ) : (
+            <>
+              {checks.slice(0, 5).map((c) => (
+                <TouchableOpacity
+                  key={c.id}
+                  style={[styles.carCheckLine, { borderBottomColor: palette.border.subtle }]}
+                  activeOpacity={0.7}
+                  onPress={() => onOpenCheck(c.id)}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.carCheckTop, { color: palette.text.primary }]} numberOfLines={1}>
+                      #{c.number} · {formatDate(c.date)}
+                    </Text>
+                    <Text style={[styles.carCheckSub, { color: palette.text.secondary }]} numberOfLines={1}>
+                      {c.masterName || 'Без мастера'}
+                    </Text>
+                  </View>
+                  <Text style={[styles.carCheckAmount, { color: palette.text.primary }]}>
+                    {formatMoney(c.totalRevenue)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              {checks.length > 5 ? (
+                <Text style={[styles.carInlineMore, { color: palette.text.tertiary }]}>
+                  Ещё {checks.length - 5} чек(ов) ниже в полной истории
+                </Text>
+              ) : null}
+            </>
+          )}
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
+interface CheckRowProps {
+  check: Check;
+  palette: ReturnType<typeof useColors>;
+  canViewProfit: boolean;
+  onPress: () => void;
+}
+function CheckRow({ check, palette, canViewProfit, onPress }: CheckRowProps) {
+  const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
+  const badge = badgeColors[badgeKey];
+  return (
+    <TouchableOpacity
+      style={[
+        styles.checkCard,
+        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+        check.isDeferred && styles.checkCardDeferred,
+      ]}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <View
+        style={[
+          styles.accentBar,
+          check.isDeferred ? { backgroundColor: colors.red[400] } : { backgroundColor: colors.primary[400] },
+        ]}
+      />
+      <View style={styles.checkContent}>
+        <View style={styles.checkHeader}>
+          <View style={styles.checkHeaderLeft}>
+            <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
+            {check.isDeferred && (
+              <View style={styles.deferredBadge}>
+                <Text style={styles.deferredText}>Отложен</Text>
+              </View>
+            )}
+            <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
+              <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
+                {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+              </Text>
+            </View>
+          </View>
+          <Text style={[styles.checkTotal, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue)}</Text>
+        </View>
+        {check.car && (
+          <View style={styles.checkInfoRow}>
+            <View style={styles.infoChip}>
+              <Ionicons name="car-outline" size={11} color={palette.text.tertiary} />
+              <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
+                {check.car.makeModel}
+              </Text>
+              {check.car.plateNumber ? <Text style={styles.plateTag}>{check.car.plateNumber}</Text> : null}
+            </View>
+          </View>
+        )}
+        {check.comment ? (
+          <Text style={styles.commentText} numberOfLines={1}>
+            {check.comment}
+          </Text>
+        ) : null}
+        <View style={styles.checkFooter}>
+          <Text style={[styles.footerTime, { color: palette.text.tertiary }]}>
+            {new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+          </Text>
+          {check.master ? (
+            <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
+          ) : null}
+          {canViewProfit && check.profit !== undefined ? (
+            <Text
+              style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}
+            >
+              {check.profit >= 0 ? '+' : ''}
+              {formatMoney(check.profit)}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
 
-  // Client info card
-  card: {
-    backgroundColor: colors.white,
+  // Retail hero — gradient card on the virtual retail screen.
+  retailHero: {
     borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[4],
+    paddingVertical: spacing[5],
+    paddingHorizontal: spacing[5],
+    alignItems: 'center',
+    gap: spacing[2],
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
-  avatarSection: { alignItems: 'center', marginBottom: spacing[3] },
-  avatar: {
+  retailHeroIcon: {
     width: 56,
     height: 56,
     borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.16)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: spacing[2],
   },
-  avatarText: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.white },
-  clientName: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  statsRow: {
+  retailHeroTitle: { color: colors.white, fontSize: 18, fontWeight: '700' },
+  retailHeroSub: { color: 'rgba(255,255,255,0.85)', fontSize: 12, marginBottom: spacing[2] },
+  retailStatsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.gray[50],
+    width: '100%',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     borderRadius: borderRadius.xl,
     paddingVertical: spacing[2.5],
-    paddingHorizontal: spacing[4],
-    marginBottom: spacing[3],
   },
-  statItem: { flex: 1, alignItems: 'center' },
-  statValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  statLabel: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  statDivider: { width: 1, height: 28, backgroundColor: colors.gray[200], marginHorizontal: spacing[3] },
+  retailStatItem: { flex: 1, alignItems: 'center' },
+  retailStatDivider: { width: 1, height: 28, backgroundColor: 'rgba(255,255,255,0.24)' },
+  retailStatValue: { color: colors.white, fontSize: 14, fontWeight: '700' },
+  retailStatLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
+
+  // Hero
+  heroCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[4],
+    gap: spacing[3],
+  },
+  heroTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  heroInfo: { flex: 1, minWidth: 0 },
+  heroBadgesRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' },
+  heroDate: { fontSize: 11 },
+  sourceBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  sourceBadgeText: { fontSize: 11, fontWeight: '600' },
+  sourceBadgeEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderStyle: 'dashed',
+  },
+  sourceBadgeEmptyText: { fontSize: 10, fontWeight: '500' },
+
+  avatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: { fontSize: 18, fontWeight: '700', color: colors.white },
+  clientName: { fontSize: 17, fontWeight: '700', letterSpacing: -0.3, color: colors.gray[900] },
+
+  // Stat tiles row
+  statTilesRow: { flexDirection: 'row', gap: spacing[2] },
+  statTile: {
+    flex: 1,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    gap: 2,
+  },
+  statTileValue: { fontSize: 14, fontWeight: '700', letterSpacing: -0.2 },
+  statTileLabel: { fontSize: 11 },
+
+  // Quick action row
+  quickActionsRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+  },
+  quickAction: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[1],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    gap: 6,
+    ...Platform.select({
+      ios: { shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
+      android: { elevation: 1 },
+    }),
+  },
+  quickActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quickActionLabel: { fontSize: 11, fontWeight: '600' },
+
+  // Meta (owner-only)
+  metaCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    gap: spacing[2],
+  },
+  metaHeader: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaHeaderText: { fontSize: 11, fontWeight: '600', letterSpacing: 0.2, textTransform: 'uppercase' },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[2.5],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  metaLabel: { fontSize: 11, fontWeight: '600' },
+  metaValue: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, marginTop: 2 },
+
+  // Info card
+  infoCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+  },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
     paddingVertical: spacing[2.5],
     borderBottomWidth: 1,
-    borderBottomColor: colors.gray[50],
+    borderBottomColor: colors.gray[100],
   },
   infoLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
   infoValue: {
@@ -866,7 +1517,7 @@ const styles = StyleSheet.create({
   },
 
   // Section
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing[4] },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing[2] },
   sectionTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   smallBtn: {
     backgroundColor: colors.primary[600],
@@ -876,9 +1527,18 @@ const styles = StyleSheet.create({
   },
   smallBtnText: { color: colors.white, fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
+  // Empty cars
+  emptyCars: {
+    alignItems: 'center',
+    paddingVertical: spacing[5],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    gap: spacing[2],
+  },
+  emptyCarsText: { fontSize: fontSize.sm },
+
   // Car cards
   carCard: {
-    backgroundColor: colors.white,
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: colors.gray[100],
@@ -890,10 +1550,74 @@ const styles = StyleSheet.create({
   carInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flex: 1 },
   carIconWrap: { width: 32, height: 32, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
   carModel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  carPlate: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 1 },
-  carActions: { flexDirection: 'row', gap: spacing[0.5] },
+  plateBadgeRow: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: colors.gray[100],
+    marginTop: 3,
+  },
+  plateBadgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+  carActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[0.5] },
   iconBtn: { padding: spacing[1.5], borderRadius: borderRadius.md },
   carComment: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[1.5], marginLeft: spacing[10] },
+
+  // Inline checks inside a car row
+  carInlineChecks: {
+    marginTop: spacing[2],
+    paddingTop: spacing[2],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: spacing[1],
+  },
+  carInlineEmpty: { fontSize: 12, paddingVertical: spacing[2] },
+  carInlineMore: { fontSize: 11, marginTop: spacing[1] },
+  carCheckLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  carCheckTop: { fontSize: 13, fontWeight: '600' },
+  carCheckSub: { fontSize: 11, marginTop: 2 },
+  carCheckAmount: { fontSize: 13, fontWeight: '700' },
+
+  // Analytics
+  analyticsCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[4],
+    gap: spacing[3],
+  },
+  analyticsHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  analyticsCaption: { fontSize: 11, marginTop: -spacing[1] },
+  analyticsRow: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[2] },
+  analyticsLabel: { fontSize: 11, fontWeight: '500' },
+  analyticsValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, marginTop: 2 },
+  analyticsBlock: { gap: spacing[1] },
+  riskBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  riskBadgeText: { fontSize: 10, fontWeight: '700' },
+  serviceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: spacing[1.5],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  serviceName: { fontSize: fontSize.sm, flex: 1 },
+  serviceRevenue: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  favMasterRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
 
   // Car filter chips
   carChipsScroll: { marginTop: spacing[2] },
@@ -927,7 +1651,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  // Check card — compact with left accent
+  // Check card
   checkCard: {
     flexDirection: 'row',
     backgroundColor: colors.white,
@@ -945,8 +1669,6 @@ const styles = StyleSheet.create({
   checkCardDeferred: { backgroundColor: '#fef8f8', borderColor: colors.red[100] },
   accentBar: { width: 3.5 },
   checkContent: { flex: 1, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
-
-  // Check header row
   checkHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -954,7 +1676,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing[1.5],
   },
   checkHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: 1 },
-  checkNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  checkNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   deferredBadge: {
     backgroundColor: colors.red[100],
     paddingHorizontal: spacing[1.5],
@@ -964,9 +1686,8 @@ const styles = StyleSheet.create({
   deferredText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.red[700] },
   paymentBadge: { paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: borderRadius.full },
   paymentBadgeText: { fontSize: 10, fontWeight: fontWeight.medium },
-  checkTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  checkTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 
-  // Info chips row
   checkInfoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[1.5], marginBottom: spacing[1] },
   infoChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   infoChipText: { fontSize: 12, color: colors.gray[600], maxWidth: 120 },
@@ -981,30 +1702,20 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     marginLeft: 2,
   },
-
-  // Comment
   commentText: { fontSize: 11, color: colors.amber[600], fontStyle: 'italic', marginBottom: spacing[1] },
-
-  // Check footer
   checkFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  footerTime: { fontSize: 11, color: colors.gray[400] },
-  footerMaster: { fontSize: 11, color: colors.gray[400], flex: 1 },
+  footerTime: { fontSize: 11 },
+  footerMaster: { fontSize: 11, flex: 1 },
   footerProfit: { fontSize: 11, fontWeight: fontWeight.bold },
   profitPositive: { color: colors.green[600] },
   profitNegative: { color: colors.red[500] },
 
-  // Empty checks
   emptyChecks: { alignItems: 'center', paddingVertical: spacing[8] },
-  emptyChecksText: { fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] },
+  emptyChecksText: { fontSize: fontSize.sm, marginTop: spacing[2] },
 
   // Form
   formField: { marginBottom: spacing[4] },
-  formLabel: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-    color: colors.gray[700],
-    marginBottom: spacing[1.5],
-  },
+  formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, marginBottom: spacing[1.5] },
   formInput: {
     backgroundColor: colors.gray[50],
     borderWidth: 1,
@@ -1015,6 +1726,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.gray[900],
   },
+  helperText: { fontSize: 10, textAlign: 'right', marginTop: 4 },
   formActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -1030,7 +1742,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.gray[300],
   },
-  cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
+  cancelBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   submitBtn: {
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2.5],

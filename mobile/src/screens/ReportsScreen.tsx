@@ -1,53 +1,304 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl } from 'react-native';
+/**
+ * ReportsScreen — финансовый отчёт-центр.
+ *
+ * Это НЕ дашборд (дашборд показывает оперативную картину дня), а ОТЧЁТНОЕ
+ * центральное место для владельца: чистая прибыль, P&L, маржинальность,
+ * расходы по категориям, личные рекорды, тренды YoY, KPI-цели в стиле
+ * Apple Activity Rings, AI-инсайты, прогноз и алерты.
+ *
+ * Все нефинансовые виджеты (склад / клиенты / маркетинг / сотрудники)
+ * сознательно вынесены. Если владельцу нужна склад/клиентская аналитика —
+ * она живёт в DashboardScreen и в Warehouse-аналитике, не здесь.
+ *
+ * Контракт с бэком: используем уже существующие endpoint'ы —
+ * `reports/financial`, `reports/dashboard-v2`, `reports/defect-writeoff`.
+ * Никаких новых полей не вводим.
+ *
+ * Экспорт: PDF — через expo-print; «Поделиться картинкой» — через
+ * react-native-view-shot + expo-sharing. expo-file-system не подключён,
+ * поэтому «Excel» собирается в виде CSV-like табличного PDF («Скачать
+ * таблицу») — это честнее, чем подсовывать .pdf под маской .csv.
+ */
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Dimensions,
+  Modal as RNModal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { Text } from '../platform/Typography';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import Svg, { Defs, LinearGradient as SvgGrad, Path, Stop, Circle, G } from 'react-native-svg';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { captureRef } from 'react-native-view-shot';
 import { useNavigation } from '@react-navigation/native';
-import { reportsApi } from '../api/services';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { reportsApi, expensesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
+import FreshnessBadge from '../components/FreshnessBadge';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { FinancialReport } from '../../../shared/types';
+import { haptic } from '../platform/haptics';
+import type { FinancialReport, DashboardV2 } from '../../../shared/types';
 
-function formatMoney(v: number) {
+const SCREEN_WIDTH = Dimensions.get('window').width;
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Money / date helpers — единый источник правды по форматированию.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function formatMoney(v: number): string {
   const abs = Math.abs(Math.round(v));
   const formatted = abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
   return `${v < 0 ? '-' : ''}${formatted} ₽`;
 }
 
-function toDateStr(d: Date) {
+/** Компактная форма для крупных цифр: 1.2M / 234k. */
+function formatMoneyCompact(v: number): string {
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(1).replace('.0', '')}M ₽`;
+  if (abs >= 100_000) return `${Math.round(v / 1000)}k ₽`;
+  if (abs >= 10_000) return `${(v / 1000).toFixed(1).replace('.0', '')}k ₽`;
+  return `${Math.round(v)} ₽`;
+}
+
+function toDateStr(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-const PERIODS = [
+function parseDateStr(s: string): Date {
+  // YYYY-MM-DD → Date в локальной зоне (без сдвига UTC, как у Date(string)).
+  const [y, m, day] = s.split('-').map(Number);
+  return new Date(y, m - 1, day);
+}
+
+function pctOf(part: number, total: number): string {
+  if (total <= 0) return '0';
+  return ((part / total) * 100).toFixed(1);
+}
+
+function deltaPct(curr: number, prev: number): number {
+  if (prev === 0) return curr === 0 ? 0 : 100;
+  return ((curr - prev) / Math.abs(prev)) * 100;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Period switcher — 7 пресетов + произвольный диапазон.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type PeriodKey = 'today' | 'yesterday' | 'week' | 'month' | 'quarter' | 'year' | 'custom';
+
+const PERIODS: { key: PeriodKey; label: string }[] = [
   { key: 'today', label: 'Сегодня' },
+  { key: 'yesterday', label: 'Вчера' },
   { key: 'week', label: 'Неделя' },
   { key: 'month', label: 'Месяц' },
-] as const;
+  { key: 'quarter', label: 'Квартал' },
+  { key: 'year', label: 'Год' },
+  { key: 'custom', label: 'Произвольный' },
+];
 
-function getDateRange(period: string) {
+interface DateRange {
+  from: string;
+  to: string;
+}
+
+function getDateRange(period: PeriodKey, custom?: DateRange): DateRange {
   const now = new Date();
   const today = toDateStr(now);
   if (period === 'today') return { from: today, to: today };
+  if (period === 'yesterday') {
+    const y = new Date(now);
+    y.setDate(now.getDate() - 1);
+    const ys = toDateStr(y);
+    return { from: ys, to: ys };
+  }
   if (period === 'week') {
+    // ISO неделя — понедельник = начало.
     const day = now.getDay();
     const diff = day === 0 ? 6 : day - 1;
     const monday = new Date(now);
     monday.setDate(now.getDate() - diff);
     return { from: toDateStr(monday), to: today };
   }
-  return { from: toDateStr(new Date(now.getFullYear(), now.getMonth(), 1)), to: today };
+  if (period === 'month') {
+    return { from: toDateStr(new Date(now.getFullYear(), now.getMonth(), 1)), to: today };
+  }
+  if (period === 'quarter') {
+    const qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+    return { from: toDateStr(new Date(now.getFullYear(), qStartMonth, 1)), to: today };
+  }
+  if (period === 'year') {
+    return { from: toDateStr(new Date(now.getFullYear(), 0, 1)), to: today };
+  }
+  return custom ?? { from: today, to: today };
 }
 
-function pctOf(part: number, total: number) {
-  if (total <= 0) return '0';
-  return ((part / total) * 100).toFixed(1);
+/**
+ * Сдвинуть диапазон на ту же длину назад — для блока "Сравнить с".
+ * Длина считается в днях, чтобы для произвольного диапазона работало
+ * предсказуемо.
+ */
+function getPreviousRange(range: DateRange): DateRange {
+  const from = parseDateStr(range.from);
+  const to = parseDateStr(range.to);
+  const days = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86400000) + 1);
+  const prevTo = new Date(from);
+  prevTo.setDate(from.getDate() - 1);
+  const prevFrom = new Date(prevTo);
+  prevFrom.setDate(prevTo.getDate() - (days - 1));
+  return { from: toDateStr(prevFrom), to: toDateStr(prevTo) };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Sparkline helpers — те же кривые Безье что в DashboardScreen, но
+//  выделены сюда чтобы Reports не зависел от Dashboard.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildSparkPath(values: number[], w: number, h: number): string {
+  if (values.length < 2) return '';
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = Math.max(max - min, 1);
+  const pts = values.map((v, i) => ({
+    x: (i / (values.length - 1)) * w,
+    y: h - 3 - ((v - min) / range) * (h - 6),
+  }));
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length; i++) {
+    const prev = pts[i - 1];
+    const curr = pts[i];
+    const cpx = (prev.x + curr.x) / 2;
+    d += ` C ${cpx} ${prev.y}, ${cpx} ${curr.y}, ${curr.x} ${curr.y}`;
+  }
+  return d;
+}
+
+function buildSparkArea(values: number[], w: number, h: number): string {
+  const line = buildSparkPath(values, w, h);
+  if (!line) return '';
+  return `${line} L ${w} ${h} L 0 ${h} Z`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  KPI цели — хранятся в AsyncStorage. Не лезем в backend ради одного
+//  виджета: цели — личная настройка владельца, не часть API-контракта.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const KPI_TARGETS_KEY = 'reports.kpiTargets.v1';
+
+interface KpiTargets {
+  revenueMonth: number;
+  marginPct: number;
+  netProfitMonth: number;
+}
+
+const DEFAULT_TARGETS: KpiTargets = {
+  revenueMonth: 2_000_000,
+  marginPct: 25,
+  netProfitMonth: 500_000,
+};
+
+function useKpiTargets() {
+  const [targets, setTargets] = useState<KpiTargets>(DEFAULT_TARGETS);
+
+  // Загрузка происходит асинхронно. До первой записи показываем
+  // дефолты — это лучше, чем держать кольца пустыми.
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(KPI_TARGETS_KEY)
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        try {
+          const parsed = JSON.parse(raw) as Partial<KpiTargets>;
+          setTargets({
+            revenueMonth: Number(parsed.revenueMonth) || DEFAULT_TARGETS.revenueMonth,
+            marginPct: Number(parsed.marginPct) || DEFAULT_TARGETS.marginPct,
+            netProfitMonth: Number(parsed.netProfitMonth) || DEFAULT_TARGETS.netProfitMonth,
+          });
+        } catch {
+          /* swallow parse error — упадём на дефолты */
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = useCallback(async (next: KpiTargets) => {
+    setTargets(next);
+    try {
+      await AsyncStorage.setItem(KPI_TARGETS_KEY, JSON.stringify(next));
+    } catch {
+      /* AsyncStorage в принципе не должен падать здесь, но если — UI уже
+         обновлён через setTargets, потеряется только персистентность. */
+    }
+  }, []);
+
+  return { targets, save };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Активити-кольца (Apple style) — три концентрических дуги.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ActivityRing({
+  size,
+  strokeWidth,
+  values,
+}: {
+  size: number;
+  strokeWidth: number;
+  values: { color: string; track: string; pct: number }[];
+}) {
+  const gap = 4;
+  const half = size / 2;
+  return (
+    <Svg width={size} height={size}>
+      {values.map((v, i) => {
+        const r = half - strokeWidth / 2 - i * (strokeWidth + gap);
+        if (r <= 0) return null;
+        const C = 2 * Math.PI * r;
+        const progress = Math.max(0, Math.min(1, v.pct / 100));
+        const dash = C * Math.min(0.999, progress);
+        return (
+          <G key={i} rotation="-90" origin={`${half}, ${half}`}>
+            <Circle cx={half} cy={half} r={r} stroke={v.track} strokeWidth={strokeWidth} fill="none" />
+            <Circle
+              cx={half}
+              cy={half}
+              r={r}
+              stroke={v.color}
+              strokeWidth={strokeWidth}
+              fill="none"
+              strokeDasharray={`${dash}, ${C}`}
+              strokeLinecap="round"
+            />
+          </G>
+        );
+      })}
+    </Svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Main component
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function ReportsScreen() {
   const navigation = useNavigation<any>();
@@ -55,50 +306,210 @@ export default function ReportsScreen() {
   const palette = useColors();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
-  const [refreshing, setRefreshing] = useState(false);
-  const [period, setPeriod] = useState<string>('month');
-  const [dateFrom, setDateFrom] = useState(getDateRange('month').from);
-  const [dateTo, setDateTo] = useState(getDateRange('month').to);
 
   const canView = hasPermission('financial_reports');
 
-  const { data: report, isLoading } = useQuery<FinancialReport>({
-    queryKey: ['financial-report', dateFrom, dateTo],
-    queryFn: async () => {
-      const res = await reportsApi.getFinancial({ dateFrom, dateTo });
-      return res.data;
-    },
+  // Ref для capture: оборачиваем основной ScrollView, чтобы можно было
+  // поделиться картинкой текущего отчёта. captureRef не умеет в
+  // ScrollView внутреннее содержимое больше view — поэтому делим капту
+  // на "screen" (видимая часть) — это ок для UX превью.
+  const captureViewRef = useRef<View>(null);
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [period, setPeriod] = useState<PeriodKey>('month');
+  const [customRange, setCustomRange] = useState<DateRange>(() => getDateRange('month'));
+  const [showCustomPicker, setShowCustomPicker] = useState<null | 'from' | 'to'>(null);
+  const [compareEnabled, setCompareEnabled] = useState(false);
+  const [showTargetsModal, setShowTargetsModal] = useState(false);
+  const [pnlOpen, setPnlOpen] = useState(false);
+
+  const range = useMemo<DateRange>(
+    () => (period === 'custom' ? customRange : getDateRange(period)),
+    [period, customRange],
+  );
+  const prevRange = useMemo<DateRange>(() => getPreviousRange(range), [range]);
+
+  const { targets, save: saveTargets } = useKpiTargets();
+
+  // ── ОСНОВНЫЕ ЗАПРОСЫ ──────────────────────────────────────────────────────
+  // FinancialReport за текущий период
+  const financialQuery = useQuery<FinancialReport>({
+    queryKey: ['financial-report', range.from, range.to],
+    queryFn: async () => (await reportsApi.getFinancial({ dateFrom: range.from, dateTo: range.to })).data,
     enabled: canView,
-    // SWR — keep previous period's report visible while the user
-    // taps between Сегодня / Неделя / Месяц.
     placeholderData: (prev) => prev,
+    staleTime: 60_000,
   });
 
-  // Отдельный запрос на агрегаты брака/списаний за тот же период. Бэкенд
-  // принимает `from` / `to` (а не `dateFrom` / `dateTo`), и значения
-  // совпадают с YYYY-MM-DD из основного фильтра выше.
-  const { data: defectWriteoff } = useQuery({
-    queryKey: ['defect-writeoff-report', dateFrom, dateTo],
-    queryFn: async () => {
-      const res = await reportsApi.defectWriteoff({ from: dateFrom, to: dateTo });
-      return res.data;
-    },
-    enabled: canView,
+  // FinancialReport за предыдущий период — нужен только если включено сравнение
+  const prevFinancialQuery = useQuery<FinancialReport>({
+    queryKey: ['financial-report', prevRange.from, prevRange.to],
+    queryFn: async () => (await reportsApi.getFinancial({ dateFrom: prevRange.from, dateTo: prevRange.to })).data,
+    enabled: canView && compareEnabled,
     placeholderData: (prev) => prev,
+    staleTime: 60_000,
   });
 
-  const handlePeriodChange = (p: string) => {
+  // Dashboard V2 для marginSpark, personalRecord, monthForecast.
+  // Используем period='month' как канонический — это месячные показатели.
+  const dashboardQuery = useQuery<DashboardV2>({
+    queryKey: ['dashboard-v2', 'month'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'month' })).data,
+    enabled: canView,
+    placeholderData: (prev) => prev,
+    staleTime: 60_000,
+  });
+
+  // YoY: текущие 12 мес и предыдущие 12 — два FinancialReport.
+  const now = new Date();
+  const yoyCurrFrom = toDateStr(new Date(now.getFullYear() - 1, now.getMonth() + 1, 1));
+  const yoyCurrTo = toDateStr(now);
+  const yoyPrevFrom = toDateStr(new Date(now.getFullYear() - 2, now.getMonth() + 1, 1));
+  const yoyPrevTo = toDateStr(new Date(now.getFullYear() - 1, now.getMonth(), 0));
+  const yoyCurr = useQuery<FinancialReport>({
+    queryKey: ['financial-report', yoyCurrFrom, yoyCurrTo],
+    queryFn: async () => (await reportsApi.getFinancial({ dateFrom: yoyCurrFrom, dateTo: yoyCurrTo })).data,
+    enabled: canView,
+    placeholderData: (prev) => prev,
+    staleTime: 5 * 60_000,
+  });
+  const yoyPrev = useQuery<FinancialReport>({
+    queryKey: ['financial-report', yoyPrevFrom, yoyPrevTo],
+    queryFn: async () => (await reportsApi.getFinancial({ dateFrom: yoyPrevFrom, dateTo: yoyPrevTo })).data,
+    enabled: canView,
+    placeholderData: (prev) => prev,
+    staleTime: 5 * 60_000,
+  });
+
+  // Расходы по категориям — реальные expense rows за период.
+  // Категории жёстко в коде нет, нужно сгруппировать по categoryName.
+  const expensesQuery = useQuery({
+    queryKey: ['expenses', 'by-period', range.from, range.to],
+    queryFn: async () => (await expensesApi.getAll({ dateFrom: range.from, dateTo: range.to })).data,
+    enabled: canView,
+    placeholderData: (prev) => prev,
+    staleTime: 60_000,
+  });
+
+  const report = financialQuery.data;
+  const prevReport = prevFinancialQuery.data;
+  const dashboard = dashboardQuery.data;
+
+  // Категории расходов агрегируем в memo: имя категории → сумма.
+  const expensesByCategory = useMemo(() => {
+    const rows = expensesQuery.data ?? [];
+    const map = new Map<string, number>();
+    for (const r of rows) {
+      const key = r.categoryName ?? 'Без категории';
+      map.set(key, (map.get(key) ?? 0) + (Number(r.amount) || 0));
+    }
+    return Array.from(map.entries())
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [expensesQuery.data]);
+
+  const handlePeriodChange = useCallback((p: PeriodKey) => {
+    haptic('select');
     setPeriod(p);
-    const range = getDateRange(p);
-    setDateFrom(range.from);
-    setDateTo(range.to);
-  };
+  }, []);
 
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+    await Promise.allSettled([
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] }),
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] }),
+      queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+    ]);
     setRefreshing(false);
-  };
+  }, [queryClient]);
+
+  // ── EXPORT HANDLERS ──────────────────────────────────────────────────────
+
+  const exportPdf = useCallback(async () => {
+    if (!report) return;
+    haptic('tap');
+    const html = buildReportHtml({
+      title: 'Финансовый отчёт',
+      range,
+      report,
+      prevReport: compareEnabled ? prevReport : undefined,
+      expenses: expensesByCategory,
+    });
+    try {
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `Отчёт ${range.from} — ${range.to}`,
+        });
+      } else {
+        Alert.alert('PDF создан', uri);
+      }
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось создать PDF');
+    }
+  }, [report, prevReport, compareEnabled, expensesByCategory, range]);
+
+  const exportTablePdf = useCallback(async () => {
+    if (!report) return;
+    haptic('tap');
+    // Табличный лэйаут — для тех, кто хочет открыть в Numbers/Excel
+    // (PDF с таблицей нормально импортируется через copy-paste).
+    const html = buildTableHtml({
+      range,
+      report,
+      prevReport: compareEnabled ? prevReport : undefined,
+      expenses: expensesByCategory,
+    });
+    try {
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: `Таблица ${range.from} — ${range.to}`,
+        });
+      } else {
+        Alert.alert('Готово', uri);
+      }
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось создать таблицу');
+    }
+  }, [report, prevReport, compareEnabled, expensesByCategory, range]);
+
+  const exportImage = useCallback(async () => {
+    if (!captureViewRef.current) return;
+    haptic('tap');
+    try {
+      const uri = await captureRef(captureViewRef as any, {
+        format: 'png',
+        quality: 0.95,
+      });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, { mimeType: 'image/png', dialogTitle: 'Отчёт' });
+      }
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось сохранить изображение');
+    }
+  }, []);
+
+  // ── FORECAST SPARKLINE (hook — must run before any early return) ──────────
+  // Спарклайн "факт vs прогноз" — лёгкий синтетический ряд: marginSpark
+  // умножаем на средний дневной revenueMonth, чтобы получить визуальный
+  // тренд. Если spark пустой — спарклайн рисовать не будем.
+  const _marginSparkForChart = dashboard?.marginSpark ?? [];
+  const _monthlyRevenueForChart = dashboard?.revenueMonth ?? 0;
+  const forecastSpark = useMemo(() => {
+    if (!_marginSparkForChart.length || !_monthlyRevenueForChart) return [];
+    const dayCount = _marginSparkForChart.length;
+    const dailyAvg = _monthlyRevenueForChart / dayCount;
+    let cum = 0;
+    return _marginSparkForChart.map((m) => {
+      cum += dailyAvg * (1 + m / 200);
+      return cum;
+    });
+  }, [_marginSparkForChart, _monthlyRevenueForChart]);
+
+  // ── ACCESS GUARD ──────────────────────────────────────────────────────────
 
   if (!canView) {
     return (
@@ -108,389 +519,1472 @@ export default function ReportsScreen() {
           <Ionicons name="lock-closed" size={40} color={palette.text.tertiary} />
           <Text style={[styles.adTitle, { color: palette.text.primary }]}>Доступ ограничен</Text>
           <Text style={[styles.adDesc, { color: palette.text.secondary }]}>
-            У вас нет прав для просмотра финансовых отчетов
+            У вас нет прав для просмотра финансовых отчётов
           </Text>
         </View>
       </View>
     );
   }
 
-  const marginPct = report && report.revenue > 0 ? ((report.netProfit / report.revenue) * 100).toFixed(1) : '0';
+  // ── DERIVED METRICS ───────────────────────────────────────────────────────
 
-  const avgCheck =
-    report && report.checkCount > 0 && report.revenue > 0 ? formatMoney(report.revenue / report.checkCount) : '—';
+  const revenue = report?.revenue ?? 0;
+  const productCost = report?.productCost ?? 0;
+  const salaries = report?.salaries ?? 0;
+  const grossProfit = report?.grossProfit ?? 0;
+  const netProfit = report?.netProfit ?? 0;
+  const otherExpenses = (report as unknown as { otherExpenses?: number })?.otherExpenses ?? 0;
 
-  const otherExpenses = (report as any)?.otherExpenses ?? 0;
+  const marginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+  const prevMarginPct = prevReport && prevReport.revenue > 0 ? (prevReport.netProfit / prevReport.revenue) * 100 : 0;
+  const marginDelta = compareEnabled ? marginPct - prevMarginPct : (dashboard?.marginPctChange ?? 0);
+  const marginSpark = dashboard?.marginSpark ?? [];
+
+  const netProfitDelta = compareEnabled && prevReport ? deltaPct(netProfit, prevReport.netProfit) : 0;
+
+  // YoY-сравнение
+  const yoyCurrRevenue = yoyCurr.data?.revenue ?? 0;
+  const yoyPrevRevenue = yoyPrev.data?.revenue ?? 0;
+  const yoyCurrProfit = yoyCurr.data?.netProfit ?? 0;
+  const yoyPrevProfit = yoyPrev.data?.netProfit ?? 0;
+  const yoyRevenueDelta = deltaPct(yoyCurrRevenue, yoyPrevRevenue);
+  const yoyProfitDelta = deltaPct(yoyCurrProfit, yoyPrevProfit);
+
+  // KPI цели — прогресс к месячным целям.
+  const monthlyRevenue = dashboard?.revenueMonth ?? 0;
+  const monthlyProfit = dashboard?.netProfitMonth ?? 0;
+  const monthlyMargin = monthlyRevenue > 0 ? (monthlyProfit / monthlyRevenue) * 100 : 0;
+  const revenueProgress = (monthlyRevenue / targets.revenueMonth) * 100;
+  const marginProgress = (monthlyMargin / targets.marginPct) * 100;
+  const profitProgress = (monthlyProfit / targets.netProfitMonth) * 100;
+
+  // AI-инсайты — выводятся из реальных дельт, без вызовов в LLM.
+  const insights = buildInsights({
+    report,
+    prevReport: compareEnabled ? prevReport : undefined,
+    dashboard,
+    yoyRevenueDelta,
+    yoyProfitDelta,
+  });
+
+  // Алерты по финансовой части
+  const alerts = buildAlerts({
+    revenue,
+    expenses: productCost + salaries + otherExpenses,
+    marginPct,
+    prevMarginPct: compareEnabled ? prevMarginPct : null,
+  });
+
+  // Прогноз на конец месяца. Берём фактический monthForecast из
+  // dashboard-v2 (бэк сам экстраполирует) — это правда от бэка.
+  const monthForecast = dashboard?.monthForecast ?? 0;
+
+  // ── RENDER ────────────────────────────────────────────────────────────────
+
+  const W = SCREEN_WIDTH - spacing[4] * 2 - spacing[5] * 2;
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Отчёты" onBack={() => navigation.goBack()} />
+      <IosScreenHeader
+        title="Отчёты"
+        onBack={() => navigation.goBack()}
+        trailing={<FreshnessBadge query={dashboardQuery} />}
+      />
 
       <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
+        showsVerticalScrollIndicator={false}
       >
-        {/* Period selector */}
-        <View style={styles.periodRow}>
-          {PERIODS.map((p) => (
-            <TouchableOpacity
-              key={p.key}
-              style={[
-                styles.periodChip,
-                { backgroundColor: palette.bg.muted },
-                period === p.key && styles.periodChipActive,
-              ]}
-              onPress={() => handlePeriodChange(p.key)}
+        <View ref={captureViewRef} collapsable={false} style={{ gap: spacing[3] }}>
+          {/* PERIOD SWITCHER */}
+          <View style={styles.periodWrap}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.periodRow}
             >
-              <Text
+              {PERIODS.map((p) => (
+                <TouchableOpacity
+                  key={p.key}
+                  style={[
+                    styles.periodChip,
+                    { backgroundColor: palette.bg.muted },
+                    period === p.key && styles.periodChipActive,
+                  ]}
+                  onPress={() => handlePeriodChange(p.key)}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.periodText,
+                      { color: palette.text.secondary },
+                      period === p.key && styles.periodTextActive,
+                    ]}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            {/* Compare toggle */}
+            <View style={styles.compareRow}>
+              <Text style={[styles.compareLabel, { color: palette.text.secondary }]}>Сравнить с прошлым</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  haptic('select');
+                  setCompareEnabled((v) => !v);
+                }}
                 style={[
-                  styles.periodText,
-                  { color: palette.text.secondary },
-                  period === p.key && styles.periodTextActive,
+                  styles.toggleTrack,
+                  { backgroundColor: compareEnabled ? colors.primary[600] : palette.bg.muted },
                 ]}
+                activeOpacity={0.8}
               >
-                {p.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+                <View style={[styles.toggleThumb, compareEnabled && styles.toggleThumbOn]} />
+              </TouchableOpacity>
+            </View>
 
-        {/* Cold-start: spinner only until any report lands. Once we
-            have one (even from a previous period via SWR), keep it
-            visible across period changes. */}
-        {report === undefined ? (
-          <LoadingSpinner />
-        ) : !report && !isLoading ? (
-          <Text style={[styles.empty, { color: palette.text.tertiary }]}>Нет данных за выбранный период</Text>
-        ) : (
-          <>
-            {/* Hero: Net Profit */}
-            <AnimatedCard index={0}>
-              <LinearGradient
-                colors={report.netProfit >= 0 ? ['#059669', '#047857'] : ['#dc2626', '#b91c1c']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.heroCard}
-              >
-                <View style={styles.heroTop}>
-                  <Ionicons
-                    name={report.netProfit >= 0 ? 'trending-up' : 'trending-down'}
-                    size={16}
-                    color="rgba(255,255,255,0.6)"
-                  />
-                  <Text style={styles.heroLabel}>ЧИСТАЯ ПРИБЫЛЬ</Text>
-                </View>
-                <Text style={styles.heroValue}>{formatMoney(report.netProfit)}</Text>
-                <Text style={styles.heroSub}>Маржа {marginPct}%</Text>
-              </LinearGradient>
-            </AnimatedCard>
-
-            {/* Revenue + Gross Profit */}
-            <AnimatedCard index={1} style={styles.twoCol}>
-              <View
-                style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              >
-                <View style={styles.metricIconWrap}>
-                  <View style={[styles.metricIcon, { backgroundColor: colors.blue[50] }]}>
-                    <Ionicons name="trending-up" size={16} color={colors.blue[600]} />
-                  </View>
-                  <Text style={[styles.metricLabel, { color: palette.text.secondary }]}>Выручка</Text>
-                </View>
-                <Text style={[styles.metricValue, { color: palette.text.primary }]}>{formatMoney(report.revenue)}</Text>
+            {/* Custom range picker */}
+            {period === 'custom' && (
+              <View style={styles.customRangeRow}>
+                <TouchableOpacity
+                  style={[styles.customDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  onPress={() => setShowCustomPicker('from')}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="calendar-outline" size={14} color={palette.text.tertiary} />
+                  <Text style={[styles.customDateText, { color: palette.text.primary }]}>{customRange.from}</Text>
+                </TouchableOpacity>
+                <Text style={[styles.customDash, { color: palette.text.tertiary }]}>—</Text>
+                <TouchableOpacity
+                  style={[styles.customDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  onPress={() => setShowCustomPicker('to')}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="calendar-outline" size={14} color={palette.text.tertiary} />
+                  <Text style={[styles.customDateText, { color: palette.text.primary }]}>{customRange.to}</Text>
+                </TouchableOpacity>
               </View>
+            )}
+          </View>
 
-              <View
-                style={[styles.metricCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              >
-                <View style={styles.metricIconWrap}>
-                  <View style={[styles.metricIcon, { backgroundColor: colors.green[50] }]}>
-                    <Ionicons name="trending-up" size={16} color={colors.green[600]} />
+          {/* COLD-START */}
+          {report === undefined ? (
+            <LoadingSpinner />
+          ) : (
+            <>
+              {/* 1. HERO — Чистая прибыль */}
+              <AnimatedCard index={0}>
+                <LinearGradient
+                  colors={netProfit >= 0 ? ['#059669', '#047857'] : ['#dc2626', '#b91c1c']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.heroCard}
+                >
+                  <View style={styles.heroTop}>
+                    <Ionicons
+                      name={netProfit >= 0 ? 'trending-up' : 'trending-down'}
+                      size={16}
+                      color="rgba(255,255,255,0.7)"
+                    />
+                    <Text style={styles.heroLabel}>ЧИСТАЯ ПРИБЫЛЬ</Text>
                   </View>
-                  <Text style={[styles.metricLabel, { color: palette.text.secondary }]}>Валовая прибыль</Text>
-                </View>
-                <Text style={[styles.metricValue, { color: palette.text.primary }]}>
-                  {formatMoney(report.grossProfit)}
-                </Text>
-              </View>
-            </AnimatedCard>
-
-            {/* Expenses breakdown */}
-            <AnimatedCard
-              index={2}
-              style={[styles.expCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            >
-              <Text style={[styles.expTitle, { color: palette.text.tertiary }]}>РАСХОДЫ</Text>
-
-              <View style={styles.expRow}>
-                <View style={styles.expLeft}>
-                  <View style={[styles.expIcon, { backgroundColor: colors.orange[50] }]}>
-                    <Ionicons name="cube-outline" size={16} color={colors.orange[500]} />
-                  </View>
-                  <View>
-                    <Text style={[styles.expName, { color: palette.text.primary }]}>Себестоимость товаров</Text>
-                    {report.revenue > 0 && (
-                      <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
-                        {pctOf(report.productCost, report.revenue)}% от выручки
-                      </Text>
-                    )}
-                  </View>
-                </View>
-                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
-                  {formatMoney(report.productCost)}
-                </Text>
-              </View>
-
-              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
-
-              <View style={styles.expRow}>
-                <View style={styles.expLeft}>
-                  <View style={[styles.expIcon, { backgroundColor: colors.violet[50] }]}>
-                    <Ionicons name="people-outline" size={16} color={colors.violet[500]} />
-                  </View>
-                  <View>
-                    <Text style={[styles.expName, { color: palette.text.primary }]}>Зарплаты мастерам</Text>
-                    {report.revenue > 0 && (
-                      <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
-                        {pctOf(report.salaries, report.revenue)}% от выручки
-                      </Text>
-                    )}
-                  </View>
-                </View>
-                <Text style={[styles.expAmount, { color: palette.text.primary }]}>{formatMoney(report.salaries)}</Text>
-              </View>
-
-              {otherExpenses > 0 && (
-                <>
-                  <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
-                  <View style={styles.expRow}>
-                    <View style={styles.expLeft}>
-                      <View style={[styles.expIcon, { backgroundColor: colors.rose[50] }]}>
-                        <Ionicons name="wallet-outline" size={16} color={colors.rose[500]} />
-                      </View>
-                      <View>
-                        <Text style={[styles.expName, { color: palette.text.primary }]}>Прочие расходы</Text>
-                        {report.revenue > 0 && (
-                          <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
-                            {pctOf(otherExpenses, report.revenue)}% от выручки
-                          </Text>
-                        )}
-                      </View>
+                  <Text style={styles.heroValue}>{formatMoney(netProfit)}</Text>
+                  <Text style={styles.heroSub}>Оборот: {formatMoney(revenue)}</Text>
+                  {compareEnabled && prevReport && (
+                    <View style={styles.heroDeltaWrap}>
+                      <DeltaChip value={netProfitDelta} dark />
+                      <Text style={styles.heroDeltaSub}>vs предыдущий период</Text>
                     </View>
-                    <Text style={[styles.expAmount, { color: palette.text.primary }]}>
-                      {formatMoney(otherExpenses)}
-                    </Text>
-                  </View>
-                </>
-              )}
-            </AnimatedCard>
-
-            {/* Check count */}
-            <AnimatedCard
-              index={3}
-              style={[styles.checkCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            >
-              <View style={styles.checkLeft}>
-                <View style={[styles.metricIcon, { backgroundColor: colors.primary[50] }]}>
-                  <Ionicons name="receipt-outline" size={16} color={colors.primary[600]} />
-                </View>
-                <View>
-                  <Text style={[styles.expName, { color: palette.text.primary }]}>Количество чеков</Text>
-                  {report.checkCount > 0 && (
-                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>Ср. чек: {avgCheck}</Text>
                   )}
-                </View>
-              </View>
-              <Text style={styles.checkCount}>{report.checkCount}</Text>
-            </AnimatedCard>
+                </LinearGradient>
+              </AnimatedCard>
 
-            {/* Defect + writeoff aggregates за тот же период. Сама секция
-                всегда показывается (даже на нулях) — владельцу важно
-                видеть, что данных нет, а не делать вид, что их не было.
-                Источник — reports/defect-writeoff из shared/api. */}
-            <AnimatedCard
-              index={4}
-              style={[styles.expCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            >
-              <Text style={[styles.expTitle, { color: palette.text.tertiary }]}>БРАК И СПИСАНИЯ</Text>
+              {/* 2. ФИНАНСОВАЯ ВОРОНКА */}
+              <AnimatedCard
+                index={1}
+                style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
+                <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>ФИНАНСОВАЯ ВОРОНКА</Text>
+                <FunnelRow
+                  label="Выручка"
+                  amount={revenue}
+                  icon="trending-up-outline"
+                  tone="positive"
+                  palette={palette}
+                />
+                <FunnelArrow palette={palette} />
+                <FunnelRow
+                  label="− Себестоимость товаров"
+                  amount={-productCost}
+                  pct={pctOf(productCost, revenue)}
+                  icon="cube-outline"
+                  tone="negative"
+                  palette={palette}
+                />
+                <FunnelRow
+                  label="= Валовая прибыль"
+                  amount={grossProfit}
+                  pct={pctOf(grossProfit, revenue)}
+                  icon="checkmark-circle-outline"
+                  tone="result"
+                  palette={palette}
+                />
+                <FunnelArrow palette={palette} />
+                <FunnelRow
+                  label="− Зарплаты"
+                  amount={-salaries}
+                  pct={pctOf(salaries, revenue)}
+                  icon="people-outline"
+                  tone="negative"
+                  palette={palette}
+                />
+                <FunnelRow
+                  label="= После ФОТ"
+                  amount={grossProfit - salaries}
+                  pct={pctOf(grossProfit - salaries, revenue)}
+                  icon="checkmark-circle-outline"
+                  tone="result"
+                  palette={palette}
+                />
+                {otherExpenses > 0 && (
+                  <>
+                    <FunnelArrow palette={palette} />
+                    <FunnelRow
+                      label="− Прочие расходы"
+                      amount={-otherExpenses}
+                      pct={pctOf(otherExpenses, revenue)}
+                      icon="wallet-outline"
+                      tone="negative"
+                      palette={palette}
+                    />
+                  </>
+                )}
+                <FunnelArrow palette={palette} />
+                <FunnelRow
+                  label="= Чистая прибыль"
+                  amount={netProfit}
+                  pct={pctOf(netProfit, revenue)}
+                  icon="cash-outline"
+                  tone="final"
+                  palette={palette}
+                />
+              </AnimatedCard>
 
-              <View style={styles.expRow}>
-                <View style={styles.expLeft}>
-                  <View style={[styles.expIcon, { backgroundColor: colors.amber[50] }]}>
-                    <Ionicons name="warning-outline" size={16} color={colors.amber[600]} />
+              {/* 3. P&L (collapsed by default) */}
+              <AnimatedCard
+                index={2}
+                style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
+                <TouchableOpacity
+                  style={styles.collapseHeader}
+                  onPress={() => {
+                    haptic('tap');
+                    setPnlOpen((v) => !v);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.collapseTitle, { color: palette.text.primary }]}>Прибыли и убытки (P&L)</Text>
+                  <Ionicons
+                    name={pnlOpen ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={palette.text.tertiary}
+                  />
+                </TouchableOpacity>
+                {pnlOpen && (
+                  <View style={{ marginTop: spacing[3] }}>
+                    <PnLRow label="Доходы" amount={revenue} palette={palette} tone="positive" />
+                    <PnLRow label="Расходы" amount={-(productCost + salaries + otherExpenses)} palette={palette} tone="negative" />
+                    <View style={[styles.pnlDivider, { backgroundColor: palette.border.subtle }]} />
+                    <PnLRow label="Чистая прибыль" amount={netProfit} palette={palette} tone="bold" />
+                    <TouchableOpacity style={styles.pnlPdfBtn} onPress={exportPdf} activeOpacity={0.85}>
+                      <Ionicons name="document-text-outline" size={16} color={colors.white} />
+                      <Text style={styles.pnlPdfText}>Скачать PDF</Text>
+                    </TouchableOpacity>
                   </View>
-                  <View>
-                    <Text style={[styles.expName, { color: palette.text.primary }]}>Перенос в брак</Text>
-                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
-                      {defectWriteoff?.defectQty ?? 0} шт
+                )}
+              </AnimatedCard>
+
+              {/* 4. МАРЖИНАЛЬНОСТЬ */}
+              <AnimatedCard
+                index={3}
+                style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
+                <View style={styles.cardHeaderRow}>
+                  <View style={[styles.cardIcon, { backgroundColor: colors.green[50] }]}>
+                    <Ionicons name="stats-chart-outline" size={16} color={colors.green[600]} />
+                  </View>
+                  <Text style={[styles.cardTitleInline, { color: palette.text.tertiary }]}>МАРЖИНАЛЬНОСТЬ</Text>
+                </View>
+                <View style={styles.marginRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.marginValue, { color: palette.text.primary }]}>{marginPct.toFixed(1)}%</Text>
+                    <Text style={[styles.cardCaption, { color: palette.text.tertiary }]}>
+                      Чистая прибыль / Оборот
                     </Text>
                   </View>
+                  <DeltaChip value={marginDelta} suffix="%" />
                 </View>
-                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
-                  {formatMoney(defectWriteoff?.defectValue ?? 0)}
-                </Text>
-              </View>
-
-              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
-
-              <View style={styles.expRow}>
-                <View style={styles.expLeft}>
-                  <View style={[styles.expIcon, { backgroundColor: colors.red[50] }]}>
-                    <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
+                {marginSpark.length > 1 && (
+                  <View style={{ marginTop: spacing[3] }}>
+                    <Svg width={W} height={60}>
+                      <Defs>
+                        <SvgGrad id="marginGrad" x1="0" y1="0" x2="0" y2="1">
+                          <Stop offset="0%" stopColor={colors.green[400]} stopOpacity={0.45} />
+                          <Stop offset="100%" stopColor={colors.green[400]} stopOpacity={0} />
+                        </SvgGrad>
+                      </Defs>
+                      <Path d={buildSparkArea(marginSpark, W, 60)} fill="url(#marginGrad)" />
+                      <Path
+                        d={buildSparkPath(marginSpark, W, 60)}
+                        stroke={colors.green[600]}
+                        strokeWidth={2}
+                        fill="none"
+                        strokeLinecap="round"
+                      />
+                    </Svg>
                   </View>
-                  <View>
-                    <Text style={[styles.expName, { color: palette.text.primary }]}>Списано всего</Text>
-                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
-                      {defectWriteoff?.writeoffQty ?? 0} шт
+                )}
+                {compareEnabled && prevReport && (
+                  <View style={styles.compareLine}>
+                    <Text style={[styles.cardCaption, { color: palette.text.tertiary }]}>
+                      Прошлый период: {prevMarginPct.toFixed(1)}%
                     </Text>
                   </View>
-                </View>
-                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
-                  {formatMoney(defectWriteoff?.writeoffValue ?? 0)}
-                </Text>
-              </View>
+                )}
+              </AnimatedCard>
 
-              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
+              {/* 5. РАСХОДЫ ПО КАТЕГОРИЯМ */}
+              {expensesByCategory.length > 0 && (
+                <AnimatedCard
+                  index={4}
+                  style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>РАСХОДЫ ПО КАТЕГОРИЯМ</Text>
+                  {expensesByCategory.slice(0, 5).map((row, idx) => {
+                    const total = expensesByCategory.reduce((s, r) => s + r.amount, 0);
+                    const pct = total > 0 ? (row.amount / total) * 100 : 0;
+                    return (
+                      <View key={row.name} style={styles.expRow}>
+                        <View style={styles.expRowHead}>
+                          <Text
+                            style={[styles.expRowName, { color: palette.text.primary }]}
+                            numberOfLines={1}
+                          >
+                            {row.name}
+                          </Text>
+                          <Text style={[styles.expRowAmount, { color: palette.text.primary }]}>
+                            {formatMoney(row.amount)}
+                          </Text>
+                        </View>
+                        <View style={[styles.expBarTrack, { backgroundColor: palette.bg.muted }]}>
+                          <View
+                            style={[
+                              styles.expBarFill,
+                              {
+                                width: `${Math.min(100, Math.max(2, pct))}%`,
+                                backgroundColor: EXPENSE_COLORS[idx % EXPENSE_COLORS.length],
+                              },
+                            ]}
+                          />
+                        </View>
+                        <Text style={[styles.expRowPct, { color: palette.text.tertiary }]}>
+                          {pct.toFixed(1)}% от расходов
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </AnimatedCard>
+              )}
 
-              <View style={styles.expRow}>
-                <View style={styles.expLeft}>
-                  <View style={[styles.expIcon, { backgroundColor: colors.rose[50] }]}>
-                    <Ionicons name="receipt-outline" size={16} color={colors.rose[600]} />
-                  </View>
-                  <View>
-                    <Text style={[styles.expName, { color: palette.text.primary }]}>Списано в расходы</Text>
-                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
-                      {defectWriteoff?.writeoffExpensedQty ?? 0} шт
+              {/* 6. ЛИЧНЫЙ РЕКОРД */}
+              {dashboard?.personalRecord && (
+                <PersonalRecordCard
+                  bestDay={dashboard.personalRecord.bestDay}
+                  bestMonth={dashboard.personalRecord.bestMonth}
+                  monthlyProfit={monthlyProfit}
+                />
+              )}
+
+              {/* 7. ТРЕНДЫ YoY */}
+              <AnimatedCard
+                index={6}
+                style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
+                <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>ТРЕНДЫ — ГОД К ГОДУ</Text>
+                <View style={styles.yoyRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.yoyLabel, { color: palette.text.secondary }]}>Выручка 12 мес</Text>
+                    <Text style={[styles.yoyValue, { color: palette.text.primary }]} numberOfLines={1}>
+                      {formatMoneyCompact(yoyCurrRevenue)}
                     </Text>
+                    <DeltaChip value={yoyRevenueDelta} suffix="%" />
                   </View>
-                </View>
-                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
-                  {formatMoney(defectWriteoff?.writeoffExpensedValue ?? 0)}
-                </Text>
-              </View>
-
-              <View style={[styles.expDivider, { backgroundColor: palette.border.subtle }]} />
-
-              <View style={styles.expRow}>
-                <View style={styles.expLeft}>
-                  <View style={[styles.expIcon, { backgroundColor: colors.indigo[50] }]}>
-                    <Ionicons name="arrow-undo-outline" size={16} color={colors.indigo[600]} />
-                  </View>
-                  <View>
-                    <Text style={[styles.expName, { color: palette.text.primary }]}>Возврат поставщику</Text>
-                    <Text style={[styles.expPct, { color: palette.text.tertiary }]}>
-                      {defectWriteoff?.returnedToSupplierQty ?? 0} шт
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.yoyLabel, { color: palette.text.secondary }]}>Прибыль 12 мес</Text>
+                    <Text style={[styles.yoyValue, { color: palette.text.primary }]} numberOfLines={1}>
+                      {formatMoneyCompact(yoyCurrProfit)}
                     </Text>
+                    <DeltaChip value={yoyProfitDelta} suffix="%" />
                   </View>
                 </View>
-                <Text style={[styles.expAmount, { color: palette.text.primary }]}>
-                  {formatMoney(defectWriteoff?.returnedToSupplierValue ?? 0)}
+                {marginSpark.length > 1 && (
+                  <View style={{ marginTop: spacing[3] }}>
+                    <Svg width={W} height={50}>
+                      <Defs>
+                        <SvgGrad id="yoyGrad" x1="0" y1="0" x2="0" y2="1">
+                          <Stop offset="0%" stopColor={colors.primary[400]} stopOpacity={0.35} />
+                          <Stop offset="100%" stopColor={colors.primary[400]} stopOpacity={0} />
+                        </SvgGrad>
+                      </Defs>
+                      <Path d={buildSparkArea(marginSpark, W, 50)} fill="url(#yoyGrad)" />
+                      <Path
+                        d={buildSparkPath(marginSpark, W, 50)}
+                        stroke={colors.primary[600]}
+                        strokeWidth={1.8}
+                        fill="none"
+                        strokeLinecap="round"
+                      />
+                    </Svg>
+                  </View>
+                )}
+              </AnimatedCard>
+
+              {/* 8. KPI ЦЕЛИ (Apple Activity Rings) */}
+              <AnimatedCard
+                index={7}
+                style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
+                <View style={styles.kpiHeader}>
+                  <Text style={[styles.cardTitle, { color: palette.text.tertiary, padding: 0 }]}>KPI ЦЕЛИ</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      haptic('tap');
+                      setShowTargetsModal(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.kpiEdit, { color: colors.primary[600] }]}>Изменить цели</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.kpiBody}>
+                  <View style={styles.kpiRingsWrap}>
+                    <ActivityRing
+                      size={140}
+                      strokeWidth={14}
+                      values={[
+                        { color: colors.green[600], track: colors.green[100], pct: revenueProgress },
+                        { color: colors.primary[600], track: colors.primary[100], pct: marginProgress },
+                        { color: colors.amber[600], track: colors.amber[100], pct: profitProgress },
+                      ]}
+                    />
+                  </View>
+                  <View style={styles.kpiLegend}>
+                    <KpiLegendRow
+                      color={colors.green[600]}
+                      label="Выручка месяца"
+                      current={formatMoneyCompact(monthlyRevenue)}
+                      target={formatMoneyCompact(targets.revenueMonth)}
+                      progress={revenueProgress}
+                      palette={palette}
+                    />
+                    <KpiLegendRow
+                      color={colors.primary[600]}
+                      label="Маржа"
+                      current={`${monthlyMargin.toFixed(1)}%`}
+                      target={`${targets.marginPct}%`}
+                      progress={marginProgress}
+                      palette={palette}
+                    />
+                    <KpiLegendRow
+                      color={colors.amber[600]}
+                      label="Чистая прибыль"
+                      current={formatMoneyCompact(monthlyProfit)}
+                      target={formatMoneyCompact(targets.netProfitMonth)}
+                      progress={profitProgress}
+                      palette={palette}
+                    />
+                  </View>
+                </View>
+              </AnimatedCard>
+
+              {/* 9. AI-ИНСАЙТЫ */}
+              {insights.length > 0 && (
+                <View style={{ gap: spacing[2] }}>
+                  <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>ИНСАЙТЫ</Text>
+                  {insights.map((ins, idx) => (
+                    <AnimatedCard key={idx} index={8 + idx} style={[styles.insightCard, { backgroundColor: insightBg(ins.tone, palette.bg.card), borderColor: insightBorder(ins.tone, palette.border.subtle) }]}>
+                      <View style={[styles.insightIcon, { backgroundColor: insightIconBg(ins.tone) }]}>
+                        <Ionicons name={ins.icon} size={16} color={insightIconColor(ins.tone)} />
+                      </View>
+                      <Text style={[styles.insightText, { color: palette.text.primary }]}>{ins.text}</Text>
+                    </AnimatedCard>
+                  ))}
+                </View>
+              )}
+
+              {/* 10. ПРОГНОЗ */}
+              {monthForecast > 0 && (
+                <AnimatedCard
+                  index={11}
+                  style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <View style={styles.cardHeaderRow}>
+                    <View style={[styles.cardIcon, { backgroundColor: colors.primary[50] }]}>
+                      <Ionicons name="trending-up-outline" size={16} color={colors.primary[600]} />
+                    </View>
+                    <Text style={[styles.cardTitleInline, { color: palette.text.tertiary }]}>ПРОГНОЗ</Text>
+                  </View>
+                  <Text style={[styles.forecastValue, { color: palette.text.primary }]}>
+                    ~{formatMoney(monthForecast)}
+                  </Text>
+                  <Text style={[styles.cardCaption, { color: palette.text.tertiary }]}>
+                    По текущей динамике до конца месяца
+                  </Text>
+                  {forecastSpark.length > 1 && (
+                    <View style={{ marginTop: spacing[3] }}>
+                      <Svg width={W} height={50}>
+                        <Defs>
+                          <SvgGrad id="fcstGrad" x1="0" y1="0" x2="0" y2="1">
+                            <Stop offset="0%" stopColor={colors.primary[400]} stopOpacity={0.4} />
+                            <Stop offset="100%" stopColor={colors.primary[400]} stopOpacity={0} />
+                          </SvgGrad>
+                        </Defs>
+                        <Path d={buildSparkArea(forecastSpark, W, 50)} fill="url(#fcstGrad)" />
+                        <Path
+                          d={buildSparkPath(forecastSpark, W, 50)}
+                          stroke={colors.primary[600]}
+                          strokeWidth={2}
+                          fill="none"
+                          strokeLinecap="round"
+                        />
+                      </Svg>
+                    </View>
+                  )}
+                </AnimatedCard>
+              )}
+
+              {/* 11. АЛЕРТЫ */}
+              {alerts.length > 0 && (
+                <View style={{ gap: spacing[2] }}>
+                  <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>ФИНАНСОВЫЕ АЛЕРТЫ</Text>
+                  {alerts.map((a, idx) => (
+                    <AnimatedCard
+                      key={idx}
+                      index={12 + idx}
+                      style={[
+                        styles.alertCard,
+                        {
+                          backgroundColor: palette.bg.card,
+                          borderColor: a.tone === 'crit' ? colors.red[200] : colors.amber[200],
+                          borderLeftColor: a.tone === 'crit' ? colors.red[500] : colors.amber[600],
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name="warning"
+                        size={18}
+                        color={a.tone === 'crit' ? colors.red[600] : colors.amber[600]}
+                      />
+                      <Text style={[styles.alertText, { color: palette.text.primary }]}>{a.message}</Text>
+                    </AnimatedCard>
+                  ))}
+                </View>
+              )}
+
+              {/* 12. ЭКСПОРТ */}
+              <AnimatedCard
+                index={15}
+                style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              >
+                <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>ЭКСПОРТ</Text>
+                <View style={styles.exportRow}>
+                  <TouchableOpacity style={styles.exportBtn} onPress={exportPdf} activeOpacity={0.85}>
+                    <Ionicons name="document-text-outline" size={20} color={colors.primary[600]} />
+                    <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>PDF</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.exportBtn} onPress={exportTablePdf} activeOpacity={0.85}>
+                    <Ionicons name="grid-outline" size={20} color={colors.green[600]} />
+                    <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>Таблица</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.exportBtn} onPress={exportImage} activeOpacity={0.85}>
+                    <Ionicons name="image-outline" size={20} color={colors.amber[600]} />
+                    <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>Картинка</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={[styles.cardCaption, { color: palette.text.tertiary, marginTop: spacing[2] }]}>
+                  Таблица — PDF в табличном виде. expo-file-system не подключён, поэтому отдельного .csv пока нет.
                 </Text>
-              </View>
-            </AnimatedCard>
-          </>
-        )}
+              </AnimatedCard>
+            </>
+          )}
+        </View>
       </ScrollView>
+
+      {/* TARGETS MODAL */}
+      <TargetsModal
+        visible={showTargetsModal}
+        onClose={() => setShowTargetsModal(false)}
+        targets={targets}
+        onSave={async (next) => {
+          await saveTargets(next);
+          setShowTargetsModal(false);
+        }}
+      />
+
+      {/* CUSTOM DATE PICKERS */}
+      <DateTimePickerModal
+        visible={showCustomPicker === 'from'}
+        value={parseDateStr(customRange.from)}
+        mode="date"
+        onConfirm={(d) => {
+          setCustomRange((r) => ({ ...r, from: toDateStr(d) }));
+          setShowCustomPicker(null);
+        }}
+        onCancel={() => setShowCustomPicker(null)}
+      />
+      <DateTimePickerModal
+        visible={showCustomPicker === 'to'}
+        value={parseDateStr(customRange.to)}
+        mode="date"
+        onConfirm={(d) => {
+          setCustomRange((r) => ({ ...r, to: toDateStr(d) }));
+          setShowCustomPicker(null);
+        }}
+        onCancel={() => setShowCustomPicker(null)}
+      />
     </View>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Sub-components
+// ─────────────────────────────────────────────────────────────────────────────
+
+type FunnelTone = 'positive' | 'negative' | 'result' | 'final';
+
+function FunnelRow({
+  label,
+  amount,
+  pct,
+  icon,
+  tone,
+  palette,
+}: {
+  label: string;
+  amount: number;
+  pct?: string;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  tone: FunnelTone;
+  palette: ReturnType<typeof useColors>;
+}) {
+  const accentBg = (() => {
+    if (tone === 'positive') return colors.green[50];
+    if (tone === 'negative') return colors.red[50];
+    if (tone === 'final') return colors.primary[50];
+    return palette.bg.muted;
+  })();
+  const accentFg = (() => {
+    if (tone === 'positive') return colors.green[600];
+    if (tone === 'negative') return colors.red[500];
+    if (tone === 'final') return colors.primary[600];
+    return palette.text.secondary;
+  })();
+  const amountColor = (() => {
+    if (tone === 'final') return colors.primary[700];
+    if (tone === 'result') return colors.green[700];
+    return palette.text.primary;
+  })();
+  return (
+    <View style={[styles.funnelRow, tone === 'final' && styles.funnelRowFinal]}>
+      <View style={styles.funnelLeft}>
+        <View style={[styles.funnelIcon, { backgroundColor: accentBg }]}>
+          <Ionicons name={icon} size={14} color={accentFg} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.funnelLabel, { color: palette.text.primary }]}>{label}</Text>
+          {pct && (
+            <Text style={[styles.funnelPct, { color: palette.text.tertiary }]}>{pct}% от выручки</Text>
+          )}
+        </View>
+      </View>
+      <Text style={[styles.funnelAmount, { color: amountColor }, tone === 'final' && styles.funnelAmountFinal]}>
+        {formatMoney(amount)}
+      </Text>
+    </View>
+  );
+}
+
+function FunnelArrow({ palette }: { palette: ReturnType<typeof useColors> }) {
+  return (
+    <View style={styles.funnelArrowWrap}>
+      <Ionicons name="arrow-down" size={12} color={palette.text.tertiary} />
+    </View>
+  );
+}
+
+function DeltaChip({ value, suffix = '%', dark = false }: { value: number; suffix?: string; dark?: boolean }) {
+  const tone: 'up' | 'down' | 'flat' = value > 0.5 ? 'up' : value < -0.5 ? 'down' : 'flat';
+  const bg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : 'rgba(0,0,0,0.06)';
+  const fg = tone === 'up' ? colors.green[700] : tone === 'down' ? colors.red[700] : colors.gray[600];
+  const darkBg =
+    tone === 'up' ? 'rgba(255,255,255,0.25)' : tone === 'down' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.18)';
+  const darkFg = colors.white;
+  return (
+    <View style={[styles.deltaChip, { backgroundColor: dark ? darkBg : bg }]}>
+      <Ionicons
+        name={tone === 'up' ? 'arrow-up' : tone === 'down' ? 'arrow-down' : 'remove'}
+        size={10}
+        color={dark ? darkFg : fg}
+      />
+      <Text style={[styles.deltaChipText, { color: dark ? darkFg : fg }]}>
+        {Math.abs(value).toFixed(value < 10 ? 1 : 0)}
+        {suffix}
+      </Text>
+    </View>
+  );
+}
+
+function PnLRow({
+  label,
+  amount,
+  palette,
+  tone,
+}: {
+  label: string;
+  amount: number;
+  palette: ReturnType<typeof useColors>;
+  tone: 'positive' | 'negative' | 'bold';
+}) {
+  const color = tone === 'positive' ? colors.green[700] : tone === 'negative' ? colors.red[600] : palette.text.primary;
+  return (
+    <View style={styles.pnlRow}>
+      <Text
+        style={[
+          styles.pnlLabel,
+          { color: palette.text.primary },
+          tone === 'bold' && { fontWeight: fontWeight.bold },
+        ]}
+      >
+        {label}
+      </Text>
+      <Text style={[styles.pnlAmount, { color }, tone === 'bold' && { fontWeight: fontWeight.bold }]}>
+        {formatMoney(amount)}
+      </Text>
+    </View>
+  );
+}
+
+function PersonalRecordCard({
+  bestDay,
+  bestMonth,
+  monthlyProfit,
+}: {
+  bestDay?: { date: string; value: number };
+  bestMonth?: { ym: string; value: number };
+  monthlyProfit: number;
+}) {
+  const palette = useColors();
+  if (!bestDay && !bestMonth) return null;
+  // "До рекорда осталось" — считаем относительно лучшего месяца.
+  const remaining = bestMonth ? Math.max(0, bestMonth.value - monthlyProfit) : 0;
+  const approaching = bestMonth && monthlyProfit > 0 && remaining > 0 && remaining < bestMonth.value * 0.3;
+  return (
+    <AnimatedCard
+      index={5}
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.cardHeaderRow}>
+        <View style={[styles.cardIcon, { backgroundColor: colors.amber[50] }]}>
+          <Ionicons name="trophy-outline" size={16} color={colors.amber[600]} />
+        </View>
+        <Text style={[styles.cardTitleInline, { color: palette.text.tertiary }]}>ЛИЧНЫЙ РЕКОРД</Text>
+      </View>
+      {bestDay && (
+        <View style={styles.recordRow}>
+          <Text style={[styles.recordLabel, { color: palette.text.secondary }]}>Лучший день</Text>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.recordValue, { color: palette.text.primary }]}>
+              {formatMoney(bestDay.value)}
+            </Text>
+            <Text style={[styles.recordCaption, { color: palette.text.tertiary }]}>{bestDay.date}</Text>
+          </View>
+        </View>
+      )}
+      {bestMonth && (
+        <View style={styles.recordRow}>
+          <Text style={[styles.recordLabel, { color: palette.text.secondary }]}>Лучший месяц</Text>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={[styles.recordValue, { color: palette.text.primary }]}>
+              {formatMoney(bestMonth.value)}
+            </Text>
+            <Text style={[styles.recordCaption, { color: palette.text.tertiary }]}>{bestMonth.ym}</Text>
+          </View>
+        </View>
+      )}
+      {approaching && bestMonth && (
+        <View style={[styles.recordHint, { backgroundColor: colors.amber[50] }]}>
+          <Ionicons name="flame-outline" size={14} color={colors.amber[600]} />
+          <Text style={[styles.recordHintText, { color: colors.amber[700] }]}>
+            До рекорда осталось {formatMoney(remaining)}
+          </Text>
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
+function KpiLegendRow({
+  color,
+  label,
+  current,
+  target,
+  progress,
+  palette,
+}: {
+  color: string;
+  label: string;
+  current: string;
+  target: string;
+  progress: number;
+  palette: ReturnType<typeof useColors>;
+}) {
+  return (
+    <View style={styles.kpiLegendRow}>
+      <View style={[styles.kpiDot, { backgroundColor: color }]} />
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.kpiLegendLabel, { color: palette.text.secondary }]}>{label}</Text>
+        <Text style={[styles.kpiLegendValue, { color: palette.text.primary }]} numberOfLines={1}>
+          {current} / {target}
+        </Text>
+        <Text style={[styles.kpiLegendPct, { color: progress >= 100 ? colors.green[600] : palette.text.tertiary }]}>
+          {progress >= 100 ? '✓ Цель достигнута' : `${Math.min(999, Math.round(progress))}%`}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function TargetsModal({
+  visible,
+  onClose,
+  targets,
+  onSave,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  targets: KpiTargets;
+  onSave: (next: KpiTargets) => Promise<void>;
+}) {
+  const palette = useColors();
+  const [rev, setRev] = useState(String(targets.revenueMonth));
+  const [marg, setMarg] = useState(String(targets.marginPct));
+  const [prof, setProf] = useState(String(targets.netProfitMonth));
+
+  useEffect(() => {
+    if (visible) {
+      setRev(String(targets.revenueMonth));
+      setMarg(String(targets.marginPct));
+      setProf(String(targets.netProfitMonth));
+    }
+  }, [visible, targets]);
+
+  const handleSave = () => {
+    const next: KpiTargets = {
+      revenueMonth: Math.max(0, Number(rev.replace(/\D/g, '')) || DEFAULT_TARGETS.revenueMonth),
+      marginPct: Math.max(0, Number(marg.replace(/[^\d.]/g, '')) || DEFAULT_TARGETS.marginPct),
+      netProfitMonth: Math.max(0, Number(prof.replace(/\D/g, '')) || DEFAULT_TARGETS.netProfitMonth),
+    };
+    onSave(next);
+  };
+
+  return (
+    <RNModal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={onClose} />
+        <View style={[styles.modalSheet, { backgroundColor: palette.bg.elevated }]}>
+          <View style={[styles.modalHandle, { backgroundColor: palette.border.subtle }]} />
+          <View style={styles.modalHeader}>
+            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Изменить цели</Text>
+            <TouchableOpacity onPress={onClose} style={[styles.modalClose, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="close" size={20} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.modalBody}>
+            <Text style={[styles.modalLabel, { color: palette.text.secondary }]}>Выручка месяца (₽)</Text>
+            <TextInput
+              style={[
+                styles.modalInput,
+                { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
+              ]}
+              keyboardType="numeric"
+              value={rev}
+              onChangeText={setRev}
+              placeholder="2000000"
+              placeholderTextColor={palette.text.tertiary}
+            />
+            <Text style={[styles.modalLabel, { color: palette.text.secondary }]}>Маржа (%)</Text>
+            <TextInput
+              style={[
+                styles.modalInput,
+                { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
+              ]}
+              keyboardType="numeric"
+              value={marg}
+              onChangeText={setMarg}
+              placeholder="25"
+              placeholderTextColor={palette.text.tertiary}
+            />
+            <Text style={[styles.modalLabel, { color: palette.text.secondary }]}>Чистая прибыль месяца (₽)</Text>
+            <TextInput
+              style={[
+                styles.modalInput,
+                { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
+              ]}
+              keyboardType="numeric"
+              value={prof}
+              onChangeText={setProf}
+              placeholder="500000"
+              placeholderTextColor={palette.text.tertiary}
+            />
+            <TouchableOpacity style={styles.modalSaveBtn} onPress={handleSave} activeOpacity={0.85}>
+              <Text style={styles.modalSaveText}>Сохранить</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </RNModal>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Insights / alerts — детерминированная логика, не AI-вызов.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type InsightTone = 'green' | 'amber' | 'red';
+interface Insight {
+  text: string;
+  tone: InsightTone;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+}
+
+function buildInsights({
+  report,
+  prevReport,
+  dashboard,
+  yoyRevenueDelta,
+  yoyProfitDelta,
+}: {
+  report?: FinancialReport;
+  prevReport?: FinancialReport;
+  dashboard?: DashboardV2;
+  yoyRevenueDelta: number;
+  yoyProfitDelta: number;
+}): Insight[] {
+  const out: Insight[] = [];
+  if (!report) return out;
+
+  // Маржа падает + зарплаты растут → классическое тревожное сочетание.
+  if (prevReport) {
+    const currMargin = report.revenue > 0 ? (report.netProfit / report.revenue) * 100 : 0;
+    const prevMargin = prevReport.revenue > 0 ? (prevReport.netProfit / prevReport.revenue) * 100 : 0;
+    const marginDrop = prevMargin - currMargin;
+    const salaryRise = prevReport.salaries > 0 ? ((report.salaries - prevReport.salaries) / prevReport.salaries) * 100 : 0;
+    if (marginDrop >= 3 && salaryRise >= 5) {
+      out.push({
+        text: `Маржа упала на ${marginDrop.toFixed(1)}% — выросли зарплаты +${salaryRise.toFixed(0)}%`,
+        tone: 'amber',
+        icon: 'alert-circle-outline',
+      });
+    }
+
+    const revenueDelta = deltaPct(report.revenue, prevReport.revenue);
+    const profitDelta = deltaPct(report.netProfit, prevReport.netProfit);
+    if (revenueDelta > 10 && profitDelta < revenueDelta / 3) {
+      out.push({
+        text: `Выручка ${revenueDelta > 0 ? '+' : ''}${revenueDelta.toFixed(0)}%, но прибыль только ${profitDelta > 0 ? '+' : ''}${profitDelta.toFixed(0)}% — растут расходы`,
+        tone: 'amber',
+        icon: 'pulse-outline',
+      });
+    }
+  }
+
+  // YoY
+  if (Math.abs(yoyRevenueDelta) > 5 || Math.abs(yoyProfitDelta) > 5) {
+    out.push({
+      text:
+        yoyRevenueDelta > 0 && yoyProfitDelta < yoyRevenueDelta / 2
+          ? `Год к году: +${yoyRevenueDelta.toFixed(0)}% выручки, прибыль только ${yoyProfitDelta > 0 ? '+' : ''}${yoyProfitDelta.toFixed(0)}%`
+          : yoyRevenueDelta < 0
+            ? `Год к году выручка ${yoyRevenueDelta.toFixed(0)}% — проверьте, что ушло`
+            : `Год к году выручка ${yoyRevenueDelta > 0 ? '+' : ''}${yoyRevenueDelta.toFixed(0)}%, прибыль ${yoyProfitDelta > 0 ? '+' : ''}${yoyProfitDelta.toFixed(0)}%`,
+      tone: yoyRevenueDelta < 0 || yoyProfitDelta < 0 ? 'red' : 'green',
+      icon: 'calendar-outline',
+    });
+  }
+
+  // dashboard marginPctChange — устойчивая динамика маржи
+  if (dashboard && Math.abs(dashboard.marginPctChange) > 3) {
+    out.push({
+      text:
+        dashboard.marginPctChange > 0
+          ? `Маржа выросла на ${dashboard.marginPctChange.toFixed(1)}% за месяц — отлично`
+          : `Маржа снизилась на ${Math.abs(dashboard.marginPctChange).toFixed(1)}% за месяц`,
+      tone: dashboard.marginPctChange > 0 ? 'green' : 'amber',
+      icon: 'stats-chart-outline',
+    });
+  }
+
+  // Возьмём максимум 3 — отчёт не должен превращаться в стену.
+  return out.slice(0, 3);
+}
+
+interface FinanceAlert {
+  message: string;
+  tone: 'warn' | 'crit';
+}
+
+function buildAlerts({
+  revenue,
+  expenses,
+  marginPct,
+  prevMarginPct,
+}: {
+  revenue: number;
+  expenses: number;
+  marginPct: number;
+  prevMarginPct: number | null;
+}): FinanceAlert[] {
+  const out: FinanceAlert[] = [];
+  if (marginPct < 20 && revenue > 0) {
+    out.push({
+      message:
+        prevMarginPct !== null && prevMarginPct >= 20
+          ? 'Маржа ниже 20% впервые в этом периоде'
+          : 'Маржа ниже 20% — стоит пересмотреть наценку',
+      tone: 'crit',
+    });
+  }
+  if (expenses > revenue && revenue > 0) {
+    out.push({ message: 'Расходы превышают выручку в выбранном периоде', tone: 'crit' });
+  }
+  if (marginPct < 10 && revenue > 0) {
+    out.push({ message: 'Маржа ниже 10% — операционный риск', tone: 'crit' });
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Insight palette helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function insightBg(tone: InsightTone, fallback: string): string {
+  if (tone === 'green') return colors.green[50];
+  if (tone === 'amber') return colors.amber[50];
+  if (tone === 'red') return colors.red[50];
+  return fallback;
+}
+function insightBorder(tone: InsightTone, fallback: string): string {
+  if (tone === 'green') return colors.green[200];
+  if (tone === 'amber') return colors.amber[200];
+  if (tone === 'red') return colors.red[200];
+  return fallback;
+}
+function insightIconBg(tone: InsightTone): string {
+  if (tone === 'green') return colors.green[100];
+  if (tone === 'amber') return colors.amber[100];
+  return colors.red[100];
+}
+function insightIconColor(tone: InsightTone): string {
+  if (tone === 'green') return colors.green[700];
+  if (tone === 'amber') return colors.amber[700];
+  return colors.red[700];
+}
+
+const EXPENSE_COLORS = [
+  colors.primary[500],
+  colors.green[500],
+  colors.amber[600],
+  colors.violet[500],
+  colors.cyan[600],
+  colors.rose[500],
+  colors.orange[500],
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HTML builders for export
+// ─────────────────────────────────────────────────────────────────────────────
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+}
+
+function buildReportHtml({
+  title,
+  range,
+  report,
+  prevReport,
+  expenses,
+}: {
+  title: string;
+  range: DateRange;
+  report: FinancialReport;
+  prevReport?: FinancialReport;
+  expenses: { name: string; amount: number }[];
+}): string {
+  const margin = report.revenue > 0 ? ((report.netProfit / report.revenue) * 100).toFixed(1) : '0';
+  const totalExp = expenses.reduce((s, r) => s + r.amount, 0);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  body { font-family: -apple-system, "Helvetica Neue", sans-serif; padding: 24px; color: #111; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #666; font-size: 12px; margin-bottom: 24px; }
+  .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eee; font-size: 14px; }
+  .row.total { border-bottom: 2px solid #111; font-weight: 700; }
+  .section-title { font-size: 11px; letter-spacing: 1px; color: #666; margin: 24px 0 8px; text-transform: uppercase; }
+  .big { font-size: 28px; font-weight: 700; margin: 8px 0; }
+  .delta { color: #047857; font-size: 12px; }
+  </style></head><body>
+  <h1>${escapeHtml(title)}</h1>
+  <div class="sub">Период: ${range.from} — ${range.to}</div>
+  <div class="big">Чистая прибыль: ${escapeHtml(formatMoney(report.netProfit))}</div>
+  <div class="sub">Маржа ${margin}% • Оборот ${escapeHtml(formatMoney(report.revenue))}</div>
+
+  <div class="section-title">Финансовая воронка</div>
+  <div class="row"><span>Выручка</span><span>${escapeHtml(formatMoney(report.revenue))}</span></div>
+  <div class="row"><span>− Себестоимость товаров</span><span>${escapeHtml(formatMoney(report.productCost))}</span></div>
+  <div class="row"><span>= Валовая прибыль</span><span>${escapeHtml(formatMoney(report.grossProfit))}</span></div>
+  <div class="row"><span>− Зарплаты</span><span>${escapeHtml(formatMoney(report.salaries))}</span></div>
+  <div class="row total"><span>= Чистая прибыль</span><span>${escapeHtml(formatMoney(report.netProfit))}</span></div>
+
+  ${
+    prevReport
+      ? `<div class="section-title">Сравнение с прошлым периодом</div>
+  <div class="row"><span>Прошлая выручка</span><span>${escapeHtml(formatMoney(prevReport.revenue))}</span></div>
+  <div class="row"><span>Прошлая прибыль</span><span>${escapeHtml(formatMoney(prevReport.netProfit))}</span></div>`
+      : ''
+  }
+
+  ${
+    expenses.length > 0
+      ? `<div class="section-title">Расходы по категориям</div>
+  ${expenses
+    .slice(0, 10)
+    .map(
+      (e) =>
+        `<div class="row"><span>${escapeHtml(e.name)} <small style="color:#999">${totalExp > 0 ? ((e.amount / totalExp) * 100).toFixed(1) : '0'}%</small></span><span>${escapeHtml(formatMoney(e.amount))}</span></div>`,
+    )
+    .join('')}`
+      : ''
+  }
+
+  </body></html>`;
+}
+
+function buildTableHtml({
+  range,
+  report,
+  prevReport,
+  expenses,
+}: {
+  range: DateRange;
+  report: FinancialReport;
+  prevReport?: FinancialReport;
+  expenses: { name: string; amount: number }[];
+}): string {
+  const rows: [string, number, number | null][] = [
+    ['Выручка', report.revenue, prevReport?.revenue ?? null],
+    ['Себестоимость', report.productCost, prevReport?.productCost ?? null],
+    ['Валовая прибыль', report.grossProfit, prevReport?.grossProfit ?? null],
+    ['Зарплаты', report.salaries, prevReport?.salaries ?? null],
+    ['Чистая прибыль', report.netProfit, prevReport?.netProfit ?? null],
+    ['Чеков', report.checkCount, prevReport?.checkCount ?? null],
+  ];
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  body { font-family: -apple-system, "Helvetica Neue", sans-serif; padding: 24px; color: #111; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #666; font-size: 12px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
+  th { background: #f5f5f5; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  </style></head><body>
+  <h1>Таблица: ${range.from} — ${range.to}</h1>
+  <div class="sub">Для экспорта в Numbers/Excel: выделите таблицу → скопируйте.</div>
+  <table>
+  <thead><tr><th>Показатель</th><th class="num">Текущий</th><th class="num">Прошлый</th></tr></thead>
+  <tbody>
+  ${rows
+    .map(
+      ([n, c, p]) =>
+        `<tr><td>${escapeHtml(n)}</td><td class="num">${escapeHtml(formatMoney(c))}</td><td class="num">${p !== null ? escapeHtml(formatMoney(p)) : '—'}</td></tr>`,
+    )
+    .join('')}
+  </tbody>
+  </table>
+  ${
+    expenses.length > 0
+      ? `<h1 style="margin-top:24px">Расходы по категориям</h1>
+  <table>
+  <thead><tr><th>Категория</th><th class="num">Сумма</th></tr></thead>
+  <tbody>
+  ${expenses.map((e) => `<tr><td>${escapeHtml(e.name)}</td><td class="num">${escapeHtml(formatMoney(e.amount))}</td></tr>`).join('')}
+  </tbody></table>`
+      : ''
+  }
+  </body></html>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Styles
+// ─────────────────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    backgroundColor: colors.white,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[200],
-  },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  scrollContent: { padding: spacing[4], gap: spacing[3], paddingBottom: spacing[8] },
-  empty: { textAlign: 'center', padding: spacing[8], color: colors.gray[400], fontSize: fontSize.sm },
-  // Access denied
+  safe: { flex: 1 },
+  scrollContent: { padding: spacing[4], paddingBottom: spacing[12] },
   accessDenied: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing[8] },
-  adTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: spacing[4] },
-  adDesc: { fontSize: fontSize.sm, color: colors.gray[500], textAlign: 'center', marginTop: spacing[2] },
-  // Period
-  periodRow: { flexDirection: 'row', gap: spacing[2] },
-  periodChip: {
+  adTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, marginTop: spacing[4] },
+  adDesc: { fontSize: fontSize.sm, textAlign: 'center', marginTop: spacing[2] },
+
+  // Period switcher
+  periodWrap: { gap: spacing[2] },
+  periodRow: { gap: spacing[2], paddingRight: spacing[4] },
+  periodChip: { paddingHorizontal: spacing[3], paddingVertical: spacing[2.5], borderRadius: borderRadius.xl },
+  periodChipActive: { backgroundColor: colors.primary[600] },
+  periodText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  periodTextActive: { color: colors.white },
+  compareRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[1] },
+  compareLabel: { fontSize: fontSize.sm },
+  toggleTrack: {
+    width: 44,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+    paddingHorizontal: 2,
+  },
+  toggleThumb: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 1.5,
+    shadowOffset: { width: 0, height: 1 },
+    ...Platform.select({ android: { elevation: 1 } }),
+  },
+  toggleThumbOn: { transform: [{ translateX: 18 }] },
+  customRangeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  customDateBtn: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[3],
     paddingVertical: spacing[2.5],
     borderRadius: borderRadius.xl,
-    backgroundColor: colors.gray[100],
-    alignItems: 'center',
+    borderWidth: 1,
   },
-  periodChipActive: { backgroundColor: colors.primary[600] },
-  periodText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[600] },
-  periodTextActive: { color: colors.white },
+  customDateText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  customDash: { fontSize: fontSize.sm },
+
   // Hero
   heroCard: { borderRadius: borderRadius['2xl'], padding: spacing[5], overflow: 'hidden' },
   heroTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], marginBottom: spacing[1] },
-  heroLabel: { fontSize: 11, fontWeight: fontWeight.bold, color: 'rgba(255,255,255,0.6)', letterSpacing: 1 },
-  heroValue: { fontSize: 32, fontWeight: fontWeight.bold, color: colors.white },
-  heroSub: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.5)', marginTop: 2 },
-  // Two columns
-  twoCol: { flexDirection: 'row', gap: spacing[3] },
-  metricCard: {
-    flex: 1,
-    backgroundColor: colors.white,
+  heroLabel: { fontSize: 11, fontWeight: fontWeight.bold, color: 'rgba(255,255,255,0.7)', letterSpacing: 1 },
+  heroValue: { fontSize: 34, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: -0.5 },
+  heroSub: { fontSize: fontSize.sm, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
+  heroDeltaWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: spacing[2] },
+  heroDeltaSub: { fontSize: 11, color: 'rgba(255,255,255,0.7)' },
+
+  // Generic card
+  card: {
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
-    borderColor: colors.gray[100],
     padding: spacing[4],
-  },
-  metricIconWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[3] },
-  metricIcon: { width: 32, height: 32, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
-  metricLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
-  metricValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  // Expenses
-  expCard: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    borderColor: colors.gray[100],
     overflow: 'hidden',
   },
-  expTitle: {
-    fontSize: 11,
-    fontWeight: fontWeight.bold,
-    color: colors.gray[400],
-    letterSpacing: 1,
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[4],
-    paddingBottom: spacing[2],
-  },
-  expRow: {
+  cardTitle: { fontSize: 11, fontWeight: fontWeight.bold, letterSpacing: 1, paddingBottom: spacing[3] },
+  cardTitleInline: { fontSize: 11, fontWeight: fontWeight.bold, letterSpacing: 1 },
+  cardHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[3] },
+  cardIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  cardCaption: { fontSize: 11 },
+  sectionLabel: { fontSize: 11, fontWeight: fontWeight.bold, letterSpacing: 1, paddingHorizontal: spacing[1] },
+
+  // Funnel
+  funnelRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3.5],
+    paddingVertical: spacing[2],
   },
-  expLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], flex: 1 },
-  expIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  expName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  expPct: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
-  expAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  expDivider: { height: 1, backgroundColor: colors.gray[50], marginHorizontal: spacing[4] },
-  // Check count
-  checkCard: {
+  funnelRowFinal: { marginTop: spacing[1] },
+  funnelLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flex: 1 },
+  funnelIcon: { width: 28, height: 28, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  funnelLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  funnelPct: { fontSize: 11, marginTop: 1 },
+  funnelAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, fontVariant: ['tabular-nums'] },
+  funnelAmountFinal: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
+  funnelArrowWrap: { alignItems: 'center', paddingVertical: 2 },
+
+  // Delta
+  deltaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+  },
+  deltaChipText: { fontSize: 11, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+
+  // Collapse
+  collapseHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  collapseTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+
+  // P&L
+  pnlRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: spacing[2] },
+  pnlLabel: { fontSize: fontSize.sm },
+  pnlAmount: { fontSize: fontSize.sm, fontVariant: ['tabular-nums'] },
+  pnlDivider: { height: 1, marginVertical: spacing[1] },
+  pnlPdfBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.primary[600],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    marginTop: spacing[3],
+  },
+  pnlPdfText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+
+  // Margin
+  marginRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  marginValue: { fontSize: 36, fontWeight: fontWeight.bold, letterSpacing: -0.5 },
+  compareLine: { marginTop: spacing[2] },
+
+  // Expenses
+  expRow: { marginBottom: spacing[3] },
+  expRowHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  expRowName: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.medium, paddingRight: spacing[2] },
+  expRowAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, fontVariant: ['tabular-nums'] },
+  expBarTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
+  expBarFill: { height: '100%', borderRadius: 3 },
+  expRowPct: { fontSize: 11, marginTop: 4 },
+
+  // Record
+  recordRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
+    paddingVertical: spacing[2],
+  },
+  recordLabel: { fontSize: fontSize.sm },
+  recordValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  recordCaption: { fontSize: 11, marginTop: 2 },
+  recordHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.lg,
+    marginTop: spacing[2],
+  },
+  recordHintText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+
+  // YoY
+  yoyRow: { flexDirection: 'row', gap: spacing[3] },
+  yoyLabel: { fontSize: 11, fontWeight: fontWeight.medium, marginBottom: 2 },
+  yoyValue: { fontSize: 24, fontWeight: fontWeight.bold, marginBottom: spacing[1], letterSpacing: -0.5 },
+
+  // KPI rings
+  kpiHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[3] },
+  kpiEdit: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  kpiBody: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
+  kpiRingsWrap: { alignItems: 'center', justifyContent: 'center' },
+  kpiLegend: { flex: 1, gap: spacing[2] },
+  kpiLegendRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },
+  kpiDot: { width: 10, height: 10, borderRadius: 5, marginTop: 6 },
+  kpiLegendLabel: { fontSize: 11, fontWeight: fontWeight.medium },
+  kpiLegendValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, fontVariant: ['tabular-nums'] },
+  kpiLegendPct: { fontSize: 11, marginTop: 1 },
+
+  // Insight
+  insightCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[3],
+    padding: spacing[3.5],
     borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[4],
+    borderRadius: borderRadius.xl,
   },
-  checkLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  checkCount: { fontSize: 28, fontWeight: fontWeight.bold, color: colors.primary[600] },
+  insightIcon: { width: 30, height: 30, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  insightText: { flex: 1, fontSize: fontSize.sm, lineHeight: 18 },
+
+  // Forecast
+  forecastValue: { fontSize: 28, fontWeight: fontWeight.bold, marginVertical: spacing[1], letterSpacing: -0.5 },
+
+  // Alert
+  alertCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3.5],
+    borderWidth: 1,
+    borderLeftWidth: 4,
+    borderRadius: borderRadius.lg,
+  },
+  alertText: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+
+  // Export
+  exportRow: { flexDirection: 'row', gap: spacing[3] },
+  exportBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[3],
+    backgroundColor: 'rgba(0,0,0,0.04)',
+    borderRadius: borderRadius.xl,
+  },
+  exportBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+
+  // Modal
+  modalOverlay: { flex: 1, justifyContent: 'flex-end' },
+  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)' },
+  modalSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingBottom: spacing[8] },
+  modalHandle: { width: 36, height: 5, borderRadius: 3, alignSelf: 'center', marginVertical: spacing[3] },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[5],
+    paddingBottom: spacing[3],
+  },
+  modalTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
+  modalClose: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  modalBody: { padding: spacing[5], gap: spacing[3] },
+  modalLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
+  modalInput: {
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.semibold,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  modalSaveBtn: {
+    backgroundColor: colors.primary[600],
+    paddingVertical: spacing[4],
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    marginTop: spacing[3],
+  },
+  modalSaveText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.bold },
 });

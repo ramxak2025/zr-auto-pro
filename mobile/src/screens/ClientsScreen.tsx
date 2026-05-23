@@ -8,17 +8,19 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Swipeable } from 'react-native-gesture-handler';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi } from '../api/services';
-import type { Car } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { processPlateMainInput } from '../utils/plateMask';
+import { normalizePlateQuery, looksLikePlateQuery, plateMatches } from '../utils/plateNormalize';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { UserRole } from '../../../shared/types';
@@ -29,8 +31,10 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import FreshnessBadge from '../components/FreshnessBadge';
+import SourcePickerSheet from '../components/SourcePickerSheet';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { haptic } from '../platform/haptics';
 import type { Client, PaginatedResponse } from '../../../shared/types';
 
 // ─── Avatar helpers (mirror ClientDetailScreen so initials/colour match) ───
@@ -57,6 +61,16 @@ function getAvatarColor(name: string): string {
   return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
 }
 
+type ClientFilter = 'all' | 'regular' | 'new' | 'source';
+
+// "Постоянные" / "Новые" thresholds — derived from createdAt only.
+// "Новые" = created within the last 30 days. "Постоянные" = client
+// where the local cars[] array reports any car at all (proxy for
+// activity, since a returning client almost always has a car
+// attached). Backend doesn't yet expose check-count per client on
+// the list endpoint, so we keep the heuristic conservative.
+const NEW_THRESHOLD_DAYS = 30;
+
 export default function ClientsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -66,53 +80,27 @@ export default function ClientsScreen() {
   const tabBarHeight = useTabBarHeight();
 
   const [search, setSearch] = useState('');
-  // Cars and clients each have their OWN page cursor. Earlier the two
-  // modes shared `page` — flipping to «Клиенты» after paginating cars
-  // to page 5 instantly requested clients?page=5 (often returning
-  // empty), and switching back to «Авто» reset to 1. Independent
-  // cursors fix that.
   const [page, setPage] = useState(1);
-  const [carsPage, setCarsPage] = useState(1);
-  // 'clients' = list of clients, 'cars' = same screen but car list below.
-  // Default = 'cars' per product owner: when this screen opens the user is
-  // most often looking for a vehicle (e.g. госномер of a car about to be
-  // serviced), not a person — surface cars first.
-  const [mode, setMode] = useState<'cars' | 'clients'>('cars');
+  const [filter, setFilter] = useState<ClientFilter>('all');
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  // Picker visibility — both the "filter by source" picker and the
+  // create-modal's source picker reuse the same sheet component.
+  const [sourceFilterOpen, setSourceFilterOpen] = useState(false);
+  const [formSourceOpen, setFormSourceOpen] = useState(false);
 
   const limit = 20;
-
-  // Cars query — only fires while mode === 'cars' so we don't waste bandwidth.
-  // Same shape as CarsScreen so persistent-cache hits on either entry point.
-  const carsQuery = useQuery<{ data: Car[]; total: number } | Car[]>({
-    queryKey: ['cars', { search, page: carsPage, limit }],
-    queryFn: async () => {
-      const res = await carsApi.getAll({ search, page: carsPage, limit });
-      return res.data;
-    },
-    enabled: mode === 'cars',
-    placeholderData: (prev) => prev as any,
-  });
-  const carsList: Car[] = Array.isArray(carsQuery.data) ? (carsQuery.data as Car[]) : (carsQuery.data?.data ?? []);
-  const carsTotal: number = Array.isArray(carsQuery.data)
-    ? (carsQuery.data as Car[]).length
-    : (carsQuery.data?.total ?? 0);
-  const carsHasMore = carsPage * limit < carsTotal;
   const [refreshing, setRefreshing] = useState(false);
 
-  // Modal state
+  // Modal state — single "Новый клиент" form
   const [modalOpen, setModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [comment, setComment] = useState('');
-  // Inline car block — visible only when creating a new client.
-  // Allows attaching one vehicle without leaving the form. Cleared on
-  // open/close. Plate is normalized through plateMask so the same RU
-  // cyrillic rules apply (latin auto-converted, uppercase, single string
-  // shape A123АА77).
+  const [formSource, setFormSource] = useState<string | null>(null);
+  // Inline car block — shown only when creating, never when editing.
   const [carPlate, setCarPlate] = useState('');
   const [carMakeModel, setCarMakeModel] = useState('');
-  const [carVin, setCarVin] = useState('');
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -124,35 +112,30 @@ export default function ClientsScreen() {
       const res = await clientsApi.getAll({ search, page, limit });
       return res.data;
     },
-    // Local re-assertion of the global SWR — keeps the previous page
-    // visible while pagination/search keys mutate, eliminating the
-    // skeleton-flash between filters.
     placeholderData: (prev) => prev,
   });
 
-  // Client+optional-car create. The inline car block in the "Новый клиент"
-  // modal is fed into this mutation: after the client is created, if a
-  // plate is filled we POST the car too, so the user doesn't have to
-  // navigate into the detail screen just to attach the first vehicle.
-  // The plate-duplicate-warning dialog (carsApi.lookupByPlate) gates the
-  // create — same UX as the standalone car add inside ClientDetail.
+  // Client+optional-car create. Mirror the previous behaviour but with
+  // `source` baked into the create payload. The inline car still flows
+  // through `carsApi.create` only after the client succeeds.
   const createMutation = useMutation({
     mutationFn: async (d: {
       fullName: string;
       phone: string;
       comment?: string;
-      car?: { plateNumber: string; makeModel: string; comment?: string };
+      source?: string | null;
+      car?: { plateNumber: string; makeModel: string };
     }) => {
       const clientRes = await clientsApi.create({
         fullName: d.fullName,
         phone: d.phone,
         comment: d.comment,
+        source: d.source ?? null,
       });
       if (d.car && d.car.plateNumber) {
         await carsApi.create({
           plateNumber: d.car.plateNumber,
           makeModel: d.car.makeModel || '',
-          comment: d.car.comment,
           clientId: clientRes.data.id,
         });
       }
@@ -161,13 +144,15 @@ export default function ClientsScreen() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
+      haptic('success');
       closeModal();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании клиента'),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => clientsApi.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: { fullName: string; phone: string; comment?: string; source?: string | null } }) =>
+      clientsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       closeModal();
@@ -177,7 +162,10 @@ export default function ClientsScreen() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => clientsApi.remove(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      haptic('success');
+    },
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении клиента'),
   });
 
@@ -186,9 +174,9 @@ export default function ClientsScreen() {
     setFullName('');
     setPhone('');
     setComment('');
+    setFormSource(null);
     setCarPlate('');
     setCarMakeModel('');
-    setCarVin('');
     setModalOpen(true);
   };
 
@@ -197,11 +185,11 @@ export default function ClientsScreen() {
     setFullName(client.fullName);
     setPhone(client.phone);
     setComment(client.comment || '');
-    // Edit modal hides the inline car block; cars are managed from
-    // ClientDetailScreen. Clear so nothing leaks across reopen.
+    setFormSource(client.source ?? null);
+    // Edit modal never shows the inline-car block — that's only for
+    // creation. Clear so reopen on a different client doesn't leak.
     setCarPlate('');
     setCarMakeModel('');
-    setCarVin('');
     setModalOpen(true);
   };
 
@@ -210,19 +198,13 @@ export default function ClientsScreen() {
     setEditingClient(null);
   };
 
-  // Duplicate-by-phone dialog state. Mirrors the web flow in ClientsPage:
-  // before creating a new client, ping clientsApi.lookupByPhone — if the
-  // tenant already has someone with that phone, show a warning popup with
-  // an option to open the existing card or create a duplicate anyway.
+  // Duplicate-by-phone / by-plate flow (same as before).
   const [duplicateClient, setDuplicateClient] = useState<{
     id: string;
     fullName: string;
     phone: string;
     cars?: Array<{ plateNumber: string; makeModel: string }>;
   } | null>(null);
-  // Duplicate-by-plate dialog state — fires only when the inline car
-  // block is filled and carsApi.lookupByPlate returns a hit. Same UX
-  // contract as the per-client car add: open owner OR create anyway.
   const [duplicateCar, setDuplicateCar] = useState<{
     id: string;
     plateNumber: string;
@@ -232,15 +214,10 @@ export default function ClientsScreen() {
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // Normalized plate string for backend / lookup. The plateMask util
-  // strips spaces, uppercases, swaps latin → cyrillic, etc. Sharing the
-  // same normalization makes the lookup match a previously-typed plate
-  // regardless of casing/diacritics differences.
   const normalizedCarPlate = processPlateMainInput(carPlate.replace(/\s/g, ''));
   const hasInlineCar = !editingClient && normalizedCarPlate.length > 0;
 
-  const submitFlow = async (opts?: { forceClient?: boolean; forceCar?: boolean }) => {
-    // 1) If we have an inline car, optionally check for plate duplicate.
+  const submitFlow = async (opts?: { forceCar?: boolean }) => {
     if (hasInlineCar && !opts?.forceCar) {
       try {
         const res = await carsApi.lookupByPlate(normalizedCarPlate);
@@ -249,15 +226,15 @@ export default function ClientsScreen() {
           return;
         }
       } catch {
-        // Lookup is best-effort; on failure, proceed to create.
+        // best-effort; on failure, proceed to create.
       }
     }
-    const carComment = carVin ? `VIN: ${carVin}` : undefined;
     createMutation.mutate({
       fullName,
       phone,
       comment: comment || undefined,
-      car: hasInlineCar ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, comment: carComment } : undefined,
+      source: formSource,
+      car: hasInlineCar ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel } : undefined,
     });
   };
 
@@ -265,14 +242,12 @@ export default function ClientsScreen() {
     if (editingClient) {
       updateMutation.mutate({
         id: editingClient.id,
-        data: { fullName, phone, comment: comment || undefined },
+        data: { fullName, phone, comment: comment || undefined, source: formSource },
       });
       return;
     }
     setSubmitting(true);
     try {
-      // Phone-dupe pre-check. Fires only for new client (edit keeps the
-      // existing record). On lookup failure, fall through to create.
       const res = await clientsApi.lookupByPhone(phone);
       const existing = res.data;
       if (existing) {
@@ -287,8 +262,6 @@ export default function ClientsScreen() {
     }
   };
 
-  // "Всё равно создать" on the phone-dupe dialog → bypass the phone
-  // check but still run the plate-dupe check on the inline car.
   const handleCreateAnyway = () => {
     setDuplicateClient(null);
     void submitFlow();
@@ -302,7 +275,6 @@ export default function ClientsScreen() {
     (navigation as any).navigate('ClientDetail', { id });
   };
 
-  // Plate-dupe dialog handlers.
   const handleCreateCarAnyway = () => {
     setDuplicateCar(null);
     void submitFlow({ forceCar: true });
@@ -318,44 +290,67 @@ export default function ClientsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    // Pull-to-refresh refreshes the currently-visible list. Earlier
-    // this hardcoded ['clients'], so pulling in Авто mode silently
-    // did nothing — the user thought the screen was frozen.
-    await queryClient.invalidateQueries({ queryKey: mode === 'cars' ? ['cars'] : ['clients'] });
+    await queryClient.invalidateQueries({ queryKey: ['clients'] });
     setRefreshing(false);
   };
 
-  const clients = data?.data || [];
+  const rawClients = data?.data || [];
   const total = data?.total || 0;
   const hasMore = page * limit < total;
 
-  // Static retail buyer sentinel — must not be recreated each render,
-  // otherwise FlashList sees a new `data[0]` every parent render and
-  // re-mounts the row. The empty `tenantId`/`createdAt` are fine — the
-  // detail screen treats id === '__retail__' as a virtual entity.
-  const retailBuyer = useMemo<Client>(
-    () =>
-      ({
-        id: '__retail__',
-        fullName: 'Розничный покупатель',
-        phone: '',
-        comment: 'Все чеки без клиента — автоматически розничный покупатель',
-        tenantId: '',
-        createdAt: '',
-      }) as Client,
-    [],
+  // The list backend already returns retail buyer first when not
+  // searching (server sorts by `is_retail DESC NULLS LAST`). When the
+  // user searches we drop the retail row from the visual list — it
+  // isn't a real searchable record. When applying a client-side filter
+  // chip we keep the retail row pinned at the top regardless of the chip,
+  // because "Розничные продажи" sits outside the regular/new taxonomy.
+
+  // ── Client-side filtering layer ────────────────────────────────────
+  // Two independent layers on top of the server result:
+  //  1) plate-priority search (when query looks like a plate, prefer
+  //     matches on cars[*].plateNumber);
+  //  2) filter chip (Все / Постоянные / Новые / по источнику).
+  const filteredClients = useMemo(() => {
+    let base = rawClients.filter((c) => !c.isRetail);
+
+    // Pre-trim by plate when user is typing what looks like a plate.
+    if (search && looksLikePlateQuery(search)) {
+      const q = normalizePlateQuery(search);
+      const byPlate = base.filter((c) => (c.cars || []).some((car) => plateMatches(car.plateNumber, q)));
+      const byOther = base.filter((c) => !byPlate.includes(c));
+      base = [...byPlate, ...byOther];
+    }
+
+    if (filter === 'regular') {
+      base = base.filter((c) => (c.cars && c.cars.length > 0) || (c.checks && c.checks.length > 0));
+    } else if (filter === 'new') {
+      const cutoff = Date.now() - NEW_THRESHOLD_DAYS * 24 * 60 * 60 * 1000;
+      base = base.filter((c) => {
+        const t = c.createdAt ? new Date(c.createdAt).getTime() : 0;
+        return t > cutoff;
+      });
+    } else if (filter === 'source' && sourceFilter) {
+      base = base.filter((c) => (c.source || '').toLowerCase() === sourceFilter.toLowerCase());
+    }
+    return base;
+  }, [rawClients, search, filter, sourceFilter]);
+
+  // Retail buyer pin — server returns the actual row, we pluck it out
+  // so we can render it as the gradient hero card above the filtered
+  // regular list (without duplicating the row).
+  const retailFromServer = useMemo(
+    () => rawClients.find((c) => c.isRetail) || null,
+    [rawClients],
   );
 
-  // Pin "Розничный покупатель" at top when not searching. Memoised so
-  // FlashList only sees a new array reference when the underlying data
-  // or search-mode actually changes — keeps virtualisation stable
-  // while parent state (modals, dialog flags) churns above it.
-  const displayClients = useMemo(() => (!search ? [retailBuyer, ...clients] : clients), [search, retailBuyer, clients]);
+  const showRetailPin = !search && filter === 'all';
 
-  // Prefetch-on-tap — fires on `onPressIn` so by the time
-  // ClientDetailScreen mounts, `['client', id]` is in cache (or in flight).
-  // Skip the synthetic retail-buyer row — ClientDetail handles `__retail__`
-  // as a virtual entity (no GET /clients/__retail__).
+  // FlashList data — without the retail row (it lives outside the
+  // virtual list as a sticky hero). Keep memoised so the virtualiser
+  // doesn't see a new reference on every parent re-render.
+  const displayClients = useMemo<Client[]>(() => filteredClients, [filteredClients]);
+
+  // Prefetch-on-tap — same idea as before.
   const prefetchClientDetail = useCallback(
     (clientId: string) => {
       if (clientId === '__retail__') return;
@@ -368,46 +363,12 @@ export default function ClientsScreen() {
     [queryClient],
   );
 
-  // Cars FlashList data — same retail-buyer pin treatment. Inline
-  // `[{ id: '__retail__' }, ...carsList]` re-created on every render
-  // caused the whole virtualised list to re-key its rows.
-  const displayCars = useMemo<Car[]>(
-    () => (!search ? [{ id: '__retail__' } as unknown as Car, ...carsList] : carsList),
-    [search, carsList],
-  );
-
   const renderClient = useCallback(
     ({ item }: { item: Client; index: number }) => {
-      // Pinned retail buyer — same row geometry, branded icon instead of
-      // initials so it reads as a "system" entry above the alphabet. Tap
-      // opens the virtual retail-buyer view (ClientDetail with id
-      // '__retail__') — list of all checks paid by walk-in retail.
-      if (item.id === '__retail__') {
-        return (
-          <TouchableOpacity
-            style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
-            activeOpacity={0.6}
-            onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
-          >
-            <View style={[styles.avatar, { backgroundColor: colors.primary[50] }]}>
-              <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
-            </View>
-            <View style={styles.info}>
-              <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
-                {item.fullName}
-              </Text>
-              <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-                Все чеки без клиента
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
-          </TouchableOpacity>
-        );
-      }
-
       const initials = getInitials(item.fullName);
       const avatarBg = getAvatarColor(item.fullName);
       const carsCount = item.cars?.length || 0;
+      const primaryPlate = item.cars?.[0]?.plateNumber;
 
       const card = (
         <TouchableOpacity
@@ -423,14 +384,30 @@ export default function ClientsScreen() {
             <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
               {item.fullName}
             </Text>
-            <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-              {/* item.phone is typed required but legacy rows have null —
-                pass through `|| ''` so formatPhone doesn't throw on .replace. */}
-              {[formatPhone(item.phone || '') || 'Без телефона', carsCount > 0 ? `${carsCount} авто` : null]
-                .filter(Boolean)
-                .join(' · ')}
-            </Text>
+            <View style={styles.subLine}>
+              <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
+                {formatPhone(item.phone || '') || 'Без телефона'}
+              </Text>
+              {primaryPlate ? (
+                <View style={[styles.platePill, { backgroundColor: palette.bg.muted }]}>
+                  <Text style={[styles.platePillText, { color: palette.text.primary }]} numberOfLines={1}>
+                    {primaryPlate}
+                  </Text>
+                </View>
+              ) : carsCount > 0 ? (
+                <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
+                  · {carsCount} авто
+                </Text>
+              ) : null}
+            </View>
           </View>
+          {item.source ? (
+            <View style={[styles.sourceTag, { backgroundColor: palette.bg.muted }]}>
+              <Text style={[styles.sourceTagText, { color: palette.text.secondary }]} numberOfLines={1}>
+                {item.source}
+              </Text>
+            </View>
+          ) : null}
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
         </TouchableOpacity>
       );
@@ -463,76 +440,44 @@ export default function ClientsScreen() {
           {card}
         </Swipeable>
       );
-      // The inline TouchableOpacity / Swipeable rendering captures
-      // openEditModal / setDeleteId / etc, but those identities are stable
-      // for the lifetime of this screen instance, so we intentionally only
-      // depend on the things that actually flow into row visuals.
+      // openEditModal / setDeleteId identities are stable across the
+      // component's lifetime; only depend on what actually flows into
+      // the row visuals.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     },
     [canDelete, navigation, palette, prefetchClientDetail],
   );
 
-  // Cars renderer — stable identity (FlashList re-renders every row
-  // when this changes), so wrap in useCallback. The retail-pin branch
-  // and the regular car row share the same handler.
-  const renderCar = useCallback(
-    ({ item }: { item: Car }) => {
-      if (item.id === '__retail__') {
-        return (
-          <TouchableOpacity
-            style={[cnStyles.carRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
-            activeOpacity={0.6}
-            onPress={() => navigation.navigate('ClientDetail', { id: '__retail__' })}
-          >
-            <View style={[cnStyles.carIconBox, { backgroundColor: colors.primary[50] }]}>
-              <Ionicons name="storefront-outline" size={18} color={colors.primary[600]} />
-            </View>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={[cnStyles.carName, { color: palette.text.primary }]} numberOfLines={1}>
-                Розничный покупатель
-              </Text>
-              <Text style={[cnStyles.carClient, { color: palette.text.secondary }]} numberOfLines={1}>
-                Все чеки без клиента
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-          </TouchableOpacity>
-        );
-      }
-      return (
-        <TouchableOpacity
-          style={[cnStyles.carRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
-          activeOpacity={0.6}
-          onPress={() => {
-            if (item.client?.id) {
-              navigation.navigate('ClientDetail', { id: item.client.id });
-            }
-          }}
+  // Retail-pin hero — gradient card pinned above the FlashList. The pin
+  // is OUTSIDE the virtualised list so it never collides with row keys
+  // and FlashList can stay homogenous.
+  const RetailPin = () => {
+    if (!showRetailPin) return null;
+    const targetId = retailFromServer?.id || '__retail__';
+    return (
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => navigation.navigate('ClientDetail', { id: targetId })}
+        style={styles.retailWrap}
+      >
+        <LinearGradient
+          colors={[colors.primary[500], colors.primary[700]]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.retailCard}
         >
-          <View style={cnStyles.carIconBox}>
-            <Ionicons name="car-sport-outline" size={18} color={colors.primary[600]} />
+          <View style={styles.retailIconWrap}>
+            <Ionicons name="cart-outline" size={22} color={colors.white} />
           </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={[cnStyles.carName, { color: palette.text.primary }]} numberOfLines={1}>
-              {item.makeModel || '—'}
-            </Text>
-            {item.plateNumber && (
-              <View style={[cnStyles.platePill, { backgroundColor: palette.bg.muted }]}>
-                <Text style={[cnStyles.platePillText, { color: palette.text.primary }]}>{item.plateNumber}</Text>
-              </View>
-            )}
+          <View style={styles.retailContent}>
+            <Text style={styles.retailTitle}>Розничный покупатель</Text>
+            <Text style={styles.retailSubtitle}>Быстрые продажи без клиента</Text>
           </View>
-          {item.client?.fullName && (
-            <Text style={[cnStyles.carClient, { color: palette.text.secondary }]} numberOfLines={1}>
-              {item.client.fullName}
-            </Text>
-          )}
-          <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-        </TouchableOpacity>
-      );
-    },
-    [navigation, palette],
-  );
+          <Ionicons name="chevron-forward" size={18} color={colors.white} />
+        </LinearGradient>
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -540,154 +485,130 @@ export default function ClientsScreen() {
         title="Клиенты"
         onBack={() => navigation.goBack()}
         trailing={
-          <TouchableOpacity style={styles.addBtn} onPress={openCreateModal}>
-            <Text style={styles.addBtnText}>+ Новый</Text>
+          <TouchableOpacity
+            style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
+            onPress={openCreateModal}
+            accessibilityRole="button"
+            accessibilityLabel="Добавить клиента"
+          >
+            <Ionicons name="add" size={18} color={colors.white} />
           </TouchableOpacity>
         }
       />
-      {/* FreshnessBadge — HYBRID-perf plan. Subtle pill under the header
-          shows the user that the list rendered from cache and is now
-          revalidating in the background. */}
+
       <View style={styles.freshnessRow}>
         <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
       </View>
 
-      {/* Авто ⇄ Клиенты — single screen with an in-place segmented control.
-          Tapping a tab swaps which list is rendered below; no navigation,
-          no full-screen transition, no animation. The search bar is shared
-          (its placeholder updates per mode). Order: Авто first, Клиенты
-          second — opening this screen, the user is usually scanning for a
-          car (госномер) rather than a person. */}
-      <View style={cnStyles.segmentWrap}>
-        <View style={[cnStyles.segment, { backgroundColor: palette.bg.muted }]}>
-          <TouchableOpacity
-            style={[
-              cnStyles.segmentItem,
-              mode === 'cars' && [cnStyles.segmentActive, { backgroundColor: palette.bg.card }],
-            ]}
-            onPress={() => {
-              setMode('cars');
-              setSearch('');
-              setPage(1);
-              setCarsPage(1);
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-          >
-            <Ionicons
-              name="car-sport"
-              size={14}
-              color={mode === 'cars' ? colors.primary[700] : palette.text.secondary}
-            />
-            <Text
-              style={
-                mode === 'cars'
-                  ? cnStyles.segmentLabelActive
-                  : [cnStyles.segmentLabelInactive, { color: palette.text.secondary }]
-              }
-            >
-              Авто
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              cnStyles.segmentItem,
-              mode === 'clients' && [cnStyles.segmentActive, { backgroundColor: palette.bg.card }],
-            ]}
-            onPress={() => {
-              setMode('clients');
-              setSearch('');
-              setPage(1);
-              setCarsPage(1);
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
-          >
-            <Ionicons
-              name="people"
-              size={14}
-              color={mode === 'clients' ? colors.primary[700] : palette.text.secondary}
-            />
-            <Text
-              style={
-                mode === 'clients'
-                  ? cnStyles.segmentLabelActive
-                  : [cnStyles.segmentLabelInactive, { color: palette.text.secondary }]
-              }
-            >
-              Клиенты
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Search — placeholder switches with mode */}
       <View style={styles.searchWrap}>
         <SearchInput
           value={search}
           onChange={(v) => {
             setSearch(v);
             setPage(1);
-            setCarsPage(1);
           }}
-          placeholder={mode === 'clients' ? 'Поиск по имени или телефону...' : 'Поиск по госномеру или марке...'}
+          placeholder="Госномер, телефон или имя"
         />
       </View>
 
-      {/* Content — single screen renders either clients or cars based on mode */}
-      {mode === 'cars' ? (
-        // Cold-start guard: only show skeleton while we genuinely have
-        // no data yet (cache miss + no prefetch). Once data exists,
-        // SWR keeps it visible across filter changes — no flash.
-        carsQuery.data === undefined ? (
-          <ListSkeleton count={8} />
-        ) : carsList.length === 0 && !carsQuery.isLoading && !!search ? (
-          <EmptyState title="Нет автомобилей" description="Ничего не найдено" />
-        ) : (
-          <FlashList
-            // Pin "Розничный покупатель" at the top of the cars list when
-            // not searching. A sentinel object with id === '__retail__'
-            // is rendered with a branded row (storefront icon) and routes
-            // to ClientDetail/__retail__, which the detail screen treats
-            // as a virtual retail buyer entity (all checks paid by walk-in
-            // retail). `displayCars` is memoised so the FlashList virtualiser
-            // doesn't re-mount every row on each parent re-render.
-            data={displayCars}
-            keyExtractor={(item: Car) => item.id}
-            renderItem={renderCar}
-            contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
-            removeClippedSubviews
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-            }
-            // Cars list also paginates — without onEndReached the limit=20
-            // first page silently capped how many vehicles the user could
-            // browse from the segmented Авто tab. CarsScreen has had this
-            // since the start; ClientsScreen's cars mode just regressed
-            // when the segment swap was introduced.
-            onEndReached={() => {
-              if (carsHasMore) setCarsPage((p) => p + 1);
-            }}
-            onEndReachedThreshold={0.5}
-          />
-        )
-      ) : data === undefined ? (
-        // Cold-start: no cached value AND no prefetch hit yet — show
-        // the skeleton instead of an EmptyState. EmptyState ("Нет
-        // клиентов") on cold-start was the perceived "пусто" flash.
-        <ListSkeleton count={8} />
-      ) : clients.length === 0 && !search && !isLoading ? (
-        <EmptyState
-          title="Нет клиентов"
-          description="Добавьте первого клиента"
-          action={{ label: 'Добавить клиента', onPress: openCreateModal }}
+      {/* Filter chips — Все / По источнику / Постоянные / Новые. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipsRow}
+      >
+        <FilterChip
+          active={filter === 'all'}
+          label="Все"
+          icon="apps-outline"
+          onPress={() => {
+            haptic('select');
+            setFilter('all');
+            setSourceFilter(null);
+          }}
+          palette={palette}
         />
+        <FilterChip
+          active={filter === 'source'}
+          label={
+            filter === 'source' && sourceFilter
+              ? `Источник: ${sourceFilter}`
+              : 'По источнику'
+          }
+          icon="pricetag-outline"
+          onPress={() => {
+            haptic('select');
+            setSourceFilterOpen(true);
+          }}
+          palette={palette}
+          dismissable={filter === 'source'}
+          onDismiss={
+            filter === 'source'
+              ? () => {
+                  setFilter('all');
+                  setSourceFilter(null);
+                }
+              : undefined
+          }
+        />
+        <FilterChip
+          active={filter === 'regular'}
+          label="Постоянные"
+          icon="repeat-outline"
+          onPress={() => {
+            haptic('select');
+            setFilter('regular');
+            setSourceFilter(null);
+          }}
+          palette={palette}
+        />
+        <FilterChip
+          active={filter === 'new'}
+          label="Новые"
+          icon="sparkles-outline"
+          onPress={() => {
+            haptic('select');
+            setFilter('new');
+            setSourceFilter(null);
+          }}
+          palette={palette}
+        />
+      </ScrollView>
+
+      {data === undefined ? (
+        <ListSkeleton count={8} />
+      ) : filteredClients.length === 0 && !search && !isLoading && filter === 'all' ? (
+        <View style={{ flex: 1 }}>
+          <View style={{ paddingHorizontal: spacing[4] }}>
+            <RetailPin />
+          </View>
+          <EmptyState
+            title="Нет клиентов"
+            description="Добавьте первого клиента"
+            action={{ label: 'Добавить клиента', onPress: openCreateModal }}
+          />
+        </View>
       ) : (
         <FlashList
           data={displayClients}
           keyExtractor={(item) => item.id}
           renderItem={renderClient}
+          ListHeaderComponent={
+            showRetailPin ? (
+              <View style={{ paddingHorizontal: spacing[4] }}>
+                <RetailPin />
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            !isLoading ? (
+              <EmptyState
+                title={filter === 'new' ? 'Нет новых клиентов' : filter === 'regular' ? 'Нет постоянных клиентов' : 'Ничего не найдено'}
+                description={search ? `Запрос: «${search}»` : undefined}
+              />
+            ) : null
+          }
           contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
-          // Android can grow this list to hundreds of clients — keep
-          // off-screen rows clipped while flinging.
           removeClippedSubviews
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
@@ -702,7 +623,7 @@ export default function ClientsScreen() {
       {/* Create/Edit Modal */}
       <Modal visible={modalOpen} onClose={closeModal} title={editingClient ? 'Редактировать' : 'Новый клиент'}>
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>ФИО</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>ФИО *</Text>
           <TextInput
             value={fullName}
             onChangeText={setFullName}
@@ -715,7 +636,7 @@ export default function ClientsScreen() {
           />
         </View>
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон *</Text>
           <TextInput
             value={phone}
             onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}
@@ -728,6 +649,28 @@ export default function ClientsScreen() {
             autoComplete="tel"
             placeholderTextColor={palette.text.tertiary}
           />
+        </View>
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Источник *</Text>
+          <TouchableOpacity
+            onPress={() => setFormSourceOpen(true)}
+            activeOpacity={0.7}
+            style={[
+              styles.formInput,
+              styles.formPicker,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+            ]}
+          >
+            <Text
+              style={[
+                styles.formPickerText,
+                { color: formSource ? palette.text.primary : palette.text.tertiary },
+              ]}
+            >
+              {formSource ?? 'Выберите источник'}
+            </Text>
+            <Ionicons name="chevron-down" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
         </View>
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
@@ -750,10 +693,7 @@ export default function ClientsScreen() {
           />
         </View>
 
-        {/* Inline car block — only when creating a new client.
-            All three car fields are optional; submit creates the car
-            only if a госномер is typed. Plate dupes go through the
-            same DuplicateWarningDialog as the standalone car add. */}
+        {/* Inline car block — only when creating a new client. No VIN. */}
         {!editingClient && (
           <View style={[cnStyles.inlineCarBlock, { borderTopColor: palette.border.subtle }]}>
             <View style={cnStyles.inlineCarHeader}>
@@ -790,29 +730,9 @@ export default function ClientsScreen() {
                     color: palette.text.primary,
                   },
                 ]}
-                placeholder="А000АА00"
+                placeholder="А000АА"
                 autoCapitalize="characters"
                 autoCorrect={false}
-                placeholderTextColor={palette.text.tertiary}
-              />
-            </View>
-            <View style={styles.formField}>
-              <Text style={[styles.formLabel, { color: palette.text.secondary }]}>VIN (необязательно)</Text>
-              <TextInput
-                value={carVin}
-                onChangeText={(t) => setCarVin(t.toUpperCase())}
-                style={[
-                  styles.formInput,
-                  {
-                    backgroundColor: palette.bg.muted,
-                    borderColor: palette.border.subtle,
-                    color: palette.text.primary,
-                  },
-                ]}
-                placeholder="1HGCM82633A123456"
-                autoCapitalize="characters"
-                autoCorrect={false}
-                maxLength={17}
                 placeholderTextColor={palette.text.tertiary}
               />
             </View>
@@ -837,7 +757,6 @@ export default function ClientsScreen() {
         </View>
       </Modal>
 
-      {/* Delete Confirm */}
       <ConfirmDialog
         visible={confirmOpen}
         onClose={() => setConfirmOpen(false)}
@@ -864,10 +783,6 @@ export default function ClientsScreen() {
         openExistingLabel="Открыть карточку"
       />
 
-      {/* Plate-duplicate dialog for the inline car block. Mirrors the
-          car-add flow inside ClientDetailScreen. Shows the existing
-          car's owner; "Открыть владельца" navigates to that client's
-          detail, "Всё равно создать" proceeds with the create chain. */}
       <DuplicateWarningDialog
         visible={!!duplicateCar}
         onClose={() => setDuplicateCar(null)}
@@ -883,31 +798,94 @@ export default function ClientsScreen() {
         existingSubtitle={duplicateCar?.client ? `Клиент: ${duplicateCar.client.fullName}` : duplicateCar?.plateNumber}
         openExistingLabel={duplicateCar?.client ? 'Открыть владельца' : 'Закрыть'}
       />
+
+      {/* Source picker — opens for filter chip (sets sourceFilter) */}
+      <SourcePickerSheet
+        visible={sourceFilterOpen}
+        onClose={() => setSourceFilterOpen(false)}
+        selected={sourceFilter}
+        onPick={(value) => {
+          if (value) {
+            setFilter('source');
+            setSourceFilter(value);
+          } else {
+            setFilter('all');
+            setSourceFilter(null);
+          }
+        }}
+        title="Фильтр по источнику"
+      />
+
+      {/* Source picker — opens for the create/edit form */}
+      <SourcePickerSheet
+        visible={formSourceOpen}
+        onClose={() => setFormSourceOpen(false)}
+        selected={formSource}
+        onPick={(value) => setFormSource(value)}
+        title="Источник клиента"
+      />
     </View>
+  );
+}
+
+interface FilterChipProps {
+  active: boolean;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  palette: ReturnType<typeof useColors>;
+  dismissable?: boolean;
+  onDismiss?: () => void;
+}
+
+function FilterChip({ active, label, icon, onPress, palette, dismissable, onDismiss }: FilterChipProps) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[
+        cnStyles.chip,
+        {
+          backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
+          borderColor: active ? palette.accent.primary : palette.border.subtle,
+        },
+      ]}
+    >
+      <Ionicons name={icon} size={13} color={active ? palette.accent.primary : palette.text.secondary} />
+      <Text
+        style={[
+          cnStyles.chipLabel,
+          { color: active ? palette.accent.primaryText : palette.text.secondary },
+        ]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+      {dismissable && active && onDismiss ? (
+        <TouchableOpacity
+          onPress={onDismiss}
+          hitSlop={8}
+          style={cnStyles.chipDismiss}
+          accessibilityLabel="Сбросить фильтр"
+        >
+          <Ionicons name="close-circle" size={14} color={palette.accent.primary} />
+        </TouchableOpacity>
+      ) : null}
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-  },
-  headerCenter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   addBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: colors.primary[600],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: spacing[4] },
-  // FreshnessBadge slot — sits below the header, right-aligned.
   freshnessRow: {
     paddingHorizontal: spacing[4],
     alignItems: 'flex-end',
@@ -915,7 +893,45 @@ const styles = StyleSheet.create({
   },
   list: { paddingHorizontal: 0, paddingBottom: spacing[8] },
 
-  // ── iOS Contacts-style dense row ──
+  // Retail buyer hero card — gradient pin above the list.
+  retailWrap: {
+    marginTop: spacing[1],
+    marginBottom: spacing[3],
+  },
+  retailCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius['2xl'],
+    gap: spacing[3],
+    shadowColor: colors.primary[700],
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  retailIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  retailContent: { flex: 1, gap: 2 },
+  retailTitle: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  retailSubtitle: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 12,
+  },
+
+  // Row
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -941,9 +957,25 @@ const styles = StyleSheet.create({
   },
   info: { flex: 1, minWidth: 0 },
   cardName: { fontSize: 15, fontWeight: '600', color: colors.gray[900], letterSpacing: -0.1 },
-  cardSub: { fontSize: 12, color: colors.gray[500], marginTop: 2 },
+  subLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
+  cardSub: { fontSize: 12, color: colors.gray[500] },
+  platePill: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    backgroundColor: colors.gray[100],
+  },
+  platePillText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, color: colors.gray[800] },
+  sourceTag: {
+    maxWidth: 90,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: colors.gray[100],
+  },
+  sourceTagText: { fontSize: 10, fontWeight: '600' },
 
-  // ── Swipe-to-delete actions (mirror SuppliersScreen) ──
+  // Swipe
   swipeActionsRow: { flexDirection: 'row' },
   swipeEditAction: {
     backgroundColor: colors.primary[600],
@@ -961,12 +993,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
   },
-  swipeActionText: {
-    color: colors.white,
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 0.2,
-  },
+  swipeActionText: { color: colors.white, fontSize: 12, fontWeight: '600', letterSpacing: 0.2 },
+
   // Form
   formField: { marginBottom: spacing[4] },
   formLabel: {
@@ -985,6 +1013,12 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     color: colors.gray[900],
   },
+  formPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  formPickerText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   formActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
@@ -1008,43 +1042,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[600],
   },
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
+  chipsRow: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[3],
+    gap: spacing[2],
+    alignItems: 'center',
+  },
 });
 
-// Standalone styles for the Clients ⇄ Cars segmented control. Kept apart
-// from `styles` so the same block can be reused verbatim in CarsScreen.
 const cnStyles = StyleSheet.create({
-  segmentWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
-  segment: {
-    flexDirection: 'row',
-    backgroundColor: colors.gray[100],
-    borderRadius: 12,
-    padding: 3,
-    gap: 2,
-    alignSelf: 'flex-start',
-  },
-  segmentItem: {
+  chip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 9,
-    minWidth: 96,
-    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: 220,
   },
-  segmentActive: {
-    backgroundColor: colors.white,
-    shadowColor: colors.black,
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-  },
-  segmentLabelActive: { fontSize: 13, fontWeight: '700', color: colors.primary[700] },
-  segmentLabelInactive: { fontSize: 13, fontWeight: '500', color: colors.gray[600] },
+  chipLabel: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
+  chipDismiss: { marginLeft: 2 },
 
-  // Inline car block inside the "Новый клиент" modal. Visually separated
-  // from the client fields with a top hairline + small "Автомобиль"
-  // header so the form reads as two sections instead of one long list.
   inlineCarBlock: {
     marginTop: spacing[2],
     paddingTop: spacing[3],
@@ -1063,35 +1082,4 @@ const cnStyles = StyleSheet.create({
     color: colors.primary[700],
     letterSpacing: 0.2,
   },
-
-  // Car list rows used inside ClientsScreen when mode === 'cars'
-  carRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
-    backgroundColor: colors.white,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.gray[200],
-  },
-  carIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.primary[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  carName: { fontSize: 14, fontWeight: '600', color: colors.gray[900] },
-  platePill: {
-    alignSelf: 'flex-start',
-    marginTop: 4,
-    backgroundColor: colors.gray[100],
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  platePillText: { fontSize: 11, fontWeight: '700', color: colors.gray[800], letterSpacing: 0.5 },
-  carClient: { fontSize: 11, color: colors.gray[500], maxWidth: 100, marginRight: 4 },
 });

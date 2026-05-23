@@ -439,8 +439,35 @@ export function createExpensesApi(api: HttpClient) {
     getCategories: () => api.get<Array<{ id: string; name: string }>>('/expenses/categories'),
     createCategory: (data: { name: string }) => api.post('/expenses/categories', data),
     removeCategory: (id: string) => api.delete(`/expenses/categories/${id}`),
-    getAll: (params?: DateRangeParams) => api.get<Array<{ id: string; categoryId?: string; categoryName?: string; amount: number; description?: string; date: string; userId?: string; userName?: string; createdAt: string }>>('/expenses', { params }),
+    // The server now exposes `createdBy`, `creatorName`, `source` and
+    // `approvalStatus` for every row (migration 047). They're optional
+    // on the TS side so legacy callers / older backends keep compiling.
+    // `createdBy` filter narrows the listing to a single employee (used
+    // by the owner's "По сотруднику" chip); `approvalStatus` filter is
+    // used by the "Ожидает одобрения" review queue.
+    getAll: (params?: DateRangeParams & { createdBy?: string; approvalStatus?: 'pending' | 'approved' | 'rejected' }) =>
+      api.get<
+        Array<{
+          id: string;
+          categoryId?: string;
+          categoryName?: string;
+          amount: number;
+          description?: string;
+          date: string;
+          userId?: string;
+          userName?: string;
+          createdBy?: string;
+          creatorName?: string;
+          source?: 'owner' | 'employee';
+          approvalStatus?: 'approved' | 'pending' | 'rejected';
+          createdAt: string;
+        }>
+      >('/expenses', { params }),
     create: (data: { categoryId?: string; amount: number; description?: string; date?: string }) => api.post('/expenses', data),
+    /** Owner approves a pending expense — flips approval_status to 'approved'. Director / admin / superadmin only. */
+    approve: (id: string) => api.patch(`/expenses/${id}/approve`),
+    /** Owner rejects a pending expense — flips approval_status to 'rejected'. Director / admin / superadmin only. */
+    reject: (id: string) => api.patch(`/expenses/${id}/reject`),
     remove: (id: string) => api.delete(`/expenses/${id}`),
   };
 }

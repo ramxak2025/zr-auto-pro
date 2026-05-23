@@ -9,6 +9,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { ThemeProvider, useThemeMode } from './src/contexts/ThemeContext';
+import { SalaryNotificationProvider } from './src/contexts/SalaryNotificationContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
@@ -149,33 +150,40 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
     <SafeAreaProvider style={{ backgroundColor: palette.bg.canvas }}>
       <QueryClientProvider client={queryClient}>
         <AuthProvider queryClient={queryClient} onAuthResolve={onAuthResolve}>
-          <NavigationContainer
-            theme={{
-              dark: mode === 'dark',
-              colors: {
-                primary: palette.accent.primary,
-                background: palette.bg.canvas,
-                card: 'transparent',
-                text: palette.text.primary,
-                border: palette.border.subtle,
-                notification: palette.accent.primary,
-              },
-              fonts: {
-                regular: { fontFamily: 'System', fontWeight: '400' },
-                medium: { fontFamily: 'System', fontWeight: '500' },
-                bold: { fontFamily: 'System', fontWeight: '700' },
-                heavy: { fontFamily: 'System', fontWeight: '900' },
-              },
-            }}
-          >
-            <StatusBar
-              barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
-              backgroundColor="transparent"
-              translucent
-            />
-            {fontsReady && <AppNavigator />}
-            {showSplash && <SplashOverlay />}
-          </NavigationContainer>
+          {/* SalaryNotificationProvider mounts the global "Деньги пришли"
+              modal that pops up over any tab/screen when the current user
+              has an unconfirmed salary payment. Must live INSIDE
+              AuthProvider so it can read `useAuth()`, and inside
+              QueryClientProvider so it can use the shared queryClient. */}
+          <SalaryNotificationProvider>
+            <NavigationContainer
+              theme={{
+                dark: mode === 'dark',
+                colors: {
+                  primary: palette.accent.primary,
+                  background: palette.bg.canvas,
+                  card: 'transparent',
+                  text: palette.text.primary,
+                  border: palette.border.subtle,
+                  notification: palette.accent.primary,
+                },
+                fonts: {
+                  regular: { fontFamily: 'System', fontWeight: '400' },
+                  medium: { fontFamily: 'System', fontWeight: '500' },
+                  bold: { fontFamily: 'System', fontWeight: '700' },
+                  heavy: { fontFamily: 'System', fontWeight: '900' },
+                },
+              }}
+            >
+              <StatusBar
+                barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
+                backgroundColor="transparent"
+                translucent
+              />
+              {fontsReady && <AppNavigator />}
+              {showSplash && <SplashOverlay />}
+            </NavigationContainer>
+          </SalaryNotificationProvider>
         </AuthProvider>
       </QueryClientProvider>
     </SafeAreaProvider>

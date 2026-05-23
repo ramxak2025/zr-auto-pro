@@ -12,14 +12,15 @@ import {
 } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, AudioModule } from 'expo-audio';
 import IosScreenHeader from '../components/IosScreenHeader';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { useQuery } from '@tanstack/react-query';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
 import { callsApi } from '../api/services';
-import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { haptic } from '../platform/haptics';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -400,11 +401,11 @@ const TABS: { key: FilterTab; label: string }[] = [
 // ---------------------------------------------------------------------------
 
 export default function CallsScreen({ navigation }: { navigation: any }) {
-  const { isRole } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   // Single global "currently expanded player" — exactly one recording can
   // play at a time, tapping a different row swaps which one is open.
   const [playingId, setPlayingId] = useState<string | null>(null);
@@ -482,14 +483,20 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   }, [calls, activeTab]);
 
   const goToPrevDay = () => {
+    haptic('select');
     const d = new Date(selectedDate);
     d.setDate(d.getDate() - 1);
     setSelectedDate(d);
   };
   const goToNextDay = () => {
+    haptic('select');
     const d = new Date(selectedDate);
     d.setDate(d.getDate() + 1);
     if (d <= new Date()) setSelectedDate(d);
+  };
+  const openDatePicker = () => {
+    haptic('tap');
+    setDatePickerOpen(true);
   };
   const isToday =
     dateStr ===
@@ -510,7 +517,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
 
   return (
     <View style={[styles.container, { backgroundColor: palette.bg.canvas }]}>
-      {/* Unified iOS header with date stepper as the trailing slot. */}
+      {/* Unified iOS header — date stepper + calendar in trailing slot. */}
       <IosScreenHeader
         title="Звонки"
         subtitle={dateLabel}
@@ -521,20 +528,44 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
               onPress={goToPrevDay}
               style={[styles.dateBtn, { backgroundColor: palette.bg.muted }]}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Предыдущий день"
             >
               <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={openDatePicker}
+              style={[styles.dateBtn, { backgroundColor: palette.bg.muted }]}
+              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Выбрать дату"
+            >
+              <Ionicons name="calendar-outline" size={16} color={palette.text.secondary} />
             </TouchableOpacity>
             <TouchableOpacity
               onPress={goToNextDay}
               disabled={isToday}
               style={[styles.dateBtn, { backgroundColor: palette.bg.muted }, isToday && { opacity: 0.25 }]}
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              accessibilityRole="button"
+              accessibilityLabel="Следующий день"
             >
               <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
             </TouchableOpacity>
           </View>
         }
       />
+
+      {/* One-line digest — "Сегодня: 12 звонков · 3 пропущенных · 5 → клиенты" */}
+      {summary && (
+        <Text style={[styles.digest, { color: palette.text.secondary }]} numberOfLines={1}>
+          {dateLabel}: {summary.total ?? 0} звонков
+          {summary.missed > 0 ? ` · ${summary.missed} пропущенных` : ''}
+          {calls.filter((c) => !!c.client).length > 0
+            ? ` · ${calls.filter((c) => !!c.client).length} → клиенты`
+            : ''}
+        </Text>
+      )}
 
       {/* Summary strip */}
       <View style={styles.summaryRow}>
@@ -608,6 +639,19 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           ))
         )}
       </ScrollView>
+
+      <DateTimePickerModal
+        visible={datePickerOpen}
+        value={selectedDate}
+        mode="date"
+        onConfirm={(d) => {
+          haptic('select');
+          setDatePickerOpen(false);
+          // Forbid future dates — server returns nothing for them anyway.
+          if (d <= new Date()) setSelectedDate(d);
+        }}
+        onCancel={() => setDatePickerOpen(false)}
+      />
     </View>
   );
 }
@@ -654,6 +698,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  digest: {
+    fontSize: 12,
+    fontWeight: '500',
+    paddingHorizontal: spacing[4],
+    marginBottom: spacing[2],
+  },
   summaryRow: { flexDirection: 'row', gap: spacing[2], paddingHorizontal: spacing[4], marginBottom: spacing[3] },
   summaryCard: { flex: 1, borderRadius: borderRadius.xl, paddingVertical: spacing[2.5], alignItems: 'center' },
   summaryValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
