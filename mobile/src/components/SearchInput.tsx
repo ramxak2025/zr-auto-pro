@@ -69,7 +69,7 @@ export default function SearchInput({ value, onChange, placeholder = 'Поиск
             accessibilityRole="button"
             accessibilityLabel="Очистить поиск"
           >
-            <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
+            <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
           </Pressable>
         )}
       </View>

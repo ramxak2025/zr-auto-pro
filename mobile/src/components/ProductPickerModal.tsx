@@ -519,7 +519,7 @@ export default function ProductPickerModal({
                   setProductSearch('');
                 }}
               >
-                <Ionicons name="close-circle" size={18} color={colors.gray[400]} />
+                <Ionicons name="close-circle-outline" size={18} color={colors.gray[400]} />
               </TouchableOpacity>
             ) : (
               <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">

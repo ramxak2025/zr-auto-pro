@@ -59,18 +59,19 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
   // MARK: - Layout constants
   //
-  // The droplet is locked to the SAME size as the central Kassa button
-  // (KASSA_SIZE = 52pt on the JS side). It never grows with the slot
-  // width — that produced an oversized capsule on wide bars and an
-  // obvious overlap mismatch with the round Kassa button in the centre
-  // slot. A fixed 52×52 pill with a 26pt corner radius reads as a
-  // perfectly round capsule when the droplet sits over the Kassa slot,
-  // and as a tight pill-shaped highlight when it sits over any other
-  // slot — visually consistent across all five tabs and on every iPhone
-  // width.
+  // The droplet is locked to the SAME size AND the SAME shape as the
+  // central Kassa button (KASSA_SIZE = 52pt, continuous-corner squircle
+  // with cornerRadius = 18 — see AutexaKassaButtonView.swift line 83-84).
+  // Owner requirement: the moving capsule must read as the same family
+  // of shapes as the Kassa CTA, not a foreign full-pill / circle. By
+  // matching cornerRadius = 18 + cornerCurve = .continuous, the droplet
+  // sitting under the Kassa button becomes geometrically identical to
+  // it (perfect overlap), and over the other four slots it reads as a
+  // tight iOS-app-icon-style squircle, visually consistent across all
+  // five tabs and on every iPhone width.
 
   private let dropletSize: CGFloat = 52       // matches KASSA_SIZE on JS
-  private let dropletCornerRadius: CGFloat = 26 // half-height → full pill / circle
+  private let dropletCornerRadius: CGFloat = 18 // matches Kassa squircle radius (AutexaKassaButtonView line 84)
   private let dropletInset: CGFloat = 4         // (BAR_HEIGHT - KASSA_SIZE) / 2 = 4
 
   // The visible bar geometry — bar floats with 14pt horizontal margin and
@@ -95,7 +96,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
     self.dropletView = UIView()
     self.dropletView.layer.cornerCurve = .continuous
-    self.dropletView.layer.cornerRadius = 26 // == dropletCornerRadius
+    self.dropletView.layer.cornerRadius = 18 // == dropletCornerRadius (matches Kassa squircle)
     self.dropletView.backgroundColor = .clear
     self.dropletView.isUserInteractionEnabled = false
     self.dropletView.layer.shadowColor = UIColor.black.cgColor
@@ -121,7 +122,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     self.dropletGradient.startPoint = CGPoint(x: 0.5, y: 0.0)
     self.dropletGradient.endPoint = CGPoint(x: 0.5, y: 1.0)
     self.dropletGradient.cornerCurve = .continuous
-    self.dropletGradient.cornerRadius = 26
+    self.dropletGradient.cornerRadius = 18
 
     self.panGesture = UIPanGestureRecognizer()
     self.tapGesture = UITapGestureRecognizer()

@@ -841,7 +841,7 @@ export default function UsersScreen() {
                       style={styles.commItemDelete}
                       onPress={() => removeCommissionItem(item.productId)}
                     >
-                      <Ionicons name="close-circle" size={18} color={colors.red[400]} />
+                      <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
                     </TouchableOpacity>
                   </View>
                 );

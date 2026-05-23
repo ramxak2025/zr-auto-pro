@@ -175,4 +175,47 @@ export class CarsService {
     await this.pool.query('DELETE FROM cars WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     return { message: 'Удалено' };
   }
+
+  /**
+   * Recent checks for a specific car, newest-first. Belongs-to-tenant is
+   * enforced via the WHERE clause; foreign cars yield an empty list rather
+   * than 404 to keep the FE simple (an empty list is a valid history).
+   */
+  async getChecks(id: string, tenantID: string, limit: number) {
+    // Verify car belongs to tenant — without this the foreign-id path
+    // returns an empty array instead of a 404, which masks bugs.
+    const { rows: carRows } = await this.pool.query('SELECT 1 FROM cars WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
+      id,
+      tenantID,
+    ]);
+    if (carRows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
+
+    const { rows } = await this.pool.query(
+      `SELECT ch.id, ch.number, ch.date, ch.total_revenue, ch.payment_method, ch.is_returned,
+              ch.is_deferred, m.full_name as master_name, ca.plate_number, ca.make_model,
+              cl.full_name as client_name, cl.phone as client_phone
+       FROM checks ch
+       LEFT JOIN users m ON m.id = ch.master_id
+       LEFT JOIN cars ca ON ca.id = ch.car_id
+       LEFT JOIN clients cl ON cl.id = ch.client_id
+       WHERE ch.tenant_id=$1 AND ch.car_id=$2
+       ORDER BY ch.date DESC
+       LIMIT $3`,
+      [tenantID, id, limit],
+    );
+    return rows.map((r: any) => ({
+      id: r.id,
+      number: r.number,
+      date: r.date,
+      totalRevenue: parseFloat(r.total_revenue) || 0,
+      paymentMethod: r.payment_method,
+      isReturned: !!r.is_returned,
+      isDeferred: !!r.is_deferred,
+      masterName: r.master_name,
+      carPlate: r.plate_number,
+      carMakeModel: r.make_model,
+      clientName: r.client_name,
+      clientPhone: r.client_phone,
+    }));
+  }
 }

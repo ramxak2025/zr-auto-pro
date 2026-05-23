@@ -52,6 +52,9 @@ export class ClientsService {
       fullName: row.full_name,
       phone: row.phone,
       comment: row.comment,
+      source: row.source ?? null,
+      ownerNotes: row.owner_notes ?? null,
+      isRetail: !!row.is_retail,
       createdAt: row.created_at,
     };
   }
@@ -99,7 +102,11 @@ export class ClientsService {
 
     params.push(limit, offset);
     const { rows } = await this.pool.query(
-      `SELECT c.* FROM clients c WHERE ${where} ORDER BY c.created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      // Retail client pinned to the top so the cash screen always shows it
+      // first; the rest are newest-first as before.
+      `SELECT c.* FROM clients c WHERE ${where}
+       ORDER BY c.is_retail DESC NULLS LAST, c.created_at DESC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
       params,
     );
 
@@ -143,9 +150,9 @@ export class ClientsService {
 
   async create(tenantID: string, dto: any) {
     const { rows } = await this.pool.query(
-      `INSERT INTO clients (full_name, phone, comment, tenant_id)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [dto.fullName, dto.phone, dto.comment, tenantID],
+      `INSERT INTO clients (full_name, phone, comment, source, owner_notes, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [dto.fullName, dto.phone, dto.comment, dto.source ?? null, dto.ownerNotes ?? null, tenantID],
     );
     const client = this.mapClient(rows[0]);
     (client as any).cars = [];
@@ -168,6 +175,14 @@ export class ClientsService {
     if (dto.comment !== undefined) {
       sets.push(`comment=$${idx++}`);
       vals.push(dto.comment);
+    }
+    if (dto.source !== undefined) {
+      sets.push(`source=$${idx++}`);
+      vals.push(dto.source === '' ? null : dto.source);
+    }
+    if (dto.ownerNotes !== undefined) {
+      sets.push(`owner_notes=$${idx++}`);
+      vals.push(dto.ownerNotes === '' ? null : dto.ownerNotes);
     }
 
     if (sets.length === 0) return this.getById(id, tenantID);
@@ -192,7 +207,104 @@ export class ClientsService {
   }
 
   async remove(id: string, tenantID: string) {
+    // Refuse to delete the pinned retail client — it's a system row that
+    // /cash relies on. Without this guard the cash screen would silently
+    // lose its default buyer.
+    const { rows: check } = await this.pool.query(
+      'SELECT is_retail FROM clients WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
+    if (check.length > 0 && check[0].is_retail) {
+      throw new NotFoundException({ message: 'Нельзя удалить розничного покупателя' });
+    }
     await this.pool.query('DELETE FROM clients WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     return { message: 'Удалено' };
+  }
+
+  /**
+   * Update just the `source` tag on a client. Trimmed and stored verbatim;
+   * empty string normalised to NULL so the FE renders "Без источника".
+   */
+  async updateSource(id: string, tenantID: string, source: string | null) {
+    const normalized = typeof source === 'string' ? source.trim().slice(0, 100) : null;
+    const { rows } = await this.pool.query(
+      `UPDATE clients SET source=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+      [normalized && normalized.length > 0 ? normalized : null, id, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
+    return this.mapClient(rows[0]);
+  }
+
+  /**
+   * Update just the `owner_notes` field. Free-form text — capped at 4000
+   * chars so a runaway client can't blow up the table.
+   */
+  async updateNotes(id: string, tenantID: string, notes: string | null) {
+    const normalized = typeof notes === 'string' ? notes.slice(0, 4000) : null;
+    const { rows } = await this.pool.query(
+      `UPDATE clients SET owner_notes=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`,
+      [normalized && normalized.length > 0 ? normalized : null, id, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
+    return this.mapClient(rows[0]);
+  }
+
+  /**
+   * Group the client's checks by car so the FE can render a per-car history
+   * panel inside ClientDetail. Cars with zero checks still appear so the FE
+   * doesn't have to do its own merge.
+   */
+  async getChecksByCar(id: string, tenantID: string) {
+    const { rows: clientRows } = await this.pool.query('SELECT 1 FROM clients WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+    if (clientRows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
+
+    const { rows: carRows } = await this.pool.query(
+      `SELECT id, plate_number, make_model FROM cars WHERE client_id=$1 AND tenant_id=$2 ORDER BY created_at`,
+      [id, tenantID],
+    );
+
+    const { rows: checkRows } = await this.pool.query(
+      `SELECT ch.*, m.full_name as master_name, ca.plate_number, ca.make_model
+       FROM checks ch
+       LEFT JOIN users m ON m.id = ch.master_id
+       LEFT JOIN cars ca ON ca.id = ch.car_id
+       WHERE ch.tenant_id=$1 AND ch.client_id=$2
+       ORDER BY ch.date DESC`,
+      [tenantID, id],
+    );
+
+    const byCar: Record<string, any[]> = {};
+    for (const r of checkRows) {
+      const carId = r.car_id ?? 'no-car';
+      if (!byCar[carId]) byCar[carId] = [];
+      byCar[carId].push({
+        id: r.id,
+        number: r.number,
+        date: r.date,
+        totalRevenue: parseFloat(r.total_revenue) || 0,
+        paymentMethod: r.payment_method,
+        masterName: r.master_name,
+        carPlate: r.plate_number,
+        carMakeModel: r.make_model,
+        isReturned: !!r.is_returned,
+      });
+    }
+
+    const out = carRows.map((c: any) => ({
+      carId: c.id as string,
+      carPlate: c.plate_number as string,
+      makeModel: c.make_model as string,
+      checks: byCar[c.id] || [],
+    }));
+    // Add an "no-car" bucket if any checks were attached without car_id.
+    if (byCar['no-car'] && byCar['no-car'].length > 0) {
+      out.push({
+        carId: '',
+        carPlate: '—',
+        makeModel: 'Без автомобиля',
+        checks: byCar['no-car'],
+      });
+    }
+    return out;
   }
 }

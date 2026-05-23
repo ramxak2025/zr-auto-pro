@@ -581,7 +581,7 @@ export default function ExpensesScreen() {
                 <Text style={[styles.catListName, { color: palette.text.primary }]}>{c.name}</Text>
               </View>
               <TouchableOpacity onPress={() => deleteCatMutation.mutate(c.id)} style={styles.catListDeleteBtn}>
-                <Ionicons name="close-circle" size={20} color={palette.text.tertiary} />
+                <Ionicons name="close-circle-outline" size={20} color={palette.text.tertiary} />
               </TouchableOpacity>
             </View>
           ))

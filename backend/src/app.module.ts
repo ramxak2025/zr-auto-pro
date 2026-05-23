@@ -32,6 +32,9 @@ import { CheckPhotosModule } from './check-photos/check-photos.module';
 import { CheckTemplatesModule } from './check-templates/check-templates.module';
 import { ReturnsModule } from './returns/returns.module';
 import { EmployeesModule } from './employees/employees.module';
+import { WarehouseAnalyticsModule } from './warehouse-analytics/warehouse-analytics.module';
+import { ClientSourcesModule } from './client-sources/client-sources.module';
+import { JournalModule } from './journal/journal.module';
 
 @Module({
   imports: [
@@ -67,6 +70,9 @@ import { EmployeesModule } from './employees/employees.module';
     CheckTemplatesModule,
     ReturnsModule,
     EmployeesModule,
+    WarehouseAnalyticsModule,
+    ClientSourcesModule,
+    JournalModule,
   ],
   providers: [MigrationRunner],
 })

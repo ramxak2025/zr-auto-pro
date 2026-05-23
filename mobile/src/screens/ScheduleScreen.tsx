@@ -233,12 +233,12 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
       bgDark: 'rgba(234, 88, 12, 0.18)',
       label: '',
     };
-  // 2. Прогул из note
+  // 2. Прогул из note — лёгкий X-glyph вместо «жирного красного кружка».
   if (note.includes('прогул'))
     return {
       key: 'absent',
       hasEntry: true,
-      icon: 'close-circle',
+      icon: 'close',
       dotColor: colors.red[600],
       bgColor: colors.red[50],
       bgDark: 'rgba(220, 38, 38, 0.18)',
@@ -277,14 +277,17 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
       bgDark: 'rgba(217, 119, 6, 0.18)',
       label: '',
     };
-  // 6. Открыл смену вовремя — показываем время только если оно осмысленное
+  // 6. Открыл смену вовремя — показываем время только если оно осмысленное.
+  // Используем `checkmark` (тонкая галочка без круга) вместо filled
+  // `checkmark-circle` — последний на ярко-зелёном фоне читался как
+  // тяжёлый «зелёный жирный кружок».
   if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
     const startHHMM = entry.shiftStart.slice(0, 5);
     return {
       key: 'worked',
       hasEntry: true,
-      icon: 'checkmark-circle',
-      dotColor: colors.green[600],
+      icon: 'checkmark',
+      dotColor: colors.green[700],
       bgColor: colors.green[50],
       bgDark: 'rgba(22, 163, 74, 0.18)',
       label: startHHMM === DEFAULT_SHIFT_START ? '' : startHHMM,
@@ -295,7 +298,7 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
     return {
       key: 'absent',
       hasEntry: true,
-      icon: 'close-circle',
+      icon: 'close',
       dotColor: colors.red[600],
       bgColor: colors.red[50],
       bgDark: 'rgba(220, 38, 38, 0.18)',
@@ -307,8 +310,8 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
     return {
       key: 'worked',
       hasEntry: true,
-      icon: 'checkmark-circle',
-      dotColor: colors.green[600],
+      icon: 'checkmark',
+      dotColor: colors.green[700],
       bgColor: colors.green[50],
       bgDark: 'rgba(22, 163, 74, 0.15)',
       label: '',
@@ -1040,7 +1043,7 @@ function GridTab() {
           }}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
-            <Ionicons name="warning" size={14} color="#d97706" />
+            <Ionicons name="warning-outline" size={14} color="#d97706" />
             <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400e' }}>
               Не сохранено: {Object.keys(pendingChanges).length}
             </Text>
@@ -1064,12 +1067,12 @@ function GridTab() {
           native iOS app, not a chat-bot transcript. */}
       <View style={styles.legendRow}>
         {[
-          { icon: 'checkmark-circle' as const, color: colors.green[600], label: 'Смена' },
+          { icon: 'checkmark' as const, color: colors.green[700], label: 'Смена' },
           { icon: 'moon-outline' as const, color: colors.gray[500], label: 'Вых' },
           { icon: 'medkit-outline' as const, color: colors.orange[600], label: 'Б/Л' },
           { icon: 'time-outline' as const, color: colors.amber[600], label: '<1ч' },
           { icon: 'alert-circle' as const, color: colors.red[500], label: '>1ч' },
-          { icon: 'close-circle' as const, color: colors.red[600], label: 'Прогул' },
+          { icon: 'close' as const, color: colors.red[600], label: 'Прогул' },
         ].map((item) => (
           <View key={item.label} style={styles.legendItem}>
             <Ionicons name={item.icon} size={13} color={item.color} />
@@ -1360,8 +1363,8 @@ function GridTab() {
               {
                 type: 'shift',
                 label: 'Смена',
-                icon: 'checkmark-circle' as const,
-                iconColor: colors.green[500],
+                icon: 'checkmark' as const,
+                iconColor: colors.green[700],
                 bg: colors.green[50],
                 gradient: [colors.green[50], colors.green[100]],
               },
@@ -1563,7 +1566,7 @@ function TodayTab() {
             style={styles.todayStatCard}
           >
             <View style={styles.todayStatIconWrap}>
-              <Ionicons name="checkmark-circle" size={20} color={colors.green[600]} />
+              <Ionicons name="checkmark" size={20} color={colors.green[700]} />
             </View>
             <Text style={[styles.todayStatNum, { color: colors.green[700] }]}>{working.length}</Text>
             <Text style={[styles.todayStatLabel, { color: colors.green[600] }]}>На смене</Text>
@@ -1673,7 +1676,7 @@ function ShiftsTab() {
     {
       label: 'Вовремя',
       value: s.totalOnTime || 0,
-      icon: 'checkmark-circle' as const,
+      icon: 'checkmark' as const,
       color: colors.green[700],
       gradient: [colors.green[50], colors.green[100]],
     },
@@ -2111,8 +2114,8 @@ const SHIFT_STATUS_OPTIONS: {
     key: 'worked',
     label: 'Смена',
     description: 'Полная отработанная смена',
-    icon: 'checkmark-circle',
-    color: colors.green[600],
+    icon: 'checkmark',
+    color: colors.green[700],
   },
   {
     key: 'short',
@@ -2146,7 +2149,7 @@ const SHIFT_STATUS_OPTIONS: {
     key: 'absent',
     label: 'Прогул',
     description: 'Не вышел на смену без причины',
-    icon: 'close-circle',
+    icon: 'close',
     color: colors.red[600],
   },
 ];
@@ -2639,7 +2642,10 @@ export default function ScheduleScreen() {
     { key: 'grid', label: 'График', icon: 'grid-outline', activeIcon: 'grid' },
     { key: 'today', label: 'Сегодня', icon: 'today-outline', activeIcon: 'today' },
     { key: 'shifts', label: 'Смены', icon: 'stats-chart-outline', activeIcon: 'stats-chart' },
-    { key: 'rating', label: 'Рейтинг', icon: 'trophy-outline', activeIcon: 'trophy' },
+    // `activeIcon` остаётся outline-вариантом по просьбе владельца — filled
+    // Trophy на градиенте читался слишком жирно. Тонкая обводка совпадает с
+    // другими табами по визуальному весу.
+    { key: 'rating', label: 'Рейтинг', icon: 'trophy-outline', activeIcon: 'trophy-outline' },
     ...(isAdmin
       ? [
           {

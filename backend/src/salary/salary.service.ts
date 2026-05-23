@@ -1,10 +1,25 @@
-import { Injectable, Inject, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { PushService } from '../push/push.service';
+
+interface PremiumDto {
+  userId: string;
+  type: 'cash' | 'rate_bonus';
+  amount?: number;
+  bonusPercent?: number;
+  reason: string;
+  periodMonthYear?: string;
+}
 
 @Injectable()
 export class SalaryService {
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  private readonly logger = new Logger('SalaryService');
+
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private push: PushService,
+  ) {}
 
   async getAll(tenantID: string, query: any) {
     const dateFrom =
@@ -69,11 +84,42 @@ export class SalaryService {
       });
     }
 
+    // Premiums for the same period — both cash and rate_bonus rows.
+    const { rows: premRows } = await this.pool.query(
+      `SELECT sp.*, u.full_name as user_name, a.full_name as awarder_name
+       FROM salary_premiums sp
+       LEFT JOIN users u ON u.id = sp.user_id
+       LEFT JOIN users a ON a.id = sp.awarded_by
+       WHERE sp.tenant_id = $1
+         AND (sp.created_at >= $2::timestamptz AND sp.created_at <= ($3::date + 1)::timestamptz)`,
+      [tenantID, dateFrom, dateTo],
+    );
+    const premiumsByUser: Record<string, any[]> = {};
+    for (const p of premRows) {
+      if (!premiumsByUser[p.user_id]) premiumsByUser[p.user_id] = [];
+      premiumsByUser[p.user_id].push({
+        id: p.id,
+        userId: p.user_id,
+        userName: p.user_name,
+        type: p.type,
+        amount: p.amount === null || p.amount === undefined ? undefined : parseFloat(p.amount) || 0,
+        bonusPercent: p.bonus_percent === null || p.bonus_percent === undefined ? undefined : parseFloat(p.bonus_percent) || 0,
+        reason: p.reason,
+        periodMonthYear: p.period_month_year,
+        awardedBy: p.awarded_by,
+        awarderName: p.awarder_name,
+        awardedAt: p.created_at,
+      });
+    }
+
     return rows.map((r) => {
       const masterId = r.master_id;
       const masterPayments = paymentsByUser[masterId] || [];
+      const masterPremiums = premiumsByUser[masterId] || [];
       const paidAmount = masterPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
-      const totalEarnings = parseFloat(r.total_earnings) || 0;
+      const baseEarnings = parseFloat(r.total_earnings) || 0;
+      const premiumsAmount = masterPremiums.reduce((sum: number, p: any) => sum + (p.type === 'cash' ? (p.amount || 0) : 0), 0);
+      const totalEarnings = baseEarnings + premiumsAmount;
 
       return {
         masterId,
@@ -82,12 +128,14 @@ export class SalaryService {
         productSalaryPercent: parseFloat(r.product_salary_percent) || 0,
         serviceEarnings: parseFloat(r.service_earnings) || 0,
         productEarnings: parseFloat(r.product_earnings) || 0,
+        premiumsAmount,
         totalEarnings,
         totalRevenue: parseFloat(r.total_revenue) || 0,
         checkCount: parseInt(r.check_count) || 0,
         paidAmount,
         remainingAmount: totalEarnings - paidAmount,
         payments: masterPayments,
+        premiums: masterPremiums,
       };
     });
   }
@@ -123,10 +171,12 @@ export class SalaryService {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name
+      `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name,
+              spc.confirmed_at
        FROM salary_payments sp
        LEFT JOIN users u ON u.id = sp.user_id
        LEFT JOIN users c ON c.id = sp.created_by
+       LEFT JOIN salary_payment_confirmations spc ON spc.payment_id = sp.id AND spc.user_id = sp.user_id
        WHERE ${where}
        ORDER BY sp.date DESC`,
       queryParams,
@@ -143,6 +193,7 @@ export class SalaryService {
       createdBy: r.created_by,
       creatorName: r.creator_name,
       date: r.date,
+      confirmedAt: r.confirmed_at ?? null,
       createdAt: r.created_at,
     }));
   }
@@ -212,7 +263,23 @@ export class SalaryService {
       [categoryId, dto.amount, description, payment.date, createdBy, tenantID],
     );
 
-    // 5. Return created payment with user info
+    // 5. Push notification to the employee — non-blocking; failure is logged
+    // inside push.service. We use a short Russian title so the iOS lock
+    // screen shows it cleanly.
+    const titleByType: Record<string, string> = {
+      salary: 'Зарплата',
+      advance: 'Аванс',
+      premium: 'Премия',
+    };
+    const title = titleByType[String(payment.type)] || 'Зарплата';
+    const formatted = (parseFloat(payment.amount) || 0).toLocaleString('ru-RU');
+    this.push.sendToUser(payment.user_id, `${title} начислена`, `Сумма: ${formatted} ₽`, {
+      kind: 'salary',
+      paymentId: payment.id,
+      paymentType: payment.type,
+    });
+
+    // 6. Return created payment with user info
     return {
       id: payment.id,
       userId: payment.user_id,
@@ -225,6 +292,145 @@ export class SalaryService {
       date: payment.date,
       createdAt: payment.created_at,
     };
+  }
+
+  // ─── Premiums ────────────────────────────────────────────────────────
+
+  /**
+   * Award a premium to an employee. The DB CHECK constraint forces type into
+   * {cash, rate_bonus}; here we additionally enforce that the matching
+   * monetary field is filled.
+   */
+  async createPremium(tenantID: string, awardedBy: string, dto: PremiumDto) {
+    if (!dto || !dto.userId || !dto.type || !dto.reason) {
+      throw new BadRequestException({ message: 'userId, type и reason обязательны' });
+    }
+    if (dto.type === 'cash' && (dto.amount === undefined || Number(dto.amount) <= 0)) {
+      throw new BadRequestException({ message: 'Для премии типа "cash" укажите сумму' });
+    }
+    if (dto.type === 'rate_bonus' && (dto.bonusPercent === undefined || Number(dto.bonusPercent) <= 0)) {
+      throw new BadRequestException({ message: 'Для премии "rate_bonus" укажите процент' });
+    }
+
+    const { rows: userRows } = await this.pool.query(
+      'SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2',
+      [dto.userId, tenantID],
+    );
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
+
+    const { rows } = await this.pool.query(
+      `INSERT INTO salary_premiums (
+         tenant_id, user_id, type, amount, bonus_percent, reason, period_month_year, awarded_by
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING *`,
+      [
+        tenantID,
+        dto.userId,
+        dto.type,
+        dto.type === 'cash' ? dto.amount : null,
+        dto.type === 'rate_bonus' ? dto.bonusPercent : null,
+        dto.reason,
+        dto.periodMonthYear ?? null,
+        awardedBy,
+      ],
+    );
+    const p = rows[0];
+
+    // Push the news so the employee sees it instantly.
+    const body =
+      dto.type === 'cash'
+        ? `Сумма: ${(parseFloat(p.amount) || 0).toLocaleString('ru-RU')} ₽ — ${dto.reason}`
+        : `Бонус к ставке: +${parseFloat(p.bonus_percent) || 0}% — ${dto.reason}`;
+    this.push.sendToUser(dto.userId, 'Премия начислена', body, { kind: 'premium', premiumId: p.id });
+
+    return this.mapPremium(p);
+  }
+
+  async listPremiums(tenantID: string, query: { userId?: string; monthYear?: string }) {
+    const conds: string[] = ['sp.tenant_id=$1'];
+    const params: any[] = [tenantID];
+    let idx = 2;
+    if (query.userId) {
+      conds.push(`sp.user_id=$${idx++}`);
+      params.push(query.userId);
+    }
+    if (query.monthYear) {
+      conds.push(`sp.period_month_year=$${idx++}`);
+      params.push(query.monthYear);
+    }
+    const { rows } = await this.pool.query(
+      `SELECT sp.*, u.full_name as user_name, a.full_name as awarder_name
+       FROM salary_premiums sp
+       LEFT JOIN users u ON u.id = sp.user_id
+       LEFT JOIN users a ON a.id = sp.awarded_by
+       WHERE ${conds.join(' AND ')}
+       ORDER BY sp.created_at DESC`,
+      params,
+    );
+    return rows.map((r) => this.mapPremium(r));
+  }
+
+  async removePremium(id: string, tenantID: string) {
+    const { rowCount } = await this.pool.query(
+      'DELETE FROM salary_premiums WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
+    if (!rowCount) throw new NotFoundException({ message: 'Премия не найдена' });
+    return { message: 'Удалено' };
+  }
+
+  private mapPremium(r: any) {
+    return {
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name,
+      type: r.type,
+      amount: r.amount === null || r.amount === undefined ? undefined : parseFloat(r.amount) || 0,
+      bonusPercent:
+        r.bonus_percent === null || r.bonus_percent === undefined ? undefined : parseFloat(r.bonus_percent) || 0,
+      reason: r.reason,
+      periodMonthYear: r.period_month_year,
+      awardedBy: r.awarded_by,
+      awarderName: r.awarder_name,
+      awardedAt: r.created_at,
+    };
+  }
+
+  // ─── Payment confirmations ───────────────────────────────────────────
+
+  /**
+   * Employee confirms receipt of a salary payment. Uniqueness is enforced
+   * by the DB index — re-confirming returns the existing confirmation
+   * timestamp without bumping it (we want the FIRST confirmation, the
+   * canonical "yes I got it" moment).
+   */
+  async confirmPayment(paymentId: string, tenantID: string, userID: string) {
+    const { rows: paymentRows } = await this.pool.query(
+      'SELECT sp.user_id FROM salary_payments sp WHERE sp.id=$1 AND sp.tenant_id=$2 LIMIT 1',
+      [paymentId, tenantID],
+    );
+    if (paymentRows.length === 0) throw new NotFoundException({ message: 'Выплата не найдена' });
+    const ownerId = paymentRows[0].user_id as string;
+    if (ownerId !== userID) {
+      throw new BadRequestException({ message: 'Подтвердить может только получатель выплаты' });
+    }
+
+    const { rows } = await this.pool.query(
+      `INSERT INTO salary_payment_confirmations (payment_id, user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (payment_id, user_id) DO NOTHING
+       RETURNING confirmed_at`,
+      [paymentId, userID],
+    );
+    if (rows.length > 0) {
+      return { paymentId, userId: userID, confirmedAt: rows[0].confirmed_at };
+    }
+    // Already confirmed — fetch existing timestamp.
+    const { rows: existing } = await this.pool.query(
+      'SELECT confirmed_at FROM salary_payment_confirmations WHERE payment_id=$1 AND user_id=$2',
+      [paymentId, userID],
+    );
+    return { paymentId, userId: userID, confirmedAt: existing[0]?.confirmed_at ?? null };
   }
 
   async getMy(tenantID: string, userID: string) {

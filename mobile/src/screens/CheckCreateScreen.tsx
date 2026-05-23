@@ -1620,7 +1620,7 @@ export default function CheckCreateScreen() {
                       onPress={() => removeServiceLine(idx)}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
-                      <Ionicons name="close-circle" size={18} color={colors.red[400]} />
+                      <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
                     </TouchableOpacity>
                   </View>
                   <TouchableOpacity style={styles.lineMasterRow} onPress={() => setShowMasterPicker(idx)}>
@@ -1717,7 +1717,7 @@ export default function CheckCreateScreen() {
                       onPress={() => removeProductLine(idx)}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
-                      <Ionicons name="close-circle" size={18} color={colors.red[400]} />
+                      <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
                     </TouchableOpacity>
                   </View>
                   <View style={styles.lineInputs}>

@@ -27,6 +27,16 @@ export class CarsController {
     return this.carsService.getById(id, user.tenantID);
   }
 
+  /**
+   * Per-car check history — used by the car detail panel and the cash
+   * screen "история по машине" section. `limit` capped at 200 server-side.
+   */
+  @Get(':id/checks')
+  getChecks(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('limit') limit?: string) {
+    const numericLimit = parseInt(String(limit ?? '50'), 10);
+    return this.carsService.getChecks(id, user.tenantID, Math.min(Math.max(numericLimit || 50, 1), 200));
+  }
+
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.carsService.create(user.tenantID, dto);

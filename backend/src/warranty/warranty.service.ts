@@ -49,30 +49,53 @@ export class WarrantyService {
    * Active = not expired (expires_at > now) AND not redeemed (used_at IS NULL).
    * Either clientId or carId (or both) must be supplied — without a filter
    * the endpoint returns nothing rather than the full tenant list.
+   *
+   * Returned shape augments the raw claim row with `name` (resolved through
+   * product / service / item_name) and `daysLeft` so the cash screen does
+   * not need any extra fetches when the master picks a car / client.
    */
-  async getActive(tenantID: string, filters: { clientId?: string; carId?: string }): Promise<WarrantyClaimRow[]> {
+  async getActive(
+    tenantID: string,
+    filters: { clientId?: string; carId?: string },
+  ): Promise<Array<WarrantyClaimRow & { name: string; daysLeft: number }>> {
     if (!filters.clientId && !filters.carId) return [];
 
-    const conds: string[] = ['tenant_id = $1', 'used_at IS NULL', 'expires_at > now()'];
+    const conds: string[] = ['wc.tenant_id = $1', 'wc.used_at IS NULL', 'wc.expires_at > now()'];
     const params: any[] = [tenantID];
     let idx = 2;
 
     if (filters.clientId) {
-      conds.push(`client_id = $${idx++}`);
+      conds.push(`wc.client_id = $${idx++}`);
       params.push(filters.clientId);
     }
     if (filters.carId) {
-      conds.push(`car_id = $${idx++}`);
+      conds.push(`wc.car_id = $${idx++}`);
       params.push(filters.carId);
     }
 
     const { rows } = await this.pool.query(
-      `SELECT * FROM warranty_claims
+      `SELECT wc.*,
+              p.name as product_name,
+              s.name as service_name
+         FROM warranty_claims wc
+         LEFT JOIN products p ON p.id = wc.product_id
+         LEFT JOIN services s ON s.id = wc.service_id
         WHERE ${conds.join(' AND ')}
-        ORDER BY expires_at ASC`,
+        ORDER BY wc.expires_at ASC`,
       params,
     );
-    return rows.map((r) => this.mapRow(r));
+
+    const now = Date.now();
+    return rows.map((r) => {
+      const mapped = this.mapRow(r);
+      const productName = r.product_name as string | null;
+      const serviceName = r.service_name as string | null;
+      const fallbackName = r.item_name as string | null;
+      const name = (mapped.kind === 'product' ? productName : serviceName) || fallbackName || 'Без названия';
+      const expires = new Date(mapped.expiresAt).getTime();
+      const daysLeft = Math.max(0, Math.ceil((expires - now) / (24 * 60 * 60 * 1000)));
+      return { ...mapped, name, daysLeft };
+    });
   }
 
   /**

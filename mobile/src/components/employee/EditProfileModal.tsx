@@ -243,7 +243,7 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
                   {specs.map((s) => (
                     <Pressable key={s} onPress={() => removeSpec(s)} style={styles.specChip}>
                       <Text style={styles.specText}>{s}</Text>
-                      <Ionicons name="close-circle" size={14} color={colors.primary[700]} />
+                      <Ionicons name="close-circle-outline" size={14} color={colors.primary[700]} />
                     </Pressable>
                   ))}
                 </View>

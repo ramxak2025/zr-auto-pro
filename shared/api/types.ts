@@ -63,18 +63,29 @@ export interface UpdateUserRequest {
   permissions?: Record<string, boolean>;
   daysOff?: number[];
   isActive?: boolean;
+  team?: string | null;
+  /** 047_expenses_by_employee — gate for non-privileged users to /expenses POST. */
+  canAddExpenses?: boolean;
+  /** Daily cap (RUB). Null/undefined → unlimited. */
+  dailyExpenseLimit?: number | null;
 }
 
 export interface CreateClientRequest {
   fullName: string;
   phone: string;
   comment?: string;
+  /** Acquisition source tag — 046_clients_source. Empty string → null. */
+  source?: string | null;
+  /** Owner-only free-form notes. Capped at 4000 chars server-side. */
+  ownerNotes?: string | null;
 }
 
 export interface UpdateClientRequest {
   fullName?: string;
   phone?: string;
   comment?: string;
+  source?: string | null;
+  ownerNotes?: string | null;
 }
 
 export interface CreateCarRequest {

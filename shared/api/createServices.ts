@@ -27,6 +27,8 @@ import type {
   CheckReturn, ScheduleSettings, EmployeeProfile, EmployeeDocument,
   EmployeeAchievement, EmployeeFullProfile, DashboardV2, ClientsNewVsReturning,
   OwnerAlert, BestDayOfWeek, RecentReview, RetentionStats,
+  WarehouseSummary, VelocityRow, ReorderItem, CategoryMargin, TopProduct,
+  ActiveWarranty, ClientSources, PerCarChecks, SalaryPremium, JournalDoc,
 } from '../types';
 import type {
   LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams,
@@ -106,6 +108,14 @@ export function createClientsApi(api: HttpClient) {
     update: (id: string, data: UpdateClientRequest) => api.patch<Client>(`/clients/${id}`, data),
     remove: (id: string) => api.delete(`/clients/${id}`),
     exportCsv: () => api.get('/clients/export-csv', { responseType: 'blob' }),
+    /** Update just the source tag (faster path than full client update). */
+    updateSource: (id: string, source: string | null) =>
+      api.patch<Client>(`/clients/${id}/source`, { source }),
+    /** Update just the owner notes. */
+    updateNotes: (id: string, notes: string | null) =>
+      api.patch<Client>(`/clients/${id}/notes`, { notes }),
+    /** Client's checks grouped by car. */
+    checksByCar: (id: string) => api.get<PerCarChecks[]>(`/clients/${id}/checks-by-car`),
     /** Returns existing client with the given phone in the current tenant, or null. */
     lookupByPhone: (phone: string) =>
       api.get<{
@@ -125,6 +135,9 @@ export function createCarsApi(api: HttpClient) {
     create: (data: CreateCarRequest) => api.post<Car>('/cars', data),
     update: (id: string, data: UpdateCarRequest) => api.patch<Car>(`/cars/${id}`, data),
     remove: (id: string) => api.delete(`/cars/${id}`),
+    /** Recent checks for one car. limit capped at 200 server-side. */
+    checks: (carId: string, params?: { limit?: number }) =>
+      api.get<Check[]>(`/cars/${carId}/checks`, { params }),
     /** Returns existing car with the given plate (normalized) in the current tenant, or null. */
     lookupByPlate: (plate: string) =>
       api.get<{
@@ -263,8 +276,36 @@ export function createSalaryApi(api: HttpClient) {
   return {
     getAll: (params?: DateRangeParams) => api.get<MasterSalary[]>('/salary', { params }),
     getMy: () => api.get<SalarySummary>('/salary/my'),
-    getPayments: (params?: { userId?: string; monthYear?: string }) => api.get<SalaryPayment[]>('/salary/payments', { params }),
-    createPayment: (data: { userId: string; amount: number; monthYear: string; type: 'salary' | 'advance'; comment?: string }) => api.post<SalaryPayment>('/salary/payments', data),
+    getPayments: (params?: { userId?: string; monthYear?: string }) =>
+      api.get<SalaryPayment[]>('/salary/payments', { params }),
+    createPayment: (data: {
+      userId: string;
+      amount: number;
+      monthYear: string;
+      type: 'salary' | 'advance' | 'premium';
+      comment?: string;
+    }) => api.post<SalaryPayment>('/salary/payments', data),
+    /**
+     * Employee confirms receipt of a salary payment. Returns the
+     * confirmation timestamp (which is sticky — re-confirming returns the
+     * FIRST confirmation moment).
+     */
+    confirmPayment: (id: string) =>
+      api.post<{ paymentId: string; userId: string; confirmedAt: string }>(`/salary/payments/${id}/confirm`),
+    // Premiums (048_salary_premiums).
+    premiums: {
+      list: (params?: { userId?: string; monthYear?: string }) =>
+        api.get<SalaryPremium[]>('/salary/premiums', { params }),
+      create: (data: {
+        userId: string;
+        type: 'cash' | 'rate_bonus';
+        amount?: number;
+        bonusPercent?: number;
+        reason: string;
+        periodMonthYear?: string;
+      }) => api.post<SalaryPremium>('/salary/premiums', data),
+      remove: (id: string) => api.delete(`/salary/premiums/${id}`),
+    },
   };
 }
 
@@ -322,9 +363,17 @@ export function createWarrantyApi(api: HttpClient) {
      * Active (non-expired, non-used) warranties for the given client and/or car.
      * Either filter (or both) may be supplied; without filters the API
      * returns an empty array rather than the full tenant list.
+     * Backend augments each row with `name` + `daysLeft`.
      */
     activeForClient: (params: { clientId?: string; carId?: string }) =>
-      api.get<WarrantyClaim[]>('/warranty-claims/active', { params }),
+      api.get<Array<WarrantyClaim & { name: string; daysLeft: number }>>('/warranty-claims/active', { params }),
+    /**
+     * Same shape but typed as `ActiveWarranty[]` for the cash screen
+     * convenience — preserves backwards-compat with the older endpoint
+     * naming so consumers can pick whichever they prefer.
+     */
+    active: (params: { clientId?: string; carId?: string }) =>
+      api.get<ActiveWarranty[]>('/warranty-claims/active', { params }),
     /** Mark the warranty as used against a specific (newly-created) check. */
     redeem: (id: string, checkId: string) =>
       api.post<WarrantyClaim>(`/warranty-claims/${id}/redeem`, { checkId }),
@@ -591,6 +640,58 @@ export function createEmployeesApi(api: HttpClient) {
     ) => api.post<EmployeeAchievement>(`/employees/${id}/achievements`, body),
     removeAchievement: (id: string, achId: string) =>
       api.delete(`/employees/${id}/achievements/${achId}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Warehouse analytics (045_stock_value_snapshots + computed endpoints)
+// ───────────────────────────────────────────────────────────────────────
+
+export function createWarehouseAnalyticsApi(api: HttpClient) {
+  return {
+    summary: (params: { warehouseId?: string; period?: 'week' | 'month' | 'quarter' | 'year' }) =>
+      api.get<WarehouseSummary>('/warehouse-analytics/summary', { params }),
+    velocity: (params: { warehouseId?: string; period?: 'week' | 'month' | 'quarter' | 'year' }) =>
+      api.get<VelocityRow[]>('/warehouse-analytics/velocity', { params }),
+    reorderForecast: (params?: { warehouseId?: string }) =>
+      api.get<ReorderItem[]>('/warehouse-analytics/reorder-forecast', { params }),
+    categoryMargin: (params: { period?: 'week' | 'month' | 'quarter' | 'year' }) =>
+      api.get<CategoryMargin[]>('/warehouse-analytics/category-margin', { params }),
+    topMoving: (params: { period?: 'week' | 'month' | 'quarter' | 'year'; limit?: number }) =>
+      api.get<TopProduct[]>('/warehouse-analytics/top-moving', { params }),
+    topMargin: (params: { period?: 'week' | 'month' | 'quarter' | 'year'; limit?: number }) =>
+      api.get<TopProduct[]>('/warehouse-analytics/top-margin', { params }),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Client sources (per-tenant pickable list)
+// ───────────────────────────────────────────────────────────────────────
+
+export function createClientSourcesApi(api: HttpClient) {
+  return {
+    get: () => api.get<ClientSources>('/client-sources'),
+    update: (sources: string[]) => api.post<ClientSources>('/client-sources', { sources }),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Journal (unified warehouse documents feed)
+// ───────────────────────────────────────────────────────────────────────
+
+export function createJournalApi(api: HttpClient) {
+  return {
+    warehouseDocs: (params: {
+      from?: string;
+      to?: string;
+      type?:
+        | 'purchase'
+        | 'return_to_supplier'
+        | 'defect_transfer'
+        | 'writeoff'
+        | 'supplier_payment'
+        | 'used_purchase';
+    }) => api.get<JournalDoc[]>('/journal/warehouse-docs', { params }),
   };
 }
 

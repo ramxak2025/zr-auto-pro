@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ExpensesService } from './expenses.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
@@ -31,9 +31,23 @@ export class ExpensesController {
     return this.expensesService.getAll(user.tenantID, query);
   }
 
+  // Open to all authenticated users. Non-privileged callers need
+  // can_add_expenses=true on their user row — enforced inside the service.
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.expensesService.create(user.tenantID, user.userID, dto);
+    return this.expensesService.create(user.tenantID, user.userID, user.role, dto);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Patch(':id/approve')
+  approve(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.expensesService.approve(id, user.tenantID);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Patch(':id/reject')
+  reject(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.expensesService.reject(id, user.tenantID);
   }
 
   @Roles('director', 'admin', 'superadmin')

@@ -519,7 +519,7 @@ function TenantsTab({
           />
           {search.length > 0 && (
             <TouchableOpacity onPress={() => setSearch('')}>
-              <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
+              <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
             </TouchableOpacity>
           )}
         </View>

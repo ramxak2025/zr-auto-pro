@@ -885,7 +885,7 @@ export default function ChecksScreen() {
                   }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Ionicons name="close-circle" size={14} color={palette.text.tertiary} />
+                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
                 </TouchableOpacity>
               )}
             </TouchableOpacity>
@@ -912,7 +912,7 @@ export default function ChecksScreen() {
                   }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Ionicons name="close-circle" size={14} color={palette.text.tertiary} />
+                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
                 </TouchableOpacity>
               )}
             </TouchableOpacity>

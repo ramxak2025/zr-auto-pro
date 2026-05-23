@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Query, Param, UseGuards } from '@nestjs/common';
 import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
+import { CreatePremiumDto } from './dto/create-premium.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('salary')
@@ -37,5 +38,37 @@ export class SalaryController {
   @Post('payments')
   createPayment(@CurrentUser() user: JwtPayload, @Body() dto: CreateSalaryPaymentDto) {
     return this.salaryService.createPayment(user.tenantID, user.userID, dto);
+  }
+
+  // Employee confirms receipt of a payment. The service rejects calls from
+  // anyone other than the payment owner, so the role gate is intentionally
+  // open here.
+  @Post('payments/:id/confirm')
+  confirmPayment(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.salaryService.confirmPayment(id, user.tenantID, user.userID);
+  }
+
+  // ── Premiums ───────────────────────────────────────────────────────────
+
+  @Roles('director', 'admin', 'superadmin')
+  @Post('premiums')
+  createPremium(@CurrentUser() user: JwtPayload, @Body() dto: CreatePremiumDto) {
+    return this.salaryService.createPremium(user.tenantID, user.userID, dto);
+  }
+
+  /**
+   * Returns the tenant's premiums. With no filters this is the owner's
+   * audit view; passing `?userId=` returns a single master's premiums
+   * (master themselves can use this to see their own awarded premiums).
+   */
+  @Get('premiums')
+  listPremiums(@CurrentUser() user: JwtPayload, @Query() query: { userId?: string; monthYear?: string }) {
+    return this.salaryService.listPremiums(user.tenantID, query || {});
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Delete('premiums/:id')
+  removePremium(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.salaryService.removePremium(id, user.tenantID);
   }
 }

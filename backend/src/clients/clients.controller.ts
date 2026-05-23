@@ -39,6 +39,16 @@ export class ClientsController {
     return this.clientsService.getById(id, user.tenantID);
   }
 
+  /**
+   * Checks for one client grouped by car. Returned shape is
+   * `PerCarChecks[]` so the FE can render a tab-per-car layout without an
+   * extra merge step on its side.
+   */
+  @Get(':id/checks-by-car')
+  getChecksByCar(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.clientsService.getChecksByCar(id, user.tenantID);
+  }
+
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.clientsService.create(user.tenantID, dto);
@@ -47,6 +57,25 @@ export class ClientsController {
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.clientsService.update(id, user.tenantID, dto);
+  }
+
+  /**
+   * Targeted update for the source tag only. The owner often adjusts source
+   * without touching the rest of the client; a focused endpoint avoids the
+   * full diff payload and lets the FE invalidate just the source field.
+   */
+  @Patch(':id/source')
+  updateSource(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { source: string | null }) {
+    return this.clientsService.updateSource(id, user.tenantID, dto?.source ?? null);
+  }
+
+  /**
+   * Owner notes — free-form text used for "VIP клиент", "Не звонить", etc.
+   * Capped at 4000 chars server-side.
+   */
+  @Patch(':id/notes')
+  updateNotes(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { notes: string | null }) {
+    return this.clientsService.updateNotes(id, user.tenantID, dto?.notes ?? null);
   }
 
   @Roles('director', 'admin', 'superadmin')

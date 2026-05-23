@@ -73,6 +73,10 @@ export interface User {
   isActive: boolean;
   /** Free-text team grouping. Null/empty → "Без группы" on the FE. */
   team?: string | null;
+  /** Per-employee permission to submit /expenses entries. Off by default. */
+  canAddExpenses?: boolean;
+  /** When set, non-privileged users' daily expense submissions auto-flip to 'pending' once the total crosses this number. */
+  dailyExpenseLimit?: number | null;
   tenantId?: string;
   tenant?: Tenant;
   createdAt: string;
@@ -109,6 +113,12 @@ export interface Client {
   fullName: string;
   phone: string;
   comment?: string;
+  /** Acquisition source tag — value from `client_sources.sources` (e.g. "Яндекс", "Авито"). */
+  source?: string | null;
+  /** Owner-only free-form notes about the client. Capped at 4000 chars server-side. */
+  ownerNotes?: string | null;
+  /** True for the tenant's pinned "Розничный покупатель". */
+  isRetail?: boolean;
   cars?: Car[];
   checks?: Check[];
   createdAt: string;
@@ -362,11 +372,13 @@ export interface SalaryPayment {
   userName?: string;
   amount: number;
   monthYear: string;
-  type: 'salary' | 'advance';
+  type: 'salary' | 'advance' | 'premium';
   comment?: string;
   createdBy?: string;
   creatorName?: string;
   date: string;
+  /** When the employee confirmed receipt (049_salary_payment_confirmations). Null until confirmed. */
+  confirmedAt?: string | null;
   createdAt: string;
 }
 
@@ -377,12 +389,16 @@ export interface MasterSalary {
   productSalaryPercent?: number;
   serviceEarnings?: number;
   productEarnings?: number;
+  /** Sum of `type='cash'` premiums awarded inside the period (048_salary_premiums). */
+  premiumsAmount?: number;
   totalEarnings: number;
   totalRevenue: number;
   checkCount: number;
   paidAmount: number;
   remainingAmount: number;
   payments?: SalaryPayment[];
+  /** Premium rows awarded inside the period. */
+  premiums?: SalaryPremium[];
 }
 
 export interface ProductPromotion {
@@ -500,6 +516,13 @@ export interface Expense {
   date: string;
   userId?: string;
   userName?: string;
+  /** User who entered the row (047_expenses_by_employee). */
+  createdBy?: string;
+  creatorName?: string;
+  /** 'owner' for owner/director/admin-created, 'employee' for non-privileged submitters. */
+  source?: 'owner' | 'employee';
+  /** 'approved' (default), 'pending' (over limit), 'rejected'. */
+  approvalStatus?: 'approved' | 'pending' | 'rejected';
   createdAt: string;
 }
 
@@ -796,4 +819,130 @@ export interface RetentionStats {
   returningRate: number;
   avgLtv: number;
   avgDaysBetweenVisits: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Warehouse analytics (045_stock_value_snapshots + computed endpoints)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface WarehouseSummary {
+  stockValueStart: number;
+  stockValueCurrent: number;
+  stockValueDelta: number;
+  deltaPct: number;
+  itemsCount: number;
+  deadStock30: { count: number; value: number };
+  deadStock60: { count: number; value: number };
+  deadStock90: { count: number; value: number };
+  abcAnalysis: { tier: 'A' | 'B' | 'C'; count: number; value: number; pct: number }[];
+  avgMargin: number;
+  gmroi: number;
+  overStocked: { id: string; name: string; stock: number; sales: number }[];
+  understocked: { id: string; name: string; stock: number; sales: number }[];
+}
+
+export interface VelocityRow {
+  productId: string;
+  name: string;
+  soldQty: number;
+  avgDailySales: number;
+  currentStock: number;
+  daysOfStock: number;
+}
+
+export interface ReorderItem {
+  productId: string;
+  name: string;
+  currentStock: number;
+  avgDailySales: number;
+  daysOfStock: number;
+  urgency: 'critical' | 'now' | 'soon' | 'overstocked';
+  recommendedOrderQty: number;
+}
+
+export interface CategoryMargin {
+  category: string;
+  revenue: number;
+  cost: number;
+  margin: number;
+  marginPct: number;
+}
+
+export interface TopProduct {
+  productId: string;
+  name: string;
+  soldQty: number;
+  revenue: number;
+  profit: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Active warranties (cash screen helper)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface ActiveWarranty {
+  kind: 'product' | 'service';
+  name: string;
+  expiresAt: string;
+  daysLeft: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Client sources (046_clients_source) and per-car checks (052)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface ClientSources {
+  sources: string[];
+}
+
+export interface PerCarChecks {
+  carId: string;
+  carPlate?: string;
+  makeModel?: string;
+  checks: Array<{
+    id: string;
+    number: number;
+    date: string;
+    totalRevenue: number;
+    paymentMethod?: string;
+    masterName?: string | null;
+    carPlate?: string | null;
+    carMakeModel?: string | null;
+    isReturned?: boolean;
+    isDeferred?: boolean;
+  }>;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Salary premiums (048_salary_premiums)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface SalaryPremium {
+  id: string;
+  userId: string;
+  userName?: string;
+  type: 'cash' | 'rate_bonus';
+  amount?: number;
+  bonusPercent?: number;
+  reason: string;
+  periodMonthYear?: string;
+  awardedBy?: string;
+  awarderName?: string;
+  awardedAt: string;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Journal / warehouse documents (050_journal_warehouse_docs_index)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface JournalDoc {
+  id: string;
+  kind: 'purchase' | 'return_to_supplier' | 'defect_transfer' | 'writeoff' | 'supplier_payment' | 'used_purchase';
+  occurredAt: string;
+  title: string;
+  subtitle?: string;
+  amount: number;
+  badge: string;
+  badgeColor: string;
+  payeeName?: string;
 }
