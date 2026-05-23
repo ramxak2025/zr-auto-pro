@@ -9,7 +9,7 @@ import helmet from 'helmet';
 // `compression` ships as CommonJS without a default export — using a
 // default import compiles to `compression_1.default()` which is undefined
 // in production. require() avoids the interop wrapper entirely.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
 const compression = require('compression');
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
