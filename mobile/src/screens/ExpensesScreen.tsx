@@ -562,6 +562,12 @@ export default function ExpensesScreen() {
     mutationFn: (d: any) => expensesApi.create(d),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      // A new expense changes the owner's daily P&L and cashflow.
+      // The user perceives the dashboard as "fresh" only when these
+      // refresh in the background.
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
       setModalOpen(false);
       resetForm();
       haptic('success');
@@ -573,6 +579,9 @@ export default function ExpensesScreen() {
     mutationFn: (id: string) => expensesApi.remove(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении'),
   });
@@ -581,6 +590,11 @@ export default function ExpensesScreen() {
     mutationFn: (id: string) => expensesApi.approve(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      // Approval flips the row into the "approved" bucket — dashboard
+      // reflects the delta only after these refetch.
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
     },
     onError: () => Alert.alert('Ошибка', 'Не удалось одобрить расход'),
   });
@@ -589,6 +603,9 @@ export default function ExpensesScreen() {
     mutationFn: (id: string) => expensesApi.reject(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
     },
     onError: () => Alert.alert('Ошибка', 'Не удалось отклонить расход'),
   });

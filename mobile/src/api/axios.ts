@@ -56,6 +56,30 @@ export function onAuthExpired(listener: AuthListener) {
   };
 }
 
+/**
+ * Auth-expiry coalescer — a wave of parallel 401s (8+ dashboard queries
+ * all hit the API at once with a stale token) would otherwise fire the
+ * listeners 8 times, each one triggering `queryClient.clear()` /
+ * `clearPersistentCache()` / state updates. We collapse them into a
+ * single notification per 2 s window.
+ */
+let lastAuthExpiredAt = 0;
+const AUTH_EXPIRED_COALESCE_MS = 2_000;
+
+function fireAuthExpired() {
+  const now = Date.now();
+  if (now - lastAuthExpiredAt < AUTH_EXPIRED_COALESCE_MS) return;
+  lastAuthExpiredAt = now;
+  authListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      // Listener errors must not block other listeners or the next
+      // 401 from firing the chain.
+    }
+  });
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError<{ message?: string }>) => {
@@ -71,9 +95,11 @@ api.interceptors.response.use(
     const status = error.response.status;
 
     if (status === 401) {
-      await AsyncStorage.removeItem('token');
-      await AsyncStorage.removeItem('user');
-      authListeners.forEach((fn) => fn());
+      // Best-effort cleanup of the stale token; if another parallel 401
+      // already removed it, this is a no-op.
+      await AsyncStorage.removeItem('token').catch(() => {});
+      await AsyncStorage.removeItem('user').catch(() => {});
+      fireAuthExpired();
     }
 
     return Promise.reject(error);

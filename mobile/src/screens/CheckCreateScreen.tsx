@@ -953,8 +953,20 @@ export default function CheckCreateScreen() {
     },
     onSuccess: async (res: any) => {
       submittingRef.current = false;
+      // After creating / editing a check we have to bust every cache
+      // entry that the new revenue / inventory delta touches. The legacy
+      // `['dashboard']` invalidation was a no-op (no such key exists);
+      // expand to the real dashboard/journal/inventory keys so the owner
+      // sees fresh numbers without manually pulling-to-refresh.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      queryClient.invalidateQueries({ queryKey: ['low-stock'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-analytics'] });
 
       // Upload pending local photos (create-mode only — in edit mode they
       // were already uploaded immediately on pick). Snapshot the list

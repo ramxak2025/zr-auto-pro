@@ -319,7 +319,13 @@ export default function CheckDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['check', id] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      // Real dashboard/journal keys (the legacy `['dashboard']` slug
+      // didn't match any active query — see commit fixing CheckCreate).
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['low-stock'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-analytics'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
       setReturnModalOpen(false);
       Alert.alert('Возврат оформлен', 'Чек помечен как возвращённый.');

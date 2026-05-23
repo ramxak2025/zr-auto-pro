@@ -435,6 +435,11 @@ export default function SalaryScreen() {
       );
       setFormMasterId(null);
       queryClient.invalidateQueries({ queryKey: ['salary'] });
+      // Salary paid out — cash leaves the till; owner expects the
+      // dashboard cash position and cashflow ledger to drop immediately
+      // without manual refresh.
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
     },
     onError: (err: any) => {
       haptic('error');

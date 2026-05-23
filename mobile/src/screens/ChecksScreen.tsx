@@ -547,7 +547,13 @@ export default function ChecksScreen() {
       // any longer key that starts with it.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      // Real dashboard keys (legacy `['dashboard']` matched no active
+      // query). Owner deleting a check from the Journal still wants
+      // the dashboard / cashflow numbers to drop accordingly.
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
     },
   });
 

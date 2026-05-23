@@ -314,6 +314,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // Listen for 401 events from axios interceptor
   useEffect(() => {
     return onAuthExpired(() => {
+      // Cancel every in-flight refetch BEFORE clearing the cache —
+      // otherwise a still-pending request lands after we've cleared
+      // state and resurrects a stale `queryClient` entry under a
+      // re-authenticated session (mixing tenants A and B briefly).
+      queryClient?.cancelQueries().catch(() => {});
       setToken(null);
       setUser(null);
       // Clear persistent cache so the next login starts fresh
@@ -332,6 +337,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     async (phone: string, password: string) => {
       const res = await authApi.login({ phone, password });
       const { token: t, user: u } = res.data;
+      // Cross-tenant safety: even though `logout()` is the normal path
+      // off-board user A's data, a crash/kill mid-session can leave
+      // `rqcache:v1:*` entries belonging to A in AsyncStorage. When user
+      // B then logs in on the same device, we MUST start with an empty
+      // QueryClient + empty persistent cache before persisting B's data.
+      queryClient?.cancelQueries().catch(() => {});
+      queryClient?.clear();
+      await clearPersistentCache().catch(() => {});
       await AsyncStorage.setItem('token', t);
       setToken(t);
       setUser(u);
@@ -351,6 +364,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
 
   const logout = useCallback(async () => {
     authApi.logout().catch(() => {});
+    // Cancel in-flight queries first so a stale request can't land
+    // after we've torn down state and revive an entry under the next
+    // user's session.
+    queryClient?.cancelQueries().catch(() => {});
     await AsyncStorage.removeItem('token');
     await clearPersistentCache().catch(() => {});
     queryClient?.clear();

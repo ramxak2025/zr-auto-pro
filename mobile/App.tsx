@@ -15,6 +15,7 @@ import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
 import { colors } from './src/theme';
 import { hydrateCache, attachPersistence } from './src/utils/persistentCache';
+import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
 
 // Configure how notifications are handled when the app is in the foreground.
 // Must be set before any notification arrives — top-level call outside component.
@@ -53,6 +54,7 @@ export default function App() {
   const [authResolved, setAuthResolved] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
   const persistenceCleanup = useRef<(() => void) | null>(null);
+  const foregroundCleanup = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +63,12 @@ export default function App() {
     // we waited for hydration to finish before subscribing, which meant
     // the first batch of post-login queries silently bypassed the cache.
     persistenceCleanup.current = attachPersistence(queryClient);
+    // Foreground revalidation — invalidate critical dashboard/journal
+    // queries whenever the app comes back to `active` state. So the user
+    // who put the phone down at lunch and reopens at 14:00 sees the
+    // freshest cash position immediately, instead of yesterday's snapshot
+    // plus a manual pull-to-refresh.
+    foregroundCleanup.current = attachForegroundRevalidation(queryClient);
     // Hydration runs in the background — we do NOT gate the first render
     // on it. With an expanded whitelist (~25 keys), the AsyncStorage
     // multiGet + JSON.parse loop costs ~200-500ms on a cold start. While
@@ -75,6 +83,8 @@ export default function App() {
       cancelled = true;
       persistenceCleanup.current?.();
       persistenceCleanup.current = null;
+      foregroundCleanup.current?.();
+      foregroundCleanup.current = null;
     };
   }, []);
 
