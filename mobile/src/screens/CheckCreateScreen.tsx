@@ -61,7 +61,7 @@ import type {
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
-import WarrantyBanner from '../components/WarrantyBanner';
+import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -1316,11 +1316,12 @@ export default function CheckCreateScreen() {
                   </View>
                 )}
                 <LastVisitBadge clientId={selectedClient.id} carId={selectedCar?.id} />
-                {/* Active warranty for this client/car. Informational
-                    only — backend auto-redeems on check finalisation,
-                    so we render the same banner for edits of deferred
-                    checks too. Hidden when no claims are returned. */}
-                <WarrantyBanner clientId={selectedClient.id} carId={selectedCar?.id} />
+                {/* Active warranties for this client / car. Premium
+                    section with per-item urgency chips (green/amber/
+                    red by daysLeft). Backend auto-redeems on check
+                    finalisation, so this block is informational and
+                    hides itself when there are no active warranties. */}
+                <ActiveWarrantiesSection clientId={selectedClient.id} carId={selectedCar?.id} />
               </View>
             ) : (
               <>

@@ -34,6 +34,9 @@ import EquipmentScreen, { EquipmentEmployeeScreen } from '../screens/EquipmentSc
 import EmployeesScreen from '../screens/EmployeesScreen';
 import EmployeeDetailScreen from '../screens/EmployeeDetailScreen';
 import TrashScreen from '../screens/TrashScreen';
+import MailingsScreen from '../screens/MailingsScreen';
+import IntegrationsScreen from '../screens/IntegrationsScreen';
+import WarehouseAnalyticsScreen from '../screens/WarehouseAnalyticsScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import FeatureGate from '../components/FeatureGate';
 
@@ -100,7 +103,14 @@ export type RootStackParamList = {
   CheckCreate: { id?: string } | undefined;
   CheckDetail: { id: string };
   ClientDetail: { id: string };
-  SupplierDetail: { id: string };
+  /**
+   * `openDefectReturn` — set when the caller (typically the suppliers
+   * list "Возврат брака" header CTA) wants the detail screen to
+   * auto-open the defect-return modal once supplier + defect warehouse
+   * are loaded. Detail screen consumes the flag once via useEffect and
+   * resets navigation state so a re-mount doesn't re-trigger it.
+   */
+  SupplierDetail: { id: string; openDefectReturn?: boolean };
 };
 
 export type TabParamList = {
@@ -169,6 +179,9 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Reports" component={gated('reports_view', ReportsScreen)} />
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
       <MoreStack.Screen name="Calls" component={CallsScreen} />
+      <MoreStack.Screen name="Mailings" component={MailingsScreen} />
+      <MoreStack.Screen name="Integrations" component={IntegrationsScreen} />
+      <MoreStack.Screen name="WarehouseAnalytics" component={WarehouseAnalyticsScreen} />
       <MoreStack.Screen name="Equipment" component={EquipmentStackNavigator} />
       <MoreStack.Screen name="Users" component={gated('users_manage', UsersScreen)} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />

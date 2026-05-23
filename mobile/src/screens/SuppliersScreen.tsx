@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,11 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Swipeable } from 'react-native-gesture-handler';
+import { LinearGradient } from 'expo-linear-gradient';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -46,6 +48,12 @@ function formatMoney(v: number) {
 // Memo works because the props are primitive + stable callbacks via
 // useCallback in the parent (onPress / onEdit / onDelete). Swipeable
 // retains its native handler across renders thanks to that stability.
+//
+// NOTE: this row only renders REGULAR (non-system) suppliers. The
+// pinned `kind === 'used_purchase'` system supplier is rendered above
+// the FlashList by `SystemSupplierCard` so we can give it a fully
+// distinct visual treatment (accent gradient, no swipe affordance,
+// dedicated subtitle).
 interface SupplierRowProps {
   item: Supplier;
   index: number;
@@ -83,11 +91,6 @@ const SupplierRow = React.memo(function SupplierRow({
   iconCircleCleanColor,
 }: SupplierRowProps) {
   const hasDebt = item.currentDebt > 0;
-  // System suppliers (currently only "Покупка б/у товара") render with a
-  // distinct icon + chip and skip the swipe-to-delete affordance — the
-  // backend would 403 anyway.
-  const isSystem = !!item.isSystem;
-  const isUsedPurchase = item.kind === 'used_purchase';
 
   const card = (
     <AnimatedCard
@@ -100,17 +103,13 @@ const SupplierRow = React.memo(function SupplierRow({
         <View
           style={[
             styles.iconCircle,
-            isSystem
-              ? styles.iconCircleSystem
-              : hasDebt
-                ? styles.iconCircleDebt
-                : [styles.iconCircleClean, { backgroundColor: iconCircleCleanBg }],
+            hasDebt ? styles.iconCircleDebt : [styles.iconCircleClean, { backgroundColor: iconCircleCleanBg }],
           ]}
         >
           <Ionicons
-            name={isUsedPurchase ? 'cube-outline' : hasDebt ? 'wallet-outline' : 'business-outline'}
+            name={hasDebt ? 'wallet-outline' : 'business-outline'}
             size={18}
-            color={isSystem ? colors.primary[600] : hasDebt ? colors.orange[600] : iconCircleCleanColor}
+            color={hasDebt ? colors.orange[600] : iconCircleCleanColor}
           />
         </View>
         <View style={styles.info}>
@@ -118,17 +117,10 @@ const SupplierRow = React.memo(function SupplierRow({
             <Text style={[styles.cardName, { color: textPrimary }]} numberOfLines={1}>
               {item.name}
             </Text>
-            {isSystem ? (
-              <View style={styles.systemChip}>
-                <Text style={styles.systemChipText}>СИСТЕМНЫЙ</Text>
-              </View>
-            ) : null}
           </View>
           <Text style={[styles.cardSub, { color: textTertiary }]} numberOfLines={1}>
-            {isUsedPurchase
-              ? 'Покупка б/у у клиентов'
-              : [item.contactPerson, item.phone ? formatPhone(item.phone) : null].filter(Boolean).join(' · ') ||
-                'Без контактов'}
+            {[item.contactPerson, item.phone ? formatPhone(item.phone) : null].filter(Boolean).join(' · ') ||
+              'Без контактов'}
           </Text>
         </View>
         <View style={styles.amountWrap}>
@@ -146,9 +138,7 @@ const SupplierRow = React.memo(function SupplierRow({
     </AnimatedCard>
   );
 
-  // System rows are uneditable + undeletable — return the bare card
-  // with no swipe affordance regardless of caller permissions.
-  if (isSystem || !canDelete) return card;
+  if (!canDelete) return card;
 
   return (
     <Swipeable
@@ -175,6 +165,62 @@ const SupplierRow = React.memo(function SupplierRow({
   );
 });
 
+// ── SystemSupplierCard ─────────────────────────────────────────────────
+// Distinct visual treatment for the pinned «Покупка б/у товара»
+// system supplier. Per UX spec:
+//   • not the regular gray card — uses a primary-tinted gradient
+//     surface that visually separates it from contractor suppliers,
+//   • no phone / contact info (it's a system channel, not a person),
+//   • dedicated icon row (package + arrow-down) reinforcing the
+//     "inbound used goods purchase" semantics,
+//   • subtitle "Покупка б/у товаров от клиентов и третьих лиц",
+//   • no swipe-to-delete (the backend would 403 anyway),
+//   • renders above the FlashList with a section header / separator
+//     below to break the visual rhythm before the regular list begins.
+interface SystemSupplierCardProps {
+  item: Supplier;
+  onPress: (id: string) => void;
+  onPressIn: (id: string) => void;
+}
+const SystemSupplierCard = React.memo(function SystemSupplierCard({ item, onPress, onPressIn }: SystemSupplierCardProps) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={() => onPress(item.id)}
+      onPressIn={() => onPressIn(item.id)}
+      style={styles.systemCardWrap}
+    >
+      <LinearGradient
+        colors={[colors.primary[50], colors.primary[100]]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.systemCardSurface}
+      >
+        <View style={styles.systemIconCircle}>
+          <Ionicons name="cube-outline" size={20} color={colors.primary[700]} />
+          <View style={styles.systemIconBadge}>
+            <Ionicons name="arrow-down" size={10} color={colors.white} />
+          </View>
+        </View>
+        <View style={styles.systemInfo}>
+          <View style={styles.systemNameRow}>
+            <Text style={styles.systemName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <View style={styles.systemChip}>
+              <Text style={styles.systemChipText}>СИСТЕМНЫЙ</Text>
+            </View>
+          </View>
+          <Text style={styles.systemSubtitle} numberOfLines={2}>
+            Покупка б/у товаров от клиентов и третьих лиц
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.primary[600]} />
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+});
+
 export default function SuppliersScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -191,6 +237,15 @@ export default function SuppliersScreen() {
 
   // Confirm dialog state — driven by row swipe.
   const [pendingDelete, setPendingDelete] = useState<Supplier | null>(null);
+
+  // Header CTA «Возврат брака» — opens a supplier picker sheet. After
+  // the owner taps a contractor we navigate to its detail screen with
+  // `openDefectReturn: true`, which auto-opens the existing defect
+  // return modal there. We don't host the defect-return flow at the
+  // list level because the modal needs supplier-scoped data (defect
+  // warehouse contents filtered by purchase history, etc.) that the
+  // detail screen already loads.
+  const [defectPickerOpen, setDefectPickerOpen] = useState(false);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
@@ -231,6 +286,39 @@ export default function SuppliersScreen() {
       : suppliersRaw === undefined
         ? undefined
         : [];
+
+  // Split system vs. regular suppliers. The system row (pinned
+  // "Покупка б/у товара") is rendered above the FlashList with a
+  // distinct visual treatment; the FlashList itself only paints
+  // contractor suppliers. We don't filter out from a separate list —
+  // useMemo keeps the partition stable across keystrokes so FlashList
+  // doesn't tear down rows when search debounces.
+  const { systemSupplier, regularSuppliers } = useMemo(() => {
+    const list = suppliers ?? [];
+    let system: Supplier | null = null;
+    const regular: Supplier[] = [];
+    for (const s of list) {
+      if (s.isSystem || s.kind === 'used_purchase') {
+        // Backend may return multiple system rows in theory; keep the
+        // first and let the rest fall through as "regular" so the
+        // owner can still see them rather than silently dropping data.
+        if (!system) {
+          system = s;
+          continue;
+        }
+      }
+      regular.push(s);
+    }
+    return { systemSupplier: system, regularSuppliers: regular };
+  }, [suppliers]);
+
+  // Sheet picker list — only real contractors. The system row is
+  // excluded because the defect-return flow doesn't apply to it (it
+  // has no standard deliveries / purchase records to return against).
+  const defectPickerSuppliers = useMemo(
+    () => regularSuppliers.filter((s) => !s.isSystem && s.kind !== 'used_purchase'),
+    [regularSuppliers],
+  );
 
   const createMutation = useMutation({
     mutationFn: (d: any) => suppliersApi.create(d),
@@ -321,6 +409,20 @@ export default function SuppliersScreen() {
   const handlePressSupplier = useCallback((id: string) => navigation.navigate('SupplierDetail', { id }), [navigation]);
   const handleDeleteSupplier = useCallback((s: Supplier) => setPendingDelete(s), []);
 
+  // Defect-return picker → SupplierDetail with auto-open flag. Closes
+  // the sheet first so the next-screen mount doesn't fight a backdrop
+  // dismiss animation.
+  const handlePickDefectSupplier = useCallback(
+    (id: string) => {
+      setDefectPickerOpen(false);
+      // Tiny delay matches the Modal close animation; without it the
+      // detail screen mounts before the sheet has fully dismissed,
+      // which produces a visible flicker on iOS.
+      setTimeout(() => navigation.navigate('SupplierDetail', { id, openDefectReturn: true }), 250);
+    },
+    [navigation],
+  );
+
   // Prefetch-on-tap — by the time SupplierDetailScreen mounts, the
   // canonical query is already in flight (often resolved). Fires from
   // the row's `onPressIn`, BEFORE the navigation push.
@@ -367,15 +469,60 @@ export default function SuppliersScreen() {
     ],
   );
 
+  // Pinned system row — rendered as the FlashList's ListHeaderComponent
+  // so it shares the same scroll surface as the regular rows. Falsy
+  // when the backend hasn't sent a system supplier (e.g. very old
+  // tenants pre-migration).
+  const listHeader = systemSupplier ? (
+    <View>
+      <SystemSupplierCard
+        item={systemSupplier}
+        onPress={handlePressSupplier}
+        onPressIn={handlePressInSupplier}
+      />
+      {/* Section separator — small label + hairline divider so the
+          regular contractor list visually starts as its own block. */}
+      <View style={styles.sectionSeparator}>
+        <View style={[styles.sectionDivider, { backgroundColor: palette.border.subtle }]} />
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>ПОСТАВЩИКИ</Text>
+        <View style={[styles.sectionDivider, { backgroundColor: palette.border.subtle }]} />
+      </View>
+    </View>
+  ) : null;
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
         title="Поставщики"
         onBack={() => navigation.goBack()}
         trailing={
-          <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-            <Text style={styles.addBtnText}>+ Новый</Text>
-          </TouchableOpacity>
+          /* Trailing slot now hosts TWO actions:
+             1) «Возврат брака» — secondary, opens a supplier picker
+                sheet that forwards to SupplierDetail with the
+                auto-open flag.
+             2) «+ Новый» — primary, opens the create-supplier modal.
+             Both stay inside the standard 36pt IosScreenHeader
+             trailing zone via a small flex row. */
+          <View style={styles.headerTrailing}>
+            <TouchableOpacity
+              onPress={() => setDefectPickerOpen(true)}
+              style={[
+                styles.headerSecondaryBtn,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+              ]}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Возврат брака"
+            >
+              <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
+              <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
+                Возврат брака
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.addBtn} onPress={openCreate} hitSlop={8} accessibilityLabel="Новый поставщик">
+              <Ionicons name="add" size={18} color={colors.white} />
+            </TouchableOpacity>
+          </View>
         }
       />
       {/* FreshnessBadge — HYBRID-perf plan. Tiny pulsing label that
@@ -402,9 +549,21 @@ export default function SuppliersScreen() {
         />
       ) : (
         <FlashList
-          data={suppliers}
+          data={regularSuppliers}
           keyExtractor={(i) => i.id}
           renderItem={renderSupplier}
+          ListHeaderComponent={listHeader}
+          ListEmptyComponent={
+            // When ONLY the system supplier exists (no contractors yet)
+            // we still want to render a friendly nudge below it.
+            systemSupplier && regularSuppliers.length === 0 ? (
+              <View style={styles.listEmptyHint}>
+                <Text style={[styles.listEmptyHintText, { color: palette.text.tertiary }]}>
+                  Контрагентов пока нет. Добавьте первого поставщика.
+                </Text>
+              </View>
+            ) : null
+          }
           contentContainerStyle={styles.list}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -414,6 +573,64 @@ export default function SuppliersScreen() {
           }
         />
       )}
+
+      {/* Возврат брака picker — appears when the owner taps the header
+          CTA. Lists only real contractors (system row excluded by
+          definition — defect returns don't apply to it). Selecting a
+          row navigates to SupplierDetail with openDefectReturn:true. */}
+      <Modal visible={defectPickerOpen} onClose={() => setDefectPickerOpen(false)} title="Возврат брака">
+        <Text style={[styles.pickerHint, { color: palette.text.secondary }]}>
+          Выберите поставщика, которому нужно вернуть бракованный товар. После выбора откроется форма возврата.
+        </Text>
+        {defectPickerSuppliers.length === 0 ? (
+          <View style={styles.pickerEmpty}>
+            <Ionicons name="business-outline" size={32} color={palette.text.tertiary} />
+            <Text style={[styles.pickerEmptyText, { color: palette.text.tertiary }]}>Контрагенты не найдены</Text>
+          </View>
+        ) : (
+          <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
+            {defectPickerSuppliers.map((s) => {
+              const hasDebt = s.currentDebt > 0;
+              return (
+                <TouchableOpacity
+                  key={s.id}
+                  style={[styles.pickerRow, { borderBottomColor: palette.border.subtle }]}
+                  onPress={() => handlePickDefectSupplier(s.id)}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.iconCircle,
+                      hasDebt ? styles.iconCircleDebt : [styles.iconCircleClean, { backgroundColor: palette.bg.muted }],
+                    ]}
+                  >
+                    <Ionicons
+                      name={hasDebt ? 'wallet-outline' : 'business-outline'}
+                      size={16}
+                      color={hasDebt ? colors.orange[600] : palette.text.tertiary}
+                    />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.pickerName, { color: palette.text.primary }]} numberOfLines={1}>
+                      {s.name}
+                    </Text>
+                    {hasDebt ? (
+                      <Text style={styles.pickerDebt} numberOfLines={1}>
+                        Долг {formatMoney(s.currentDebt)}
+                      </Text>
+                    ) : (
+                      <Text style={[styles.pickerSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                        Без долга
+                      </Text>
+                    )}
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
+      </Modal>
 
       <Modal visible={modalOpen} onClose={closeModal} title={editingSupplier ? 'Редактировать' : 'Новый поставщик'}>
         <View style={styles.formField}>
@@ -522,11 +739,40 @@ const styles = StyleSheet.create({
   headerIcon: { width: 36, height: 36, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
   backText: { fontSize: fontSize.sm, color: colors.primary[600], fontWeight: fontWeight.medium },
   title: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  // ── Header trailing slot ────────────────────────────────────────
+  // Two compact actions live in the 36pt trailing zone. The defect
+  // return CTA is a pill (icon + label) so the label is discoverable
+  // for first-time users; «+ Новый» is a squircle icon-only button —
+  // it's the screen's primary mutation and the icon alone is
+  // unambiguous in iOS UX (this is exactly the pattern Mail / Notes
+  // use for "compose").
+  headerTrailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  headerSecondaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2.5],
+    height: 32,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  headerSecondaryText: {
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: -0.1,
+    maxWidth: 110,
+  },
   addBtn: {
     backgroundColor: colors.primary[600],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   searchWrap: { paddingHorizontal: spacing[4] },
@@ -550,6 +796,125 @@ const styles = StyleSheet.create({
   iconCircleClean: { backgroundColor: colors.gray[100] },
   iconCircleDebt: { backgroundColor: colors.orange[50] },
   iconCircleSystem: { backgroundColor: colors.primary[50] },
+  // ── Pinned system supplier card ─────────────────────────────────
+  // Distinct surface vs. the regular gray row: subtle primary-tinted
+  // gradient, larger padding, dedicated icon treatment. Stands apart
+  // from the contractor list so the owner reads it as "this is the
+  // built-in б/у purchase channel, not a vendor".
+  systemCardWrap: {
+    marginHorizontal: spacing[3],
+    marginTop: spacing[2],
+    marginBottom: spacing[2],
+    borderRadius: borderRadius['2xl'],
+    overflow: 'hidden',
+  },
+  systemCardSurface: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3.5],
+    borderWidth: 1,
+    borderColor: colors.primary[200],
+    borderRadius: borderRadius['2xl'],
+  },
+  systemIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.primary[900],
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  // Tiny inset arrow-down chip on the icon — reinforces the
+  // "inbound goods" semantics without crowding the label.
+  systemIconBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.white,
+  },
+  systemInfo: { flex: 1, minWidth: 0 },
+  systemNameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+  systemName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.primary[900],
+    letterSpacing: -0.2,
+    flexShrink: 1,
+  },
+  systemSubtitle: {
+    fontSize: 12,
+    color: colors.primary[700],
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  // Section separator between the pinned system row and the regular
+  // contractor list. Hairline + small label, iOS-grouped style.
+  sectionSeparator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[2],
+  },
+  sectionDivider: {
+    flex: 1,
+    height: StyleSheet.hairlineWidth,
+  },
+  sectionLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+  },
+  listEmptyHint: {
+    paddingHorizontal: spacing[6],
+    paddingVertical: spacing[6],
+    alignItems: 'center',
+  },
+  listEmptyHintText: {
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  // Defect-return picker sheet rows. Lightweight — same iconography
+  // as the main list but tighter padding so the sheet stays compact.
+  pickerHint: {
+    fontSize: fontSize.sm,
+    lineHeight: 18,
+    marginBottom: spacing[3],
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  pickerName: { fontSize: 14, fontWeight: '600', letterSpacing: -0.1 },
+  pickerSub: { fontSize: 11, marginTop: 1 },
+  pickerDebt: { fontSize: 11, color: colors.orange[600], fontWeight: '600', marginTop: 1 },
+  pickerEmpty: {
+    alignItems: 'center',
+    paddingVertical: spacing[6],
+    gap: spacing[2],
+  },
+  pickerEmptyText: {
+    fontSize: 13,
+  },
   info: { flex: 1, minWidth: 0 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
   // System chip — subtle pill next to the supplier name on the pinned

@@ -3,7 +3,6 @@ import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert, Scroll
 import { FlashList } from '@shopify/flash-list';
 import { ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -11,19 +10,18 @@ import { useNavigation } from '@react-navigation/native';
 // entityLinks намеренно не импортируются здесь: тап по карточке журнала
 // должен всегда вести в CheckDetail, а не на клиента/авто/мастера.
 // Переходы на сущности живут внутри открытой деталки чека.
-import { checksApi, usersApi, productsApi, suppliersApi } from '../api/services';
+import { checksApi, usersApi, journalApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import SearchInput from '../components/SearchInput';
-import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Check, PaginatedResponse, User, StockMovement, Delivery } from '../../../shared/types';
+import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -63,62 +61,71 @@ const paymentStatusColors: Record<string, { bg: string; text: string }> = {
   unpaid: { bg: colors.red[50], text: colors.red[700] },
 };
 
-const movementTypeLabels: Record<string, string> = {
-  inventory: 'Инвентаризация',
-  writeoff: 'Списание',
-  income: 'Приход',
-  expense: 'Расход',
-  // Новые типы (миграция 0XX_defect_used_returns). UI-имена согласованы с
-  // веб-журналом и backend StockMovementType (shared/types).
-  defect_transfer: 'Перенос в брак',
-  used_transfer: 'Перенос в Б/У',
-  defect_return_to_supplier: 'Возврат поставщику',
+// ── Journal warehouse-docs kind metadata ───────────────────────────────
+// Owner-facing labels for each JournalDoc kind. Mirrors the backend
+// `KIND_META` map (backend/src/journal/journal.service.ts) so chip
+// labels and row titles stay consistent across web and mobile.
+type JournalKind = JournalDoc['kind'];
+
+const journalKindLabels: Record<JournalKind, string> = {
+  purchase: 'Покупки',
+  return_to_supplier: 'Возвраты',
+  defect_transfer: 'Брак',
+  writeoff: 'Списания',
+  supplier_payment: 'Платежи',
+  used_purchase: 'Б/У',
 };
 
-// Special label for `isUsedPurchase=true` rows — overrides the generic
-// "Приход" label coming from movementTypeLabels.income.
-const USED_PURCHASE_LABEL = 'Покупка Б/У';
-
-const movementTypeIcons: Record<string, { name: keyof typeof Ionicons.glyphMap; color: string; accentColor: string }> =
+// Visual tokens for each JournalDoc kind. Used by both the row card
+// (left accent bar + icon background) and the kind chip filter row.
+// Each block intentionally uses a distinct color so a glance is enough
+// to tell a purchase apart from a writeoff / payment / used-purchase.
+const journalKindVisual: Record<
+  JournalKind,
   {
-    inventory: { name: 'clipboard-outline', color: colors.blue[600], accentColor: colors.blue[500] },
-    writeoff: { name: 'trash-outline', color: colors.red[600], accentColor: colors.red[500] },
-    income: { name: 'arrow-down-outline', color: colors.green[600], accentColor: colors.green[500] },
-    expense: { name: 'arrow-up-outline', color: colors.orange[500], accentColor: colors.orange[500] },
-    // Перенос в брак — янтарный (предупреждение, но не критический «трэш»),
-    // икона щита-предостережения. amber[600] используется и для бордера —
-    // в нашей палитре нет 500.
-    defect_transfer: { name: 'warning-outline', color: colors.amber[600], accentColor: colors.amber[600] },
-    // Перенос в Б/У — нейтральный swap, indigo чтоб отделить от прихода.
-    // indigo тоже без 500 в палитре, оставляем 600 для accent.
-    used_transfer: { name: 'swap-horizontal-outline', color: colors.indigo[600], accentColor: colors.indigo[600] },
-    // Возврат поставщику — красный (товар физически уходит со склада),
-    // стрелка возврата.
-    defect_return_to_supplier: {
-      name: 'arrow-undo-outline',
-      color: colors.red[600],
-      accentColor: colors.red[500],
-    },
-  };
-
-// Дополнительная палитра для inbound used-purchase rows. Цвет cyan
-// отличает её от обычного зелёного "Приход" — owner не путает покупку
-// нового товара с покупкой б/у у клиента.
-const USED_PURCHASE_ICON = {
-  name: 'cube-outline' as keyof typeof Ionicons.glyphMap,
-  color: colors.cyan[600],
-  accentColor: colors.cyan[400],
+    icon: keyof typeof Ionicons.glyphMap;
+    accentColor: string;
+    iconColor: string;
+    // Optional override for the row card background — used by
+    // `used_purchase` so those rows visually pop (purple tint).
+    cardBg?: string;
+  }
+> = {
+  purchase: { icon: 'cube-outline', accentColor: colors.green[500], iconColor: colors.green[600] },
+  return_to_supplier: { icon: 'arrow-undo-outline', accentColor: colors.orange[500], iconColor: colors.orange[600] },
+  defect_transfer: { icon: 'warning-outline', accentColor: colors.red[500], iconColor: colors.red[600] },
+  writeoff: { icon: 'trash-outline', accentColor: colors.gray[400], iconColor: colors.gray[600] },
+  supplier_payment: { icon: 'cash-outline', accentColor: colors.blue[500], iconColor: colors.blue[600] },
+  // Used-purchase rows get a stronger visual treatment per owner brief —
+  // soft purple background so they stand out from the generic green
+  // purchase rows even on a busy day.
+  used_purchase: {
+    icon: 'car-outline',
+    accentColor: colors.purple[600],
+    iconColor: colors.purple[700],
+    cardBg: colors.purple[50],
+  },
 };
 
-// Outflow-движения — количество показываем со знаком «−» и красным цветом.
-// inventory всегда нейтральный знак (это коррекция, а не приход/расход).
-const NEGATIVE_MOVEMENT_TYPES = new Set<string>([
-  'writeoff',
-  'expense',
+// Outflow rows — amount shown with `-` prefix and red tint.
+const NEGATIVE_KINDS = new Set<JournalKind>([
+  'return_to_supplier',
   'defect_transfer',
-  'used_transfer',
-  'defect_return_to_supplier',
+  'writeoff',
+  'supplier_payment',
 ]);
+
+// Ordered list of kind chips above the warehouse-docs list. `null` is
+// the "Все" filter — passes no `type` param to the API.
+const KIND_CHIPS: Array<{ key: JournalKind | null; label: string }> = [
+  { key: null, label: 'Все' },
+  { key: 'purchase', label: journalKindLabels.purchase },
+  { key: 'return_to_supplier', label: journalKindLabels.return_to_supplier },
+  { key: 'defect_transfer', label: journalKindLabels.defect_transfer },
+  { key: 'writeoff', label: journalKindLabels.writeoff },
+  { key: 'supplier_payment', label: journalKindLabels.supplier_payment },
+  { key: 'used_purchase', label: journalKindLabels.used_purchase },
+];
 
 type ActiveTab = 'checks' | 'warehouse';
 
@@ -297,112 +304,76 @@ const CheckRow = React.memo(function CheckRow({
   );
 });
 
-// Unified warehouse document item for the list
-type WarehouseDoc =
-  | { kind: 'movement'; data: StockMovement; sortDate: string }
-  | { kind: 'delivery'; data: Delivery; sortDate: string };
-
 // ── WarehouseDocRow ────────────────────────────────────────────────────
-// Memoised row for the warehouse-documents tab. Module-scope so React
-// can `React.memo` it correctly without per-render closure recreation.
-// Renders either a stock-movement card or a delivery card — picked by
-// `item.kind`. The only prop that ever changes is `item`; the `onSelect`
-// setter from `useState` is stable across renders.
+// Memoised row for the warehouse-documents tab. Renders a unified
+// `JournalDoc` regardless of kind — the backend `journal/warehouse-docs`
+// endpoint normalises stock_movements + supplier_payments into a single
+// shape. Kind-specific styling (accent bar color, icon, money sign) is
+// driven by `journalKindVisual[item.kind]`.
+//
+// Module-scope so React can `React.memo` correctly without per-render
+// closure recreation. The only prop that ever changes is `item`; the
+// `onSelect` setter from `useState` is stable across renders.
 interface WarehouseDocRowProps {
-  item: WarehouseDoc;
-  onSelect: (doc: WarehouseDoc) => void;
+  item: JournalDoc;
+  onSelect: (doc: JournalDoc) => void;
   palette: SemanticPalette;
 }
 const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, palette }: WarehouseDocRowProps) {
-  if (item.kind === 'movement') {
-    const m = item.data;
-    // "Покупка Б/У" — отдельная палитра (cyan) и лейбл. Owner brief:
-    // эти движения должны визуально выделяться в журнале.
-    const isUsedPurchase = !!m.isUsedPurchase;
-    const typeInfo = isUsedPurchase ? USED_PURCHASE_ICON : movementTypeIcons[m.type] || movementTypeIcons.income;
-    const label = isUsedPurchase ? USED_PURCHASE_LABEL : movementTypeLabels[m.type];
-    const qtyColor = isUsedPurchase
-      ? colors.cyan[600]
-      : NEGATIVE_MOVEMENT_TYPES.has(m.type)
+  const visual = journalKindVisual[item.kind];
+  const isNegative = NEGATIVE_KINDS.has(item.kind);
+  const amountColor =
+    item.kind === 'used_purchase'
+      ? colors.purple[700]
+      : isNegative
         ? colors.red[600]
         : colors.green[600];
-    return (
-      <TouchableOpacity
-        style={[styles.warehouseCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-        activeOpacity={0.7}
-        onPress={() => onSelect(item)}
-      >
-        <View style={[styles.warehouseAccent, { backgroundColor: typeInfo.accentColor }]} />
-        <View style={styles.warehouseCardContent}>
-          <View style={styles.warehouseCardHeader}>
-            <View style={[styles.warehouseIconWrap, { backgroundColor: typeInfo.accentColor + '18' }]}>
-              <Ionicons name={typeInfo.name as any} size={18} color={typeInfo.color} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.warehouseCardTitle, { color: palette.text.primary }]} numberOfLines={1}>
-                {m.product?.name || 'Товар'}
-              </Text>
-              <Text style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]}>{label}</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={[styles.warehouseQty, { color: qtyColor }]}>
-                {NEGATIVE_MOVEMENT_TYPES.has(m.type) ? '-' : '+'}
-                {m.quantity} шт
-              </Text>
-              <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>{formatDate(m.createdAt)}</Text>
-            </View>
-          </View>
-          {(m.reason || m.user) && (
-            <View style={[styles.warehouseCardFooter, { borderTopColor: palette.border.subtle }]}>
-              {m.reason ? (
-                <Text style={[styles.warehouseReason, { color: palette.text.secondary }]} numberOfLines={1}>
-                  {m.reason}
-                </Text>
-              ) : null}
-              {m.user ? (
-                <Text style={[styles.warehouseUser, { color: palette.text.tertiary }]}>{m.user.fullName}</Text>
-              ) : null}
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
-    );
-  }
-  // Delivery — payment-status badges intentionally absent here per
-  // product policy (debt tracking lives in the Suppliers screen).
-  const d = item.data;
+  // Title prefers payeeName for supplier_payment ("Оплата: ООО Х"),
+  // otherwise falls back to the backend-provided title.
+  const title =
+    item.kind === 'supplier_payment' && item.payeeName
+      ? `Оплата: ${item.payeeName}`
+      : item.title;
+  const subtitle = item.subtitle || journalKindLabels[item.kind];
   return (
     <TouchableOpacity
-      style={[styles.warehouseCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      style={[
+        styles.warehouseCard,
+        {
+          backgroundColor: visual.cardBg || palette.bg.card,
+          borderColor: palette.border.subtle,
+        },
+      ]}
       activeOpacity={0.7}
       onPress={() => onSelect(item)}
     >
-      <View style={[styles.warehouseAccent, { backgroundColor: colors.green[500] }]} />
+      <View style={[styles.warehouseAccent, { backgroundColor: visual.accentColor }]} />
       <View style={styles.warehouseCardContent}>
         <View style={styles.warehouseCardHeader}>
-          <View style={[styles.warehouseIconWrap, { backgroundColor: colors.green[500] + '18' }]}>
-            <Ionicons name="bus-outline" size={18} color={colors.green[600]} />
+          <View style={[styles.warehouseIconWrap, { backgroundColor: visual.accentColor + '18' }]}>
+            <Ionicons name={visual.icon} size={18} color={visual.iconColor} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.warehouseCardTitle, { color: palette.text.primary }]} numberOfLines={1}>
-              {d.supplier?.name || 'Поставщик'}
+              {title}
             </Text>
-            <Text style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]}>
-              Поставка {d.items?.length || 0} поз.
+            <Text
+              style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]}
+              numberOfLines={1}
+            >
+              {subtitle}
             </Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[styles.warehouseQty, { color: palette.text.primary }]}>{formatMoney(d.totalAmount)}</Text>
-            <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>{formatDate(d.date)}</Text>
-          </View>
-        </View>
-        {d.comment ? (
-          <View style={[styles.warehouseCardFooter, { borderTopColor: palette.border.subtle }]}>
-            <Text style={[styles.warehouseReason, { color: palette.text.secondary }]} numberOfLines={1}>
-              {d.comment}
+            <Text style={[styles.warehouseQty, { color: amountColor }]}>
+              {isNegative ? '-' : '+'}
+              {formatMoney(Math.abs(item.amount))}
+            </Text>
+            <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>
+              {formatDate(item.occurredAt)}
             </Text>
           </View>
-        ) : null}
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -446,7 +417,11 @@ export default function ChecksScreen() {
   const [showDateFromPicker, setShowDateFromPicker] = useState(false);
   const [showDateToPicker, setShowDateToPicker] = useState(false);
 
-  const [selectedDoc, setSelectedDoc] = useState<WarehouseDoc | null>(null);
+  // Warehouse-tab kind filter — null means "Все". Persists across tab
+  // switches so toggling Чеки → Складские документы keeps the last
+  // chosen chip active.
+  const [warehouseKind, setWarehouseKind] = useState<JournalKind | null>(null);
+  const [selectedDoc, setSelectedDoc] = useState<JournalDoc | null>(null);
 
   const activeFilterCount = (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0) + (returnsOnly ? 1 : 0);
 
@@ -512,42 +487,21 @@ export default function ChecksScreen() {
     placeholderData: (prev) => prev,
   });
 
-  // Warehouse documents queries
-  const { data: movementsData, isLoading: movementsLoading } = useQuery<StockMovement[]>({
-    queryKey: ['stock-movements'],
+  // ── Warehouse documents (unified journal feed) ──────────────────
+  // Single source of truth: `journalApi.warehouseDocs(...)` merges
+  // stock_movements + supplier_payments serverside and returns a
+  // pre-sorted JournalDoc[]. The `type` filter narrows by kind so we
+  // don't ship rows the user has filtered out.
+  const { data: warehouseDocs = [], isLoading: warehouseLoading } = useQuery<JournalDoc[]>({
+    queryKey: ['journal-warehouse-docs', warehouseKind],
     queryFn: async () => {
-      const res = await productsApi.getMovements();
+      const res = await journalApi.warehouseDocs(warehouseKind ? { type: warehouseKind } : {});
       return res.data;
     },
     staleTime: 60_000,
     enabled: activeTab === 'warehouse',
+    placeholderData: (prev) => prev,
   });
-
-  const { data: deliveriesData, isLoading: deliveriesLoading } = useQuery<Delivery[]>({
-    queryKey: ['supplier-deliveries'],
-    queryFn: async () => {
-      const res = await suppliersApi.getDeliveries();
-      return res.data;
-    },
-    staleTime: 60_000,
-    enabled: activeTab === 'warehouse',
-  });
-
-  const warehouseDocs = useMemo<WarehouseDoc[]>(() => {
-    const docs: WarehouseDoc[] = [];
-    if (movementsData) {
-      for (const m of movementsData) {
-        docs.push({ kind: 'movement', data: m, sortDate: m.createdAt });
-      }
-    }
-    if (deliveriesData) {
-      for (const d of deliveriesData) {
-        docs.push({ kind: 'delivery', data: d, sortDate: d.date });
-      }
-    }
-    docs.sort((a, b) => new Date(b.sortDate).getTime() - new Date(a.sortDate).getTime());
-    return docs;
-  }, [movementsData, deliveriesData]);
 
   // Optimistic delete — UX feels instant because the row disappears
   // BEFORE the server confirms. The rollback path restores the cache
@@ -612,10 +566,7 @@ export default function ChecksScreen() {
     if (activeTab === 'checks') {
       await queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
     } else {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
-        queryClient.invalidateQueries({ queryKey: ['supplier-deliveries'] }),
-      ]);
+      await queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
     }
     setRefreshing(false);
   };
@@ -708,11 +659,11 @@ export default function ChecksScreen() {
   );
 
   const renderWarehouseDoc = useCallback(
-    ({ item }: { item: WarehouseDoc }) => <WarehouseDocRow item={item} onSelect={setSelectedDoc} palette={palette} />,
+    ({ item }: { item: JournalDoc }) => <WarehouseDocRow item={item} onSelect={setSelectedDoc} palette={palette} />,
     [palette],
   );
 
-  const isWarehouseLoading = movementsLoading || deliveriesLoading;
+  const isWarehouseLoading = warehouseLoading;
   // No IosScreenHeader on this screen — the tab bar already names it
   // «Журнал», so we just reserve the top safe-area inset ourselves so
   // the search bar doesn't slide under the Dynamic Island / status bar.
@@ -766,45 +717,6 @@ export default function ChecksScreen() {
           )}
         </TouchableOpacity>
       </View>
-
-      {/* Quick "Возвраты" chip — clientside фильтр по isReturned.
-          Виден только во вкладке «Чеки» (склад-документы тоже могут
-          возвращаться, но это другой UX). Чип помечается badge'ем,
-          если активен — пользователь сразу видит что фильтр на. */}
-      {activeTab === 'checks' && (
-        <View style={styles.returnsChipRow}>
-          <TouchableOpacity
-            onPress={() => setReturnsOnly((v) => !v)}
-            activeOpacity={0.7}
-            style={[
-              styles.returnsChip,
-              {
-                backgroundColor: returnsOnly ? colors.red[500] : palette.bg.muted,
-                borderColor: returnsOnly ? colors.red[600] : palette.border.subtle,
-              },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel="Фильтр возвратов"
-          >
-            <Ionicons
-              name="arrow-undo-outline"
-              size={13}
-              color={returnsOnly ? colors.white : palette.text.secondary}
-            />
-            <Text
-              style={[
-                styles.returnsChipText,
-                { color: returnsOnly ? colors.white : palette.text.secondary },
-              ]}
-            >
-              Возвраты
-            </Text>
-            {returnsOnly && (
-              <Ionicons name="close" size={12} color={colors.white} style={{ marginLeft: 1 }} />
-            )}
-          </TouchableOpacity>
-        </View>
-      )}
 
       {/* Segmented control: Checks | Warehouse documents */}
       <View style={styles.segmentedWrap}>
@@ -969,6 +881,50 @@ export default function ChecksScreen() {
             </View>
           </ScrollView>
 
+          {/* Returns-only toggle — moved inside the filter sheet (was
+              a standalone chip above the list). Owner brief: keep the
+              functionality but hide it behind the funnel button so the
+              main view stays clean. */}
+          <TouchableOpacity
+            onPress={() => setReturnsOnly((v) => !v)}
+            activeOpacity={0.7}
+            style={[
+              styles.returnsToggleRow,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              returnsOnly && styles.returnsToggleRowActive,
+            ]}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: returnsOnly }}
+            accessibilityLabel="Только возвраты"
+          >
+            <Ionicons
+              name="arrow-undo-outline"
+              size={14}
+              color={returnsOnly ? colors.red[600] : palette.text.secondary}
+            />
+            <Text
+              style={[
+                styles.returnsToggleLabel,
+                { color: returnsOnly ? colors.red[700] : palette.text.primary },
+              ]}
+            >
+              Только возвраты
+            </Text>
+            <View
+              style={[
+                styles.returnsToggleSwitch,
+                { backgroundColor: returnsOnly ? colors.red[500] : palette.border.subtle },
+              ]}
+            >
+              <View
+                style={[
+                  styles.returnsToggleSwitchKnob,
+                  returnsOnly && styles.returnsToggleSwitchKnobOn,
+                ]}
+              />
+            </View>
+          </TouchableOpacity>
+
           {activeFilterCount > 0 && (
             <TouchableOpacity
               style={styles.clearFiltersBtn}
@@ -1061,21 +1017,68 @@ export default function ChecksScreen() {
         </>
       ) : (
         <>
-          {/* Same cold-start logic as the checks tab — skeleton until at
-             least one of the two underlying queries has data, then render
-             the merged list. EmptyState only when both queries finished
-             AND the merged list is still empty. */}
-          {movementsData === undefined && deliveriesData === undefined ? (
-            /* Skeleton list — gradual reveal from top, no white-empty
-               flash. Same component the checks list uses, so the two
-               tabs feel identical during loading. */
+          {/* Kind filter chips — drive `journalApi.warehouseDocs({type})`.
+              Horizontal scroll so all 7 chips fit on small screens. */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.kindChipsRow}
+          >
+            {KIND_CHIPS.map((chip) => {
+              const active = warehouseKind === chip.key;
+              const visual = chip.key ? journalKindVisual[chip.key] : null;
+              return (
+                <TouchableOpacity
+                  key={chip.key ?? 'all'}
+                  onPress={() => setWarehouseKind(chip.key)}
+                  activeOpacity={0.7}
+                  style={[
+                    styles.kindChip,
+                    {
+                      backgroundColor: active
+                        ? (visual?.accentColor ?? colors.primary[600])
+                        : palette.bg.muted,
+                      borderColor: active
+                        ? (visual?.accentColor ?? colors.primary[600])
+                        : palette.border.subtle,
+                    },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={chip.label}
+                >
+                  {visual && (
+                    <Ionicons
+                      name={visual.icon}
+                      size={12}
+                      color={active ? colors.white : palette.text.secondary}
+                    />
+                  )}
+                  <Text
+                    style={[
+                      styles.kindChipText,
+                      { color: active ? colors.white : palette.text.secondary },
+                    ]}
+                  >
+                    {chip.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {/* Cold-start path: skeleton only on the very first fetch.
+             After we have any data (even from a different kind filter),
+             rely on `placeholderData` to keep the list painted during
+             the next refetch — no white flash on filter switch. */}
+          {isWarehouseLoading && warehouseDocs.length === 0 ? (
             <ListSkeleton count={8} />
-          ) : warehouseDocs.length === 0 && !isWarehouseLoading ? (
+          ) : warehouseDocs.length === 0 ? (
             <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
           ) : (
             <FlashList
               data={warehouseDocs}
-              keyExtractor={(item) => (item.kind === 'movement' ? `m-${item.data.id}` : `d-${item.data.id}`)}
+              keyExtractor={(item) => `${item.kind}-${item.id}`}
               renderItem={renderWarehouseDoc}
               contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
               contentInset={{ bottom: tabBarHeight }}
@@ -1090,142 +1093,78 @@ export default function ChecksScreen() {
           )}
         </>
       )}
-      {/* Warehouse Document Detail Modal */}
+      {/* Warehouse Document Detail Modal — driven by JournalDoc. The
+          backend already normalises kind / title / subtitle / amount, so
+          the modal is a thin presentational view. Payment-status badges
+          are intentionally absent: warehouse docs have no "paid /
+          unpaid" semantic; supplier debt lives in the Suppliers screen. */}
       <Modal
         visible={!!selectedDoc}
         onClose={() => setSelectedDoc(null)}
-        title={
-          selectedDoc?.kind === 'movement'
-            ? selectedDoc.data.isUsedPurchase
-              ? USED_PURCHASE_LABEL
-              : movementTypeLabels[selectedDoc.data.type] || 'Документ'
-            : 'Поставка'
-        }
+        title={selectedDoc ? journalKindLabels[selectedDoc.kind] : ''}
       >
-        {selectedDoc?.kind === 'movement' &&
+        {selectedDoc &&
           (() => {
-            const m = selectedDoc.data;
-            const isUsedPurchase = !!m.isUsedPurchase;
-            const typeInfo = isUsedPurchase
-              ? USED_PURCHASE_ICON
-              : movementTypeIcons[m.type] || movementTypeIcons.income;
-            const label = isUsedPurchase ? USED_PURCHASE_LABEL : movementTypeLabels[m.type];
-            const qtyColor = isUsedPurchase
-              ? colors.cyan[600]
-              : NEGATIVE_MOVEMENT_TYPES.has(m.type)
-                ? colors.red[600]
-                : colors.green[600];
+            const doc = selectedDoc;
+            const visual = journalKindVisual[doc.kind];
+            const isNegative = NEGATIVE_KINDS.has(doc.kind);
+            const amountColor =
+              doc.kind === 'used_purchase'
+                ? colors.purple[700]
+                : isNegative
+                  ? colors.red[600]
+                  : colors.green[600];
             return (
               <View style={{ gap: spacing[3] }}>
                 <View style={[styles.docDetailHeader, { borderBottomColor: palette.border.subtle }]}>
-                  <View style={[styles.docDetailIcon, { backgroundColor: typeInfo.accentColor + '18' }]}>
-                    <Ionicons name={typeInfo.name as any} size={28} color={typeInfo.color} />
+                  <View style={[styles.docDetailIcon, { backgroundColor: visual.accentColor + '18' }]}>
+                    <Ionicons name={visual.icon} size={28} color={visual.iconColor} />
                   </View>
-                  <Text style={[styles.docDetailType, { color: palette.text.primary }]}>{label}</Text>
+                  <Text style={[styles.docDetailType, { color: palette.text.primary }]}>
+                    {journalKindLabels[doc.kind]}
+                  </Text>
                 </View>
 
                 <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Товар</Text>
-                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.product?.name || '—'}</Text>
-                </View>
-                <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Количество</Text>
-                  <Text style={[styles.docDetailValue, { color: qtyColor }]}>
-                    {NEGATIVE_MOVEMENT_TYPES.has(m.type) ? '-' : '+'}
-                    {m.quantity} шт
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Описание</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]} numberOfLines={3}>
+                    {doc.title}
                   </Text>
                 </View>
-                <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Остаток до</Text>
-                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.stockBefore} шт</Text>
-                </View>
-                <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Остаток после</Text>
-                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.stockAfter} шт</Text>
-                </View>
-                {m.reason && (
+                {doc.payeeName && (
                   <View style={styles.docDetailRow}>
-                    <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Причина</Text>
-                    <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.reason}</Text>
-                  </View>
-                )}
-                {m.user && (
-                  <View style={styles.docDetailRow}>
-                    <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Сотрудник</Text>
-                    <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{m.user.fullName}</Text>
-                  </View>
-                )}
-                <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Дата</Text>
-                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>
-                    {formatDate(m.createdAt)}
-                  </Text>
-                </View>
-              </View>
-            );
-          })()}
-
-        {selectedDoc?.kind === 'delivery' &&
-          (() => {
-            // Per product policy a warehouse delivery has no payment status
-            // displayed here — supplier-side debts/payments live in the
-            // Suppliers screen, not in the journal detail.
-            const d = selectedDoc.data;
-            return (
-              <View style={{ gap: spacing[3] }}>
-                <View style={[styles.docDetailHeader, { borderBottomColor: palette.border.subtle }]}>
-                  <View style={[styles.docDetailIcon, { backgroundColor: colors.green[50] }]}>
-                    <Ionicons name="bus-outline" size={28} color={colors.green[600]} />
-                  </View>
-                  <Text style={[styles.docDetailType, { color: palette.text.primary }]}>Поставка</Text>
-                </View>
-
-                <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Поставщик</Text>
-                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>
-                    {d.supplier?.name || '—'}
-                  </Text>
-                </View>
-                <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Дата</Text>
-                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>{formatDate(d.date)}</Text>
-                </View>
-                <View style={styles.docDetailRow}>
-                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Сумма</Text>
-                  <Text style={[styles.docDetailValue, { color: palette.text.primary, fontWeight: fontWeight.bold }]}>
-                    {formatMoney(d.totalAmount)}
-                  </Text>
-                </View>
-
-                {d.items && d.items.length > 0 && (
-                  <View style={[styles.docDetailItems, { backgroundColor: palette.bg.muted }]}>
-                    <Text style={[styles.docDetailItemsTitle, { color: palette.text.primary }]}>
-                      Товары ({d.items.length})
+                    <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Поставщик</Text>
+                    <Text style={[styles.docDetailValue, { color: palette.text.primary }]} numberOfLines={2}>
+                      {doc.payeeName}
                     </Text>
-                    {d.items.map((item, idx) => (
-                      <View key={idx} style={styles.docDetailItemRow}>
-                        <Text style={[styles.docDetailItemName, { color: palette.text.secondary }]} numberOfLines={1}>
-                          {item.product?.name || '—'}
-                        </Text>
-                        <Text style={[styles.docDetailItemQty, { color: palette.text.tertiary }]}>
-                          {item.quantity} x {formatMoney(item.price)}
-                        </Text>
-                        <Text style={[styles.docDetailItemTotal, { color: palette.text.primary }]}>
-                          {formatMoney(item.total)}
-                        </Text>
-                      </View>
-                    ))}
                   </View>
                 )}
-
-                {d.comment && (
+                {doc.subtitle && (
                   <View style={styles.docDetailRow}>
                     <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Комментарий</Text>
-                    <Text style={[styles.docDetailValue, { color: palette.text.primary, fontStyle: 'italic' }]}>
-                      {d.comment}
+                    <Text
+                      style={[styles.docDetailValue, { color: palette.text.primary, fontStyle: 'italic' }]}
+                      numberOfLines={4}
+                    >
+                      {doc.subtitle}
                     </Text>
                   </View>
                 )}
+                <View style={styles.docDetailRow}>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Сумма</Text>
+                  <Text
+                    style={[styles.docDetailValue, { color: amountColor, fontWeight: fontWeight.bold }]}
+                  >
+                    {isNegative ? '-' : '+'}
+                    {formatMoney(Math.abs(doc.amount))}
+                  </Text>
+                </View>
+                <View style={styles.docDetailRow}>
+                  <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Дата</Text>
+                  <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>
+                    {formatDate(doc.occurredAt)}
+                  </Text>
+                </View>
               </View>
             );
           })()}
@@ -1332,15 +1271,53 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
 
-  // ── Returns quick-filter chip row ───────────────────────────────
-  // Тонкая полоска под поиском — chip-style, не нагружает экран
-  // когда фильтр выключен.
-  returnsChipRow: {
+  // ── Returns-only toggle row (lives inside the filter sheet) ─────
+  // Owner brief: "Возвраты" is hidden from the main header — it now
+  // lives behind the funnel button as a labelled switch row, matching
+  // the rest of the filter UI.
+  returnsToggleRow: {
+    marginTop: spacing[2],
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  returnsToggleRowActive: {
+    // No background flip — the switch itself signals state. We only
+    // boost the border to a faint red so it reads as "filter on" at
+    // a glance.
+    borderColor: colors.red[300],
+  },
+  returnsToggleLabel: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  returnsToggleSwitch: {
+    width: 36,
+    height: 20,
+    borderRadius: 10,
+    padding: 2,
+    justifyContent: 'center',
+  },
+  returnsToggleSwitchKnob: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+  },
+  returnsToggleSwitchKnobOn: {
+    transform: [{ translateX: 16 }],
+  },
+
+  // ── Warehouse kind chips (above the warehouse-docs list) ────────
+  // Horizontal scroll row driving `journalApi.warehouseDocs({ type })`.
+  kindChipsRow: {
     paddingHorizontal: spacing[4],
     paddingBottom: spacing[2],
+    gap: spacing[1.5],
+    flexDirection: 'row',
   },
-  returnsChip: {
+  kindChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
@@ -1349,7 +1326,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
     borderWidth: 1,
   },
-  returnsChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
+  kindChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
 
   // ── Segmented Control ───────────────────────────────────────────
   segmentedWrap: {
@@ -1580,35 +1557,6 @@ const styles = StyleSheet.create({
     color: colors.gray[400],
     marginTop: 1,
   },
-  warehouseCardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    marginTop: spacing[2],
-    paddingTop: spacing[1.5],
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.gray[100],
-  },
-  warehouseReason: {
-    flex: 1,
-    fontSize: 11,
-    color: colors.gray[500],
-    fontStyle: 'italic',
-  },
-  warehouseUser: {
-    fontSize: 11,
-    color: colors.gray[400],
-  },
-  paymentStatusBadge: {
-    paddingHorizontal: spacing[2],
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  paymentStatusText: {
-    fontSize: 10,
-    fontWeight: fontWeight.semibold,
-  },
-
   // ── Document Detail Modal ─────────────────────────────────────
   docDetailHeader: {
     alignItems: 'center',
@@ -1645,49 +1593,6 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.medium,
     color: colors.gray[900],
     flex: 1,
-    textAlign: 'right',
-  },
-  docDetailStatusBadge: {
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: spacing[1],
-    borderRadius: borderRadius.full,
-  },
-  docDetailStatusText: {
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.semibold,
-  },
-  docDetailItems: {
-    backgroundColor: colors.gray[50],
-    borderRadius: borderRadius.xl,
-    padding: spacing[3],
-    gap: spacing[2],
-  },
-  docDetailItemsTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.bold,
-    color: colors.gray[700],
-    marginBottom: spacing[1],
-  },
-  docDetailItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing[1],
-  },
-  docDetailItemName: {
-    flex: 1,
-    fontSize: fontSize.xs,
-    color: colors.gray[700],
-  },
-  docDetailItemQty: {
-    fontSize: fontSize.xs,
-    color: colors.gray[400],
-    marginHorizontal: spacing[2],
-  },
-  docDetailItemTotal: {
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.semibold,
-    color: colors.gray[700],
-    minWidth: 60,
     textAlign: 'right',
   },
 });

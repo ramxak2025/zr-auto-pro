@@ -29,6 +29,7 @@ import {
   callsApi,
   usersApi,
   reportsApi,
+  warehouseAnalyticsApi,
 } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -45,8 +46,9 @@ import type {
   Shift,
   ScheduleEntry,
   User,
-  OwnerAlert,
   RecentReview,
+  WarehouseSummary,
+  ReorderItem,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
@@ -1569,118 +1571,214 @@ function DeferredCard() {
   );
 }
 
-// ── 4. Owner Alerts hub ─────────────────────────────────────────────────────
-function AlertsCard() {
+// ── 4. Warehouse analytics — складская аналитика ────────────────────────────
+// Combines stock-value summary (current + delta vs start of month, items count,
+// dead-stock 90d) with reorder forecast top-3 urgent items. Tap → MoreTab →
+// WarehouseAnalytics (screen registered lazily; widget tolerates missing route).
+function WarehouseAnalyticsWidget() {
   const palette = useColors();
   const navigation = useNavigation<any>();
-  const [expanded, setExpanded] = useState(false);
-  const { data, isLoading } = useQuery({
-    queryKey: ['owner-alerts'],
-    queryFn: async () => (await reportsApi.alerts()).data,
+
+  const summaryQuery = useQuery<WarehouseSummary>({
+    queryKey: ['warehouse-analytics', 'summary', 'month'],
+    queryFn: async () => (await warehouseAnalyticsApi.summary({ period: 'month' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+  const forecastQuery = useQuery<ReorderItem[]>({
+    queryKey: ['warehouse-analytics', 'reorder-forecast'],
+    queryFn: async () => (await warehouseAnalyticsApi.reorderForecast()).data,
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
 
-  const alerts = data ?? [];
-  const visible = expanded ? alerts : alerts.slice(0, 5);
+  const summary = summaryQuery.data;
+  const isLoading = summaryQuery.isLoading && !summary;
 
-  const typeMeta: Record<OwnerAlert['type'], { icon: keyof typeof Ionicons.glyphMap; color: string }> = {
-    low_stock: { icon: 'cube-outline', color: colors.amber[600] },
-    low_review: { icon: 'star-outline', color: colors.red[600] },
-    warranty: { icon: 'shield-outline', color: colors.purple[600] },
-    late_master: { icon: 'time-outline', color: colors.orange[600] },
-    pending_return: { icon: 'return-down-back-outline', color: colors.blue[600] },
+  // Top-3 urgent reorder picks. We keep `urgency in (critical, now, soon)`
+  // — `overstocked` is the opposite signal and would just clutter the
+  // "Рекомендуем заказать" list.
+  const URGENCY_RANK: Record<ReorderItem['urgency'], number> = {
+    critical: 0,
+    now: 1,
+    soon: 2,
+    overstocked: 99,
   };
-  const severityBar: Record<OwnerAlert['severity'], string> = {
-    info: colors.blue[400],
-    warn: colors.amber[600],
-    crit: colors.red[500],
-  };
+  const reorderTop = useMemo(() => {
+    const items = forecastQuery.data ?? [];
+    return items
+      .filter((r) => r.urgency === 'critical' || r.urgency === 'now' || r.urgency === 'soon')
+      .sort((a, b) => {
+        const ra = URGENCY_RANK[a.urgency];
+        const rb = URGENCY_RANK[b.urgency];
+        if (ra !== rb) return ra - rb;
+        // Same urgency tier → fewer days of stock first.
+        return a.daysOfStock - b.daysOfStock;
+      })
+      .slice(0, 3);
+    // URGENCY_RANK is module-local constant, no need in deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forecastQuery.data]);
 
-  const handlePressAlert = (a: OwnerAlert) => {
+  const deltaValue = summary?.stockValueDelta ?? 0;
+  const deltaPct = summary?.deltaPct ?? 0;
+  const tone: 'up' | 'down' | 'flat' = deltaValue > 0 ? 'up' : deltaValue < 0 ? 'down' : 'flat';
+  // Growing stock value = green (capital rising); shrinking = red (capital
+  // leaving the warehouse, usually because nothing is being replenished).
+  // Owner's POV: "Денег застряло в товаре" — рост ≠ хорошо, но визуально
+  // green/red остаётся читаемым потому что подписан как «застряло».
+  const deltaColor = tone === 'up' ? colors.green[600] : tone === 'down' ? colors.red[600] : palette.text.tertiary;
+  const deltaBg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : palette.bg.muted;
+
+  // Dead-stock 90d красный, если он съедает >5% капитала склада. Иначе —
+  // нейтральный текст, чтобы виджет не «кричал» без повода.
+  const totalValue = summary?.stockValueCurrent ?? 0;
+  const deadValue = summary?.deadStock90.value ?? 0;
+  const deadCount = summary?.deadStock90.count ?? 0;
+  const deadPct = totalValue > 0 ? deadValue / totalValue : 0;
+  const deadIsHot = deadPct > 0.05;
+  const deadColor = deadIsHot ? colors.red[600] : palette.text.primary;
+
+  const openAnalytics = () => {
     haptic('tap');
-    if (!a.link) return;
-    // Простой роут-парсер: link формата "/clients/:id", "/checks", "/marketing",
-    // "/products?lowStock=true" и т.п. Маппим первый сегмент на экран.
-    const path = a.link.replace(/^\//, '').split('?')[0];
-    const seg = path.split('/')[0];
-    const routeMap: Record<string, { tab: string; screen?: string }> = {
-      checks: { tab: 'Checks' },
-      products: { tab: 'Products' },
-      clients: { tab: 'MoreTab', screen: 'Clients' },
-      marketing: { tab: 'MoreTab', screen: 'Marketing' },
-      schedule: { tab: 'MoreTab', screen: 'Schedule' },
-      reports: { tab: 'MoreTab', screen: 'Reports' },
-    };
-    const target = routeMap[seg];
-    if (!target) return;
-    if (target.screen) {
-      navigation.navigate('Main', { screen: target.tab, params: { screen: target.screen } });
-    } else {
-      navigation.navigate('Main', { screen: target.tab });
-    }
+    // Screen is registered separately. If it doesn't exist yet, react-
+    // navigation logs a warning and noop's — we don't crash the dashboard.
+    navigation.navigate('Main', {
+      screen: 'MoreTab',
+      params: { screen: 'WarehouseAnalytics' },
+    });
   };
 
   return (
-    <AnimatedCard index={8} style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+    <AnimatedCard
+      index={8}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={openAnalytics}
+      activeOpacity={0.85}
+    >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.red[50] }]}>
-          <Ionicons name="alert-circle-outline" size={16} color={colors.red[600]} />
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.amber[50] }]}>
+          <Text style={styles.warehouseHeaderEmoji}>📦</Text>
         </View>
-        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ВНИМАНИЕ</Text>
-        {alerts.length > 0 && (
-          <View style={[styles.alertBadge, { backgroundColor: colors.red[600] }]}>
-            <Text style={styles.alertBadgeText}>{alerts.length}</Text>
-          </View>
-        )}
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>СКЛАД</Text>
+          <Text style={[styles.warehouseSubtitle, { color: palette.text.tertiary }]}>За месяц</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
       </View>
-      {isLoading && alerts.length === 0 ? (
-        <View style={{ gap: spacing[2] }}>
+
+      {/* Hero: stock value + delta chip */}
+      {isLoading ? (
+        <Skeleton width={'70%'} height={36} radius={8} />
+      ) : (
+        <View style={styles.warehouseHeroRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.warehouseHeroValue, { color: palette.text.primary }]} numberOfLines={1}>
+              {formatMoney(totalValue)}
+            </Text>
+            <Text style={[styles.warehouseHeroCaption, { color: palette.text.tertiary }]}>
+              Денег застряло в товаре
+            </Text>
+          </View>
+          {summary && (
+            <View style={[styles.warehouseDeltaChip, { backgroundColor: deltaBg }]}>
+              <Ionicons
+                name={tone === 'up' ? 'arrow-up' : tone === 'down' ? 'arrow-down' : 'remove'}
+                size={12}
+                color={deltaColor}
+              />
+              <Text style={[styles.warehouseDeltaText, { color: deltaColor }]}>
+                {`${Math.abs(deltaPct).toFixed(0)}% / ${formatMoney(Math.abs(deltaValue))}`}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Divider */}
+      <View style={[styles.warehouseDivider, { backgroundColor: palette.border.subtle }]} />
+
+      {/* Mini stats: items count + dead stock 90d */}
+      <View style={styles.warehouseStatsRow}>
+        <View style={styles.warehouseStatCell}>
+          <Text style={[styles.warehouseStatLabel, { color: palette.text.tertiary }]}>Товаров</Text>
+          {isLoading ? (
+            <Skeleton width={60} height={18} radius={6} />
+          ) : (
+            <Text style={[styles.warehouseStatValue, { color: palette.text.primary }]}>
+              {summary?.itemsCount ?? 0}
+            </Text>
+          )}
+        </View>
+        <View style={[styles.warehouseStatCell, styles.warehouseStatCellRight]}>
+          <Text style={[styles.warehouseStatLabel, { color: palette.text.tertiary }]}>Мёртвый сток</Text>
+          {isLoading ? (
+            <Skeleton width={80} height={18} radius={6} />
+          ) : (
+            <Text style={[styles.warehouseStatValue, { color: deadColor }]} numberOfLines={1}>
+              {`${formatMoney(deadValue)} (${deadCount})`}
+            </Text>
+          )}
+        </View>
+      </View>
+
+      {/* Divider */}
+      <View style={[styles.warehouseDivider, { backgroundColor: palette.border.subtle }]} />
+
+      {/* Reorder forecast */}
+      <View style={styles.warehouseReorderHeader}>
+        <Text style={styles.warehouseReorderEmoji}>🤖</Text>
+        <Text style={[styles.warehouseReorderTitle, { color: palette.text.secondary }]}>
+          Рекомендуем заказать
+        </Text>
+      </View>
+      {forecastQuery.isLoading && reorderTop.length === 0 ? (
+        <View style={{ gap: spacing[1.5] }}>
           {[0, 1, 2].map((i) => (
-            <Skeleton key={i} width={'100%'} height={42} radius={10} />
+            <Skeleton key={i} width={'100%'} height={36} radius={8} />
           ))}
         </View>
-      ) : alerts.length === 0 ? (
-        <View style={styles.alertsEmpty}>
-          <Ionicons name="checkmark-circle" size={28} color={colors.green[500]} />
-          <Text style={[styles.alertsEmptyText, { color: palette.text.tertiary }]}>Всё под контролем</Text>
+      ) : reorderTop.length === 0 ? (
+        <View style={styles.warehouseReorderEmpty}>
+          <Ionicons name="checkmark-circle" size={18} color={colors.green[500]} />
+          <Text style={[styles.warehouseReorderEmptyText, { color: palette.text.tertiary }]}>
+            Запасы в норме
+          </Text>
         </View>
       ) : (
         <View style={{ gap: spacing[1.5] }}>
-          {visible.map((a, idx) => {
-            const meta = typeMeta[a.type];
+          {reorderTop.map((item) => {
+            const urgencyBar =
+              item.urgency === 'critical'
+                ? colors.red[500]
+                : item.urgency === 'now'
+                  ? colors.amber[600]
+                  : colors.blue[400];
             return (
-              <TouchableOpacity
-                key={`${a.type}-${idx}`}
+              <View
+                key={item.productId}
                 style={[
-                  styles.alertRow,
-                  { backgroundColor: palette.bg.muted, borderLeftColor: severityBar[a.severity] },
+                  styles.warehouseReorderRow,
+                  { backgroundColor: palette.bg.muted, borderLeftColor: urgencyBar },
                 ]}
-                onPress={() => handlePressAlert(a)}
-                activeOpacity={a.link ? 0.7 : 1}
               >
-                <Ionicons name={meta.icon} size={16} color={meta.color} style={{ marginRight: spacing[2.5] }} />
-                <Text style={[styles.alertRowText, { color: palette.text.primary }]} numberOfLines={2}>
-                  {a.message}
+                <View style={{ flex: 1 }}>
+                  <Text
+                    style={[styles.warehouseReorderName, { color: palette.text.primary }]}
+                    numberOfLines={1}
+                  >
+                    {item.name}
+                  </Text>
+                  <Text style={[styles.warehouseReorderMeta, { color: palette.text.tertiary }]}>
+                    {`Хватит на ${Math.max(0, Math.round(item.daysOfStock))} дн.`}
+                  </Text>
+                </View>
+                <Text style={[styles.warehouseReorderQty, { color: palette.text.primary }]}>
+                  {`~${Math.max(1, Math.round(item.recommendedOrderQty))} шт`}
                 </Text>
-                {a.link && <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />}
-              </TouchableOpacity>
+              </View>
             );
           })}
-          {alerts.length > 5 && (
-            <TouchableOpacity
-              style={styles.alertsExpandBtn}
-              onPress={() => {
-                haptic('tap');
-                setExpanded((e) => !e);
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.alertsExpandText, { color: colors.primary[600] }]}>
-                {expanded ? 'Свернуть' : `Показать все (${alerts.length})`}
-              </Text>
-            </TouchableOpacity>
-          )}
         </View>
       )}
     </AnimatedCard>
@@ -2361,7 +2459,7 @@ function AdminDashboard({ name }: { name: string }) {
       <CashPositionCard />
       <MarginCard />
       <DeferredCard />
-      <AlertsCard />
+      <WarehouseAnalyticsWidget />
       <ClientsNewVsReturningCard />
       <CallFunnelWidget />
       <RetentionCard />
@@ -3005,7 +3103,9 @@ export default function DashboardScreen() {
       ['marketing-dashboard'],
       ['calls-summary'],
       // Owner widget queries (new in iter#14):
-      ['owner-alerts'],
+      // owner-alerts → replaced by WarehouseAnalyticsWidget; pull-to-refresh
+      // now invalidates both warehouse-analytics sub-queries.
+      ['warehouse-analytics'],
       ['clients-new-returning'],
       ['retention'],
       ['best-day-week'],
@@ -3677,34 +3777,76 @@ const styles = StyleSheet.create({
   deferredAccent: { fontWeight: '800', letterSpacing: -0.3 },
   deferredCaption: { fontSize: 12, marginTop: 4 },
 
-  // Alerts
-  alertBadge: {
-    marginLeft: 'auto',
-    minWidth: 22,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
+  // Warehouse analytics widget
+  warehouseHeaderEmoji: { fontSize: 14, lineHeight: 16 },
+  warehouseSubtitle: { fontSize: 10, fontWeight: '500', marginTop: 1, letterSpacing: 0.2 },
+  warehouseHeroRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5] },
+  warehouseHeroValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+    fontVariant: ['tabular-nums'],
   },
-  alertBadgeText: { color: colors.white, fontWeight: '800', fontSize: 11 },
-  alertsEmpty: {
-    alignItems: 'center',
-    paddingVertical: spacing[4],
-    gap: spacing[1.5],
-  },
-  alertsEmptyText: { fontSize: 13 },
-  alertRow: {
+  warehouseHeroCaption: { fontSize: 11, marginTop: 2 },
+  warehouseDeltaChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing[2.5],
+    gap: 3,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 4,
+    borderRadius: borderRadius.full,
+  },
+  warehouseDeltaText: { fontSize: 12, fontWeight: '700', letterSpacing: -0.1 },
+  warehouseDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: spacing[3],
+  },
+  warehouseStatsRow: { flexDirection: 'row' },
+  warehouseStatCell: { flex: 1, gap: 4 },
+  warehouseStatCellRight: { alignItems: 'flex-end' },
+  warehouseStatLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  warehouseStatValue: {
+    fontSize: 14,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  warehouseReorderHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    marginBottom: spacing[2],
+  },
+  warehouseReorderEmoji: { fontSize: 14 },
+  warehouseReorderTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  warehouseReorderEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[2],
+  },
+  warehouseReorderEmptyText: { fontSize: 13, fontWeight: '500' },
+  warehouseReorderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[2],
     paddingHorizontal: spacing[3],
     borderRadius: borderRadius.lg,
     borderLeftWidth: 3,
+    gap: spacing[2],
   },
-  alertRowText: { flex: 1, fontSize: 13, lineHeight: 17 },
-  alertsExpandBtn: { alignItems: 'center', paddingVertical: spacing[2] },
-  alertsExpandText: { fontSize: 12, fontWeight: '700' },
+  warehouseReorderName: { fontSize: 13, fontWeight: '600' },
+  warehouseReorderMeta: { fontSize: 11, marginTop: 2 },
+  warehouseReorderQty: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
 
   // Clients new vs returning
   clientsModeRow: {

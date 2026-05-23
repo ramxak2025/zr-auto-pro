@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -55,10 +55,15 @@ export default function SupplierDetailScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
-  const { id } = route.params;
+  const { id, openDefectReturn } = (route.params ?? {}) as { id: string; openDefectReturn?: boolean };
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'deliveries' | 'payments' | 'returns'>('deliveries');
   const [expandedDelivery, setExpandedDelivery] = useState<string | null>(null);
+  // Latch — consume the route param once. Without this, re-running the
+  // useEffect (e.g. on focus, on a query refetch that toggles defect
+  // warehouse identity) would re-open the modal after the user
+  // dismissed it.
+  const [defectReturnConsumed, setDefectReturnConsumed] = useState(false);
 
   // Delivery form
   const [deliveryModalOpen, setDeliveryModalOpen] = useState(false);
@@ -198,6 +203,51 @@ export default function SupplierDetailScreen() {
     },
     staleTime: 30_000,
   });
+
+  // Tab fallback — if the supplier turns out to be the system
+  // used-purchase row and the active tab is the (now hidden)
+  // 'returns', flip back to 'deliveries' so the screen doesn't show
+  // an empty body. Cheap effect, runs once per supplier load.
+  useEffect(() => {
+    if (supplier?.kind === 'used_purchase' && tab === 'returns') {
+      setTab('deliveries');
+    }
+  }, [supplier?.kind, tab]);
+
+  // Auto-open «Возврат брака» modal when the caller passed
+  // `openDefectReturn: true` (e.g. via the SuppliersScreen header CTA).
+  // Defers until supplier is loaded AND we know which warehouse hosts
+  // defect stock — opening earlier would show an empty picker. The
+  // `defectReturnConsumed` latch guarantees at-most-once behaviour
+  // even if dependencies rerun.
+  //
+  // Skipped silently for the system used-purchase supplier — defect
+  // returns don't apply to it (it doesn't have standard deliveries
+  // and the backend would 400 anyway).
+  useEffect(() => {
+    if (!openDefectReturn) return;
+    if (defectReturnConsumed) return;
+    if (!supplier) return;
+    if (supplier.kind === 'used_purchase') {
+      setDefectReturnConsumed(true);
+      return;
+    }
+    if (!defectWarehouse) return;
+    setDefectReturnConsumed(true);
+    // Reset the form state then open. Matches the manual openReturnDefect
+    // path so the modal lands fresh, not with stale numbers from a
+    // previous session.
+    setDefectProduct(null);
+    setDefectQty('');
+    setDefectPurchasePrice('');
+    setDefectNote('');
+    setReturnDefectModalOpen(true);
+    // Clear the route param so a focus event later in the lifecycle
+    // doesn't re-trigger us. setParams is idempotent.
+    navigation.setParams({ openDefectReturn: undefined });
+    // Explicit dep list — we want to retry only on the props that
+    // actually unlock the action.
+  }, [openDefectReturn, defectReturnConsumed, supplier, defectWarehouse, navigation]);
 
   const invalidateAll = () =>
     Promise.all([
@@ -463,7 +513,16 @@ export default function SupplierDetailScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title={supplier.name} onBack={() => navigation.goBack()} />
+      {/* Header subtitle is set only for the system used-purchase
+          supplier — it explains the channel up-front and gives the
+          screen a visually distinct header treatment without having
+          to fork IosScreenHeader. Regular contractors keep the plain
+          name title. */}
+      <IosScreenHeader
+        title={supplier.name}
+        subtitle={isUsedPurchaseSupplier ? 'Покупка б/у товаров от клиентов и третьих лиц' : undefined}
+        onBack={() => navigation.goBack()}
+      />
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
@@ -590,7 +649,18 @@ export default function SupplierDetailScreen() {
           </View>
         )}
 
-        {/* Tabs */}
+        {/* Tabs.
+            • Regular contractor — three tabs: Поставки + Платежи + Возвраты.
+            • System used-purchase supplier — only two: Покупки + Платежи.
+              Returns tab is hidden entirely because defect returns
+              don't apply to the used-purchase channel (no standard
+              deliveries to return against). We also rename "Поставки"
+              → "Покупки" for the system row — it matches the verb in
+              the corresponding CTA above and avoids confusing the
+              owner with terminology that implies a contractor flow.
+            • If the active tab becomes invalid (was on 'returns' and
+              the row is system), we silently switch the active tab in
+              an effect just below this block. */}
         <View style={[styles.tabRow, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
             style={[
@@ -613,7 +683,7 @@ export default function SupplierDetailScreen() {
                 tab === 'deliveries' && [styles.tabTextActive, { color: palette.text.primary }],
               ]}
             >
-              Поставки ({deliveries?.length || 0})
+              {isUsedPurchaseSupplier ? 'Покупки' : 'Поставки'} ({deliveries?.length || 0})
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -640,30 +710,32 @@ export default function SupplierDetailScreen() {
               Платежи ({payments?.length || 0})
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.tabBtn,
-              tab === 'returns' && styles.tabBtnActive,
-              tab === 'returns' && { backgroundColor: palette.bg.card },
-            ]}
-            onPress={() => setTab('returns')}
-          >
-            <Ionicons
-              name="arrow-undo-outline"
-              size={15}
-              color={tab === 'returns' ? colors.primary[600] : palette.text.tertiary}
-              style={{ marginRight: 4 }}
-            />
-            <Text
+          {!isUsedPurchaseSupplier && (
+            <TouchableOpacity
               style={[
-                styles.tabText,
-                { color: palette.text.secondary },
-                tab === 'returns' && [styles.tabTextActive, { color: palette.text.primary }],
+                styles.tabBtn,
+                tab === 'returns' && styles.tabBtnActive,
+                tab === 'returns' && { backgroundColor: palette.bg.card },
               ]}
+              onPress={() => setTab('returns')}
             >
-              Возвраты ({defectReturns?.length || 0})
-            </Text>
-          </TouchableOpacity>
+              <Ionicons
+                name="arrow-undo-outline"
+                size={15}
+                color={tab === 'returns' ? colors.primary[600] : palette.text.tertiary}
+                style={{ marginRight: 4 }}
+              />
+              <Text
+                style={[
+                  styles.tabText,
+                  { color: palette.text.secondary },
+                  tab === 'returns' && [styles.tabTextActive, { color: palette.text.primary }],
+                ]}
+              >
+                Возвраты ({defectReturns?.length || 0})
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {tab === 'deliveries' && (
@@ -690,7 +762,14 @@ export default function SupplierDetailScreen() {
             {(deliveries || []).length === 0 && (
               <View style={styles.emptyState}>
                 <Ionicons name="cube-outline" size={36} color={palette.text.tertiary} />
-                <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Нет поставок</Text>
+                <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>
+                  {isUsedPurchaseSupplier ? 'Нет покупок' : 'Нет поставок'}
+                </Text>
+                {!isUsedPurchaseSupplier && (
+                  <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>
+                    История всех операций сохраняется навсегда
+                  </Text>
+                )}
               </View>
             )}
 
@@ -796,6 +875,11 @@ export default function SupplierDetailScreen() {
               <View style={styles.emptyState}>
                 <Ionicons name="cash-outline" size={36} color={palette.text.tertiary} />
                 <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Нет платежей</Text>
+                {!isUsedPurchaseSupplier && (
+                  <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>
+                    История всех операций сохраняется навсегда
+                  </Text>
+                )}
               </View>
             )}
 
@@ -837,6 +921,9 @@ export default function SupplierDetailScreen() {
               <View style={styles.emptyState}>
                 <Ionicons name="arrow-undo-outline" size={36} color={palette.text.tertiary} />
                 <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Возвратов нет</Text>
+                <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>
+                  История всех операций сохраняется навсегда
+                </Text>
               </View>
             )}
 
@@ -1025,6 +1112,17 @@ export default function SupplierDetailScreen() {
           increments the matching Б/У SKU and grows supplier debt. */}
       <Modal visible={usedPurchaseModalOpen} onClose={() => setUsedPurchaseModalOpen(false)} title="Покупка б/у товара">
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
+          {/* Informational chip — owner needs to know the financial
+              side of this action ends up in the «Покупка товара»
+              expenses bucket. Backend handles the bookkeeping; UI
+              just makes that contract visible so there's no surprise
+              when reviewing expenses. */}
+          <View style={[styles.expenseNotice, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <Ionicons name="information-circle-outline" size={16} color={colors.primary[600]} />
+            <Text style={[styles.expenseNoticeText, { color: palette.text.secondary }]}>
+              Эта покупка автоматически попадёт в расходы в категорию «Покупка товара».
+            </Text>
+          </View>
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Название товара *</Text>
             <TextInput
@@ -1433,6 +1531,35 @@ const styles = StyleSheet.create({
   // Empty state
   emptyState: { alignItems: 'center', paddingVertical: spacing[8] },
   emptyText: { fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] },
+  // Subtle footnote under an empty state — reminds the owner that
+  // even after a debt is closed nothing here will be removed. Sits
+  // below the primary message in a smaller weight.
+  emptyHint: {
+    fontSize: 12,
+    color: colors.gray[400],
+    marginTop: spacing[1],
+    textAlign: 'center',
+    paddingHorizontal: spacing[6],
+    lineHeight: 16,
+  },
+  // Soft info banner inside the used-purchase modal — surfaces the
+  // expenses-bookkeeping side-effect that's invisible from the form
+  // itself.
+  expenseNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginBottom: spacing[4],
+  },
+  expenseNoticeText: {
+    fontSize: 12,
+    lineHeight: 16,
+    flex: 1,
+  },
   // Delivery card with accent bar
   deliveryCard: {
     flexDirection: 'row',

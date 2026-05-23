@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,15 +7,17 @@ import {
   StyleSheet,
   RefreshControl,
   Modal,
-  TextInput,
   Platform,
+  LayoutAnimation,
+  UIManager,
+  ActivityIndicator,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { reportsApi, usersApi } from '../api/services';
+import { checksApi, reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import AnimatedCard from '../components/AnimatedCard';
@@ -24,38 +26,182 @@ import EmptyState from '../components/EmptyState';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
 
-// ── MasterPickerRow ────────────────────────────────────────────────────
-// Module-scope memoised row for the master-picker FlashList. Without
-// memoisation the inline renderItem rebuilt every closure each time the
-// parent re-rendered (which happens on every text input + filter change),
-// thrashing the FlashList cell recycler.
-interface MasterPickerRowProps {
+// ── Android LayoutAnimation enable ──────────────────────────────────────
+// Required for collapsible day cards to animate height changes on Android.
+// iOS has it on by default. Guarded so HMR doesn't double-register.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+// ── Constants ──────────────────────────────────────────────────────────
+type Period = 'day' | 'week' | 'month' | 'year';
+type Mode = 'all' | 'employee';
+
+const PERIOD_LABELS: Record<Period, string> = {
+  day: 'День',
+  week: 'Неделя',
+  month: 'Месяц',
+  year: 'Год',
+};
+
+const MONTH_LABELS = [
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
+];
+
+// ── Date helpers ───────────────────────────────────────────────────────
+function fmt(d: Date) {
+  // YYYY-MM-DD in LOCAL time — avoids toISOString() shifting the day by a
+  // timezone when the user is east of UTC and the local midnight was an
+  // hour ago. The cashflow API expects calendar dates, not UTC instants.
+  const y = d.getFullYear();
+  const m = (d.getMonth() + 1).toString().padStart(2, '0');
+  const day = d.getDate().toString().padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseISO(s: string): Date {
+  // Treat the YYYY-MM-DD string as local-date (no TZ shift).
+  const [y, m, d] = s.split('-').map((v) => parseInt(v, 10));
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+function startOfWeek(d: Date): Date {
+  // RU calendar week starts Monday.
+  const r = new Date(d);
+  const dow = r.getDay();
+  const diff = (dow + 6) % 7; // 0 = Mon ... 6 = Sun
+  r.setDate(r.getDate() - diff);
+  r.setHours(0, 0, 0, 0);
+  return r;
+}
+
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function endOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+
+function startOfYear(d: Date): Date {
+  return new Date(d.getFullYear(), 0, 1);
+}
+
+function endOfYear(d: Date): Date {
+  return new Date(d.getFullYear(), 11, 31);
+}
+
+function rangeForPeriod(period: Period, anchor: Date): { from: Date; to: Date } {
+  if (period === 'day') return { from: anchor, to: anchor };
+  if (period === 'week') {
+    const from = startOfWeek(anchor);
+    return { from, to: addDays(from, 6) };
+  }
+  if (period === 'month') return { from: startOfMonth(anchor), to: endOfMonth(anchor) };
+  return { from: startOfYear(anchor), to: endOfYear(anchor) };
+}
+
+function shiftPeriod(period: Period, anchor: Date, dir: -1 | 1): Date {
+  if (period === 'day') return addDays(anchor, dir);
+  if (period === 'week') return addDays(anchor, dir * 7);
+  if (period === 'month') return new Date(anchor.getFullYear(), anchor.getMonth() + dir, 1);
+  return new Date(anchor.getFullYear() + dir, 0, 1);
+}
+
+function periodRangeLabel(period: Period, anchor: Date): string {
+  if (period === 'day') {
+    return anchor.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+  if (period === 'week') {
+    const { from, to } = rangeForPeriod('week', anchor);
+    const sameMonth = from.getMonth() === to.getMonth();
+    if (sameMonth) {
+      return `${from.getDate()}–${to.getDate()} ${MONTH_LABELS[from.getMonth()].toLowerCase()}`;
+    }
+    const fromStr = from.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    const toStr = to.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    return `${fromStr} – ${toStr}`;
+  }
+  if (period === 'month') {
+    return `${MONTH_LABELS[anchor.getMonth()]} ${anchor.getFullYear()}`;
+  }
+  return `${anchor.getFullYear()}`;
+}
+
+function formatMoney(v: number) {
+  return (
+    Math.round(v)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
+  );
+}
+
+function dayChipLabel(d: Date) {
+  // "Сегодня" / "Вчера" / "Завтра" — quick mental anchor near the centre
+  // of the scroll. Otherwise short "12 мая".
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const day = new Date(d);
+  day.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((day.getTime() - today.getTime()) / 86_400_000);
+  if (diffDays === 0) return 'Сегодня';
+  if (diffDays === -1) return 'Вчера';
+  if (diffDays === 1) return 'Завтра';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
+function dayWeekday(d: Date): string {
+  const wd = d.toLocaleDateString('ru-RU', { weekday: 'short' });
+  // Capitalise first letter of e.g. "пн" → "Пн".
+  return wd.charAt(0).toUpperCase() + wd.slice(1);
+}
+
+// ── EmployeePickerRow ──────────────────────────────────────────────────
+interface EmployeePickerRowProps {
   id: string;
   fullName: string;
   active: boolean;
   onPick: (id: string, fullName: string) => void;
   palette: ReturnType<typeof useColors>;
 }
-const MasterPickerRow = React.memo(function MasterPickerRow({
+const EmployeePickerRow = React.memo(function EmployeePickerRow({
   id,
   fullName,
   active,
   onPick,
   palette,
-}: MasterPickerRowProps) {
+}: EmployeePickerRowProps) {
   return (
     <TouchableOpacity
-      style={[styles.masterOption, active && styles.masterOptionActive]}
+      style={[styles.employeeOption, active && styles.employeeOptionActive]}
       onPress={() => onPick(id, fullName)}
     >
-      <View style={styles.masterAvatar}>
-        <Text style={styles.masterAvatarText}>{fullName?.charAt(0) || '?'}</Text>
+      <View style={styles.employeeAvatar}>
+        <Text style={styles.employeeAvatarText}>{fullName?.charAt(0) || '?'}</Text>
       </View>
       <Text
         style={[
-          styles.masterOptionText,
+          styles.employeeOptionText,
           { color: palette.text.secondary },
           active && { color: colors.primary[600], fontWeight: fontWeight.bold },
         ]}
@@ -67,123 +213,186 @@ const MasterPickerRow = React.memo(function MasterPickerRow({
   );
 });
 
-function formatMoney(v: number) {
-  return (
-    Math.round(v)
-      .toString()
-      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
-  );
-}
-
-function fmt(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
-
-function formatDateLabel(dateStr: string) {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-}
-
+// ── Screen ─────────────────────────────────────────────────────────────
 export default function CashFlowScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const { isRole } = useAuth();
   const palette = useColors();
-  const canFilterByMaster = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
+  const canFilterByEmployee = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
 
-  const now = new Date();
-  const [dateFrom, setDateFrom] = useState(fmt(new Date(now.getFullYear(), now.getMonth(), 1)));
-  const [dateTo, setDateTo] = useState(fmt(now));
-  const [masterId, setMasterId] = useState('');
-  const [masterName, setMasterName] = useState('');
-  const [showMasterPicker, setShowMasterPicker] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState<'from' | 'to' | null>(null);
-  const [dateInput, setDateInput] = useState('');
+  // Period + anchor date — these two together drive dateFrom/dateTo. The
+  // anchor is the SELECTED point inside the period (a date for "day", any
+  // date in the week/month/year for the others).
+  const today = useMemo(() => {
+    const t = new Date();
+    t.setHours(0, 0, 0, 0);
+    return t;
+  }, []);
+  const [period, setPeriod] = useState<Period>('day');
+  const [anchor, setAnchor] = useState<Date>(today);
 
-  const { data: masters } = useQuery<any[]>({
+  // Filter mode + employee selection.
+  const [mode, setMode] = useState<Mode>('all');
+  const [employeeId, setEmployeeId] = useState('');
+  const [employeeName, setEmployeeName] = useState('');
+  const [showEmployeePicker, setShowEmployeePicker] = useState(false);
+
+  // Which day card is open right now (only one at a time — keeps the
+  // scroll content predictable + checks fetched lazily).
+  const [expandedDay, setExpandedDay] = useState<string | null>(null);
+
+  // Derived range
+  const { from: rangeFrom, to: rangeTo } = useMemo(() => rangeForPeriod(period, anchor), [period, anchor]);
+  const dateFrom = useMemo(() => fmt(rangeFrom), [rangeFrom]);
+  const dateTo = useMemo(() => fmt(rangeTo), [rangeTo]);
+
+  // Day chip range (period === 'day') — ±30 days around today, snapping
+  // to the selected day.
+  const dayChips = useMemo(() => {
+    const out: Date[] = [];
+    for (let i = -30; i <= 30; i++) out.push(addDays(today, i));
+    return out;
+  }, [today]);
+  const dayScrollRef = useRef<ScrollView | null>(null);
+  const DAY_CHIP_WIDTH = 64;
+  const DAY_CHIP_GAP = spacing[2];
+
+  useEffect(() => {
+    if (period !== 'day') return;
+    // Snap horizontal scroller to the selected day. We compute the index
+    // relative to today (which sits at offset 30 in `dayChips`).
+    const idx = 30 + Math.round((anchor.getTime() - today.getTime()) / 86_400_000);
+    const x = Math.max(0, idx * (DAY_CHIP_WIDTH + DAY_CHIP_GAP) - 100);
+    requestAnimationFrame(() => {
+      try {
+        dayScrollRef.current?.scrollTo({ x, animated: true });
+      } catch {
+        // ignore
+      }
+    });
+  }, [anchor, today, period]);
+
+  // ── Queries ──────────────────────────────────────────────────────────
+  const { data: employees } = useQuery<any[]>({
     queryKey: ['masters'],
     queryFn: async () => {
       const res = await usersApi.getMasters();
       return res.data;
     },
-    enabled: canFilterByMaster,
+    enabled: canFilterByEmployee,
     placeholderData: (prev) => prev,
   });
 
+  const effectiveEmployeeId = mode === 'employee' ? employeeId : '';
+
   const { data: cashflow, isLoading } = useQuery<any>({
-    queryKey: ['cashflow', dateFrom, dateTo, masterId],
+    queryKey: ['cashflow', dateFrom, dateTo, effectiveEmployeeId],
     queryFn: async () => {
       const params: any = { dateFrom, dateTo };
-      if (masterId) params.masterId = masterId;
+      if (effectiveEmployeeId) params.masterId = effectiveEmployeeId;
       const res = await reportsApi.getCashFlow(params);
       return res.data;
     },
-    // Keep previous period's cashflow visible while the user picks
-    // a new range — no flash to "Нет данных" between fetches.
     placeholderData: (prev: unknown) => prev,
   });
 
+  // Lazy per-day check list — fires only when a card is expanded.
+  const { data: expandedChecks, isLoading: isLoadingChecks } = useQuery<any>({
+    queryKey: ['cashflow-day-checks', expandedDay, effectiveEmployeeId],
+    queryFn: async () => {
+      if (!expandedDay) return { data: [] };
+      const params: any = { dateFrom: expandedDay, dateTo: expandedDay, limit: 200 };
+      if (effectiveEmployeeId) params.masterId = effectiveEmployeeId;
+      const res = await checksApi.getAll(params);
+      return res.data;
+    },
+    enabled: !!expandedDay,
+    placeholderData: (prev: unknown) => prev,
+  });
+
+  // ── Handlers ─────────────────────────────────────────────────────────
   const onRefresh = async () => {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+    await queryClient.invalidateQueries({ queryKey: ['cashflow-day-checks'] });
     setRefreshing(false);
   };
 
-  // Memoise the derived "totals" so its identity is stable across renders
-  // when cashflow.totals didn't change. ChannelRow is a plain function but
-  // its parent (the AnimatedCard) participates in the AnimatedCard entrance
-  // sequencing, and a stable totals object keeps useMemo deps clean.
-  const totals = useMemo(() => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 }, [cashflow?.totals]);
-
-  // Memoise the daily breakdown array so each child <AnimatedCard> sees
-  // the same row reference between renders (e.g. master-picker open).
-  const days = useMemo<any[]>(() => cashflow?.days || [], [cashflow?.days]);
-
-  // Stable picker handler — kept here so MasterPickerRow's React.memo
-  // doesn't bust on each parent render.
-  const pickMaster = useCallback((id: string, fullName: string) => {
-    setMasterId(id);
-    setMasterName(fullName);
-    setShowMasterPicker(false);
+  const handlePickPeriod = useCallback((p: Period) => {
+    haptic('select');
+    setPeriod(p);
+    setExpandedDay(null);
   }, []);
 
-  const setQuickPeriod = (period: 'today' | 'week' | 'month') => {
-    const now = new Date();
-    const to = fmt(now);
-    setDateTo(to);
-    if (period === 'today') {
-      setDateFrom(to);
-    } else if (period === 'week') {
-      const d = new Date(now);
-      d.setDate(d.getDate() - 6);
-      setDateFrom(fmt(d));
-    } else {
-      setDateFrom(fmt(new Date(now.getFullYear(), now.getMonth(), 1)));
-    }
-  };
+  const handlePickDay = useCallback((d: Date) => {
+    haptic('select');
+    setAnchor(d);
+    setExpandedDay(null);
+  }, []);
 
-  const handleDateConfirm = () => {
-    // Parse DD.MM.YYYY
-    const parts = dateInput.split('.');
-    if (parts.length === 3) {
-      const d = parts[0].padStart(2, '0');
-      const m = parts[1].padStart(2, '0');
-      const y = parts[2].length === 2 ? '20' + parts[2] : parts[2];
-      const iso = `${y}-${m}-${d}`;
-      const date = new Date(iso);
-      if (!isNaN(date.getTime())) {
-        if (showDatePicker === 'from') setDateFrom(iso);
-        else setDateTo(iso);
+  const handleShift = useCallback(
+    (dir: -1 | 1) => {
+      haptic('tap');
+      setAnchor((prev) => shiftPeriod(period, prev, dir));
+      setExpandedDay(null);
+    },
+    [period],
+  );
+
+  const handlePickMode = useCallback(
+    (m: Mode) => {
+      haptic('select');
+      if (m === 'employee') {
+        // Selecting "По сотруднику" opens the picker. If no one was picked,
+        // we stay in 'all' mode (the user must actually choose someone).
+        setShowEmployeePicker(true);
+        if (employeeId) setMode('employee');
+        return;
       }
-    }
-    setShowDatePicker(null);
-    setDateInput('');
-  };
+      setMode('all');
+      setEmployeeId('');
+      setEmployeeName('');
+      setExpandedDay(null);
+    },
+    [employeeId],
+  );
 
-  // Cold-start skeleton — branded shimmer so the screen "comes alive"
-  // before the first response, instead of a generic dimmed spinner.
+  const pickEmployee = useCallback((id: string, fullName: string) => {
+    setEmployeeId(id);
+    setEmployeeName(fullName);
+    setMode('employee');
+    setShowEmployeePicker(false);
+    setExpandedDay(null);
+  }, []);
+
+  const toggleDay = useCallback((dayDate: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    haptic('tap');
+    setExpandedDay((prev) => (prev === dayDate ? null : dayDate));
+  }, []);
+
+  const openCheck = useCallback(
+    (id: string) => {
+      navigation.navigate('CheckDetail', { id });
+    },
+    [navigation],
+  );
+
+  // ── Derived ──────────────────────────────────────────────────────────
+  const totals = useMemo(
+    () => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 },
+    [cashflow?.totals],
+  );
+  const days = useMemo<any[]>(() => cashflow?.days || [], [cashflow?.days]);
+
+  // Sort newest-first so the user reads "what happened today" without
+  // scrolling to the bottom of a month.
+  const daysSorted = useMemo(() => [...days].sort((a, b) => (a.date < b.date ? 1 : -1)), [days]);
+
+  // Cold-start skeleton — same shape as before (3 placeholder day cards).
   const renderColdStart = () => (
     <View style={{ gap: spacing[3] }}>
       <View
@@ -220,10 +429,38 @@ export default function CashFlowScreen() {
     </View>
   );
 
+  // ── Trailing slot: 4-segment period switcher ─────────────────────────
+  const periodSwitcher = (
+    <View style={[styles.periodSeg, { backgroundColor: palette.bg.muted }]}>
+      {(Object.keys(PERIOD_LABELS) as Period[]).map((p) => {
+        const active = period === p;
+        return (
+          <TouchableOpacity
+            key={p}
+            style={[styles.periodSegBtn, active && [styles.periodSegBtnActive, { backgroundColor: palette.bg.card }]]}
+            onPress={() => handlePickPeriod(p)}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Период: ${PERIOD_LABELS[p]}`}
+          >
+            <Text
+              style={[
+                styles.periodSegText,
+                { color: palette.text.secondary },
+                active && [styles.periodSegTextActive, { color: palette.text.primary }],
+              ]}
+            >
+              {PERIOD_LABELS[p]}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      {/* Унифицированная iOS-шапка — единый стиль с Расписанием/Журналом. */}
-      <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
+      <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} trailing={periodSwitcher} />
 
       <ScrollView
         contentContainerStyle={[
@@ -237,83 +474,154 @@ export default function CashFlowScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
-        {/* Quick period buttons */}
-        <View style={styles.quickRow}>
-          {[
-            { key: 'today' as const, label: 'Сегодня' },
-            { key: 'week' as const, label: 'Неделя' },
-            { key: 'month' as const, label: 'Месяц' },
-          ].map((p) => (
+        {/* ── Period sub-header ──────────────────────────────────────── */}
+        {period === 'day' ? (
+          <ScrollView
+            ref={dayScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.dayChipsRow}
+            decelerationRate="fast"
+            snapToInterval={DAY_CHIP_WIDTH + DAY_CHIP_GAP}
+            snapToAlignment="start"
+          >
+            {dayChips.map((d) => {
+              const iso = fmt(d);
+              const active = iso === dateFrom;
+              return (
+                <TouchableOpacity
+                  key={iso}
+                  style={[
+                    styles.dayChip,
+                    {
+                      backgroundColor: active ? palette.accent.primary : palette.bg.card,
+                      borderColor: active ? palette.accent.primary : palette.border.subtle,
+                    },
+                  ]}
+                  onPress={() => handlePickDay(d)}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.dayChipWeekday,
+                      { color: active ? colors.white : palette.text.tertiary },
+                    ]}
+                  >
+                    {dayWeekday(d)}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.dayChipLabel,
+                      { color: active ? colors.white : palette.text.primary },
+                    ]}
+                  >
+                    {dayChipLabel(d)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        ) : (
+          <View style={styles.rangeRow}>
             <TouchableOpacity
-              key={p.key}
-              style={[styles.quickBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              onPress={() => setQuickPeriod(p.key)}
+              style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => handleShift(-1)}
               activeOpacity={0.7}
+              accessibilityLabel="Предыдущий период"
             >
-              <Text style={[styles.quickBtnText, { color: palette.text.secondary }]}>{p.label}</Text>
+              <Ionicons name="chevron-back" size={18} color={palette.text.primary} />
             </TouchableOpacity>
-          ))}
-        </View>
-
-        {/* Date range selector */}
-        <View style={styles.dateRow}>
-          <TouchableOpacity
-            style={[styles.dateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            onPress={() => {
-              setDateInput('');
-              setShowDatePicker('from');
-            }}
-          >
-            <Ionicons name="calendar-outline" size={14} color={colors.primary[600]} />
-            <Text style={[styles.dateBtnText, { color: palette.text.secondary }]}>{formatDateLabel(dateFrom)}</Text>
-          </TouchableOpacity>
-          <Text style={[styles.dateSep, { color: palette.text.tertiary }]}>—</Text>
-          <TouchableOpacity
-            style={[styles.dateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            onPress={() => {
-              setDateInput('');
-              setShowDatePicker('to');
-            }}
-          >
-            <Ionicons name="calendar-outline" size={14} color={colors.primary[600]} />
-            <Text style={[styles.dateBtnText, { color: palette.text.secondary }]}>{formatDateLabel(dateTo)}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Master filter */}
-        {canFilterByMaster && (
-          <TouchableOpacity
-            style={[styles.masterFilter, { backgroundColor: palette.bg.card }]}
-            onPress={() => setShowMasterPicker(true)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="person-outline" size={16} color={colors.primary[600]} />
-            <Text style={[styles.masterFilterText, { color: palette.text.secondary }]}>
-              {masterName || 'Все мастера'}
-            </Text>
-            <Ionicons name="chevron-down" size={14} color={palette.text.tertiary} />
-          </TouchableOpacity>
+            <View
+              style={[styles.rangeChip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <Text style={[styles.rangeChipText, { color: palette.text.primary }]} numberOfLines={1}>
+                {periodRangeLabel(period, anchor)}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => handleShift(1)}
+              activeOpacity={0.7}
+              accessibilityLabel="Следующий период"
+            >
+              <Ionicons name="chevron-forward" size={18} color={palette.text.primary} />
+            </TouchableOpacity>
+          </View>
         )}
 
-        {/* Cold-start: branded skeleton until a real response lands.
-            Once we have any data (cached or fresh), SWR keeps it on screen
-            across period changes — no "Нет данных" flash. */}
+        {/* ── Mode tabs: all employees / by employee ─────────────────── */}
+        {canFilterByEmployee && (
+          <View style={[styles.modeSeg, { backgroundColor: palette.bg.muted }]}>
+            <TouchableOpacity
+              style={[styles.modeSegBtn, mode === 'all' && [styles.modeSegBtnActive, { backgroundColor: palette.bg.card }]]}
+              onPress={() => handlePickMode('all')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="people-outline"
+                size={14}
+                color={mode === 'all' ? palette.text.primary : palette.text.secondary}
+              />
+              <Text
+                style={[
+                  styles.modeSegText,
+                  { color: palette.text.secondary },
+                  mode === 'all' && [styles.modeSegTextActive, { color: palette.text.primary }],
+                ]}
+                numberOfLines={1}
+              >
+                Все сотрудники
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.modeSegBtn,
+                mode === 'employee' && [styles.modeSegBtnActive, { backgroundColor: palette.bg.card }],
+              ]}
+              onPress={() => handlePickMode('employee')}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name="person-outline"
+                size={14}
+                color={mode === 'employee' ? palette.text.primary : palette.text.secondary}
+              />
+              <Text
+                style={[
+                  styles.modeSegText,
+                  { color: palette.text.secondary },
+                  mode === 'employee' && [styles.modeSegTextActive, { color: palette.text.primary }],
+                ]}
+                numberOfLines={1}
+              >
+                {mode === 'employee' && employeeName ? employeeName : 'По сотруднику'}
+              </Text>
+              {mode === 'employee' && employeeName ? (
+                <Ionicons name="chevron-down" size={12} color={palette.text.secondary} />
+              ) : null}
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── Body ───────────────────────────────────────────────────── */}
         {cashflow === undefined ? (
           renderColdStart()
         ) : !cashflow && !isLoading ? (
-          <EmptyState title="Нет данных" description="За выбранный период чеков не было" icon="wallet" />
+          <EmptyState
+            title="Нет операций"
+            description="За выбранный период чеков не было"
+            icon="wallet"
+          />
         ) : (
           <>
-            {/* Hero totals — one big card.
-                Top: caption + 32pt hero number for Итого.
-                Bottom: 3 channel rows (Нал / Карта / Гарантия) with money
-                and tiny share-of-total caption. Single visual unit reads
-                an order of magnitude cleaner than the previous 4-tile grid. */}
+            {/* Hero totals card */}
             <AnimatedCard
               index={0}
               style={[styles.totalsCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             >
-              <Text style={[iosSectionLabel, { marginBottom: 4, color: palette.text.tertiary }]}>Итого за период</Text>
+              <Text style={[iosSectionLabel, { marginBottom: 4, color: palette.text.tertiary }]}>
+                Итого за {PERIOD_LABELS[period].toLowerCase()}
+              </Text>
               <Text style={[styles.totalsHero, { color: palette.text.primary }]}>{formatMoney(totals.total)}</Text>
               <View style={styles.totalsBreakdown}>
                 <ChannelRow
@@ -348,143 +656,167 @@ export default function CashFlowScreen() {
               </View>
             </AnimatedCard>
 
-            {/* Daily breakdown */}
-            <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.tertiary }]}>По дням</Text>
-            {days.length === 0 ? (
-              <EmptyState title="Нет операций" description="За выбранный период чеков не было" icon="receipt" />
+            {/* Days list */}
+            <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.tertiary }]}>
+              {period === 'day' ? 'За день' : 'По дням'}
+            </Text>
+            {daysSorted.length === 0 ? (
+              <EmptyState
+                title="Нет операций"
+                description="Нет операций за выбранный период"
+                icon="receipt"
+              />
             ) : (
-              days.map((day: any, idx: number) => (
-                <AnimatedCard
-                  key={day.date}
-                  style={[styles.dayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-                  index={idx + 1}
-                >
-                  <View style={styles.dayHeader}>
-                    <Text style={[styles.dayDate, { color: palette.text.secondary }]}>
-                      {new Date(day.date).toLocaleDateString('ru-RU', {
-                        weekday: 'short',
-                        day: 'numeric',
-                        month: 'short',
-                      })}
-                    </Text>
-                    <Text style={[styles.dayTotal, { color: palette.text.primary }]}>{formatMoney(day.total)}</Text>
-                  </View>
-                  <View style={[styles.dayDetails, { borderTopColor: palette.border.subtle }]}>
-                    {day.cash > 0 && (
-                      <View style={styles.dayDetailItem}>
-                        <View style={[styles.dayDot, { backgroundColor: colors.green[500] }]} />
-                        <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
-                          Нал: {formatMoney(day.cash)}
+              daysSorted.map((day: any, idx: number) => {
+                const isOpen = expandedDay === day.date;
+                const dateObj = parseISO(day.date);
+                return (
+                  <AnimatedCard
+                    key={day.date}
+                    style={[
+                      styles.dayCard,
+                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                    ]}
+                    index={idx + 1}
+                  >
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      onPress={() => toggleDay(day.date)}
+                      style={styles.dayHeader}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Раскрыть чеки за ${dateObj.toLocaleDateString('ru-RU')}`}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.dayDate, { color: palette.text.primary }]}>
+                          {dateObj.toLocaleDateString('ru-RU', {
+                            weekday: 'short',
+                            day: 'numeric',
+                            month: 'long',
+                          })}
                         </Text>
                       </View>
-                    )}
-                    {day.card > 0 && (
-                      <View style={styles.dayDetailItem}>
-                        <View style={[styles.dayDot, { backgroundColor: colors.blue[500] }]} />
-                        <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
-                          Карта: {formatMoney(day.card)}
-                        </Text>
+                      <Text style={[styles.dayTotal, { color: palette.text.primary }]}>
+                        {formatMoney(day.total)}
+                      </Text>
+                      <Ionicons
+                        name={isOpen ? 'chevron-up' : 'chevron-down'}
+                        size={16}
+                        color={palette.text.tertiary}
+                        style={{ marginLeft: spacing[2] }}
+                      />
+                    </TouchableOpacity>
+                    <View style={[styles.dayDetails, { borderTopColor: palette.border.subtle }]}>
+                      {day.cash > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.green[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Нал: {formatMoney(day.cash)}
+                          </Text>
+                        </View>
+                      )}
+                      {day.card > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.blue[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Карта: {formatMoney(day.card)}
+                          </Text>
+                        </View>
+                      )}
+                      {day.warranty > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.yellow[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Гарант: {formatMoney(day.warranty)}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Expanded — list of checks for this day */}
+                    {isOpen && (
+                      <View style={[styles.checksSection, { borderTopColor: palette.border.subtle }]}>
+                        {isLoadingChecks && !expandedChecks ? (
+                          <View style={{ paddingVertical: spacing[3], alignItems: 'center' }}>
+                            <ActivityIndicator color={colors.primary[500]} />
+                          </View>
+                        ) : !expandedChecks?.data?.length ? (
+                          <Text style={[styles.checksEmpty, { color: palette.text.tertiary }]}>
+                            Нет чеков за этот день
+                          </Text>
+                        ) : (
+                          expandedChecks.data.map((c: any) => (
+                            <CheckRow key={c.id} check={c} palette={palette} onPress={() => openCheck(c.id)} />
+                          ))
+                        )}
                       </View>
                     )}
-                    {day.warranty > 0 && (
-                      <View style={styles.dayDetailItem}>
-                        <View style={[styles.dayDot, { backgroundColor: colors.yellow[500] }]} />
-                        <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
-                          Гарант: {formatMoney(day.warranty)}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                </AnimatedCard>
-              ))
+                  </AnimatedCard>
+                );
+              })
             )}
+
+            {/* Footer note about deferred checks */}
+            <Text style={[styles.footerNote, { color: palette.text.tertiary }]}>
+              {'\u{1F4A1} '}Отложенные чеки попадают в выручку в день их проведения, не в день создания
+            </Text>
           </>
         )}
       </ScrollView>
 
-      {/* Master picker modal */}
-      <Modal visible={showMasterPicker} transparent animationType="fade">
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowMasterPicker(false)}>
+      {/* Employee picker modal */}
+      <Modal visible={showEmployeePicker} transparent animationType="fade">
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowEmployeePicker(false)}
+        >
           <TouchableOpacity activeOpacity={1} style={[styles.modalContent, { backgroundColor: palette.bg.card }]}>
             <View style={[styles.modalHeader, { borderBottomColor: palette.border.subtle }]}>
-              <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Выберите мастера</Text>
-              <TouchableOpacity onPress={() => setShowMasterPicker(false)}>
+              <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Выберите сотрудника</Text>
+              <TouchableOpacity onPress={() => setShowEmployeePicker(false)}>
                 <Ionicons name="close" size={22} color={palette.text.secondary} />
               </TouchableOpacity>
             </View>
             <TouchableOpacity
-              style={[styles.masterOption, !masterId && styles.masterOptionActive]}
+              style={[styles.employeeOption, !employeeId && styles.employeeOptionActive]}
               onPress={() => {
-                setMasterId('');
-                setMasterName('');
-                setShowMasterPicker(false);
+                setEmployeeId('');
+                setEmployeeName('');
+                setMode('all');
+                setShowEmployeePicker(false);
+                setExpandedDay(null);
               }}
             >
               <Ionicons
                 name="people-outline"
                 size={18}
-                color={!masterId ? colors.primary[600] : palette.text.secondary}
+                color={!employeeId ? colors.primary[600] : palette.text.secondary}
               />
               <Text
                 style={[
-                  styles.masterOptionText,
+                  styles.employeeOptionText,
                   { color: palette.text.secondary },
-                  !masterId && { color: colors.primary[600], fontWeight: fontWeight.bold },
+                  !employeeId && { color: colors.primary[600], fontWeight: fontWeight.bold },
                 ]}
               >
-                Все мастера
+                Все сотрудники
               </Text>
             </TouchableOpacity>
-            <View style={{ maxHeight: 280 }}>
+            <View style={{ maxHeight: 320 }}>
               <FlashList
-                data={masters || []}
+                data={employees || []}
                 keyExtractor={(item: any) => item.id}
-                extraData={masterId}
+                extraData={employeeId}
                 renderItem={({ item }: { item: any }) => (
-                  <MasterPickerRow
+                  <EmployeePickerRow
                     id={item.id}
                     fullName={item.fullName}
-                    active={masterId === item.id}
-                    onPick={pickMaster}
+                    active={employeeId === item.id}
+                    onPick={pickEmployee}
                     palette={palette}
                   />
                 )}
               />
-            </View>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Date input modal */}
-      <Modal visible={showDatePicker !== null} transparent animationType="fade">
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowDatePicker(null)}>
-          <TouchableOpacity activeOpacity={1} style={[styles.dateModal, { backgroundColor: palette.bg.card }]}>
-            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>
-              {showDatePicker === 'from' ? 'Дата начала' : 'Дата окончания'}
-            </Text>
-            <TextInput
-              style={[styles.dateInput, { borderColor: palette.border.subtle, color: palette.text.primary }]}
-              placeholder="ДД.ММ.ГГГГ"
-              placeholderTextColor={palette.text.tertiary}
-              value={dateInput}
-              onChangeText={setDateInput}
-              keyboardType="numeric"
-              autoFocus
-              onSubmitEditing={handleDateConfirm}
-            />
-            <View style={styles.dateModalBtns}>
-              <TouchableOpacity
-                style={[styles.dateModalCancel, { backgroundColor: palette.bg.muted }]}
-                onPress={() => setShowDatePicker(null)}
-              >
-                <Text style={[styles.dateModalCancelText, { color: palette.text.secondary }]}>Отмена</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.dateModalConfirm, { backgroundColor: palette.accent.primary }]}
-                onPress={handleDateConfirm}
-              >
-                <Text style={styles.dateModalConfirmText}>ОК</Text>
-              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -495,7 +827,6 @@ export default function CashFlowScreen() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ChannelRow — single line inside the Итого card. Icon | label + share% | amount.
-// Memo not strictly needed (3 instances) but keeps the JSX tidy.
 // ─────────────────────────────────────────────────────────────────────────────
 function ChannelRow({
   iconName,
@@ -531,55 +862,178 @@ function ChannelRow({
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CheckRow — minimal one-line row inside an expanded day card.
+// Number + employee + amount + chevron. Taps push CheckDetail on the root stack.
+// ─────────────────────────────────────────────────────────────────────────────
+function CheckRow({
+  check,
+  palette,
+  onPress,
+}: {
+  check: any;
+  palette: ReturnType<typeof useColors>;
+  onPress: () => void;
+}) {
+  const masterName: string = check?.master?.fullName || '—';
+  const carPlate: string | undefined = check?.car?.plateNumber;
+  const channelIcon: keyof typeof Ionicons.glyphMap =
+    check?.paymentMethod === 'cash'
+      ? 'cash-outline'
+      : check?.paymentMethod === 'card'
+        ? 'card-outline'
+        : 'shield-checkmark-outline';
+  return (
+    <TouchableOpacity activeOpacity={0.7} onPress={onPress} style={styles.checkRow}>
+      <View style={[styles.checkIcon, { backgroundColor: palette.bg.muted }]}>
+        <Ionicons name={channelIcon} size={14} color={palette.text.secondary} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.checkPrimary, { color: palette.text.primary }]} numberOfLines={1}>
+          № {check.number} · {masterName}
+        </Text>
+        {!!carPlate && (
+          <Text style={[styles.checkSecondary, { color: palette.text.tertiary }]} numberOfLines={1}>
+            {carPlate}
+          </Text>
+        )}
+      </View>
+      <Text style={[styles.checkAmount, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue || 0)}</Text>
+      <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scrollContent: { padding: spacing[4], gap: spacing[3] },
 
-  // Quick period
-  quickRow: { flexDirection: 'row', gap: spacing[2] },
-  quickBtn: {
-    flex: 1,
-    paddingVertical: spacing[2],
-    borderRadius: borderRadius.lg,
-    backgroundColor: colors.white,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.gray[200],
-    alignItems: 'center',
-  },
-  quickBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[700] },
-
-  // Date range
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  dateBtn: {
-    flex: 1,
+  // Period switcher (header trailing)
+  periodSeg: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[1.5],
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.gray[200],
-    paddingVertical: spacing[2.5],
-    paddingHorizontal: spacing[3],
+    backgroundColor: colors.gray[100],
+    borderRadius: borderRadius.full,
+    padding: 2,
   },
-  dateBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
-  dateSep: { color: colors.gray[400], fontSize: fontSize.sm },
-
-  // Master filter
-  masterFilter: {
-    flexDirection: 'row',
+  periodSegBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: borderRadius.full,
     alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 38,
+  },
+  periodSegBtnActive: {
+    backgroundColor: colors.white,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  periodSegText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.gray[500],
+    letterSpacing: -0.1,
+  },
+  periodSegTextActive: { color: colors.gray[900], fontWeight: '700' },
+
+  // Day chips (period === 'day')
+  dayChipsRow: {
+    paddingVertical: spacing[1],
     gap: spacing[2],
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.lg,
+  },
+  dayChip: {
+    width: 64,
+    paddingVertical: spacing[2],
+    paddingHorizontal: 8,
+    borderRadius: borderRadius.xl,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.primary[200],
-    paddingVertical: spacing[2.5],
+    backgroundColor: colors.white,
+    borderColor: colors.gray[200],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dayChipWeekday: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: colors.gray[500],
+    letterSpacing: 0.2,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  dayChipLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.gray[900],
+    letterSpacing: -0.1,
+  },
+
+  // Range chip + arrows (period !== 'day')
+  rangeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  rangeArrow: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.white,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.gray[200],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rangeChip: {
+    flex: 1,
+    height: 40,
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    backgroundColor: colors.white,
+    borderColor: colors.gray[200],
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingHorizontal: spacing[3],
   },
-  masterFilterText: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
+  rangeChipText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+    textTransform: 'capitalize',
+  },
 
-  // Totals card — one hero card replaces the 4-tile colour grid.
+  // Mode tabs (all / by employee)
+  modeSeg: {
+    flexDirection: 'row',
+    backgroundColor: colors.gray[100],
+    borderRadius: borderRadius.full,
+    padding: 3,
+  },
+  modeSegBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 7,
+    borderRadius: borderRadius.full,
+  },
+  modeSegBtnActive: {
+    backgroundColor: colors.white,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  modeSegText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: colors.gray[500],
+    letterSpacing: -0.1,
+    flexShrink: 1,
+  },
+  modeSegTextActive: { color: colors.gray[900], fontWeight: '700' },
+
+  // Totals card — hero
   totalsCard: {
     ...iosCard,
     paddingVertical: spacing[4],
@@ -622,8 +1076,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3.5],
     paddingHorizontal: spacing[4],
   },
-  dayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  dayDate: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
+  dayHeader: { flexDirection: 'row', alignItems: 'center' },
+  dayDate: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    color: colors.gray[900],
+    textTransform: 'capitalize',
+  },
   dayTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   dayDetails: {
     flexDirection: 'row',
@@ -638,6 +1097,46 @@ const styles = StyleSheet.create({
   dayDot: { width: 6, height: 6, borderRadius: 3 },
   dayDetailText: { fontSize: fontSize.xs, color: colors.gray[500] },
 
+  // Expanded checks section inside a day card
+  checksSection: {
+    marginTop: spacing[3],
+    paddingTop: spacing[2],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.gray[200],
+    gap: spacing[1],
+  },
+  checksEmpty: {
+    fontSize: fontSize.xs,
+    paddingVertical: spacing[2],
+    textAlign: 'center',
+  },
+  checkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingVertical: spacing[2],
+  },
+  checkIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkPrimary: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  checkSecondary: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
+  checkAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
+
+  // Footer note about deferred checks
+  footerNote: {
+    fontSize: fontSize.xs,
+    color: colors.gray[500],
+    textAlign: 'center',
+    marginTop: spacing[3],
+    paddingHorizontal: spacing[4],
+    lineHeight: 18,
+  },
+
   // Modal
   modalOverlay: {
     flex: 1,
@@ -648,7 +1147,7 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     width: '100%',
-    maxHeight: 400,
+    maxHeight: 440,
     borderRadius: 20,
     overflow: 'hidden',
   },
@@ -661,16 +1160,16 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.gray[200],
   },
   modalTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  masterOption: {
+  employeeOption: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
     paddingVertical: spacing[3],
     paddingHorizontal: spacing[4],
   },
-  masterOptionActive: { backgroundColor: colors.primary[50] },
-  masterOptionText: { flex: 1, fontSize: fontSize.sm, color: colors.gray[700] },
-  masterAvatar: {
+  employeeOptionActive: { backgroundColor: colors.primary[50] },
+  employeeOptionText: { flex: 1, fontSize: fontSize.sm, color: colors.gray[700] },
+  employeeAvatar: {
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -678,41 +1177,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  masterAvatarText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[700] },
-
-  // Date modal
-  dateModal: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
-    margin: spacing[6],
-    padding: spacing[5],
-    gap: spacing[4],
-  },
-  dateInput: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.gray[200],
-    borderRadius: borderRadius.lg,
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[4],
-    fontSize: fontSize.lg,
-    color: colors.gray[900],
-    textAlign: 'center',
-  },
-  dateModalBtns: { flexDirection: 'row', gap: spacing[3] },
-  dateModalCancel: {
-    flex: 1,
-    paddingVertical: spacing[3],
-    alignItems: 'center',
-    borderRadius: borderRadius.lg,
-    backgroundColor: colors.gray[100],
-  },
-  dateModalCancelText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[600] },
-  dateModalConfirm: {
-    flex: 1,
-    paddingVertical: spacing[3],
-    alignItems: 'center',
-    borderRadius: borderRadius.lg,
-    backgroundColor: colors.primary[600],
-  },
-  dateModalConfirmText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
+  employeeAvatarText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[700] },
 });

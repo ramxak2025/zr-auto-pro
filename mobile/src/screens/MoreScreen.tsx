@@ -57,21 +57,32 @@ interface MenuSection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Menu structure — three owner-requested groups, iOS Settings-style.
+// Menu structure — owner-requested 7-group taxonomy, iOS Settings-style.
 //
-//   • СЕРВИС     — production floor (schedule, clients, employees, services).
-//   • ФИНАНСЫ    — owner-facing money screens (cashflow, salary, expenses, reports).
-//   • УПРАВЛЕНИЕ — administration & catalog (suppliers, calls, equipment,
-//                  marketing, users, company settings, subscription, admin panel).
+//   • КОМАНДА     — people: Employees, Schedule, Users, Salary.
+//   • ФИНАНСЫ     — owner-facing money: CashFlow, Expenses, Reports.
+//   • СКЛАД       — warehouse-side ops: Suppliers, Equipment, Analytics.
+//   • КЛИЕНТЫ     — customer CRM: Clients, Cars.
+//   • МАРКЕТИНГ   — outreach: Marketing (reviews), Calls, Mailings, Integrations.
+//   • НАСТРОЙКИ   — admin of the tenant itself: Company, Subscription, Trash.
+//   • АДМИН       — superadmin-only platform tools.
 //
-// Order within each group is the order the owner asked for. Items keep
-// their existing roles / permissions / featureKey gates so subscription
-// paywalls and role visibility are unchanged.
+// Items keep their existing roles / permissions / featureKey gates so
+// subscription paywalls and role visibility are unchanged. Order
+// within each group is the order the owner asked for.
 // ─────────────────────────────────────────────────────────────────────────────
 const menuSections: MenuSection[] = [
   {
-    title: 'Сервис',
+    title: 'Команда',
     items: [
+      {
+        label: 'Сотрудники',
+        description: 'Карточки персонала, статус, рейтинги',
+        screen: 'Employees',
+        icon: 'people-circle-outline',
+        iconBg: colors.cyan[50],
+        iconColor: colors.cyan[600],
+      },
       {
         label: 'Расписание',
         description: 'График работы и смены',
@@ -82,45 +93,15 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
-        label: 'Клиенты',
-        description: 'Клиенты и автомобили',
-        screen: 'Clients',
-        permission: 'clients_view',
-        featureKey: 'clients_view',
-        icon: 'people-outline',
-        iconBg: colors.blue[50],
-        iconColor: colors.blue[600],
-      },
-      {
-        label: 'Сотрудники',
-        description: 'Карточки персонала, статус, рейтинги',
-        screen: 'Employees',
-        icon: 'people-circle-outline',
-        iconBg: colors.cyan[50],
-        iconColor: colors.cyan[600],
-      },
-      {
-        label: 'Услуги',
-        description: 'Каталог услуг',
-        screen: 'Services',
-        featureKey: 'services_view',
-        icon: 'build-outline',
-        iconBg: colors.orange[50],
-        iconColor: colors.orange[600],
-      },
-    ],
-  },
-  {
-    title: 'Финансы',
-    items: [
-      {
-        label: 'Движение денег',
-        description: 'Касса по дням и сотрудникам',
-        screen: 'CashFlow',
-        featureKey: 'cashflow_view',
-        icon: 'swap-horizontal-outline',
-        iconBg: colors.teal[50],
-        iconColor: colors.teal[600],
+        label: 'Пользователи',
+        description: 'Управление доступом',
+        screen: 'Users',
+        permission: 'user_management',
+        featureKey: 'users_manage',
+        roles: ['director', 'superadmin'],
+        icon: 'shield-outline',
+        iconBg: colors.indigo[50],
+        iconColor: colors.indigo[600],
       },
       {
         label: 'Зарплата',
@@ -130,6 +111,20 @@ const menuSections: MenuSection[] = [
         icon: 'wallet-outline',
         iconBg: colors.green[50],
         iconColor: colors.green[600],
+      },
+    ],
+  },
+  {
+    title: 'Финансы',
+    items: [
+      {
+        label: 'Касса по дням',
+        description: 'Поступления и выдачи по дням',
+        screen: 'CashFlow',
+        featureKey: 'cashflow_view',
+        icon: 'swap-horizontal-outline',
+        iconBg: colors.teal[50],
+        iconColor: colors.teal[600],
       },
       {
         label: 'Расходы',
@@ -153,7 +148,7 @@ const menuSections: MenuSection[] = [
     ],
   },
   {
-    title: 'Управление',
+    title: 'Склад',
     items: [
       {
         label: 'Поставщики',
@@ -166,6 +161,60 @@ const menuSections: MenuSection[] = [
         iconColor: colors.amber[600],
       },
       {
+        label: 'Имущество',
+        description: 'Инструменты и оборудование',
+        screen: 'Equipment',
+        icon: 'construct-outline',
+        iconBg: colors.emerald[50],
+        iconColor: colors.emerald[700],
+      },
+      {
+        label: 'Складская аналитика',
+        description: 'Остатки, оборот, движение',
+        screen: 'WarehouseAnalytics',
+        icon: 'analytics-outline',
+        iconBg: colors.teal[50],
+        iconColor: colors.teal[600],
+      },
+    ],
+  },
+  {
+    title: 'Клиенты',
+    items: [
+      {
+        label: 'Клиенты',
+        description: 'База клиентов и история',
+        screen: 'Clients',
+        permission: 'clients_view',
+        featureKey: 'clients_view',
+        icon: 'people-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+      },
+      {
+        label: 'Авто',
+        description: 'Автомобили клиентов',
+        screen: 'Cars',
+        permission: 'clients_view',
+        featureKey: 'clients_view',
+        icon: 'car-sport-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+      },
+    ],
+  },
+  {
+    title: 'Маркетинг',
+    items: [
+      {
+        label: 'Отзывы и репутация',
+        description: 'Сбор и публикация отзывов',
+        screen: 'Marketing',
+        icon: 'star-outline',
+        iconBg: colors.violet[50],
+        iconColor: colors.violet[600],
+      },
+      {
         label: 'Звонки',
         description: 'Журнал звонков и записи',
         screen: 'Calls',
@@ -175,31 +224,28 @@ const menuSections: MenuSection[] = [
         iconColor: colors.blue[600],
       },
       {
-        label: 'Имущество',
-        description: 'Инструменты и оборудование',
-        screen: 'Equipment',
-        icon: 'construct-outline',
-        iconBg: colors.emerald[50],
-        iconColor: colors.emerald[700],
+        label: 'Рассылки',
+        description: 'SMS и push клиентам',
+        screen: 'Mailings',
+        roles: ['director', 'superadmin'],
+        icon: 'paper-plane-outline',
+        iconBg: colors.purple[50],
+        iconColor: colors.purple[600],
       },
       {
-        label: 'Маркетинг',
-        description: 'Отзывы и рассылки',
-        screen: 'Marketing',
-        icon: 'megaphone-outline',
-        iconBg: colors.violet[50],
-        iconColor: colors.violet[600],
+        label: 'Интеграции',
+        description: 'Телефония, мессенджеры, CRM',
+        screen: 'Integrations',
+        roles: ['director', 'superadmin'],
+        icon: 'git-network-outline',
+        iconBg: colors.slate[100],
+        iconColor: colors.slate[600],
       },
-      {
-        label: 'Пользователи',
-        description: 'Управление доступом',
-        screen: 'Users',
-        permission: 'user_management',
-        featureKey: 'users_manage',
-        icon: 'shield-outline',
-        iconBg: colors.indigo[50],
-        iconColor: colors.indigo[600],
-      },
+    ],
+  },
+  {
+    title: 'Настройки',
+    items: [
       {
         label: 'Настройки компании',
         description: 'Реквизиты и данные для чеков',
@@ -218,6 +264,20 @@ const menuSections: MenuSection[] = [
         iconBg: colors.primary[50],
         iconColor: colors.primary[600],
       },
+      {
+        label: 'Корзина',
+        description: 'Удалённые товары и категории',
+        screen: 'Trash',
+        roles: ['director', 'superadmin'],
+        icon: 'trash-outline',
+        iconBg: colors.gray[100],
+        iconColor: colors.gray[600],
+      },
+    ],
+  },
+  {
+    title: 'Админ',
+    items: [
       {
         label: 'Админ-панель',
         description: 'Управление тенантами и планами',

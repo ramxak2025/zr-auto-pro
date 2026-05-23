@@ -64,7 +64,9 @@ const PERSISTED_KEYS = [
   // Owner dashboard widgets (iter#14, 2026-05-22) — owner sees them every
   // time the app cold-starts; persisting eliminates the 100-400ms flash
   // between Hero/KPI render and the first network response.
-  'owner-alerts',
+  // owner-alerts was replaced by WarehouseAnalyticsWidget (summary +
+  // reorder forecast) — same persistence rationale, single shared prefix.
+  'warehouse-analytics',
   'clients-new-returning',
   'retention',
   'best-day-week',
@@ -90,9 +92,10 @@ const PERSISTED_KEYS = [
   'checks-infinite',
   // Filter helpers used by ChecksScreen — small list, mostly static.
   'users-for-filter',
-  // Warehouse-document tabs inside ChecksScreen.
-  'stock-movements',
-  'supplier-deliveries',
+  // Warehouse-document tab inside ChecksScreen. Replaces the older
+  // 'stock-movements' / 'supplier-deliveries' pair — the journal feed
+  // is now a single unified endpoint. Key shape: ['journal-warehouse-docs', kind].
+  'journal-warehouse-docs',
   // ── Other heavy lists (cold-start instant) ─────────────────────
   // Services screen uses ['services', { search, page, limit }].
   'services',
@@ -139,6 +142,16 @@ const PERSISTED_KEYS = [
   'eq-trash',
   'eq-cats',
   'eq-storage',
+  // WarehouseAnalyticsScreen — owner-only deep dive into stock value,
+  // dead stock, ABC, velocity, reorder forecast. Heavy aggregations
+  // on the backend; we render the previous period instantly on cold
+  // start while SWR refetches.
+  'warehouse-analytics-summary',
+  'warehouse-analytics-velocity',
+  'warehouse-analytics-reorder',
+  'warehouse-analytics-category-margin',
+  'warehouse-analytics-top-moving',
+  'warehouse-analytics-top-margin',
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];
