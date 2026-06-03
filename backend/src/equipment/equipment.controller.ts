@@ -36,7 +36,7 @@ export class EquipmentController {
   @Roles('director', 'admin', 'superadmin')
   @Post('storage')
   createStorageItem(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.service.createStorageItem(user.tenantID, dto);
+    return this.service.createStorageItem(user.tenantID, user.userID, dto);
   }
 
   @Roles('director', 'admin', 'superadmin')
@@ -45,10 +45,18 @@ export class EquipmentController {
     return this.service.updateStorageItem(id, user.tenantID, dto);
   }
 
+  // `reverseExpense=true` → also delete the linked «Имущество» expense
+  // ("вернуть деньги в оборот"). Accepts the flag from query or body.
   @Roles('director', 'admin', 'superadmin')
   @Delete('storage/:id')
-  removeStorageItem(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.service.removeStorageItem(id, user.tenantID);
+  removeStorageItem(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('reverseExpense') reverseExpenseQuery?: string,
+    @Body() body?: { reverseExpense?: boolean },
+  ) {
+    const reverseExpense = reverseExpenseQuery === 'true' || body?.reverseExpense === true;
+    return this.service.removeStorageItem(id, user.tenantID, reverseExpense);
   }
 
   // ─── Employee Summary ─────────────────────────────────────────────

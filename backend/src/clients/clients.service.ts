@@ -66,6 +66,8 @@ export class ClientsService {
       makeModel: row.make_model,
       comment: row.comment,
       clientId: row.client_id,
+      // 059_cars_no_plate — present on rows selected with `cars.*`.
+      noPlate: !!row.no_plate,
       createdAt: row.created_at,
     };
   }
@@ -134,10 +136,29 @@ export class ClientsService {
   }
 
   async getById(id: string, tenantID: string) {
-    const { rows } = await this.pool.query('SELECT * FROM clients WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+    // Last loyalty rating is computed in the query (not denormalized) — the
+    // most recent review_responses row for this client (007_marketing_reviews).
+    const { rows } = await this.pool.query(
+      `SELECT c.*,
+              rr.rating AS last_rating,
+              rr.created_at AS last_rating_at
+       FROM clients c
+       LEFT JOIN LATERAL (
+         SELECT rating, created_at
+         FROM review_responses
+         WHERE client_id = c.id AND tenant_id = c.tenant_id
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) rr ON true
+       WHERE c.id=$1 AND c.tenant_id=$2`,
+      [id, tenantID],
+    );
     if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
 
     const client = this.mapClient(rows[0]);
+    (client as any).lastRating =
+      rows[0].last_rating === null || rows[0].last_rating === undefined ? null : parseInt(rows[0].last_rating, 10);
+    (client as any).lastRatingAt = rows[0].last_rating_at ?? null;
 
     const { rows: carRows } = await this.pool.query(
       'SELECT * FROM cars WHERE client_id=$1 AND tenant_id=$2 ORDER BY created_at',
@@ -210,10 +231,10 @@ export class ClientsService {
     // Refuse to delete the pinned retail client — it's a system row that
     // /cash relies on. Without this guard the cash screen would silently
     // lose its default buyer.
-    const { rows: check } = await this.pool.query(
-      'SELECT is_retail FROM clients WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows: check } = await this.pool.query('SELECT is_retail FROM clients WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
     if (check.length > 0 && check[0].is_retail) {
       throw new NotFoundException({ message: 'Нельзя удалить розничного покупателя' });
     }
@@ -227,10 +248,11 @@ export class ClientsService {
    */
   async updateSource(id: string, tenantID: string, source: string | null) {
     const normalized = typeof source === 'string' ? source.trim().slice(0, 100) : null;
-    const { rows } = await this.pool.query(
-      `UPDATE clients SET source=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`,
-      [normalized && normalized.length > 0 ? normalized : null, id, tenantID],
-    );
+    const { rows } = await this.pool.query(`UPDATE clients SET source=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`, [
+      normalized && normalized.length > 0 ? normalized : null,
+      id,
+      tenantID,
+    ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
     return this.mapClient(rows[0]);
   }
@@ -254,8 +276,11 @@ export class ClientsService {
    * panel inside ClientDetail. Cars with zero checks still appear so the FE
    * doesn't have to do its own merge.
    */
-  async getChecksByCar(id: string, tenantID: string) {
-    const { rows: clientRows } = await this.pool.query('SELECT 1 FROM clients WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+  async getChecksByCar(id: string, tenantID: string, opts: { limit?: number; offset?: number } = {}) {
+    const { rows: clientRows } = await this.pool.query('SELECT 1 FROM clients WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
     if (clientRows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
 
     const { rows: carRows } = await this.pool.query(
@@ -263,14 +288,22 @@ export class ClientsService {
       [id, tenantID],
     );
 
+    // Bound the history so a long-lived car can't return unbounded rows. The
+    // FE renders the most recent visits per car; 50 (newest-first) is plenty
+    // and keeps the response small. Optional offset lets a future "show more"
+    // page deeper without changing the response shape.
+    const limit = Math.min(Math.max(Number(opts.limit) || 50, 1), 200);
+    const offset = Math.max(Number(opts.offset) || 0, 0);
+
     const { rows: checkRows } = await this.pool.query(
       `SELECT ch.*, m.full_name as master_name, ca.plate_number, ca.make_model
        FROM checks ch
        LEFT JOIN users m ON m.id = ch.master_id
        LEFT JOIN cars ca ON ca.id = ch.car_id
        WHERE ch.tenant_id=$1 AND ch.client_id=$2
-       ORDER BY ch.date DESC`,
-      [tenantID, id],
+       ORDER BY ch.date DESC
+       LIMIT $3 OFFSET $4`,
+      [tenantID, id, limit, offset],
     );
 
     const byCar: Record<string, any[]> = {};

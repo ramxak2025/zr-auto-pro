@@ -13,6 +13,8 @@ import { PG_POOL } from '../database.module';
 import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
 import { parseFields, filterShape } from '../common/field-filter';
+import { ttlCache } from '../common/ttl-cache';
+import { invalidateReportsForTenant } from '../common/reports-cache';
 
 // Only tables we explicitly want to allow as targets of cross-tenant
 // assertions. Keeping this as an allow-list (not a string the caller
@@ -76,6 +78,10 @@ export class ChecksService {
     if (rows.length !== uniqueIds.length) {
       throw new BadRequestException({ message: `${label} не найден или принадлежит другому автосервису` });
     }
+  }
+
+  private invalidateReports(tenantID: string) {
+    invalidateReportsForTenant(tenantID);
   }
 
   private mapCheck(row: any) {
@@ -149,13 +155,19 @@ export class ChecksService {
       idx++;
     }
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) as total FROM checks ch
-       LEFT JOIN clients cl ON cl.id = ch.client_id
-       LEFT JOIN cars ca ON ca.id = ch.car_id
-       WHERE ${where}`,
-      params,
-    );
+    // The clients+cars LEFT JOINs only exist to satisfy the `search` filter
+    // (cl.full_name / cl.phone / ca.plate_number). With no search term the
+    // COUNT can run on `checks` alone — dropping two joins per page load on
+    // the most-hit list endpoint. The response shape is unchanged.
+    const countResult = query.search
+      ? await this.pool.query(
+          `SELECT COUNT(*) as total FROM checks ch
+           LEFT JOIN clients cl ON cl.id = ch.client_id
+           LEFT JOIN cars ca ON ca.id = ch.car_id
+           WHERE ${where}`,
+          params,
+        )
+      : await this.pool.query(`SELECT COUNT(*) as total FROM checks ch WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
     params.push(limit, offset);
@@ -538,6 +550,10 @@ export class ChecksService {
 
       await client.query('COMMIT');
 
+      // A new sale changes revenue/profit/ranking — drop cached aggregates so
+      // the dashboard reflects it immediately instead of up to 30s late.
+      this.invalidateReports(tenantID);
+
       const savedCheck = await this.getById(checkId, tenantID);
 
       // Push notification to master when assigned by someone else
@@ -611,6 +627,10 @@ export class ChecksService {
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+
+    // Payment-method / amount / status edits can move the cash-position and
+    // dashboard tiles — invalidate the tenant's report caches.
+    this.invalidateReports(tenantID);
 
     // Push directors/admins when check is marked paid
     if (this.pushService && dto.paymentStatus === 'paid') {
@@ -849,6 +869,7 @@ export class ChecksService {
       }
 
       await client.query('COMMIT');
+      this.invalidateReports(tenantID);
       return this.getById(id, tenantID);
     } catch (err) {
       await client.query('ROLLBACK');
@@ -870,6 +891,7 @@ export class ChecksService {
     }
 
     await this.pool.query('DELETE FROM checks WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+    this.invalidateReports(tenantID);
     return { message: 'Удалено' };
   }
 
@@ -904,6 +926,15 @@ export class ChecksService {
   }
 
   async getDashboardChart(tenantID: string, period: string, offset: number = 0) {
+    // 30s cache, in-flight de-duplicated (see TtlCache.wrap). Invalidated on
+    // any check create/update/delete via `reports:<tenant>` prefix purge, so a
+    // sale shows up immediately rather than up to 30s late.
+    return ttlCache.wrap(`reports:dashboard-chart:${tenantID}:${period}:${offset}`, 30_000, () =>
+      this.computeDashboardChart(tenantID, period, offset),
+    );
+  }
+
+  private async computeDashboardChart(tenantID: string, period: string, offset: number = 0) {
     let dateFrom: Date;
     let dateTo: Date;
     const now = new Date();
@@ -1099,6 +1130,11 @@ export class ChecksService {
   }
 
   async getRanking(tenantID: string) {
+    // Same 30s cache + in-flight de-dup + write-side invalidation as the chart.
+    return ttlCache.wrap(`reports:ranking:${tenantID}`, 30_000, () => this.computeRanking(tenantID));
+  }
+
+  private async computeRanking(tenantID: string) {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();

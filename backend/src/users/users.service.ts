@@ -11,6 +11,7 @@ import { Pool } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
+import { invalidateAuthUser } from '../common/auth-cache';
 
 // Roles that may be assigned through this service. Anything outside this set
 // is rejected up front so a manipulated DTO can't sneak a role string past
@@ -68,6 +69,9 @@ export class UsersService {
         row.daily_expense_limit === null || row.daily_expense_limit === undefined
           ? null
           : parseFloat(row.daily_expense_limit) || 0,
+      // 055_user_visibility_flags — FE filters by context, server never hides.
+      hiddenFromSchedule: !!row.hidden_from_schedule,
+      hiddenEverywhere: !!row.hidden_everywhere,
       tenantId: row.tenant_id,
       createdAt: row.created_at,
     };
@@ -84,6 +88,8 @@ export class UsersService {
               is_active, team,
               COALESCE(can_add_expenses, false) as can_add_expenses,
               daily_expense_limit,
+              COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
+              COALESCE(hidden_everywhere, false) as hidden_everywhere,
               tenant_id, created_at
        FROM users WHERE tenant_id = $1 ORDER BY sort_order, created_at`,
       [tenantID],
@@ -113,6 +119,8 @@ export class UsersService {
               is_active, team,
               COALESCE(can_add_expenses, false) as can_add_expenses,
               daily_expense_limit,
+              COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
+              COALESCE(hidden_everywhere, false) as hidden_everywhere,
               tenant_id, created_at
        FROM users
        WHERE tenant_id = $1 AND is_active = true AND role IN ('master','admin')
@@ -132,6 +140,8 @@ export class UsersService {
               is_active, team,
               COALESCE(can_add_expenses, false) as can_add_expenses,
               daily_expense_limit,
+              COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
+              COALESCE(hidden_everywhere, false) as hidden_everywhere,
               tenant_id, created_at
        FROM users WHERE id = $1 AND tenant_id = $2`,
       [id, tenantID],
@@ -171,7 +181,7 @@ export class UsersService {
       const { rows } = await this.pool.query(
         `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, true, $7)
-         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, tenant_id, created_at`,
+         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, tenant_id, created_at`,
         [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, perms, tenantID],
       );
       return this.mapUser(rows[0]);
@@ -279,6 +289,14 @@ export class UsersService {
       const lim = dto.dailyExpenseLimit;
       vals.push(lim === null || lim === '' ? null : Number(lim));
     }
+    if (dto.hiddenFromSchedule !== undefined) {
+      sets.push(`hidden_from_schedule=$${idx++}`);
+      vals.push(!!dto.hiddenFromSchedule);
+    }
+    if (dto.hiddenEverywhere !== undefined) {
+      sets.push(`hidden_everywhere=$${idx++}`);
+      vals.push(!!dto.hiddenEverywhere);
+    }
     if (dto.password) {
       const hash = await bcrypt.hash(dto.password, 10);
       sets.push(`password=$${idx++}`);
@@ -294,10 +312,15 @@ export class UsersService {
 
     const { rows } = await this.pool.query(
       `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, tenant_id, created_at`,
+       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, tenant_id, created_at`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    // Any update may have changed role / permissions / is_active — drop this
+    // user's cached JWT validations so the change takes effect on their next
+    // request rather than after the auth-cache TTL.
+    invalidateAuthUser(id);
 
     // When daysOff changed, update future schedule entries accordingly
     if (dto.daysOff !== undefined) {
@@ -340,6 +363,9 @@ export class UsersService {
     }
 
     await this.pool.query('DELETE FROM users WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+    // Purge the deleted user's cached JWT validations so any still-signed token
+    // is rejected (user-not-found) on the next request instead of cache-served.
+    invalidateAuthUser(id);
     return { message: 'Удалено' };
   }
 

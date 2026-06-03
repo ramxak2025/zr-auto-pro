@@ -103,7 +103,8 @@ export class SalaryService {
         userName: p.user_name,
         type: p.type,
         amount: p.amount === null || p.amount === undefined ? undefined : parseFloat(p.amount) || 0,
-        bonusPercent: p.bonus_percent === null || p.bonus_percent === undefined ? undefined : parseFloat(p.bonus_percent) || 0,
+        bonusPercent:
+          p.bonus_percent === null || p.bonus_percent === undefined ? undefined : parseFloat(p.bonus_percent) || 0,
         reason: p.reason,
         periodMonthYear: p.period_month_year,
         awardedBy: p.awarded_by,
@@ -112,13 +113,35 @@ export class SalaryService {
       });
     }
 
+    // Penalties for the same period (056_salary_penalties) — subtracted from
+    // the employee's remaining owed amount.
+    const { rows: penRows } = await this.pool.query(
+      `SELECT pen.*, u.full_name as user_name, c.full_name as creator_name
+       FROM salary_penalties pen
+       LEFT JOIN users u ON u.id = pen.user_id
+       LEFT JOIN users c ON c.id = pen.created_by
+       WHERE pen.tenant_id = $1
+         AND pen.date >= $2::timestamptz AND pen.date <= ($3::date + 1)::timestamptz`,
+      [tenantID, dateFrom, dateTo],
+    );
+    const penaltiesByUser: Record<string, any[]> = {};
+    for (const p of penRows) {
+      if (!penaltiesByUser[p.user_id]) penaltiesByUser[p.user_id] = [];
+      penaltiesByUser[p.user_id].push(this.mapPenalty(p));
+    }
+
     return rows.map((r) => {
       const masterId = r.master_id;
       const masterPayments = paymentsByUser[masterId] || [];
       const masterPremiums = premiumsByUser[masterId] || [];
+      const masterPenalties = penaltiesByUser[masterId] || [];
       const paidAmount = masterPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
       const baseEarnings = parseFloat(r.total_earnings) || 0;
-      const premiumsAmount = masterPremiums.reduce((sum: number, p: any) => sum + (p.type === 'cash' ? (p.amount || 0) : 0), 0);
+      const premiumsAmount = masterPremiums.reduce(
+        (sum: number, p: any) => sum + (p.type === 'cash' ? p.amount || 0 : 0),
+        0,
+      );
+      const penaltiesAmount = masterPenalties.reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
       const totalEarnings = baseEarnings + premiumsAmount;
 
       return {
@@ -129,13 +152,16 @@ export class SalaryService {
         serviceEarnings: parseFloat(r.service_earnings) || 0,
         productEarnings: parseFloat(r.product_earnings) || 0,
         premiumsAmount,
+        penaltiesAmount,
         totalEarnings,
         totalRevenue: parseFloat(r.total_revenue) || 0,
         checkCount: parseInt(r.check_count) || 0,
         paidAmount,
-        remainingAmount: totalEarnings - paidAmount,
+        // Penalties reduce what the shop still owes the employee.
+        remainingAmount: totalEarnings - paidAmount - penaltiesAmount,
         payments: masterPayments,
         premiums: masterPremiums,
+        penalties: masterPenalties,
       };
     });
   }
@@ -312,10 +338,10 @@ export class SalaryService {
       throw new BadRequestException({ message: 'Для премии "rate_bonus" укажите процент' });
     }
 
-    const { rows: userRows } = await this.pool.query(
-      'SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2',
-      [dto.userId, tenantID],
-    );
+    const { rows: userRows } = await this.pool.query('SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2', [
+      dto.userId,
+      tenantID,
+    ]);
     if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
 
     const { rows } = await this.pool.query(
@@ -371,10 +397,10 @@ export class SalaryService {
   }
 
   async removePremium(id: string, tenantID: string) {
-    const { rowCount } = await this.pool.query(
-      'DELETE FROM salary_premiums WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rowCount } = await this.pool.query('DELETE FROM salary_premiums WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
     if (!rowCount) throw new NotFoundException({ message: 'Премия не найдена' });
     return { message: 'Удалено' };
   }
@@ -393,6 +419,98 @@ export class SalaryService {
       awardedBy: r.awarded_by,
       awarderName: r.awarder_name,
       awardedAt: r.created_at,
+    };
+  }
+
+  // ─── Penalties (штрафы, 056_salary_penalties) ────────────────────────
+
+  /**
+   * Apply a penalty to an employee. The amount is subtracted from the
+   * employee's remaining owed salary in `getAll`. No expense row is written —
+   * a penalty reduces what is owed, it is not money that left the till.
+   */
+  async createPenalty(
+    tenantID: string,
+    createdBy: string,
+    dto: { userId: string; amount: number; description?: string; date?: string },
+  ) {
+    if (!dto || !dto.userId) {
+      throw new BadRequestException({ message: 'userId обязателен' });
+    }
+    const amount = Number(dto.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException({ message: 'Сумма штрафа должна быть положительной' });
+    }
+
+    // The target must belong to the caller's tenant — same isolation guard
+    // used by createPayment / createPremium.
+    const { rows: userRows } = await this.pool.query('SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2', [
+      dto.userId,
+      tenantID,
+    ]);
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
+
+    const { rows } = await this.pool.query(
+      `INSERT INTO salary_penalties (tenant_id, user_id, amount, description, date, created_by)
+       VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6)
+       RETURNING *`,
+      [tenantID, dto.userId, amount, dto.description ?? null, dto.date ?? null, createdBy],
+    );
+    const p = rows[0];
+    p.user_name = userRows[0].full_name;
+
+    // Notify the employee so a penalty is never silent.
+    const formatted = amount.toLocaleString('ru-RU');
+    this.push.sendToUser(
+      dto.userId,
+      'Штраф наложен',
+      dto.description ? `${formatted} ₽ — ${dto.description}` : `Сумма: ${formatted} ₽`,
+      { kind: 'penalty', penaltyId: p.id },
+    );
+
+    return this.mapPenalty(p);
+  }
+
+  async listPenalties(tenantID: string, query: { userId?: string }) {
+    const conds: string[] = ['pen.tenant_id=$1'];
+    const params: any[] = [tenantID];
+    let idx = 2;
+    if (query.userId) {
+      conds.push(`pen.user_id=$${idx++}`);
+      params.push(query.userId);
+    }
+    const { rows } = await this.pool.query(
+      `SELECT pen.*, u.full_name as user_name, c.full_name as creator_name
+       FROM salary_penalties pen
+       LEFT JOIN users u ON u.id = pen.user_id
+       LEFT JOIN users c ON c.id = pen.created_by
+       WHERE ${conds.join(' AND ')}
+       ORDER BY pen.date DESC`,
+      params,
+    );
+    return rows.map((r) => this.mapPenalty(r));
+  }
+
+  async deletePenalty(id: string, tenantID: string) {
+    const { rowCount } = await this.pool.query('DELETE FROM salary_penalties WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
+    if (!rowCount) throw new NotFoundException({ message: 'Штраф не найден' });
+    return { message: 'Удалено' };
+  }
+
+  private mapPenalty(r: any) {
+    return {
+      id: r.id,
+      userId: r.user_id,
+      userName: r.user_name ?? undefined,
+      amount: parseFloat(r.amount) || 0,
+      description: r.description ?? undefined,
+      date: r.date,
+      createdBy: r.created_by ?? undefined,
+      creatorName: r.creator_name ?? undefined,
+      createdAt: r.created_at,
     };
   }
 

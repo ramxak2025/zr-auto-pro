@@ -61,6 +61,8 @@ export class CarsService {
       makeModel: row.make_model,
       comment: row.comment,
       clientId: row.client_id,
+      // 059_cars_no_plate — true for cars registered "без номера".
+      noPlate: !!row.no_plate,
       createdAt: row.created_at,
     };
     if (row.client_full_name) {
@@ -95,6 +97,14 @@ export class CarsService {
       idx += 2;
     }
 
+    // «Без номеров» filter — applied server-side so it works across the full
+    // paginated dataset, not just the current page. A car counts as plate-less
+    // when the 059 no_plate flag is set OR the stored plate is empty.
+    const noPlate = query.noPlate === true || query.noPlate === 'true' || query.noPlate === '1';
+    if (noPlate) {
+      where += ` AND (ca.no_plate = true OR ca.plate_number = '')`;
+    }
+
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM cars ca WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
@@ -126,10 +136,15 @@ export class CarsService {
     if (dto.clientId) {
       await this.assertClientInTenant(dto.clientId, tenantID);
     }
+    // "Без номера" cars store an empty plate; the duplicate-plate lookup (run
+    // by the FE before create) is meaningless for them and is skipped. Foreign
+    // plates are stored verbatim — no RU validation is applied here.
+    const noPlate = !!dto.noPlate;
+    const plateNumber = noPlate ? '' : dto.plateNumber;
     const { rows } = await this.pool.query(
-      `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [dto.plateNumber, dto.makeModel, dto.comment, dto.clientId, tenantID],
+      `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id, no_plate)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [plateNumber, dto.makeModel, dto.comment, dto.clientId, tenantID, noPlate],
     );
     return this.mapCar(rows[0]);
   }
@@ -143,7 +158,17 @@ export class CarsService {
     const vals: any[] = [];
     let idx = 1;
 
-    if (dto.plateNumber !== undefined) {
+    // When toggling "без номера" on, force the stored plate empty; otherwise a
+    // provided plateNumber wins. Foreign plates pass through unchanged.
+    if (dto.noPlate !== undefined) {
+      sets.push(`no_plate=$${idx++}`);
+      vals.push(!!dto.noPlate);
+      if (dto.noPlate) {
+        sets.push(`plate_number=$${idx++}`);
+        vals.push('');
+      }
+    }
+    if (dto.plateNumber !== undefined && !dto.noPlate) {
       sets.push(`plate_number=$${idx++}`);
       vals.push(dto.plateNumber);
     }

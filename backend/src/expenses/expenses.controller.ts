@@ -20,6 +20,17 @@ export class ExpensesController {
     return this.expensesService.createCategory(user.tenantID, dto);
   }
 
+  // Toggle `approvalRequired` (or rename) a category — owner expense-settings.
+  @Roles('director', 'admin', 'superadmin')
+  @Patch('categories/:id')
+  updateCategory(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { name?: string; approvalRequired?: boolean },
+  ) {
+    return this.expensesService.updateCategory(id, user.tenantID, dto);
+  }
+
   @Roles('director', 'admin', 'superadmin')
   @Delete('categories/:id')
   removeCategory(@Param('id') id: string, @CurrentUser() user: JwtPayload) {

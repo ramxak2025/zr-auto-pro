@@ -99,6 +99,49 @@ export class WarrantyService {
   }
 
   /**
+   * Active (not expired, not redeemed) warranty claims for a single car,
+   * soonest-to-expire first. Backs the CheckCreate "Диагностика ещё 24 дня"
+   * badges — the mobile cash screen calls this when a car is picked.
+   *
+   * Uses warranty_claims_car_idx (tenant_id, car_id) + the expires filter.
+   * Returns a slim, badge-ready shape (itemType / itemName / warrantyDays /
+   * expiresAt) so the client needs no extra lookups.
+   */
+  async listActiveForCar(
+    tenantID: string,
+    carId: string,
+  ): Promise<
+    Array<{ id: string; itemType: 'product' | 'service'; itemName: string; warrantyDays: number; expiresAt: string }>
+  > {
+    if (!carId) return [];
+
+    const { rows } = await this.pool.query(
+      `SELECT wc.id,
+              wc.kind,
+              wc.warranty_days,
+              wc.expires_at,
+              COALESCE(p.name, s.name, wc.item_name, 'Без названия') AS item_name
+         FROM warranty_claims wc
+         LEFT JOIN products p ON p.id = wc.product_id
+         LEFT JOIN services s ON s.id = wc.service_id
+        WHERE wc.tenant_id = $1
+          AND wc.car_id = $2
+          AND wc.used_at IS NULL
+          AND wc.expires_at > now()
+        ORDER BY wc.expires_at ASC`,
+      [tenantID, carId],
+    );
+
+    return rows.map((r) => ({
+      id: r.id as string,
+      itemType: r.kind as 'product' | 'service',
+      itemName: r.item_name as string,
+      warrantyDays: typeof r.warranty_days === 'number' ? r.warranty_days : parseInt(String(r.warranty_days), 10) || 0,
+      expiresAt: r.expires_at as string,
+    }));
+  }
+
+  /**
    * All warranty claims raised by a specific check. Used inline in
    * getCheckById to display "Под гарантией: …" next to a finished check.
    */

@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { invalidateReportsForTenant } from '../common/reports-cache';
 
 const PRIVILEGED_ROLES = new Set(['director', 'admin', 'superadmin']);
 
@@ -14,21 +15,64 @@ export class ExpensesService {
     const { rows } = await this.pool.query('SELECT * FROM expense_categories WHERE tenant_id=$1 ORDER BY name', [
       tenantID,
     ]);
-    return rows.map((r) => ({ id: r.id, name: r.name, tenantId: r.tenant_id, createdAt: r.created_at }));
+    return rows.map((r) => this.mapCategory(r));
   }
 
   async createCategory(tenantID: string, dto: any) {
     const { rows } = await this.pool.query(
-      'INSERT INTO expense_categories (name, tenant_id) VALUES ($1, $2) RETURNING *',
-      [dto.name, tenantID],
+      'INSERT INTO expense_categories (name, tenant_id, approval_required) VALUES ($1, $2, $3) RETURNING *',
+      [dto.name, tenantID, !!dto.approvalRequired],
     );
-    const r = rows[0];
-    return { id: r.id, name: r.name, tenantId: r.tenant_id, createdAt: r.created_at };
+    return this.mapCategory(rows[0]);
+  }
+
+  /**
+   * Toggle (or rename) a category. Currently used to flip `approval_required`
+   * from the owner's expense-settings screen (#11). Returns the updated row.
+   */
+  async updateCategory(id: string, tenantID: string, dto: { name?: string; approvalRequired?: boolean }) {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+    if (dto.name !== undefined) {
+      sets.push(`name=$${idx++}`);
+      vals.push(dto.name);
+    }
+    if (dto.approvalRequired !== undefined) {
+      sets.push(`approval_required=$${idx++}`);
+      vals.push(!!dto.approvalRequired);
+    }
+    if (sets.length === 0) {
+      const { rows } = await this.pool.query('SELECT * FROM expense_categories WHERE id=$1 AND tenant_id=$2', [
+        id,
+        tenantID,
+      ]);
+      if (rows.length === 0) throw new NotFoundException({ message: 'Категория расходов не найдена' });
+      return this.mapCategory(rows[0]);
+    }
+    vals.push(id, tenantID);
+    const { rows } = await this.pool.query(
+      `UPDATE expense_categories SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+      vals,
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Категория расходов не найдена' });
+    return this.mapCategory(rows[0]);
   }
 
   async removeCategory(id: string, tenantID: string) {
     await this.pool.query('DELETE FROM expense_categories WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     return { message: 'Удалено' };
+  }
+
+  private mapCategory(r: any) {
+    return {
+      id: r.id,
+      name: r.name,
+      tenantId: r.tenant_id,
+      // 057_expense_category_approval — may be NULL on legacy rows.
+      approvalRequired: !!r.approval_required,
+      createdAt: r.created_at,
+    };
   }
 
   // --- Expenses ---
@@ -93,14 +137,16 @@ export class ExpensesService {
     // Without this, a director could store an expense under a foreign
     // tenant's category and have it surface in their own listing JOIN'd
     // with that foreign name.
+    let categoryApprovalRequired = false;
     if (dto.categoryId) {
       const { rows: catRows } = await this.pool.query(
-        'SELECT 1 FROM expense_categories WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+        'SELECT approval_required FROM expense_categories WHERE id = $1 AND tenant_id = $2 LIMIT 1',
         [dto.categoryId, tenantID],
       );
       if (catRows.length === 0) {
         throw new NotFoundException({ message: 'Категория расходов не найдена' });
       }
+      categoryApprovalRequired = !!catRows[0].approval_required;
     }
 
     const isPrivileged = PRIVILEGED_ROLES.has(userRole);
@@ -152,24 +198,24 @@ export class ExpensesService {
           approvalStatus = 'pending';
         }
       }
+
+      // 057 — a category flagged `approval_required` forces non-privileged
+      // submissions into the review queue regardless of the daily limit.
+      if (categoryApprovalRequired) {
+        approvalStatus = 'pending';
+      }
     }
 
     const { rows } = await this.pool.query(
       `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [
-        dto.categoryId || null,
-        amount,
-        dto.description || null,
-        date,
-        userID,
-        userID,
-        source,
-        approvalStatus,
-        tenantID,
-      ],
+      [dto.categoryId || null, amount, dto.description || null, date, userID, userID, source, approvalStatus, tenantID],
     );
     const r = rows[0];
+    // A new (approved) expense changes cash-position / profit tiles — drop the
+    // tenant's cached report aggregates. We invalidate on pending too; cheap
+    // and keeps the alert set in sync once it's later approved.
+    invalidateReportsForTenant(tenantID);
     return {
       id: r.id,
       categoryId: r.category_id,
@@ -195,6 +241,7 @@ export class ExpensesService {
       [id, tenantID],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Расход не найден' });
+    invalidateReportsForTenant(tenantID);
     return rows[0];
   }
 
@@ -204,6 +251,7 @@ export class ExpensesService {
       [id, tenantID],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Расход не найден' });
+    invalidateReportsForTenant(tenantID);
     return rows[0];
   }
 
@@ -213,6 +261,7 @@ export class ExpensesService {
       tenantID,
     ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Расход не найден' });
+    invalidateReportsForTenant(tenantID);
     return { message: 'Удалено' };
   }
 

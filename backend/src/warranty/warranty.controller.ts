@@ -39,6 +39,16 @@ export class WarrantyController {
   }
 
   /**
+   * Active warranties for one car, badge-ready (itemType / itemName /
+   * warrantyDays / expiresAt), soonest-to-expire first. The CheckCreate
+   * screen shows these as "Диагностика ещё 24 дня" chips when a car is picked.
+   */
+  @Get('active-for-car/:carId')
+  activeForCar(@Param('carId') carId: string, @CurrentUser() user: JwtPayload) {
+    return this.warrantyService.listActiveForCar(user.tenantID, carId);
+  }
+
+  /**
    * Mark a claim as redeemed against a specific newly-created check.
    * Idempotent in the sense that re-calling for an already-used claim
    * throws BadRequest (the FE blocks it but we never silently re-use).

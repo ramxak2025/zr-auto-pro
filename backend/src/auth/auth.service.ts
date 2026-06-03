@@ -13,6 +13,7 @@ import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
+import { invalidateAuthToken } from '../common/auth-cache';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
@@ -102,6 +103,10 @@ export class AuthService {
       `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
       [jti, userId, tenantId, exp],
     );
+    // Drop the cached JWT validation immediately so the next request with this
+    // token re-checks revoked_tokens (and is rejected) instead of being served
+    // a stale "valid" result for up to the cache TTL.
+    invalidateAuthToken(userId, jti);
   }
 
   async isTokenRevoked(jti: string): Promise<boolean> {

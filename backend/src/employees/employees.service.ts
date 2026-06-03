@@ -363,9 +363,68 @@ export class EmployeesService {
     return ttlCache.wrap(cacheKey, 60_000, () => this.computeFullProfile(tenantID, employeeId));
   }
 
+  /**
+   * Default analytics payload for an existing employee whose heavy aggregates
+   * couldn't be computed (DB error / statement timeout on a large tenant).
+   * The detail screen MUST still render from the base profile — this returns
+   * the same shape as a fully-computed profile but with empty/zero analytics
+   * so the FE never shows "сотрудник не найден" for a valid user.
+   */
+  private emptyAnalytics() {
+    return {
+      stats: { efficiency: 0, discipline: 100, activity: 0, rating: 0, quality: 50 },
+      streaks: { disciplineStreak: 0, fiveStarStreak: 0, checksStreak: 0 },
+      lifetime: {
+        totalChecks: 0,
+        totalRevenue: 0,
+        clientsServed: 0,
+        bestDay: undefined as { date: string; value: number } | undefined,
+        bestMonth: undefined as { ym: string; value: number } | undefined,
+        topCarBrands: [] as Array<{ brand: string; count: number }>,
+      },
+      yearHeatmap: [] as Array<{ day: string; checks: number; revenue: number }>,
+      teamRank: { revenueRank: 0, disciplineRank: 0, ratingRank: 0, total: 1 },
+      serviceMastery: [] as Array<{
+        serviceId: string;
+        name: string;
+        count: number;
+        tier: 'bronze' | 'silver' | 'gold' | 'platinum';
+      }>,
+      careerTimeline: [] as Array<{
+        date: string;
+        kind: 'hire' | 'promotion' | 'top_month' | 'custom';
+        title: string;
+        description?: string;
+      }>,
+      achievements: [] as Awaited<ReturnType<EmployeesService['listAchievements']>>,
+    };
+  }
+
   private async computeFullProfile(tenantID: string, employeeId: string) {
+    // getProfile is the ONLY existence check — it throws 404 for a genuinely
+    // missing tenant user and that 404 must propagate. Everything after it is
+    // derived analytics; if any of it fails (DB error / statement timeout on a
+    // big tenant) we degrade to the base profile + empty analytics rather than
+    // 500'ing a valid employee.
     const profile = await this.getProfile(tenantID, employeeId);
 
+    try {
+      return await this.computeAnalytics(tenantID, employeeId, profile);
+    } catch (err) {
+      this.logger.error(
+        `fullProfile analytics failed for ${employeeId} (returning base profile): ${
+          err instanceof Error ? err.message : err
+        }`,
+      );
+      return { profile, ...this.emptyAnalytics() };
+    }
+  }
+
+  private async computeAnalytics(
+    tenantID: string,
+    employeeId: string,
+    profile: Awaited<ReturnType<EmployeesService['getProfile']>>,
+  ) {
     // Discipline + activity quick stats (last 30 days)
     const { rows: monthAgg } = await this.pool.query(
       `WITH month_checks AS (

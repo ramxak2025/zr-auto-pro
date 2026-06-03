@@ -45,8 +45,16 @@ export class ClientsController {
    * extra merge step on its side.
    */
   @Get(':id/checks-by-car')
-  getChecksByCar(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.clientsService.getChecksByCar(id, user.tenantID);
+  getChecksByCar(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.clientsService.getChecksByCar(id, user.tenantID, {
+      limit: limit !== undefined ? parseInt(limit, 10) : undefined,
+      offset: offset !== undefined ? parseInt(offset, 10) : undefined,
+    });
   }
 
   @Post()

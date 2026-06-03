@@ -28,10 +28,11 @@ import type {
   EmployeeAchievement, EmployeeFullProfile, DashboardV2, ClientsNewVsReturning,
   OwnerAlert, BestDayOfWeek, RecentReview, RetentionStats,
   WarehouseSummary, VelocityRow, ReorderItem, CategoryMargin, TopProduct,
-  ActiveWarranty, ClientSources, PerCarChecks, SalaryPremium, JournalDoc,
+  ActiveWarranty, WarrantyActive, ClientSources, PerCarChecks, SalaryPremium, SalaryPenalty,
+  ExpenseCategory, JournalDoc,
 } from '../types';
 import type {
-  LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams,
+  LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams, CarsQuery,
   DateRangeParams, CashFlowParams, CreateUserRequest, UpdateUserRequest, CreateClientRequest,
   UpdateClientRequest, CreateCarRequest, UpdateCarRequest, CreateProductRequest,
   UpdateProductRequest, StockUpdateRequest, CreateServiceRequest, UpdateServiceRequest,
@@ -130,7 +131,14 @@ export function createClientsApi(api: HttpClient) {
 
 export function createCarsApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams) => api.get<PaginatedResponse<Car>>('/cars', { params }),
+    getAll: (params?: CarsQuery) => {
+      // Thread the «без номеров» flag through as a query param only when set, so
+      // existing callers (no noPlate) keep the exact same request shape.
+      const query: CarsQuery = { ...params };
+      if (params?.noPlate) query.noPlate = true;
+      else delete query.noPlate;
+      return api.get<PaginatedResponse<Car>>('/cars', { params: query });
+    },
     getById: (id: string) => api.get<Car>(`/cars/${id}`),
     create: (data: CreateCarRequest) => api.post<Car>('/cars', data),
     update: (id: string, data: UpdateCarRequest) => api.patch<Car>(`/cars/${id}`, data),
@@ -306,6 +314,13 @@ export function createSalaryApi(api: HttpClient) {
       }) => api.post<SalaryPremium>('/salary/premiums', data),
       remove: (id: string) => api.delete(`/salary/premiums/${id}`),
     },
+    // Penalties (штрафы, 056_salary_penalties). Director / admin / superadmin
+    // only — they subtract from the employee's remaining owed salary.
+    listPenalties: (params?: { userId?: string }) =>
+      api.get<SalaryPenalty[]>('/salary/penalties', { params }),
+    addPenalty: (data: { userId: string; amount: number; description?: string; date?: string }) =>
+      api.post<SalaryPenalty>('/salary/penalties', data),
+    removePenalty: (id: string) => api.delete(`/salary/penalties/${id}`),
   };
 }
 
@@ -374,6 +389,14 @@ export function createWarrantyApi(api: HttpClient) {
      */
     active: (params: { clientId?: string; carId?: string }) =>
       api.get<ActiveWarranty[]>('/warranty-claims/active', { params }),
+    /**
+     * Active warranties for ONE car, badge-ready (itemType / itemName /
+     * warrantyDays / expiresAt), soonest-to-expire first. Used by the
+     * CheckCreate screen to show "Диагностика ещё N дней" chips when a car is
+     * picked. Empty array if the car has none.
+     */
+    activeForCar: (carId: string) =>
+      api.get<WarrantyActive[]>(`/warranty-claims/active-for-car/${carId}`),
     /** Mark the warranty as used against a specific (newly-created) check. */
     redeem: (id: string, checkId: string) =>
       api.post<WarrantyClaim>(`/warranty-claims/${id}/redeem`, { checkId }),
@@ -436,8 +459,13 @@ export function createScheduleApi(api: HttpClient) {
 
 export function createExpensesApi(api: HttpClient) {
   return {
-    getCategories: () => api.get<Array<{ id: string; name: string }>>('/expenses/categories'),
-    createCategory: (data: { name: string }) => api.post('/expenses/categories', data),
+    getCategories: () =>
+      api.get<Array<{ id: string; name: string; approvalRequired?: boolean }>>('/expenses/categories'),
+    createCategory: (data: { name: string; approvalRequired?: boolean }) =>
+      api.post<ExpenseCategory>('/expenses/categories', data),
+    /** Toggle `approvalRequired` (or rename) a category. Director / admin / superadmin only (#11). */
+    updateCategory: (id: string, data: { name?: string; approvalRequired?: boolean }) =>
+      api.patch<ExpenseCategory>(`/expenses/categories/${id}`, data),
     removeCategory: (id: string) => api.delete(`/expenses/categories/${id}`),
     // The server now exposes `createdBy`, `creatorName`, `source` and
     // `approvalStatus` for every row (migration 047). They're optional
@@ -536,6 +564,13 @@ export function createCallsApi(api: HttpClient) {
       api.get<{ calls: any[]; summary: { total: number; incoming: number; outgoing: number; missed: number; notCalledBack: number } }>('/calls', { params }),
     getClientCalls: (clientId: string, params?: { dateFrom?: string; dateTo?: string }) =>
       api.get<{ calls: any[]; total: number }>(`/calls/client/${clientId}`, { params }),
+    /**
+     * #15 — calls for one client (alias of getClientCalls). Each call carries
+     * `recordingUrl`; play it via `getRecordingUrl(url)` which validates the
+     * MoiZvonki origin server-side.
+     */
+    getByClient: (clientId: string, params?: { dateFrom?: string; dateTo?: string }) =>
+      api.get<{ calls: any[]; total: number }>(`/calls/client/${clientId}`, { params }),
     getClientSms: (clientId: string) =>
       api.get<any[]>(`/calls/client/${clientId}/sms`),
     getClientSmsHistory: (clientId: string) =>
@@ -554,7 +589,14 @@ export function createEquipmentApi(api: HttpClient) {
     getStorageItems: (params?: any) => api.get<any[]>('/equipment/storage', { params }),
     createStorageItem: (data: any) => api.post('/equipment/storage', data),
     updateStorageItem: (id: string, data: any) => api.patch(`/equipment/storage/${id}`, data),
-    removeStorageItem: (id: string) => api.delete(`/equipment/storage/${id}`),
+    /**
+     * Delete a storage item. Pass `reverseExpense: true` to also delete the
+     * linked «Имущество» auto-expense ("вернуть деньги в оборот", #14); omit /
+     * false keeps the expense ("расход остаётся"). Sent as a query param so it
+     * survives clients that strip DELETE bodies.
+     */
+    removeStorageItem: (id: string, opts?: { reverseExpense?: boolean }) =>
+      api.delete(`/equipment/storage/${id}`, { params: { reverseExpense: opts?.reverseExpense ? 'true' : 'false' } }),
     // Employees
     getSummary: () => api.get<any[]>('/equipment/summary'),
     getByUser: (userId: string, includeInactive?: boolean) =>

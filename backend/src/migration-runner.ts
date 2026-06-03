@@ -39,7 +39,10 @@ export class MigrationRunner implements OnModuleInit {
   private pool: Pool;
 
   constructor() {
-    this.pool = new Pool(getDbConfig());
+    // Migrations run DDL (GIN index builds, ANALYZE, backfills) that can take
+    // longer than the 8s request-path statement_timeout — opt out of it here
+    // so a legitimate long migration is never killed mid-flight.
+    this.pool = new Pool(getDbConfig({ statementTimeout: null }));
   }
 
   async onModuleInit() {

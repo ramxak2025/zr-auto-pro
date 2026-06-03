@@ -5,6 +5,7 @@ import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
 import { CreatePremiumDto } from './dto/create-premium.dto';
+import { CreatePenaltyDto } from './dto/create-penalty.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('salary')
@@ -70,5 +71,29 @@ export class SalaryController {
   @Delete('premiums/:id')
   removePremium(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.salaryService.removePremium(id, user.tenantID);
+  }
+
+  // ── Penalties (штрафы, 056_salary_penalties) ────────────────────────────
+
+  @Roles('director', 'admin', 'superadmin')
+  @Post('penalties')
+  createPenalty(@CurrentUser() user: JwtPayload, @Body() dto: CreatePenaltyDto) {
+    return this.salaryService.createPenalty(user.tenantID, user.userID, dto);
+  }
+
+  /**
+   * Penalties for the tenant (or one employee via `?userId=`). Same internal-
+   * finance sensitivity as payments — director / admin / superadmin only.
+   */
+  @Roles('director', 'admin', 'superadmin')
+  @Get('penalties')
+  listPenalties(@CurrentUser() user: JwtPayload, @Query() query: { userId?: string }) {
+    return this.salaryService.listPenalties(user.tenantID, query || {});
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Delete('penalties/:id')
+  deletePenalty(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.salaryService.deletePenalty(id, user.tenantID);
   }
 }

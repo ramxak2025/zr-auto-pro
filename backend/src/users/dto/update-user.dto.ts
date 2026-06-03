@@ -37,4 +37,24 @@ export class UpdateUserDto {
   @IsArray()
   @IsOptional()
   daysOff?: number[];
+
+  /** 047 — gate for non-privileged users to submit expenses. */
+  @IsBoolean()
+  @IsOptional()
+  canAddExpenses?: boolean;
+
+  /** 047 — daily expense cap (RUB). Null → unlimited. */
+  @IsNumber()
+  @IsOptional()
+  dailyExpenseLimit?: number | null;
+
+  /** 055 — hide from Schedule grid + attendance Rating. */
+  @IsBoolean()
+  @IsOptional()
+  hiddenFromSchedule?: boolean;
+
+  /** 055 — hide everywhere (lists + cannot be chosen as master on new checks). */
+  @IsBoolean()
+  @IsOptional()
+  hiddenEverywhere?: boolean;
 }

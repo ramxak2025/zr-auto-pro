@@ -66,70 +66,250 @@ export class EquipmentService {
     }));
   }
 
-  async createStorageItem(tenantId: string, dto: any) {
-    const { rows } = await this.pool.query(
-      `INSERT INTO storage_items (tenant_id, category_id, name, description, photo, purchase_price, quantity, unit, service_life_months)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [
-        tenantId,
-        dto.categoryId || null,
-        dto.name,
-        dto.description,
-        dto.photo,
-        dto.purchasePrice || 0,
-        dto.quantity || 0,
-        dto.unit || 'шт',
-        dto.serviceLifeMonths || null,
-      ],
+  /**
+   * Add a storage item (подсобка). When a purchase price is set, atomically
+   * record an expense in the reserved «Имущество» category linked back to the
+   * new item via `storage_item_id` (#14). Equipment + expense are written in
+   * one transaction so they can never disagree.
+   */
+  async createStorageItem(tenantId: string, createdBy: string | null, dto: any) {
+    const purchasePrice = parseFloat(String(dto.purchasePrice ?? 0)) || 0;
+    // «Цена, ₽» is per-unit; quantity is a separate column. The cash outflow is
+    // the full purchase, so the linked expense must be pricePerUnit × quantity.
+    const qty = parseFloat(String(dto.quantity ?? 0)) || 0;
+    const expenseAmount = purchasePrice * Math.max(qty, 1);
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query(
+        `INSERT INTO storage_items (tenant_id, category_id, name, description, photo, purchase_price, quantity, unit, service_life_months)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [
+          tenantId,
+          dto.categoryId || null,
+          dto.name,
+          dto.description,
+          dto.photo,
+          purchasePrice,
+          dto.quantity || 0,
+          dto.unit || 'шт',
+          dto.serviceLifeMonths || null,
+        ],
+      );
+      const item = rows[0];
+
+      // Only money-bearing purchases create an expense. Guard against a double
+      // expense if a row already references this freshly-minted id (shouldn't
+      // happen inside one tx, but keeps the operation idempotent on retry).
+      if (purchasePrice > 0) {
+        const categoryId = await this.getOrCreateEquipmentCategory(client, tenantId);
+        const { rows: dup } = await client.query(
+          'SELECT 1 FROM expenses WHERE storage_item_id = $1 AND tenant_id = $2 LIMIT 1',
+          [item.id, tenantId],
+        );
+        if (dup.length === 0) {
+          await client.query(
+            `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, storage_item_id)
+             VALUES ($1, $2, $3, now(), $4, $4, 'owner', 'approved', $5, $6)`,
+            [categoryId, expenseAmount, `Покупка имущества: ${item.name}`, createdBy, tenantId, item.id],
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+      return this.mapStorageItem(item);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`createStorageItem error: ${err}`);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Lookup-or-create the reserved «Имущество» expense category for a tenant.
+   * Never throws on "missing" — it creates the row. Runs on the supplied
+   * client so it participates in the caller's transaction.
+   */
+  private async getOrCreateEquipmentCategory(client: any, tenantId: string): Promise<string> {
+    const { rows } = await client.query(
+      `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = 'Имущество' LIMIT 1`,
+      [tenantId],
     );
-    return this.mapStorageItem(rows[0]);
+    if (rows.length > 0) return rows[0].id as string;
+    // Race-safe insert: the partial unique index uq_expense_categories_imushchestvo
+    // (migration 060) guarantees at most one «Имущество» row per tenant, so a
+    // concurrent insert collapses to ON CONFLICT DO NOTHING. When that happens we
+    // get zero rows back and re-SELECT the row the other transaction created.
+    const { rows: created } = await client.query(
+      `INSERT INTO expense_categories (name, tenant_id) VALUES ('Имущество', $1)
+       ON CONFLICT DO NOTHING RETURNING id`,
+      [tenantId],
+    );
+    if (created.length > 0) return created[0].id as string;
+    const { rows: existing } = await client.query(
+      `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = 'Имущество' LIMIT 1`,
+      [tenantId],
+    );
+    return existing[0].id as string;
   }
 
   async updateStorageItem(id: string, tenantId: string, dto: any) {
-    const sets: string[] = [];
-    const vals: any[] = [];
-    let idx = 1;
-    if (dto.name !== undefined) {
-      sets.push(`name=$${idx++}`);
-      vals.push(dto.name);
+    const buildSets = () => {
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let idx = 1;
+      if (dto.name !== undefined) {
+        sets.push(`name=$${idx++}`);
+        vals.push(dto.name);
+      }
+      if (dto.description !== undefined) {
+        sets.push(`description=$${idx++}`);
+        vals.push(dto.description);
+      }
+      if (dto.photo !== undefined) {
+        sets.push(`photo=$${idx++}`);
+        vals.push(dto.photo);
+      }
+      if (dto.purchasePrice !== undefined) {
+        sets.push(`purchase_price=$${idx++}`);
+        vals.push(dto.purchasePrice);
+      }
+      if (dto.quantity !== undefined) {
+        sets.push(`quantity=$${idx++}`);
+        vals.push(dto.quantity);
+      }
+      if (dto.unit !== undefined) {
+        sets.push(`unit=$${idx++}`);
+        vals.push(dto.unit);
+      }
+      if (dto.serviceLifeMonths !== undefined) {
+        sets.push(`service_life_months=$${idx++}`);
+        vals.push(dto.serviceLifeMonths);
+      }
+      if (dto.categoryId !== undefined) {
+        sets.push(`category_id=$${idx++}`);
+        vals.push(dto.categoryId);
+      }
+      return { sets, vals, idx };
+    };
+
+    // Non-price edits keep the original single-query fast path.
+    if (dto.purchasePrice === undefined) {
+      const { sets, vals, idx } = buildSets();
+      if (sets.length === 0) return;
+      let i = idx;
+      vals.push(id, tenantId);
+      await this.pool.query(`UPDATE storage_items SET ${sets.join(', ')} WHERE id=$${i++} AND tenant_id=$${i}`, vals);
+      return { message: 'Обновлено' };
     }
-    if (dto.description !== undefined) {
-      sets.push(`description=$${idx++}`);
-      vals.push(dto.description);
+
+    // Price changed → the linked «Имущество» auto-expense must be reconciled so
+    // the cash outflow keeps matching pricePerUnit × quantity (#14). Item update
+    // and expense reconciliation run in one transaction so they can't disagree.
+    const newPrice = parseFloat(String(dto.purchasePrice ?? 0)) || 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { sets, vals, idx } = buildSets();
+      let i = idx;
+      vals.push(id, tenantId);
+      const { rows: updated } = await client.query(
+        `UPDATE storage_items SET ${sets.join(', ')} WHERE id=$${i++} AND tenant_id=$${i} RETURNING quantity`,
+        vals,
+      );
+      if (updated.length === 0) {
+        // Item missing or foreign — nothing to reconcile.
+        await client.query('COMMIT');
+        return { message: 'Обновлено' };
+      }
+
+      // Effective quantity after the update (new value if supplied, else current).
+      const qty = parseFloat(String(updated[0].quantity ?? 0)) || 0;
+      const expenseAmount = newPrice * Math.max(qty, 1);
+
+      const { rows: existing } = await client.query(
+        'SELECT id FROM expenses WHERE storage_item_id = $1 AND tenant_id = $2 LIMIT 1',
+        [id, tenantId],
+      );
+
+      if (existing.length > 0) {
+        if (newPrice > 0) {
+          await client.query('UPDATE expenses SET amount = $1 WHERE storage_item_id = $2 AND tenant_id = $3', [
+            expenseAmount,
+            id,
+            tenantId,
+          ]);
+        } else {
+          // Price dropped to 0 → no cash outflow remains, drop the linked expense.
+          await client.query('DELETE FROM expenses WHERE storage_item_id = $1 AND tenant_id = $2', [id, tenantId]);
+        }
+      } else if (newPrice > 0) {
+        // No linked expense yet (item created at price 0, now priced) → create it
+        // via the same reserved-category path as createStorageItem.
+        const categoryId = await this.getOrCreateEquipmentCategory(client, tenantId);
+        const { rows: nameRows } = await client.query(
+          'SELECT name FROM storage_items WHERE id = $1 AND tenant_id = $2 LIMIT 1',
+          [id, tenantId],
+        );
+        const itemName = nameRows[0]?.name ?? '';
+        await client.query(
+          `INSERT INTO expenses (category_id, amount, description, date, source, approval_status, tenant_id, storage_item_id)
+           VALUES ($1, $2, $3, now(), 'owner', 'approved', $4, $5)`,
+          [categoryId, expenseAmount, `Покупка имущества: ${itemName}`, tenantId, id],
+        );
+      }
+
+      await client.query('COMMIT');
+      return { message: 'Обновлено' };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`updateStorageItem error: ${err}`);
+      throw err;
+    } finally {
+      client.release();
     }
-    if (dto.photo !== undefined) {
-      sets.push(`photo=$${idx++}`);
-      vals.push(dto.photo);
-    }
-    if (dto.purchasePrice !== undefined) {
-      sets.push(`purchase_price=$${idx++}`);
-      vals.push(dto.purchasePrice);
-    }
-    if (dto.quantity !== undefined) {
-      sets.push(`quantity=$${idx++}`);
-      vals.push(dto.quantity);
-    }
-    if (dto.unit !== undefined) {
-      sets.push(`unit=$${idx++}`);
-      vals.push(dto.unit);
-    }
-    if (dto.serviceLifeMonths !== undefined) {
-      sets.push(`service_life_months=$${idx++}`);
-      vals.push(dto.serviceLifeMonths);
-    }
-    if (dto.categoryId !== undefined) {
-      sets.push(`category_id=$${idx++}`);
-      vals.push(dto.categoryId);
-    }
-    if (sets.length === 0) return;
-    vals.push(id, tenantId);
-    await this.pool.query(`UPDATE storage_items SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}`, vals);
-    return { message: 'Обновлено' };
   }
 
-  async removeStorageItem(id: string, tenantId: string) {
-    await this.pool.query('DELETE FROM storage_items WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
-    return { message: 'Удалено' };
+  /**
+   * Delete a storage item. The linked auto-expense (#14) is handled per the
+   * owner-confirmed dialog:
+   *   reverseExpense = true  → "вернуть деньги в оборот": the linked expense
+   *                            is deleted, so the money is returned to circulation.
+   *   reverseExpense = false → "расход остаётся": the expense is kept; its
+   *                            storage_item_id is cleared (ON DELETE SET NULL
+   *                            would do this anyway, but we null it explicitly
+   *                            in the same tx for clarity).
+   */
+  async removeStorageItem(id: string, tenantId: string, reverseExpense = false) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (reverseExpense) {
+        await client.query('DELETE FROM expenses WHERE storage_item_id = $1 AND tenant_id = $2', [id, tenantId]);
+      } else {
+        await client.query('UPDATE expenses SET storage_item_id = NULL WHERE storage_item_id = $1 AND tenant_id = $2', [
+          id,
+          tenantId,
+        ]);
+      }
+
+      await client.query('DELETE FROM storage_items WHERE id = $1 AND tenant_id = $2', [id, tenantId]);
+
+      await client.query('COMMIT');
+      return { message: reverseExpense ? 'Удалено, расход возвращён в оборот' : 'Удалено' };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`removeStorageItem error: ${err}`);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   private mapStorageItem(r: any) {

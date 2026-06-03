@@ -77,6 +77,10 @@ export interface User {
   canAddExpenses?: boolean;
   /** When set, non-privileged users' daily expense submissions auto-flip to 'pending' once the total crosses this number. */
   dailyExpenseLimit?: number | null;
+  /** 055 — hide from Schedule grid + attendance Rating (FE filters by context). */
+  hiddenFromSchedule?: boolean;
+  /** 055 — hide everywhere: lists + cannot be selected as master on a new check. */
+  hiddenEverywhere?: boolean;
   tenantId?: string;
   tenant?: Tenant;
   createdAt: string;
@@ -119,6 +123,10 @@ export interface Client {
   ownerNotes?: string | null;
   /** True for the tenant's pinned "Розничный покупатель". */
   isRetail?: boolean;
+  /** Last loyalty rating (1–5) from review_responses — DETAIL response only (#15). Null if никогда не оценивал. */
+  lastRating?: number | null;
+  /** Timestamp of that last rating — DETAIL response only. */
+  lastRatingAt?: string | null;
   cars?: Car[];
   checks?: Check[];
   createdAt: string;
@@ -130,6 +138,8 @@ export interface Car {
   makeModel: string;
   comment?: string;
   clientId: string;
+  /** 059 — true for cars registered "без номера" (plateNumber is empty). */
+  noPlate?: boolean;
   client?: Client;
   createdAt: string;
 }
@@ -391,14 +401,19 @@ export interface MasterSalary {
   productEarnings?: number;
   /** Sum of `type='cash'` premiums awarded inside the period (048_salary_premiums). */
   premiumsAmount?: number;
+  /** Sum of penalties applied inside the period (056_salary_penalties). Subtracted from remainingAmount. */
+  penaltiesAmount?: number;
   totalEarnings: number;
   totalRevenue: number;
   checkCount: number;
   paidAmount: number;
+  /** totalEarnings − paidAmount − penaltiesAmount. */
   remainingAmount: number;
   payments?: SalaryPayment[];
   /** Premium rows awarded inside the period. */
   premiums?: SalaryPremium[];
+  /** Penalty rows applied inside the period. */
+  penalties?: SalaryPenalty[];
 }
 
 export interface ProductPromotion {
@@ -504,6 +519,8 @@ export interface ExpenseCategory {
   id: string;
   name: string;
   tenantId: string;
+  /** 057 — when true, non-privileged users' expenses in this category go to 'pending'. */
+  approvalRequired?: boolean;
   createdAt: string;
 }
 
@@ -899,6 +916,19 @@ export interface ActiveWarranty {
   daysLeft: number;
 }
 
+/**
+ * Active warranty for a single car — badge-ready shape returned by
+ * `GET /warranty-claims/active-for-car/:carId` (warrantyApi.activeForCar).
+ * Drives the "Диагностика ещё N дней" chips on the CheckCreate screen.
+ */
+export interface WarrantyActive {
+  id: string;
+  itemType: 'product' | 'service';
+  itemName: string;
+  warrantyDays: number;
+  expiresAt: string;
+}
+
 // ───────────────────────────────────────────────────────────────────────
 //  Client sources (046_clients_source) and per-car checks (052)
 // ───────────────────────────────────────────────────────────────────────
@@ -941,6 +971,24 @@ export interface SalaryPremium {
   awardedBy?: string;
   awarderName?: string;
   awardedAt: string;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Salary penalties (штрафы, 056_salary_penalties)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface SalaryPenalty {
+  id: string;
+  userId: string;
+  userName?: string;
+  /** Positive deduction amount (RUB). Subtracted from the employee's remaining owed salary. */
+  amount: number;
+  description?: string;
+  /** When the penalty applies. */
+  date: string;
+  createdBy?: string;
+  creatorName?: string;
+  createdAt: string;
 }
 
 // ───────────────────────────────────────────────────────────────────────

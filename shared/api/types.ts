@@ -27,6 +27,15 @@ export interface PaginationParams {
   search?: string;
 }
 
+export interface CarsQuery extends PaginationParams {
+  /**
+   * «Без номеров» filter. When true, the server returns only cars registered
+   * without a plate (no_plate flag set, or an empty stored plate). Applied
+   * server-side so it spans the whole paginated dataset, not just one page.
+   */
+  noPlate?: boolean;
+}
+
 export interface ChecksParams extends PaginationParams {
   masterId?: string;
   clientId?: string;
@@ -68,6 +77,10 @@ export interface UpdateUserRequest {
   canAddExpenses?: boolean;
   /** Daily cap (RUB). Null/undefined → unlimited. */
   dailyExpenseLimit?: number | null;
+  /** 055 — hide from Schedule grid + attendance Rating. */
+  hiddenFromSchedule?: boolean;
+  /** 055 — hide everywhere (lists + cannot be chosen as master on a new check). */
+  hiddenEverywhere?: boolean;
 }
 
 export interface CreateClientRequest {
@@ -93,6 +106,8 @@ export interface CreateCarRequest {
   makeModel: string;
   comment?: string;
   clientId: string;
+  /** 059 — register the car "без номера"; plate is stored empty. */
+  noPlate?: boolean;
 }
 
 export interface UpdateCarRequest {
@@ -100,6 +115,8 @@ export interface UpdateCarRequest {
   makeModel?: string;
   comment?: string;
   clientId?: string;
+  /** 059 — toggle "без номера". When true, the stored plate is cleared. */
+  noPlate?: boolean;
 }
 
 export interface CreateProductRequest {
