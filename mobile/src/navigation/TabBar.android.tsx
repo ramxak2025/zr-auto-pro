@@ -151,14 +151,17 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
     transform: [{ translateX: capsuleX.value + CAPSULE_PADDING_H }],
   }));
 
-  // Theme-aware surface tones. The bar uses BlurView underneath and a
-  // light overlay on top; both are tuned per mode so the bar reads as
-  // a discrete material in both light and dark contexts.
+  // Theme-aware surface tones. expo-blur at high intensity is expensive
+  // and flaky on Android (see ProductsScreen / GlassSurface precedent),
+  // so the Android bar leans on a near-opaque tonal surface for a clean
+  // Material-3 look and keeps the BlurView at a low, safe intensity just
+  // for a hint of depth — the surface still reads correctly even if the
+  // blur degrades to a no-op on older GPUs.
   const blurTint = palette.bg.canvas === '#0a0d14' ? 'dark' : 'light';
   const surfaceTint =
     palette.bg.canvas === '#0a0d14'
-      ? 'rgba(20, 26, 37, 0.65)' // dark mode — sit slightly above canvas
-      : 'rgba(255, 255, 255, 0.45)';
+      ? 'rgba(20, 26, 37, 0.94)' // dark mode — sit clearly above canvas
+      : 'rgba(255, 255, 255, 0.92)';
   const rim = palette.bg.canvas === '#0a0d14' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.95)';
   const islandBorder = palette.bg.canvas === '#0a0d14' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 42, 0.08)';
 
@@ -168,7 +171,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
       style={[styles.wrapper, { paddingTop: TOP_LIFT, paddingBottom: safeBottom + BOTTOM_LIFT }]}
     >
       <View style={[styles.island, { height: BAR_HEIGHT, borderColor: islandBorder }]}>
-        <BlurView intensity={80} tint={blurTint} style={StyleSheet.absoluteFill} />
+        <BlurView intensity={24} tint={blurTint} style={StyleSheet.absoluteFill} />
         <View style={[styles.surfaceTint, { backgroundColor: surfaceTint }]} pointerEvents="none" />
         <View style={[styles.topRim, { backgroundColor: rim }]} pointerEvents="none" />
 
