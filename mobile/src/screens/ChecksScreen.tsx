@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 // entityLinks намеренно не импортируются здесь: тап по карточке журнала
 // должен всегда вести в CheckDetail, а не на клиента/авто/мастера.
 // Переходы на сущности живут внутри открытой деталки чека.
@@ -436,6 +436,18 @@ export default function ChecksScreen() {
 
   const activeUsers = useMemo(() => (allUsers || []).filter((u) => u.isActive), [allUsers]);
 
+  // Near-live journal: poll the loaded pages every 30s, but only while the
+  // screen is focused, so a backgrounded Журнал tab spends no JS tick or
+  // network roundtrip. Paired with axios If-None-Match → most refetches are
+  // ~0-byte 304s. Pattern mirrors CallsScreen's focus-gated poll.
+  const [pollEnabled, setPollEnabled] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setPollEnabled(true);
+      return () => setPollEnabled(false);
+    }, []),
+  );
+
   const formatFilterDate = (d: Date) =>
     `${d.getDate().toString().padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
   const toISODate = (d: Date) =>
@@ -483,7 +495,11 @@ export default function ChecksScreen() {
     // Принципиально: не перезапрашивать на каждый mount. Возврат с детали
     // чека не должен снова грузить страницу — данные уже в кеше.
     refetchOnMount: false,
-    refetchOnReconnect: false,
+    // Near-live: refetch loaded pages on network reconnect + on a focus-gated
+    // 30s poll. Scroll position / pagination untouched — useInfiniteQuery
+    // refetches the already-loaded pages in place.
+    refetchOnReconnect: true,
+    refetchInterval: pollEnabled ? 30_000 : false,
     placeholderData: (prev) => prev,
   });
 

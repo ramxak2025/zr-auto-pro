@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
+  AccessibilityInfo,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
 import { Button } from '../components/Button';
@@ -34,7 +35,11 @@ export default function LoginScreen() {
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
 
-  // Entrance animations — logo shows instantly, form animates quickly
+  // Entrance animations — the LOGO is intentionally static at full
+  // opacity/scale so the SplashOverlay → LoginScreen handoff is seamless:
+  // the splash's centered logo cross-fades out onto an already-present
+  // identical logo, with no second "logo pop" underneath. Only the form
+  // (fields + demo block) does a quick staggered fade/slide-up.
   const logoFade = useRef(new Animated.Value(1)).current;
   const logoScale = useRef(new Animated.Value(1)).current;
   const formSlide = useRef(new Animated.Value(20)).current;
@@ -42,12 +47,38 @@ export default function LoginScreen() {
   const demoFade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
-      Animated.timing(formSlide, { toValue: 0, duration: 250, useNativeDriver: true }),
-      Animated.timing(demoFade, { toValue: 1, duration: 350, useNativeDriver: true }),
-    ]).start();
-  }, []);
+    let cancelled = false;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((reduce) => {
+        if (cancelled) return;
+        if (reduce) {
+          // Reduce Motion: no slide-up, present the form at rest with a
+          // short opacity reveal only.
+          formSlide.setValue(0);
+          Animated.parallel([
+            Animated.timing(formFade, { toValue: 1, duration: 160, useNativeDriver: true }),
+            Animated.timing(demoFade, { toValue: 1, duration: 160, useNativeDriver: true }),
+          ]).start();
+          return;
+        }
+        Animated.parallel([
+          Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
+          Animated.timing(formSlide, { toValue: 0, duration: 250, useNativeDriver: true }),
+          Animated.timing(demoFade, { toValue: 1, duration: 350, useNativeDriver: true }),
+        ]).start();
+      })
+      .catch(() => {
+        // If the a11y query fails, fall back to the standard entrance.
+        Animated.parallel([
+          Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
+          Animated.timing(formSlide, { toValue: 0, duration: 250, useNativeDriver: true }),
+          Animated.timing(demoFade, { toValue: 1, duration: 350, useNativeDriver: true }),
+        ]).start();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [demoFade, formFade, formSlide]);
 
   const handlePhoneChange = (raw: string) => {
     const digits = raw.replace(/\D/g, '');

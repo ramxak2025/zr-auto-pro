@@ -13,8 +13,13 @@
  * one rename.
  */
 import React from 'react';
-import { Modal as RNModal, StyleSheet, View } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { KeyboardAvoidingView, Modal as RNModal, Platform, StyleSheet, View } from 'react-native';
+import {
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+  ScrollView as GHScrollView,
+} from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -30,6 +35,7 @@ import { PressableScale } from '../platform/PressableScale';
 import { SPRING_TIGHT, TIMING_STANDARD, preferSpring } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
+import ModalBlurBackdrop from './ModalBlurBackdrop';
 
 export interface BottomSheetProps {
   visible: boolean;
@@ -86,18 +92,23 @@ export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, childr
     transform: [{ translateY: translateY.value }],
   }));
 
-  const backdropStyle = useAnimatedStyle(() => ({
+  // Light dim layer on top of the static blur. Tracks sheet position so the
+  // dismissal still feels physical — fades from a max of rgba(0,0,0,0.12)
+  // (sheet open) to 0 (sheet off-screen). The blur underneath stays constant.
+  const dimStyle = useAnimatedStyle(() => ({
     opacity: interpolate(translateY.value, [0, sheetHeight.value || 600], [1, 0], Extrapolation.CLAMP),
   }));
 
   return (
     <RNModal visible={visible} transparent onRequestClose={close} statusBarTranslucent animationType="none">
-      <View style={styles.host}>
-        <Animated.View style={[styles.backdrop, backdropStyle]}>
-          <PressableScale style={StyleSheet.absoluteFill} onPress={close} hapticIntent={null}>
-            <View />
-          </PressableScale>
-        </Animated.View>
+      {/* Nested gesture root so the header pan (drag-to-dismiss) works on
+          Android — RNGH needs a GestureHandlerRootView inside the RN core
+          <Modal>, which mounts its own window tree without the app's root. */}
+      <GestureHandlerRootView style={styles.host}>
+        {/* Static premium blur backdrop + tap-outside-to-close. */}
+        <ModalBlurBackdrop onPress={close} />
+        {/* Light dim layer tied to drag position — keeps a sense of depth. */}
+        <Animated.View pointerEvents="none" style={[styles.dim, dimStyle]} />
 
         <Animated.View
           onLayout={(e) => {
@@ -131,9 +142,25 @@ export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, childr
               )}
             </View>
           </GestureDetector>
-          <View style={styles.body}>{children}</View>
+          {/* Keyboard-aware + scrollable body. autoFocus'd inputs (Warehouse
+              forms) pop the keyboard; the GH ScrollView keeps the submit
+              button + multiline reason reachable, and composes with the
+              header pan above (header drag dismisses, inner content scrolls). */}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.bodyFlex}
+          >
+            <GHScrollView
+              style={styles.bodyFlex}
+              contentContainerStyle={styles.bodyContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {children}
+            </GHScrollView>
+          </KeyboardAvoidingView>
         </Animated.View>
-      </View>
+      </GestureHandlerRootView>
     </RNModal>
   );
 }
@@ -143,9 +170,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
   },
-  backdrop: {
+  dim: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    backgroundColor: 'rgba(0,0,0,0.12)',
   },
   sheet: {
     backgroundColor: colors.white,
@@ -180,9 +207,17 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: colors.gray[100],
   },
-  body: {
+  // Flex wrapper for the KeyboardAvoidingView + ScrollView. flexShrink lets
+  // the sheet collapse to its content when short, while maxHeight on the sheet
+  // caps it when the body is long (then the inner ScrollView takes over).
+  bodyFlex: {
+    flexShrink: 1,
+  },
+  // Scroll content padding. paddingBottom keeps the submit button clear of the
+  // keyboard / home indicator when the body scrolls.
+  bodyContent: {
     paddingHorizontal: 18,
     paddingTop: 12,
-    flexShrink: 1,
+    paddingBottom: 24,
   },
 });

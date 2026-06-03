@@ -31,6 +31,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
+import { BottomSheet } from '../components/BottomSheet';
 import ConfirmDialog from '../components/ConfirmDialog';
 import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
@@ -262,6 +263,22 @@ export default function ProductsScreen() {
 
   const [search, setSearch] = useState('');
   const limit = 500;
+  // Slim list payload (audit #5): the warehouse list + its row component
+  // only render these columns. Asking the backend's `?fields=` projection
+  // (backend/src/common/field-filter.ts) for exactly this set drops the
+  // heaviest part of the response — the `bundle_items` JSONB, plus the
+  // nested supplier object and other unrendered columns. The full product
+  // shape (with bundleItems) is still fetched separately by CheckCreate /
+  // the picker via their own `['all-products-check']` query, so nothing
+  // downstream loses data. Field names are the camelCase keys produced by
+  // the backend's `mapProduct`, because `?fields=` filters the mapped
+  // object, not raw DB columns.
+  //
+  // NOTE: this is a constant, intentionally NOT part of the query KEY — a
+  // parallel agent owns prefetch keyed on ['products', { search, limit,
+  // warehouseId }] and the key shape must stay byte-for-byte identical.
+  const PRODUCT_LIST_FIELDS =
+    'id,name,stock,minStock,sellPrice,costPrice,photo,category,unit,warehouseId,supplierId,warrantyDays,barcode';
   const [refreshing, setRefreshing] = useState(false);
   // activePath теперь живёт в route.params, чтобы каждый уровень папки был
   // отдельным push в native stack. iOS edge-swipe слева делает pop —
@@ -394,8 +411,12 @@ export default function ProductsScreen() {
         search,
         page: 1,
         limit,
+        // Project to the columns the list actually renders. Cast because
+        // `fields` is a pass-through axios query param, not part of the
+        // shared PaginationParams contract (which we must not touch).
+        fields: PRODUCT_LIST_FIELDS,
         ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
-      });
+      } as Parameters<typeof productsApi.getAll>[0] & { fields: string });
       return res.data;
     },
     // Defence-in-depth: the global QueryClient already sets
@@ -424,14 +445,36 @@ export default function ProductsScreen() {
     enabled: !!activeWarehouseId,
   });
 
-  // Fetch inventory movements for folder annotations (always enabled)
+  // Inventory movements drive two things only: the "проверка DD.MM.YY"
+  // folder badges (visible in browse mode, never while searching) and the
+  // green "checked recently" annotations inside the inventory modal/picker.
+  // Audit #5: this used to fire UNCONDITIONALLY with limit:1000 on every
+  // screen entry — the heaviest non-list fetch — even during a product
+  // search where its output is never read. Gate it to the cases that
+  // actually consume it so a cold search doesn't pay for movements.
+  //
+  // Backend hard-caps movements at LIMIT 200 (products.service.getMovements)
+  // and ignores any higher `limit`, so requesting 1000 was wasted intent;
+  // ask for 200 to match reality.
+  // `!search` ≈ browse/folder mode, the only state where folder "проверка"
+  // badges can render. We deliberately don't also test `sortedFolders.length`
+  // here — that value is derived further down the component and isn't in
+  // scope yet; gating on search-vs-browse already removes the fetch from the
+  // hot path (typing a product search). A flat warehouse with no folders may
+  // still fetch once, which is harmless: the badges simply have nowhere to
+  // show.
+  const needsInventoryMovements =
+    !search || // folder badges visible in browse mode
+    showInventoryModal || // inventory sheet green-tints rows
+    showInventoryPicker; // inventory picker shows folder annotations
   const { data: inventoryMovements } = useQuery<StockMovement[]>({
     queryKey: ['inventory-movements'],
     queryFn: async () => {
-      const res = await productsApi.getMovements({ limit: 1000 });
+      const res = await productsApi.getMovements({ limit: 200 });
       return res.data;
     },
     staleTime: 60_000,
+    enabled: needsInventoryMovements,
   });
 
   // Map: productId -> last inventory check date
@@ -1711,13 +1754,16 @@ export default function ProductsScreen() {
         </View>
       </Modal>
 
-      {/* Warehouse Operations Modal */}
-      <Modal
+      {/* Warehouse Operations - bottom-sheet action list (#2/#7
+          consistency). Pull-to-dismiss + blur backdrop. heightRatio
+          auto-fits the 3-4 rows. */}
+      <BottomSheet
         visible={showOpsModal}
         onClose={() => setShowOpsModal(false)}
         title={
           '\u0421\u043A\u043B\u0430\u0434\u0441\u043A\u0438\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438'
         }
+        heightRatio={0.5}
       >
         <TouchableOpacity
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
@@ -1786,7 +1832,7 @@ export default function ProductsScreen() {
             <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
           </TouchableOpacity>
         )}
-      </Modal>
+      </BottomSheet>
 
       {/* Full-screen Корзина modal — hosts TrashScreen with an explicit
           onClose so it can be dismissed without touching the navigator. */}
@@ -2050,10 +2096,16 @@ export default function ProductsScreen() {
         title="Выберите товар для списания"
       />
 
-      {/* Writeoff Form Modal — now with two modes (по закупке / просто).
-          The expense mode books an `expenses` row alongside the stock
-          movement; the simple mode only decrements the stock. */}
-      <Modal visible={showWriteoffModal} onClose={() => setShowWriteoffModal(false)} title={'Списание товара'}>
+      {/* Writeoff Form — bottom sheet with pull-to-dismiss (consistency
+          with Correction #2). Two modes (по закупке / просто): expense
+          mode books an `expenses` row alongside the stock movement; the
+          simple mode only decrements the stock. Taller form → 0.82. */}
+      <BottomSheet
+        visible={showWriteoffModal}
+        onClose={() => setShowWriteoffModal(false)}
+        title={'Списание товара'}
+        heightRatio={0.82}
+      >
         <View style={[styles.writeoffSelectedProduct, { backgroundColor: palette.accent.primarySoft }]}>
           <Ionicons name="cube-outline" size={20} color={palette.accent.primary} />
           <View style={{ flex: 1 }}>
@@ -2197,7 +2249,7 @@ export default function ProductsScreen() {
             <Text style={styles.submitBtnText}>{'Списать'}</Text>
           </TouchableOpacity>
         </View>
-      </Modal>
+      </BottomSheet>
 
       {/* Correction Product Picker */}
       <ProductPickerModal
@@ -2207,11 +2259,17 @@ export default function ProductsScreen() {
         title="Выберите товар для корректировки"
       />
 
-      {/* Correction Form Modal */}
-      <Modal
+      {/* Correction Form — bottom sheet with pull-to-dismiss.
+          Owner ask (#2): окно всплывает снизу с блюр-подложкой и
+          закрывается жестом «потянуть вниз». BottomSheet даёт pan-to-
+          dismiss + spring + ModalBlurBackdrop (никакой тёмной тонировки).
+          Высота 0.66 — форма короткая, autoFocus-поле «Новый остаток»
+          остаётся над клавиатурой. */}
+      <BottomSheet
         visible={showCorrectionModal}
         onClose={() => setShowCorrectionModal(false)}
         title={'Корректировка остатка'}
+        heightRatio={0.66}
       >
         <View style={styles.writeoffSelectedProduct}>
           <Ionicons name="cube-outline" size={20} color={colors.purple[600]} />
@@ -2294,7 +2352,7 @@ export default function ProductsScreen() {
             <Text style={styles.submitBtnText}>{'Применить'}</Text>
           </TouchableOpacity>
         </View>
-      </Modal>
+      </BottomSheet>
 
       {/* Fullscreen Photo Viewer — native iOS preview:
           • backdrop is UIBlurEffect dark, not a flat black
@@ -2310,8 +2368,11 @@ export default function ProductsScreen() {
         <Pressable style={styles.fullscreenOverlay} onPress={() => setFullscreenPhoto(null)}>
           {/* expo-blur intensity > ~25 is expensive / flaky on Android.
               Cap it there and rely on the alpha-tinted backdrop layer
-              below for visual depth. */}
-          <BlurView intensity={Platform.OS === 'android' ? 24 : 90} tint="dark" style={StyleSheet.absoluteFill} />
+              below for visual depth. PERF: iOS dropped 90 → 40 — this is a
+              transient fullscreen modal (blur stays, per owner ask) but a
+              90-intensity full-screen UIVisualEffectView on top of the
+              always-on Liquid Glass tab bar was a heavy GPU spike on open. */}
+          <BlurView intensity={Platform.OS === 'android' ? 24 : 40} tint="dark" style={StyleSheet.absoluteFill} />
           {Platform.OS === 'android' && <View pointerEvents="none" style={styles.fullscreenAndroidScrim} />}
           {/* Inner Pressable absorbs taps on the image so the image
               itself doesn't dismiss the preview — only the backdrop does. */}

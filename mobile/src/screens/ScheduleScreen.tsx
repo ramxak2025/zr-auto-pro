@@ -698,6 +698,12 @@ function GridTab() {
     const isSchedulable = (u: any) => {
       if (!u || !u.id) return false;
       if (u.isActive === false) return false;
+      // Employees flagged hidden_from_schedule disappear from the grid
+      // (and the attendance rating) — owners are excluded below by role.
+      if (u.hiddenFromSchedule) return false;
+      // «Скрыть везде» is a superset of «скрыть из графика» — it must also
+      // remove the employee from the schedule grid and the rating.
+      if (u.hiddenEverywhere) return false;
       const role = (u.role || '').toString().toLowerCase();
       return role !== 'superadmin' && role !== 'director' && role !== 'owner';
     };
@@ -1079,6 +1085,7 @@ function GridTab() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.legendScroll}
         contentContainerStyle={styles.legendRow}
       >
         {[
@@ -1092,7 +1099,11 @@ function GridTab() {
         ].map((item) => (
           <View key={item.label} style={[styles.legendItem, { backgroundColor: item.bg }]}>
             <Ionicons name={item.icon} size={12} color={item.color} />
-            <Text style={[styles.legendText, { color: palette.text.secondary }]}>{item.label}</Text>
+            {/* allowFontScaling off: legend sits in a fixed height:34 band and
+                would clip/overflow under large Dynamic Type. */}
+            <Text allowFontScaling={false} style={[styles.legendText, { color: palette.text.secondary }]}>
+              {item.label}
+            </Text>
           </View>
         ))}
       </ScrollView>
@@ -1838,7 +1849,10 @@ function RatingTab() {
     queryFn: async () => (await usersApi.getAll()).data,
   });
 
-  const users = useMemo(() => (usersData || []).filter((u) => u.isActive), [usersData]);
+  const users = useMemo(
+    () => (usersData || []).filter((u) => u.isActive && !u.hiddenFromSchedule && !u.hiddenEverywhere),
+    [usersData],
+  );
 
   // SHARED attendance utility — same logic everywhere (web + mobile)
   const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
@@ -3012,11 +3026,22 @@ const styles = StyleSheet.create({
   // its own soft tint so the icon + label read as one legible unit. The
   // row never wraps — overflow is handled by horizontal scroll, matching
   // the warehouse-screen chip strip pattern.
+  // A horizontal ScrollView with no explicit height greedily fills the
+  // remaining vertical space of its flex:1 parent (RN/Fabric measures the
+  // horizontal scroll axis as definite but lets the cross axis grow). With
+  // contentContainerStyle.alignItems:'center' the chips then float in the
+  // middle, leaving a large void BOTH above and below the legend — the
+  // owner-reported gap. Pinning the wrapper height (flexGrow:0 + height)
+  // makes the band hug the chips so it sits snug under the tabs and right
+  // above the grid.
+  legendScroll: {
+    flexGrow: 0,
+    flexShrink: 0,
+    height: 34,
+  },
   legendRow: {
     flexDirection: 'row',
     paddingHorizontal: spacing[4],
-    paddingBottom: spacing[3],
-    paddingTop: spacing[1],
     gap: spacing[2],
     alignItems: 'center',
   },

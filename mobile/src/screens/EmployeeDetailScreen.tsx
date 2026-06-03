@@ -1,34 +1,36 @@
 /**
- * EmployeeDetailScreen — simplified "character card" profile of a
- * single staff member. The previous version stacked too many sections
- * (radar, trophy case row, heatmap, mastery, team rank, career timeline,
- * documents, notes, etc.) on the main canvas. Owner feedback: too much.
+ * EmployeeDetailScreen — focused profile of a single staff member.
  *
- * Layout now:
- *   1. Sticky header (back chevron + name + ⋯ menu).
- *   2. HERO (avatar + name + class + rank badge with LVL + status).
- *   3. STATS — 4 simpler tiles in a 2×2 grid (Efficiency / Discipline /
- *      Activity / Rating) with a tiny sparkline each.
- *   4. STREAK flames (chips row).
- *   5. TODAY (shift timer + 3 metric tiles + note).
- *   6. FINANCES (Week / Month / Year switcher + 4 metric tiles +
- *      sparkline) — only for owner-like viewers and self.
- *   7. LIFETIME — compact one card, 3 numbers (Чеков / Выручка /
- *      Клиентов).
- *   8. EXTENDED (owner-only collapsible) — Edit profile button,
- *      Documents, Notes, Year Heatmap, Service Mastery, Team Rank,
- *      Career Timeline, Award badge. Lazy-rendered: heavy children
- *      (heatmap) only mount when section is expanded.
- *   9. Quick actions sticky bar (Call / WhatsApp / Schedule / Salary).
+ * Owner feedback: the previous version stacked far too much (radar,
+ * year heatmap, career timeline, team-rank medals, service mastery,
+ * a heavy "analysis/traits" card, lifetime records sprawl, owner
+ * back-office). The owner asked to keep ONLY what concerns the employee:
  *
- * Achievements live in a separate modal opened via "Все достижения" link.
+ *   1. ЕГО ГРАФИК      — today's shift + arrival + lateness (schedule/today).
+ *   2. ЕГО ПОКАЗАТЕЛИ  — efficiency / discipline / activity / rating tiles.
+ *   3. ЕГО ПОСЛЕДНИЕ ЧЕКИ — recent checks (lazy, fetched on open).
+ *   4. ЕГО ЗАРПЛАТА    — period earnings/revenue (owner-like or self only).
+ *   5. ЕГО ИНВЕНТАРЬ   — equipment issued to him (lazy).
+ *   6. ЕГО ЗНАЧКИ      — achievements / badges.
  *
- * Share-as-photo (1080×1920 export) is preserved — it remains a feature.
+ * Kept: the hero (avatar + name + role/class + rank badge) and the
+ * quick-actions bar (Call / WhatsApp / Schedule / Salary).
  *
- * Data source — `employeesApi.fullProfile()` returns the composite blob
- * documented in `EmployeeFullProfile`. Today's attendance still comes
- * from `scheduleApi.getToday()` because the full-profile blob doesn't
- * carry per-day signals.
+ * Data:
+ *   • `employeesApi.fullProfile()` → stats / lifetime / achievements /
+ *     yearHeatmap (used ONLY to compute salary period totals — not drawn).
+ *   • `scheduleApi.getToday()` → today's attendance (his schedule).
+ *   • `checksApi.getAll({ masterId })` → recent checks (lazy below-the-fold).
+ *   • `equipmentApi.getByUser()` → issued inventory (lazy below-the-fold).
+ *
+ * NOT-FOUND vs LOADING vs ERROR (owner bug «нет сотрудника»):
+ *   • while the route id is momentarily undefined → loading skeleton;
+ *   • while the profile query is pending and we have no cached data →
+ *     loading skeleton (NOT "не найден");
+ *   • if persisted/cached data is present → render it immediately;
+ *   • on a transient/network error with no data → retryable error state;
+ *   • "Сотрудник не найден" ONLY when the query truly resolved with no
+ *     employee OR a real 404 (`error?.response?.status === 404`).
  *
  * Bug fix preserved: `formatHM` handles both ISO timestamps and plain
  * "HH:mm" strings from the DB TEXT columns.
@@ -38,7 +40,6 @@ import {
   Alert,
   Animated,
   Easing,
-  LayoutAnimation,
   Linking,
   Modal,
   Platform,
@@ -46,15 +47,12 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
-  TextInput,
   TouchableOpacity,
-  UIManager,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
-import * as ImagePicker from 'expo-image-picker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   RouteProp,
@@ -62,8 +60,10 @@ import {
   useNavigation,
   useRoute,
 } from '@react-navigation/native';
-import { employeesApi, scheduleApi, usersApi } from '../api/services';
+import { checksApi, employeesApi, equipmentApi, scheduleApi, usersApi } from '../api/services';
+import CachedImage from '../components/CachedImage';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { ListSkeleton, Skeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useAuth } from '../contexts/AuthContext';
@@ -73,13 +73,13 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { Text } from '../platform/Typography';
 import type {
+  Check,
   EmployeeFullProfile,
   EmployeeAchievement,
   TodayEmployeeStatus,
   User,
 } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
-import { YearHeatmap } from '../components/employee/YearHeatmap';
 import { ShareCardModal } from '../components/employee/ShareCardModal';
 import { EditProfileModal } from '../components/employee/EditProfileModal';
 import { AwardAchievementModal } from '../components/employee/AwardAchievementModal';
@@ -87,26 +87,13 @@ import {
   rankFromLifetime,
   progressToNextRank,
   rankLabelUpper,
-  SERVICE_TIER_COLOR,
 } from '../components/employee/rank';
 
 type RouteParams = { EmployeeDetail: { id: string } };
 
-// Enable smooth height animation on Android for the collapsible section.
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
-
 // ── Formatters ────────────────────────────────────────────────────────────
-const formatMoney = (v: number): string =>
-  Math.round(v)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
-
 /**
  * Compact RU money formatter: 1 234 567 → "1.2М ₽", 12 345 → "12.3к ₽".
- * Mirrors `DashboardScreen.formatMoneyCompact` but uses the cyrillic
- * suffixes that read better in mixed-RU UI ("М" instead of "M").
  */
 const formatMoneyCompact = (v: number): string => {
   const abs = Math.abs(v);
@@ -115,6 +102,11 @@ const formatMoneyCompact = (v: number): string => {
   if (abs >= 10_000) return `${(v / 1000).toFixed(1).replace('.0', '')}к ₽`;
   return `${Math.round(v)} ₽`;
 };
+
+const formatMoneyFull = (v: number): string =>
+  Math.round(v)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 
 /**
  * Accepts both ISO timestamps (actualArrival) and plain "HH:mm" strings
@@ -132,8 +124,8 @@ const formatHM = (raw?: string | null): string => {
   return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 };
 
-const formatDate = (iso: string): string =>
-  new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
+const formatShortDate = (iso: string): string =>
+  new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
 
 function statusBadge(s?: TodayEmployeeStatus): { text: string; bg: string; fg: string } {
   if (!s) return { text: '—', bg: 'rgba(255,255,255,0.18)', fg: '#fff' };
@@ -176,6 +168,9 @@ export default function EmployeeDetailScreen() {
   const {
     data: full,
     isLoading,
+    isPending,
+    isError,
+    error,
     refetch,
     isRefetching,
   } = useQuery<EmployeeFullProfile>({
@@ -217,30 +212,6 @@ export default function EmployeeDetailScreen() {
   const [awardOpen, setAwardOpen] = useState(false);
   const [achievementsOpen, setAchievementsOpen] = useState(false);
 
-  // Owner-only extended section — collapsed by default.
-  const [extendedOpen, setExtendedOpen] = useState(false);
-  const toggleExtended = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setExtendedOpen((v) => {
-      haptic('select');
-      return !v;
-    });
-  }, []);
-
-  // ── Owner notes — saved on blur ──────────────────────────────────────
-  const [notesDraft, setNotesDraft] = useState<string>('');
-  React.useEffect(() => {
-    setNotesDraft(full?.profile.ownerNotes ?? '');
-  }, [full?.profile.ownerNotes]);
-  const saveNotes = useMutation({
-    mutationFn: () =>
-      employeesApi.update(id, { ownerNotes: notesDraft }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['employee-full-profile', id] });
-      haptic('success');
-    },
-  });
-
   // ── Achievement remove (custom only, long press) ─────────────────────
   const removeAch = useMutation({
     mutationFn: (achId: string) => employeesApi.removeAchievement(id, achId),
@@ -253,24 +224,90 @@ export default function EmployeeDetailScreen() {
     },
   });
 
-  // ── Period switch for FINANCES section ───────────────────────────────
+  // ── Period switch for SALARY section ─────────────────────────────────
   const [period, setPeriod] = useState<'week' | 'month' | 'year'>('month');
 
   const onRefresh = async () => {
     await Promise.all([refetch(), queryClient.invalidateQueries({ queryKey: ['schedule-today'] })]);
   };
 
-  if (isLoading || !full) {
-    if (isLoading) return <LoadingSpinner />;
+  // ── Loading / error / not-found gating ───────────────────────────────
+  // The route id can be momentarily undefined during a push transition —
+  // never show "не найден" then.
+  if (!id) {
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
-        <EmptyState title="Сотрудник не найден" description="Возможно учётка удалена или у вас нет к ней доступа." />
+        <LoadingSpinner />
       </View>
     );
   }
 
-  const { profile, stats, streaks, lifetime, yearHeatmap, teamRank, serviceMastery, careerTimeline, achievements } = full;
+  // No data yet. Distinguish three cases:
+  //   1. still pending / loading (and nothing in persisted cache) → skeleton;
+  //   2. a real 404 (employee genuinely doesn't exist) → "не найден";
+  //   3. any other error (timeout, 5xx, network) → retryable error state.
+  if (!full) {
+    const status = (error as any)?.response?.status;
+    const isNotFound = isError && status === 404;
+
+    if (isNotFound) {
+      return (
+        <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+          <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+          <EmptyState
+            icon="person"
+            title="Сотрудник не найден"
+            description="Возможно учётка удалена или у вас нет к ней доступа."
+          />
+        </View>
+      );
+    }
+
+    if (isError) {
+      // Transient/network error — NOT "не найден". Offer retry.
+      return (
+        <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+          <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+          <EmptyState
+            icon="warning"
+            title="Не удалось загрузить"
+            description="Проверьте соединение и попробуйте ещё раз."
+            action={{ label: 'Повторить', onPress: () => refetch() }}
+          />
+        </View>
+      );
+    }
+
+    // Still loading (pending) and nothing cached → skeleton, not a spinner.
+    if (isLoading || isPending) {
+      return (
+        <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+          <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+          <View style={styles.scroll}>
+            <Skeleton height={150} radius={borderRadius['3xl']} />
+            <Skeleton height={140} radius={borderRadius['2xl']} />
+            <ListSkeleton count={4} />
+          </View>
+        </View>
+      );
+    }
+
+    // Fallthrough: query resolved successfully but produced nothing —
+    // treat as genuinely not found.
+    return (
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+        <EmptyState
+          icon="person"
+          title="Сотрудник не найден"
+          description="Возможно учётка удалена или у вас нет к ней доступа."
+        />
+      </View>
+    );
+  }
+
+  const { profile, stats, lifetime, yearHeatmap, achievements } = full;
 
   // ── Rank derivation ──────────────────────────────────────────────────
   const rankInfo = rankFromLifetime(lifetime.totalRevenue, lifetime.totalChecks);
@@ -301,7 +338,7 @@ export default function EmployeeDetailScreen() {
       icon: a.icon,
       color: a.color,
     })),
-    streakDays: streaks.disciplineStreak,
+    streakDays: full.streaks.disciplineStreak,
   };
 
   // ── Header trailing (⋯) ──────────────────────────────────────────────
@@ -343,19 +380,11 @@ export default function EmployeeDetailScreen() {
     navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Salary' } });
   };
 
-  // ── Period totals (computed locally from year heatmap) ───────────────
+  // ── Period totals for salary (computed locally from year heatmap) ────
   const sharePct = (userRecord?.salaryPercent ?? 30) / 100;
   const periodTotals = computePeriodTotals(yearHeatmap, period, sharePct);
 
-  // ── Spark series for the 4 stat tiles ────────────────────────────────
-  // We derive a 14-day series from the heatmap as a "recent activity"
-  // proxy for every tile. Efficiency / Discipline / Rating don't have
-  // per-day history in the backend, so we keep the spark identical
-  // across tiles (subtle motion that signals "active" without lying).
-  // Plain slice (cheap) — not memoised because there's an early-return
-  // above for the loading path, which would break the rules-of-hooks
-  // ordering if we used useMemo here.
-  const recentSpark = yearHeatmap.slice(-14).map((d) => d.revenue);
+  const canSeeSalary = isOwnerLike || isSelf;
   const topAchievements = achievements.slice(0, 3);
 
   return (
@@ -409,8 +438,6 @@ export default function EmployeeDetailScreen() {
           <RefreshControl refreshing={isRefetching} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
         showsVerticalScrollIndicator={false}
-        // 8+ sections with charts, achievements, timelines, brand chips —
-        // offscreen culling so scroll frames don't pay for unseen cards.
         removeClippedSubviews
         scrollEventThrottle={16}
       >
@@ -425,110 +452,44 @@ export default function EmployeeDetailScreen() {
           status={status}
         />
 
-        {/* ── STATS — 2×2 simple tile grid (replaces radar) ──────────── */}
+        {/* ── 1. ЕГО ГРАФИК (сегодня) ─────────────────────────────────── */}
         <Card palette={palette}>
-          <CardHeader icon="pulse-outline" title="Характеристики" palette={palette} />
-          <View style={styles.statsGrid}>
-            <StatTile
-              label="Эффективность"
-              value={stats.efficiency}
-              accent={rankInfo.accent}
-              spark={recentSpark}
-              palette={palette}
-            />
-            <StatTile
-              label="Дисциплина"
-              value={stats.discipline}
-              accent={rankInfo.accent}
-              spark={recentSpark}
-              palette={palette}
-            />
-            <StatTile
-              label="Активность"
-              value={stats.activity}
-              accent={rankInfo.accent}
-              spark={recentSpark}
-              palette={palette}
-            />
-            <StatTile
-              label="Рейтинг"
-              value={stats.rating}
-              accent={rankInfo.accent}
-              spark={recentSpark}
-              palette={palette}
-            />
-          </View>
-        </Card>
-
-        {/* ── STREAKS ─────────────────────────────────────────────────── */}
-        {(streaks.disciplineStreak > 0 || streaks.fiveStarStreak > 0 || streaks.checksStreak > 0) && (
-          <View style={styles.streaksRow}>
-            {streaks.disciplineStreak > 0 && (
-              <StreakChip icon="🔥" value={streaks.disciplineStreak} label="дней без опозданий" palette={palette} />
-            )}
-            {streaks.fiveStarStreak > 0 && (
-              <StreakChip icon="🎯" value={streaks.fiveStarStreak} label="чеков с 5★" palette={palette} />
-            )}
-            {streaks.checksStreak > 0 && (
-              <StreakChip icon="💎" value={streaks.checksStreak} label="активных дней" palette={palette} />
-            )}
-          </View>
-        )}
-
-        {/* ── ACHIEVEMENTS — top-3 preview + "Все достижения" link ───── */}
-        <Card palette={palette}>
-          <View style={styles.cardHeaderRow}>
-            <CardHeader icon="trophy-outline" title="Достижения" palette={palette} />
-            <Pressable
-              onPress={() => {
-                haptic('tap');
-                setAchievementsOpen(true);
-              }}
-              hitSlop={8}
-            >
-              <Text style={[styles.linkText, { color: rankInfo.accent }]}>Все достижения</Text>
-            </Pressable>
-          </View>
-          {topAchievements.length === 0 ? (
-            <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>
-              Пока ни одного значка. {isOwnerLike ? 'Откройте список и выдайте первый.' : ''}
-            </Text>
-          ) : (
-            <View style={styles.trophyPreviewRow}>
-              {topAchievements.map((a) => (
-                <View
-                  key={a.id}
-                  style={[
-                    styles.trophyPreview,
-                    {
-                      backgroundColor: palette.bg.muted,
-                      borderColor: palette.border.subtle,
-                    },
-                  ]}
-                >
-                  <Text style={styles.trophyPreviewIcon}>{a.icon || '🏆'}</Text>
-                  <Text
-                    style={[styles.trophyPreviewName, { color: palette.text.primary }]}
-                    numberOfLines={2}
-                  >
-                    {a.name}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </Card>
-
-        {/* ── СЕГОДНЯ ──────────────────────────────────────────────────── */}
-        <Card palette={palette}>
-          <CardHeader icon="time-outline" title="Сегодня" palette={palette} />
+          <CardHeader icon="calendar-outline" title="График" palette={palette} />
           <TodayBlock today={today} palette={palette} />
         </Card>
 
-        {/* ── ФИНАНСЫ (period switcher) ──────────────────────────────── */}
-        {isOwnerLike || isSelf ? (
+        {/* ── 2. ЕГО ПОКАЗАТЕЛИ ───────────────────────────────────────── */}
+        <Card palette={palette}>
+          <CardHeader icon="pulse-outline" title="Показатели" palette={palette} />
+          <View style={styles.statsGrid}>
+            <StatTile label="Эффективность" value={stats.efficiency} accent={rankInfo.accent} palette={palette} />
+            <StatTile label="Дисциплина" value={stats.discipline} accent={rankInfo.accent} palette={palette} />
+            <StatTile label="Активность" value={stats.activity} accent={rankInfo.accent} palette={palette} />
+            <StatTile label="Рейтинг" value={stats.rating} accent={rankInfo.accent} palette={palette} />
+          </View>
+          {/* Lifetime numbers folded into «показатели» as a compact footer. */}
+          <View style={[styles.lifeFooter, { borderTopColor: palette.border.subtle }]}>
+            <LifeStat label="Чеков" value={String(lifetime.totalChecks)} palette={palette} />
+            <LifeStat label="Выручка" value={formatMoneyCompact(lifetime.totalRevenue)} palette={palette} />
+            <LifeStat label="Клиентов" value={String(lifetime.clientsServed)} palette={palette} />
+          </View>
+        </Card>
+
+        {/* ── 3. ЕГО ПОСЛЕДНИЕ ЧЕКИ (lazy) ───────────────────────────── */}
+        <Card palette={palette}>
+          <CardHeader icon="receipt-outline" title="Последние чеки" palette={palette} />
+          <RecentChecks employeeId={id} palette={palette} navigation={navigation} />
+        </Card>
+
+        {/* ── 4. ЕГО ЗАРПЛАТА (owner-like or self) ────────────────────── */}
+        {canSeeSalary ? (
           <Card palette={palette}>
-            <CardHeader icon="wallet-outline" title="Финансы" palette={palette} />
+            <View style={styles.cardHeaderRow}>
+              <CardHeader icon="wallet-outline" title="Зарплата" palette={palette} />
+              <Pressable onPress={goSalary} hitSlop={8}>
+                <Text style={[styles.linkText, { color: rankInfo.accent }]}>Открыть</Text>
+              </Pressable>
+            </View>
             <PeriodSwitcher value={period} onChange={setPeriod} palette={palette} />
             <View style={[styles.tilesGrid, { marginTop: spacing[3] }]}>
               <MetricTile label="Заработано" value={formatMoneyCompact(periodTotals.earnings)} highlight palette={palette} />
@@ -540,62 +501,51 @@ export default function EmployeeDetailScreen() {
           </Card>
         ) : null}
 
-        {/* ── LIFETIME — compact, 3 numbers ──────────────────────────── */}
+        {/* ── 5. ЕГО ИНВЕНТАРЬ (lazy) ─────────────────────────────────── */}
         <Card palette={palette}>
-          <CardHeader icon="infinite-outline" title="За всё время" palette={palette} />
-          <View style={styles.lifetimeGrid}>
-            <LifeStat label="Чеков" value={String(lifetime.totalChecks)} palette={palette} />
-            <LifeStat label="Выручка" value={formatMoneyCompact(lifetime.totalRevenue)} palette={palette} />
-            <LifeStat label="Клиентов" value={String(lifetime.clientsServed)} palette={palette} />
-          </View>
+          <CardHeader icon="construct-outline" title="Инвентарь" palette={palette} />
+          <Inventory employeeId={id} palette={palette} />
         </Card>
 
-        {/* ── EXTENDED owner-only collapsible section ────────────────── */}
-        {isOwnerLike && (
-          <Card palette={palette}>
-            <Pressable onPress={toggleExtended} style={styles.expanderHeader} hitSlop={6}>
-              <View style={styles.expanderTitleWrap}>
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={14}
-                  color={palette.text.tertiary}
-                />
-                <Text style={[styles.expanderTitle, { color: palette.text.primary }]}>
-                  Расширенная информация
-                </Text>
-              </View>
-              <Ionicons
-                name={extendedOpen ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color={palette.text.tertiary}
-              />
-            </Pressable>
-            {!extendedOpen && (
-              <Text style={[styles.expanderHint, { color: palette.text.tertiary }]}>
-                Документы, заметки, графики, рейтинг команды, карьера, выдача значков.
-              </Text>
-            )}
-            {extendedOpen && (
-              <OwnerExtras
-                employeeId={id}
-                palette={palette}
-                rankAccent={rankInfo.accent}
-                lifetime={lifetime}
-                serviceMastery={serviceMastery}
-                yearHeatmap={yearHeatmap}
-                teamRank={teamRank}
-                careerTimeline={careerTimeline}
-                notesDraft={notesDraft}
-                setNotesDraft={setNotesDraft}
-                onSaveNotes={() => {
-                  if ((profile.ownerNotes ?? '') !== notesDraft) saveNotes.mutate();
+        {/* ── 6. ЕГО ЗНАЧКИ ───────────────────────────────────────────── */}
+        <Card palette={palette}>
+          <View style={styles.cardHeaderRow}>
+            <CardHeader icon="trophy-outline" title="Значки" palette={palette} />
+            {achievements.length > 0 && (
+              <Pressable
+                onPress={() => {
+                  haptic('tap');
+                  setAchievementsOpen(true);
                 }}
-                onEditProfile={() => setEditOpen(true)}
-                onAwardBadge={() => setAwardOpen(true)}
-              />
+                hitSlop={8}
+              >
+                <Text style={[styles.linkText, { color: rankInfo.accent }]}>Все значки</Text>
+              </Pressable>
             )}
-          </Card>
-        )}
+          </View>
+          {topAchievements.length === 0 ? (
+            <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>
+              Пока ни одного значка. {isOwnerLike ? 'Выдайте первый через меню ⋯.' : ''}
+            </Text>
+          ) : (
+            <View style={styles.trophyPreviewRow}>
+              {topAchievements.map((a) => (
+                <View
+                  key={a.id}
+                  style={[
+                    styles.trophyPreview,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  ]}
+                >
+                  <Text style={styles.trophyPreviewIcon}>{a.icon || '🏆'}</Text>
+                  <Text style={[styles.trophyPreviewName, { color: palette.text.primary }]} numberOfLines={2}>
+                    {a.name}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+        </Card>
       </ScrollView>
 
       {/* ── Quick actions sticky bar (above tab bar) ─────────────────── */}
@@ -613,7 +563,7 @@ export default function EmployeeDetailScreen() {
         <ActionBtn icon="call" label="Позвонить" onPress={goCall} palette={palette} />
         <ActionBtn icon="logo-whatsapp" label="WhatsApp" onPress={goWhatsapp} palette={palette} accent={colors.green[600]} />
         <ActionBtn icon="calendar" label="График" onPress={goSchedule} palette={palette} />
-        {isOwnerLike && <ActionBtn icon="wallet" label="Зарплата" onPress={goSalary} palette={palette} />}
+        {canSeeSalary && <ActionBtn icon="wallet" label="Зарплата" onPress={goSalary} palette={palette} />}
       </View>
 
       <ShareCardModal visible={shareOpen} onClose={() => setShareOpen(false)} data={shareData} />
@@ -748,55 +698,24 @@ function CardHeader({ icon, title, palette }: { icon: any; title: string; palett
   );
 }
 
-function StreakChip({
-  icon,
-  value,
-  label,
-  palette,
-}: {
-  icon: string;
-  value: number;
-  label: string;
-  palette: Palette;
-}) {
-  return (
-    <View style={[styles.streakChip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-      <Text style={styles.streakIcon}>{icon}</Text>
-      <Text style={[styles.streakVal, { color: palette.text.primary }]}>{value}</Text>
-      <Text style={[styles.streakLabel, { color: palette.text.secondary }]} numberOfLines={1}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
 /**
- * StatTile — single 2×2 grid cell: label + numeric value (0–100) + tiny
- * inline sparkline. Cleaner replacement for the 5-axis radar — no SVG,
- * no animated polygon, no axis labels to wrap. Less wow but more
- * legible at a glance.
+ * StatTile — single 2×2 grid cell: label + numeric value (0–100) + a
+ * progress bar. Clean, legible "показатель" at a glance (no SVG radar).
  */
 function StatTile({
   label,
   value,
   accent,
-  spark,
   palette,
 }: {
   label: string;
   value: number;
   accent: string;
-  spark: number[];
   palette: Palette;
 }) {
   const clamped = Math.round(Math.max(0, Math.min(100, value)));
   return (
-    <View
-      style={[
-        styles.statTile,
-        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-      ]}
-    >
+    <View style={[styles.statTile, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
       <Text style={[styles.statTileLabel, { color: palette.text.tertiary }]} numberOfLines={1}>
         {label}
       </Text>
@@ -805,59 +724,19 @@ function StatTile({
         <Text style={[styles.statTileUnit, { color: palette.text.tertiary }]}>/100</Text>
       </View>
       <View style={styles.statTileProgressTrack}>
-        <View
-          style={[
-            styles.statTileProgressFill,
-            {
-              width: `${clamped}%`,
-              backgroundColor: accent,
-            },
-          ]}
-        />
+        <View style={[styles.statTileProgressFill, { width: `${clamped}%`, backgroundColor: accent }]} />
       </View>
-      {spark.length > 1 ? <TinySpark values={spark} accent={accent} /> : null}
-    </View>
-  );
-}
-
-/**
- * TinySpark — minimal sparkline polyline for stat tiles. No SVG: a
- * column of bars keeps it cheap and consistent with the Finances
- * Sparkline. 30pt tall.
- */
-function TinySpark({ values, accent }: { values: number[]; accent: string }) {
-  const max = Math.max(1, ...values);
-  return (
-    <View style={styles.tinySparkRow}>
-      {values.map((v, i) => {
-        const h = Math.max(2, Math.round((v / max) * 18));
-        return (
-          <View
-            key={i}
-            style={{
-              width: 3,
-              height: h,
-              borderRadius: 1.5,
-              backgroundColor: v > 0 ? accent : 'transparent',
-              opacity: v > 0 ? 0.7 : 0,
-            }}
-          />
-        );
-      })}
     </View>
   );
 }
 
 function TodayBlock({ today, palette }: { today?: TodayEmployeeStatus; palette: Palette }) {
-  // ── Shift + arrival ──────────────────────────────────────────────────
   // Bug fix: shiftStart/shiftEnd from backend are "HH:mm" strings (TEXT
   // column), so we route them through formatHM() instead of
   // `new Date(...).toLocaleTimeString(...)`.
   const startStr = formatHM(today?.shiftStart);
   const endStr = formatHM(today?.shiftEnd);
   const arrival = today?.actualArrival ? formatHM(today.actualArrival) : '—';
-
-  // ── Shift progress (timer) ───────────────────────────────────────────
   const progress = computeShiftProgress(today);
 
   return (
@@ -898,8 +777,6 @@ function TodayBlock({ today, palette }: { today?: TodayEmployeeStatus; palette: 
 }
 
 function ShiftProgressRing({ progress }: { progress: number }) {
-  // Reuse a CSS-style outer ring with a coloured arc using two simple Views
-  // — keep it lightweight (no SVG/animation) since this is a small badge.
   const pct = Math.max(0, Math.min(1, progress));
   const rotation = pct * 360;
   return (
@@ -1031,58 +908,6 @@ function LifeStat({ label, value, palette }: { label: string; value: string; pal
   );
 }
 
-function TeamRankCell({
-  icon,
-  place,
-  total,
-  label,
-  palette,
-}: {
-  icon: string;
-  place: number;
-  total: number;
-  label: string;
-  palette: Palette;
-}) {
-  return (
-    <View style={styles.teamCell}>
-      <Text style={styles.teamIcon}>{icon}</Text>
-      <Text style={[styles.teamPlace, { color: palette.text.primary }]}>{`#${place}`}</Text>
-      <Text style={[styles.teamTotal, { color: palette.text.tertiary }]}>{`из ${total}`}</Text>
-      <Text style={[styles.teamLabel, { color: palette.text.secondary }]}>{label}</Text>
-    </View>
-  );
-}
-
-function TimelineRow({
-  event,
-  palette,
-}: {
-  event: EmployeeFullProfile['careerTimeline'][number];
-  palette: Palette;
-}) {
-  const iconFor = (k: string) =>
-    k === 'hire' ? 'briefcase-outline' : k === 'promotion' ? 'arrow-up-circle-outline' : k === 'top_month' ? 'trophy-outline' : 'star-outline';
-  return (
-    <View style={styles.timelineRow}>
-      <View style={[styles.timelineDot, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-        <Ionicons name={iconFor(event.kind) as any} size={14} color={colors.primary[600]} />
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={[styles.timelineTitle, { color: palette.text.primary }]} numberOfLines={1}>
-          {event.title}
-        </Text>
-        {event.description ? (
-          <Text style={[styles.timelineDesc, { color: palette.text.secondary }]} numberOfLines={2}>
-            {event.description}
-          </Text>
-        ) : null}
-        <Text style={[styles.timelineDate, { color: palette.text.tertiary }]}>{formatDate(event.date)}</Text>
-      </View>
-    </View>
-  );
-}
-
 function ActionBtn({
   icon,
   label,
@@ -1096,7 +921,6 @@ function ActionBtn({
   palette: Palette;
   accent?: string;
 }) {
-  // Tiny scale-on-press feel — Animated.spring keeps it on the native driver.
   const scale = useRef(new Animated.Value(1)).current;
   return (
     <TouchableOpacity
@@ -1140,213 +964,135 @@ function MenuItem({
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-//  Owner-only extras (collapsible)
+//  ЕГО ПОСЛЕДНИЕ ЧЕКИ — lazy, fetched when the card mounts (below the fold)
 // ──────────────────────────────────────────────────────────────────────────
 
-/**
- * OwnerExtras — all the rarely-needed "back office" content that used
- * to live on the main canvas. Mounted lazily (only when the
- * "Расширенная информация" expander is open) so the heavy
- * `YearHeatmap` SVG / career timeline mutations don't run on every
- * profile view.
- */
-function OwnerExtras({
+function RecentChecks({
   employeeId,
   palette,
-  rankAccent,
-  lifetime,
-  serviceMastery,
-  yearHeatmap,
-  teamRank,
-  careerTimeline,
-  notesDraft,
-  setNotesDraft,
-  onSaveNotes,
-  onEditProfile,
-  onAwardBadge,
+  navigation,
 }: {
   employeeId: string;
   palette: Palette;
-  rankAccent: string;
-  lifetime: EmployeeFullProfile['lifetime'];
-  serviceMastery: EmployeeFullProfile['serviceMastery'];
-  yearHeatmap: EmployeeFullProfile['yearHeatmap'];
-  teamRank: EmployeeFullProfile['teamRank'];
-  careerTimeline: EmployeeFullProfile['careerTimeline'];
-  notesDraft: string;
-  setNotesDraft: (v: string) => void;
-  onSaveNotes: () => void;
-  onEditProfile: () => void;
-  onAwardBadge: () => void;
+  navigation: any;
 }) {
-  const medal = (place: number) => (place === 1 ? '🥇' : place === 2 ? '🥈' : place === 3 ? '🥉' : '🏅');
+  const { data, isLoading } = useQuery<Check[]>({
+    queryKey: ['employee-recent-checks', employeeId],
+    queryFn: async () => {
+      const res = await checksApi.getAll({ masterId: employeeId, page: 1, limit: 6 });
+      return res.data.data;
+    },
+    staleTime: 30_000,
+  });
+
+  if (isLoading && !data) {
+    return (
+      <View style={{ gap: spacing[2] }}>
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} height={48} radius={borderRadius.lg} />
+        ))}
+      </View>
+    );
+  }
+
+  const checks = data ?? [];
+  if (checks.length === 0) {
+    return <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>Пока нет ни одного чека.</Text>;
+  }
 
   return (
-    <View style={styles.ownerExtras}>
-      {/* Edit profile + Award badge — two pill buttons. */}
-      <View style={styles.ownerActions}>
-        <Pressable
+    <View style={{ gap: spacing[2] }}>
+      {checks.map((c) => (
+        <TouchableOpacity
+          key={c.id}
+          activeOpacity={0.75}
           onPress={() => {
             haptic('tap');
-            onEditProfile();
+            navigation.navigate('CheckDetail', { id: c.id });
           }}
-          style={[styles.ownerActionBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          style={[styles.checkRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
         >
-          <Ionicons name="create-outline" size={16} color={palette.text.primary} />
-          <Text style={[styles.ownerActionLabel, { color: palette.text.primary }]}>Редактировать профиль</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => {
-            haptic('tap');
-            onAwardBadge();
-          }}
-          style={[styles.ownerActionBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        >
-          <Ionicons name="ribbon-outline" size={16} color={palette.text.primary} />
-          <Text style={[styles.ownerActionLabel, { color: palette.text.primary }]}>Выдать значок</Text>
-        </Pressable>
-      </View>
-
-      {/* Lifetime extras (best day / best month / brands). */}
-      {(lifetime.bestDay || lifetime.bestMonth || lifetime.topCarBrands.length > 0) && (
-        <View style={[styles.ownerBlock, { borderColor: palette.border.subtle }]}>
-          <SubLabel palette={palette}>Личные рекорды</SubLabel>
-          {lifetime.bestDay && (
-            <Text style={[styles.lifeNote, { color: palette.text.secondary, marginTop: 0 }]}>
-              Лучший день:{' '}
-              <Text style={{ color: palette.text.primary, fontWeight: '600' }}>
-                {formatDate(lifetime.bestDay.date)}
-              </Text>{' '}
-              · <Text style={{ color: palette.text.primary, fontWeight: '600' }}>{formatMoney(lifetime.bestDay.value)}</Text>
-            </Text>
-          )}
-          {lifetime.bestMonth && (
-            <Text style={[styles.lifeNote, { color: palette.text.secondary }]}>
-              Лучший месяц:{' '}
-              <Text style={{ color: palette.text.primary, fontWeight: '600' }}>{lifetime.bestMonth.ym}</Text> ·{' '}
-              <Text style={{ color: palette.text.primary, fontWeight: '600' }}>{formatMoney(lifetime.bestMonth.value)}</Text>
-            </Text>
-          )}
-          {lifetime.topCarBrands.length > 0 && (
-            <View style={[styles.brandsRow, { marginTop: spacing[3] }]}>
-              {lifetime.topCarBrands.slice(0, 3).map((b) => (
-                <View
-                  key={b.brand}
-                  style={[styles.brandChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                >
-                  <Ionicons name="car-sport-outline" size={12} color={palette.text.tertiary} />
-                  <Text style={[styles.brandText, { color: palette.text.primary }]}>{b.brand}</Text>
-                  <Text style={[styles.brandCount, { color: palette.text.tertiary }]}>{b.count}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* Year Heatmap (lazy — mounts only when extras open). */}
-      {yearHeatmap.length > 0 && (
-        <View style={[styles.ownerBlock, { borderColor: palette.border.subtle }]}>
-          <SubLabel palette={palette}>Год активности</SubLabel>
-          <YearHeatmap data={yearHeatmap} accent={rankAccent} />
-        </View>
-      )}
-
-      {/* Service mastery. */}
-      {serviceMastery.length > 0 && (
-        <View style={[styles.ownerBlock, { borderColor: palette.border.subtle }]}>
-          <SubLabel palette={palette}>Мастерство</SubLabel>
-          <View style={{ gap: spacing[2] }}>
-            {serviceMastery.slice(0, 5).map((s) => {
-              const tier = SERVICE_TIER_COLOR[s.tier];
-              return (
-                <View
-                  key={s.serviceId}
-                  style={[styles.masteryRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                >
-                  <View style={[styles.masteryIcon, { backgroundColor: tier.bg }]}>
-                    <Ionicons name="hammer" size={16} color={tier.fg} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[styles.masteryName, { color: palette.text.primary }]} numberOfLines={1}>
-                      {s.name}
-                    </Text>
-                    <Text style={[styles.masterySub, { color: palette.text.tertiary }]}>{s.count} выполнено</Text>
-                  </View>
-                  <View style={[styles.tierBadge, { backgroundColor: tier.bg }]}>
-                    <Text style={[styles.tierBadgeText, { color: tier.fg }]}>{s.tier.toUpperCase()}</Text>
-                  </View>
-                </View>
-              );
-            })}
+          <View style={[styles.checkIconBox, { backgroundColor: palette.bg.card }]}>
+            <Ionicons name="receipt-outline" size={16} color={colors.primary[600]} />
           </View>
-        </View>
-      )}
-
-      {/* Team rank. */}
-      {teamRank.total > 0 && (
-        <View style={[styles.ownerBlock, { borderColor: palette.border.subtle }]}>
-          <SubLabel palette={palette}>Рейтинг в команде</SubLabel>
-          <View style={styles.teamRow}>
-            <TeamRankCell icon={medal(teamRank.revenueRank)} place={teamRank.revenueRank} total={teamRank.total} label="по выручке" palette={palette} />
-            <TeamRankCell icon={medal(teamRank.disciplineRank)} place={teamRank.disciplineRank} total={teamRank.total} label="по дисциплине" palette={palette} />
-            <TeamRankCell icon={medal(teamRank.ratingRank)} place={teamRank.ratingRank} total={teamRank.total} label="по рейтингу" palette={palette} />
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.checkTitle, { color: palette.text.primary }]} numberOfLines={1}>
+              {`№ ${c.number}`}
+              {c.car?.makeModel ? ` · ${c.car.makeModel}` : c.client?.fullName ? ` · ${c.client.fullName}` : ''}
+            </Text>
+            <Text style={[styles.checkMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+              {formatShortDate(c.date)}
+              {c.isReturned ? ' · возврат' : ''}
+            </Text>
           </View>
-          <Text style={[styles.teamExpandedText, { color: palette.text.secondary, marginTop: spacing[2] }]}>
-            Команда из {teamRank.total} сотрудников. Чем меньше число — тем выше позиция.
+          <Text
+            style={[
+              styles.checkAmount,
+              { color: c.isReturned ? palette.text.tertiary : palette.text.primary },
+            ]}
+            numberOfLines={1}
+          >
+            {formatMoneyFull(c.totalRevenue)}
           </Text>
-        </View>
-      )}
-
-      {/* Career timeline. */}
-      {careerTimeline.length > 0 && (
-        <View style={[styles.ownerBlock, { borderColor: palette.border.subtle }]}>
-          <SubLabel palette={palette}>Карьера</SubLabel>
-          <View style={{ gap: spacing[3] }}>
-            {careerTimeline.map((e, idx) => (
-              <TimelineRow key={idx} event={e} palette={palette} />
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/* Documents. */}
-      <View style={[styles.ownerBlock, { borderColor: palette.border.subtle }]}>
-        <SubLabel palette={palette}>Документы</SubLabel>
-        <Documents employeeId={employeeId} palette={palette} />
-      </View>
-
-      {/* Notes. */}
-      <View style={[styles.ownerBlock, { borderColor: palette.border.subtle }]}>
-        <SubLabel palette={palette}>Заметки владельца</SubLabel>
-        <TextInput
-          value={notesDraft}
-          onChangeText={setNotesDraft}
-          onBlur={onSaveNotes}
-          multiline
-          numberOfLines={4}
-          placeholder="Личные заметки о сотруднике…"
-          placeholderTextColor={palette.text.tertiary}
-          style={[
-            styles.notesInput,
-            {
-              borderColor: palette.border.subtle,
-              backgroundColor: palette.bg.muted,
-              color: palette.text.primary,
-            },
-          ]}
-        />
-        <Text style={[styles.notesHint, { color: palette.text.tertiary }]}>
-          Сохраняется автоматически после редактирования. Видно только владельцу/директору.
-        </Text>
-      </View>
+          <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+        </TouchableOpacity>
+      ))}
     </View>
   );
 }
 
-function SubLabel({ children, palette }: { children: React.ReactNode; palette: Palette }) {
+// ──────────────────────────────────────────────────────────────────────────
+//  ЕГО ИНВЕНТАРЬ — lazy, equipment issued to this employee
+// ──────────────────────────────────────────────────────────────────────────
+
+function Inventory({ employeeId, palette }: { employeeId: string; palette: Palette }) {
+  const { data, isLoading } = useQuery<any[]>({
+    queryKey: ['eq-user', employeeId],
+    queryFn: async () => (await equipmentApi.getByUser(employeeId)).data,
+    staleTime: 30_000,
+  });
+
+  if (isLoading && !data) {
+    return (
+      <View style={{ gap: spacing[2] }}>
+        {[0, 1].map((i) => (
+          <Skeleton key={i} height={44} radius={borderRadius.lg} />
+        ))}
+      </View>
+    );
+  }
+
+  const active = (data ?? []).filter((i: any) => i.status === 'active');
+  if (active.length === 0) {
+    return <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>Инвентарь не выдан.</Text>;
+  }
+  const total = active.reduce((s: number, i: any) => s + (i.cost || 0), 0);
+
   return (
-    <Text style={[styles.subLabel, { color: palette.text.tertiary }]}>{children}</Text>
+    <View style={{ gap: spacing[2] }}>
+      {active.map((item: any) => (
+        <View
+          key={item.id}
+          style={[styles.invRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        >
+          {item.photo ? (
+            <CachedImage source={{ uri: item.photo }} style={styles.invPhoto} />
+          ) : (
+            <View style={[styles.invPhoto, styles.invPhotoPlaceholder, { backgroundColor: palette.bg.card }]}>
+              <Ionicons name="cube-outline" size={16} color={palette.text.tertiary} />
+            </View>
+          )}
+          <Text style={[styles.invName, { color: palette.text.primary }]} numberOfLines={1}>
+            {item.name}
+          </Text>
+          <Text style={[styles.invCost, { color: palette.text.secondary }]}>{formatMoneyFull(item.cost || 0)}</Text>
+        </View>
+      ))}
+      <View style={styles.invTotalRow}>
+        <Text style={[styles.invTotalLabel, { color: palette.text.tertiary }]}>Всего на руках</Text>
+        <Text style={[styles.invTotalValue, { color: palette.text.primary }]}>{formatMoneyFull(total)}</Text>
+      </View>
+    </View>
   );
 }
 
@@ -1377,45 +1123,27 @@ function AchievementsModal({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
-        <View
-          style={[
-            styles.modalSheet,
-            { backgroundColor: palette.bg.canvas, borderColor: palette.border.subtle },
-          ]}
-        >
+        <View style={[styles.modalSheet, { backgroundColor: palette.bg.canvas, borderColor: palette.border.subtle }]}>
           <View style={[styles.modalHandle, { backgroundColor: palette.border.strong }]} />
           <View style={styles.modalHeader}>
-            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>
-              Все достижения
-            </Text>
+            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Все значки</Text>
             <Pressable onPress={onClose} hitSlop={10} style={styles.modalClose}>
               <Ionicons name="close" size={22} color={palette.text.primary} />
             </Pressable>
           </View>
 
-          <ScrollView
-            contentContainerStyle={styles.modalScroll}
-            showsVerticalScrollIndicator={false}
-          >
+          <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
             {achievements.length === 0 && (
-              <View
-                style={[
-                  styles.emptyTrophy,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                ]}
-              >
+              <View style={[styles.emptyTrophy, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
                 <Text style={[styles.emptyTrophyText, { color: palette.text.tertiary }]}>
-                  Достижений пока нет.{' '}
-                  {isOwnerLike ? 'Выдайте первый значок ниже.' : ''}
+                  Значков пока нет. {isOwnerLike ? 'Выдайте первый ниже.' : ''}
                 </Text>
               </View>
             )}
 
             {custom.length > 0 && (
               <View style={styles.modalSection}>
-                <Text style={[styles.modalSectionTitle, { color: palette.text.tertiary }]}>
-                  Особые значки
-                </Text>
+                <Text style={[styles.modalSectionTitle, { color: palette.text.tertiary }]}>Особые значки</Text>
                 <View style={styles.trophyGrid}>
                   {custom.map((a) => (
                     <TouchableOpacity
@@ -1423,21 +1151,14 @@ function AchievementsModal({
                       activeOpacity={0.85}
                       onLongPress={() => onLongPress(a)}
                       delayLongPress={400}
-                      style={[
-                        styles.trophyBadge,
-                        styles.trophyBadgeCustom,
-                        { borderColor: a.color || colors.amber[600] },
-                      ]}
+                      style={[styles.trophyBadge, styles.trophyBadgeCustom, { borderColor: a.color || colors.amber[600] }]}
                     >
                       <Text style={styles.trophyIcon}>{a.icon || '🏆'}</Text>
                       <Text style={[styles.trophyName, { color: colors.gray[900] }]} numberOfLines={2}>
                         {a.name}
                       </Text>
                       {a.description ? (
-                        <Text
-                          style={[styles.trophyDesc, { color: colors.gray[700] }]}
-                          numberOfLines={2}
-                        >
+                        <Text style={[styles.trophyDesc, { color: colors.gray[700] }]} numberOfLines={2}>
                           {a.description}
                         </Text>
                       ) : null}
@@ -1449,30 +1170,19 @@ function AchievementsModal({
 
             {auto.length > 0 && (
               <View style={styles.modalSection}>
-                <Text style={[styles.modalSectionTitle, { color: palette.text.tertiary }]}>
-                  Автоматические
-                </Text>
+                <Text style={[styles.modalSectionTitle, { color: palette.text.tertiary }]}>Автоматические</Text>
                 <View style={styles.trophyGrid}>
                   {auto.map((a) => (
                     <View
                       key={a.id}
-                      style={[
-                        styles.trophyBadge,
-                        { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted },
-                      ]}
+                      style={[styles.trophyBadge, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}
                     >
                       <Text style={styles.trophyIcon}>{a.icon || '🏆'}</Text>
-                      <Text
-                        style={[styles.trophyName, { color: palette.text.primary }]}
-                        numberOfLines={2}
-                      >
+                      <Text style={[styles.trophyName, { color: palette.text.primary }]} numberOfLines={2}>
                         {a.name}
                       </Text>
                       {a.description ? (
-                        <Text
-                          style={[styles.trophyDesc, { color: palette.text.tertiary }]}
-                          numberOfLines={2}
-                        >
+                        <Text style={[styles.trophyDesc, { color: palette.text.tertiary }]} numberOfLines={2}>
                           {a.description}
                         </Text>
                       ) : null}
@@ -1489,122 +1199,13 @@ function AchievementsModal({
                 style={[styles.modalAddBtn, { borderColor: palette.border.subtle }]}
               >
                 <Ionicons name="add-circle-outline" size={20} color={colors.primary[600]} />
-                <Text style={[styles.modalAddBtnText, { color: colors.primary[700] }]}>
-                  Выдать новый значок
-                </Text>
+                <Text style={[styles.modalAddBtnText, { color: colors.primary[700] }]}>Выдать новый значок</Text>
               </TouchableOpacity>
             )}
           </ScrollView>
         </View>
       </View>
     </Modal>
-  );
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-//  Documents — list + upload trigger
-// ──────────────────────────────────────────────────────────────────────────
-
-function Documents({ employeeId, palette }: { employeeId: string; palette: Palette }) {
-  const queryClient = useQueryClient();
-  const { data: docs } = useQuery({
-    queryKey: ['employee-documents', employeeId],
-    queryFn: async () => (await employeesApi.documents(employeeId)).data,
-    staleTime: 30_000,
-  });
-
-  const uploadMutation = useMutation({
-    mutationFn: async () => {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (perm.status !== 'granted') throw new Error('Нет доступа к фото');
-      const res = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 0.8,
-      });
-      if (res.canceled || !res.assets[0]) return null;
-      const uri = res.assets[0].uri;
-      const form = new FormData();
-      const ext = uri.split('.').pop()?.toLowerCase() || 'jpg';
-      form.append('file', {
-        uri,
-        name: `doc.${ext}`,
-        type: ext === 'png' ? 'image/png' : 'image/jpeg',
-      } as any);
-      return employeesApi.uploadDocument(employeeId, form);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['employee-documents', employeeId] });
-      haptic('success');
-    },
-    onError: (e: any) => {
-      Alert.alert('Ошибка', e?.message || 'Не удалось загрузить документ');
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (docId: string) => employeesApi.deleteDocument(employeeId, docId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['employee-documents', employeeId] });
-      haptic('warning');
-    },
-    onError: (e: any) => {
-      Alert.alert('Ошибка', e?.message || 'Не удалось удалить документ');
-    },
-  });
-
-  return (
-    <View style={{ gap: spacing[2] }}>
-      {(docs ?? []).length === 0 ? (
-        <Text style={[styles.notesHint, { color: palette.text.tertiary }]}>
-          Документы не загружены. Сюда можно прикрепить паспорт, договор, сертификаты.
-        </Text>
-      ) : (
-        (docs ?? []).map((d) => (
-          <TouchableOpacity
-            key={d.id}
-            onPress={() => {
-              if (d.fileUrl) Linking.openURL(d.fileUrl);
-            }}
-            onLongPress={() => {
-              Alert.alert('Удалить документ?', d.name || d.type, [
-                { text: 'Отмена', style: 'cancel' },
-                {
-                  text: 'Удалить',
-                  style: 'destructive',
-                  onPress: () => deleteMutation.mutate(d.id),
-                },
-              ]);
-            }}
-            activeOpacity={0.75}
-            style={[styles.docRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-          >
-            <View style={styles.docIconBox}>
-              <Ionicons name="document-text-outline" size={18} color={colors.primary[600]} />
-            </View>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={[styles.docName, { color: palette.text.primary }]} numberOfLines={1}>
-                {d.name || d.type}
-              </Text>
-              <Text style={[styles.docMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
-                {new Date(d.uploadedAt).toLocaleDateString('ru-RU')}
-                {d.expiresAt ? ` · до ${new Date(d.expiresAt).toLocaleDateString('ru-RU')}` : ''}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-          </TouchableOpacity>
-        ))
-      )}
-      <TouchableOpacity
-        onPress={() => uploadMutation.mutate()}
-        activeOpacity={0.7}
-        style={[styles.docUpload, { borderColor: palette.border.subtle }]}
-      >
-        <Ionicons name="cloud-upload-outline" size={18} color={colors.primary[600]} />
-        <Text style={[styles.docUploadText, { color: colors.primary[700] }]}>
-          {uploadMutation.isPending ? 'Загружаем…' : 'Добавить документ'}
-        </Text>
-      </TouchableOpacity>
-    </View>
   );
 }
 
@@ -1670,7 +1271,6 @@ function formatHmDuration(ms: number): string {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
-  // Larger vertical gap between sections for calmer rhythm.
   scroll: { padding: spacing[4], gap: spacing[4] },
 
   headerBtn: {
@@ -1790,7 +1390,7 @@ const styles = StyleSheet.create({
   },
   mutedText: { fontSize: 12 },
 
-  // ── Stat tiles (replaces radar) ──────────────────────────────────────
+  // ── Stat tiles (показатели) ──────────────────────────────────────────
   statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1837,79 +1437,24 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 2,
   },
-  tinySparkRow: {
+
+  // ── Lifetime footer (folded into показатели) ────────────────────────
+  lifeFooter: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 2,
-    height: 20,
-    marginTop: 2,
+    gap: spacing[3],
+    marginTop: spacing[3],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
-
-  // ── Streaks ─────────────────────────────────────────────────────────
-  streaksRow: { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
-  streakChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: spacing[3],
-    paddingVertical: 10,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    flex: 1,
-    minWidth: 140,
+  lifeStat: { flex: 1, alignItems: 'flex-start' },
+  lifeStatLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 4,
   },
-  streakIcon: { fontSize: 16 },
-  streakVal: { fontSize: 18, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  streakLabel: { fontSize: 11, flexShrink: 1 },
-
-  // ── Trophy preview (3 chips on main canvas) ─────────────────────────
-  trophyPreviewRow: {
-    flexDirection: 'row',
-    gap: spacing[2],
-  },
-  trophyPreview: {
-    flex: 1,
-    minWidth: 0,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    paddingVertical: spacing[2.5],
-    paddingHorizontal: spacing[2],
-    alignItems: 'center',
-    gap: 4,
-  },
-  trophyPreviewIcon: { fontSize: 26 },
-  trophyPreviewName: { fontSize: 11, fontWeight: '700', textAlign: 'center', lineHeight: 14 },
-
-  // ── Trophy badge (used in modal) ────────────────────────────────────
-  trophyBadge: {
-    width: '47%',
-    minHeight: 130,
-    borderRadius: borderRadius['2xl'],
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[2],
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 6,
-  },
-  trophyBadgeCustom: {
-    backgroundColor: 'rgba(255,251,235,0.95)',
-    shadowOpacity: 0.22,
-    shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  trophyIcon: { fontSize: 36 },
-  trophyName: { fontSize: 12, fontWeight: '700', textAlign: 'center', lineHeight: 15 },
-  trophyDesc: { fontSize: 10, textAlign: 'center', lineHeight: 13, marginTop: 2 },
-
-  emptyTrophy: {
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[4],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-  },
-  emptyTrophyText: { fontSize: 12 },
+  lifeStatValue: { fontSize: 18, fontWeight: '800', letterSpacing: -0.5 },
 
   // ── Tiles & today ───────────────────────────────────────────────────
   tilesRow: { flexDirection: 'row', gap: spacing[2] },
@@ -1979,177 +1524,99 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
 
-  // ── Service mastery (in owner extras) ──────────────────────────────
-  masteryRow: {
+  // ── Recent checks ──────────────────────────────────────────────────
+  checkRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    padding: spacing[2.5],
+    paddingVertical: 8,
+    paddingHorizontal: spacing[3],
     borderRadius: borderRadius.lg,
     borderWidth: 1,
   },
-  masteryIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
+  checkIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  masteryName: { fontSize: 13, fontWeight: '700' },
-  masterySub: { fontSize: 11, marginTop: 1 },
-  tierBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999 },
-  tierBadgeText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.6 },
+  checkTitle: { fontSize: 13, fontWeight: '700' },
+  checkMeta: { fontSize: 11, marginTop: 1 },
+  checkAmount: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
 
-  // ── Lifetime ───────────────────────────────────────────────────────
-  lifetimeGrid: { flexDirection: 'row', gap: spacing[3], paddingVertical: spacing[1] },
-  lifeStat: { flex: 1, alignItems: 'flex-start' },
-  lifeStatLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  lifeStatValue: { fontSize: 20, fontWeight: '800', letterSpacing: -0.6 },
-  lifeNote: { fontSize: 12, marginTop: spacing[2] },
-
-  brandsRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap' },
-  brandChip: {
+  // ── Inventory ──────────────────────────────────────────────────────
+  invRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+    gap: spacing[3],
+    paddingVertical: 8,
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.lg,
     borderWidth: 1,
   },
-  brandText: { fontSize: 12, fontWeight: '600' },
-  brandCount: { fontSize: 11, fontWeight: '700' },
-
-  // ── Team rank (in owner extras) ────────────────────────────────────
-  teamRow: { flexDirection: 'row', gap: spacing[2] },
-  teamCell: { flex: 1, alignItems: 'center', paddingVertical: spacing[2] },
-  teamIcon: { fontSize: 22 },
-  teamPlace: { fontSize: 18, fontWeight: '800', marginTop: 2, fontVariant: ['tabular-nums'] },
-  teamTotal: { fontSize: 10, fontWeight: '600' },
-  teamLabel: { fontSize: 11, marginTop: 4, textAlign: 'center' },
-  teamExpandedText: { fontSize: 12, lineHeight: 16 },
-
-  // ── Timeline (in owner extras) ─────────────────────────────────────
-  timelineRow: { flexDirection: 'row', gap: spacing[3], alignItems: 'flex-start' },
-  timelineDot: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  timelineTitle: { fontSize: 13, fontWeight: '700' },
-  timelineDesc: { fontSize: 12, marginTop: 2 },
-  timelineDate: { fontSize: 11, marginTop: 4, fontWeight: '600' },
-
-  // ── Owner extras (collapsible content) ─────────────────────────────
-  expanderHeader: {
+  invPhoto: { width: 32, height: 32, borderRadius: 10 },
+  invPhotoPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  invName: { flex: 1, minWidth: 0, fontSize: 13, fontWeight: '600' },
+  invCost: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  invTotalRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 2,
+    paddingTop: spacing[2],
+    paddingHorizontal: spacing[1],
   },
-  expanderTitleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  expanderTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-  },
-  expanderHint: {
-    fontSize: 11,
-    marginTop: spacing[1.5],
-    lineHeight: 15,
-  },
+  invTotalLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  invTotalValue: { fontSize: 15, fontWeight: '800', fontVariant: ['tabular-nums'] },
 
-  ownerExtras: {
-    marginTop: spacing[3],
-    gap: spacing[3],
-  },
-  ownerActions: {
+  // ── Trophy preview (3 chips on main canvas) ─────────────────────────
+  trophyPreviewRow: {
     flexDirection: 'row',
     gap: spacing[2],
-    flexWrap: 'wrap',
   },
-  ownerActionBtn: {
+  trophyPreview: {
     flex: 1,
-    minWidth: 140,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: spacing[3],
-    paddingVertical: 10,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-  },
-  ownerActionLabel: { fontSize: 12, fontWeight: '700' },
-  ownerBlock: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: spacing[3],
-  },
-  subLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginBottom: spacing[2],
-  },
-
-  // ── Notes ──────────────────────────────────────────────────────────
-  notesInput: {
-    fontSize: fontSize.sm,
-    paddingHorizontal: spacing[3],
-    paddingVertical: 10,
+    minWidth: 0,
     borderRadius: borderRadius.xl,
     borderWidth: 1,
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  notesHint: { fontSize: 11, marginTop: spacing[1.5] },
-
-  // ── Documents ──────────────────────────────────────────────────────
-  docRow: {
-    flexDirection: 'row',
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[2],
     alignItems: 'center',
-    gap: spacing[3],
-    paddingVertical: 10,
-    paddingHorizontal: spacing[3],
-    borderRadius: borderRadius.lg,
+    gap: 4,
+  },
+  trophyPreviewIcon: { fontSize: 26 },
+  trophyPreviewName: { fontSize: 11, fontWeight: '700', textAlign: 'center', lineHeight: 14 },
+
+  // ── Trophy badge (used in modal) ────────────────────────────────────
+  trophyBadge: {
+    width: '47%',
+    minHeight: 130,
+    borderRadius: borderRadius['2xl'],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[2],
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 6,
+  },
+  trophyBadgeCustom: {
+    backgroundColor: 'rgba(255,251,235,0.95)',
+    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  trophyIcon: { fontSize: 36 },
+  trophyName: { fontSize: 12, fontWeight: '700', textAlign: 'center', lineHeight: 15 },
+  trophyDesc: { fontSize: 10, textAlign: 'center', lineHeight: 13, marginTop: 2 },
+
+  emptyTrophy: {
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[4],
+    borderRadius: borderRadius.xl,
     borderWidth: 1,
   },
-  docIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: colors.primary[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  docName: { fontSize: 13, fontWeight: '700' },
-  docMeta: { fontSize: 11, marginTop: 1 },
-  docUpload: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: spacing[3],
-    paddingVertical: 12,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    justifyContent: 'center',
-  },
-  docUploadText: { fontSize: 13, fontWeight: '700' },
+  emptyTrophyText: { fontSize: 12 },
 
   // ── Quick actions sticky bar ───────────────────────────────────────
   actionsBar: {

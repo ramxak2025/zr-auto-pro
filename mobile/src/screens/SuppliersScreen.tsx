@@ -130,7 +130,15 @@ const SupplierRow = React.memo(function SupplierRow({
               <Text style={[styles.debtLabel, { color: textTertiary }]}>долг</Text>
             </>
           ) : (
-            <Ionicons name="checkmark-circle" size={20} color={colors.green[500]} />
+            /* «Без долга» badge — a single crisp green disc with a plain
+               white checkmark glyph. The previous `checkmark-circle`
+               drew a green glyph (which itself contains a ring) inside
+               the lighter row, reading as a circle-in-a-circle with poor
+               contrast. A filled disc + white tick reads as one clean
+               badge. */
+            <View style={styles.cleanBadge}>
+              <Ionicons name="checkmark" size={13} color={colors.white} />
+            </View>
           )}
         </View>
         <Ionicons name="chevron-forward" size={16} color={textTertiary} style={{ marginLeft: 6 }} />
@@ -212,7 +220,7 @@ const SystemSupplierCard = React.memo(function SystemSupplierCard({ item, onPres
             </View>
           </View>
           <Text style={styles.systemSubtitle} numberOfLines={2}>
-            Покупка б/у товаров от клиентов и третьих лиц
+            Приём б/у запчастей от клиентов: долг поставщику растёт
           </Text>
         </View>
         <Ionicons name="chevron-forward" size={16} color={colors.primary[600]} />
@@ -968,6 +976,16 @@ const styles = StyleSheet.create({
   amountWrap: { alignItems: 'flex-end', justifyContent: 'center', minWidth: 70 },
   debtAmount: { fontSize: 15, fontWeight: '700', color: colors.orange[700], letterSpacing: -0.3 },
   debtLabel: { fontSize: 10, color: colors.gray[400], marginTop: -1 },
+  // «Без долга» badge — solid green disc + white checkmark. One crisp
+  // shape, high contrast on both light and dark rows.
+  cleanBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.green[500],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   formField: { marginBottom: spacing[4] },
   formLabel: {
     fontSize: fontSize.sm,

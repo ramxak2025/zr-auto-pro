@@ -1,11 +1,22 @@
 /**
- * EditProfileModal — owner-only sheet for editing the extended
+ * EditProfileModal — owner-only dialog for editing the extended
  * employee profile (hireDate, specializations, positionTitle,
  * customTitle, monthlyKpiRevenue/Checks, whatsapp, photo upload).
  *
  * Saves via `employeesApi.update`. Photo via `employeesApi.uploadPhoto`
  * (multipart). Mutations invalidate the `employee-full-profile` query
  * so the screen rehydrates with the latest values.
+ *
+ * ── Freeze-bug fix (#16.3) ──────────────────────────────────────────────
+ * Same root cause as AwardAchievementModal: `animationType="slide"` +
+ * backdrop `justifyContent:'flex-end'` + sheet `maxHeight:'92%'` rendered
+ * ABOVE the safe area on mount on iOS, off-screen, freezing the app.
+ *
+ * Replaced with the centered-card pattern from EquipmentScreen's
+ * `CenteredDialog`: `animationType="fade"`, `KeyboardAvoidingView`, the
+ * shared `ModalBlurBackdrop` (tap blurred area to close) and a centered
+ * card that scrolls internally. Card is a touch taller (max 560pt) than
+ * the award dialog because the form has more fields.
  */
 import React from 'react';
 import {
@@ -25,6 +36,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as ExpoImage } from 'expo-image';
 import { employeesApi } from '../../api/services';
+import ModalBlurBackdrop from '../ModalBlurBackdrop';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../../theme';
@@ -157,135 +169,158 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
   };
 
   return (
-    <RNModal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.backdrop}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.flex}
-        >
-          <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
-            <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
-              <Pressable onPress={onClose} hitSlop={10}>
-                <Text style={[styles.headerBtn, { color: palette.text.secondary }]}>Отмена</Text>
-              </Pressable>
-              <Text style={[styles.headerTitle, { color: palette.text.primary }]}>Профиль сотрудника</Text>
-              <Pressable onPress={onSave} hitSlop={10} disabled={updateMutation.isPending}>
-                {updateMutation.isPending ? (
-                  <ActivityIndicator size="small" color={colors.primary[600]} />
-                ) : (
-                  <Text style={[styles.headerBtn, { color: colors.primary[600], fontWeight: '700' }]}>Сохранить</Text>
-                )}
-              </Pressable>
-            </View>
-
-            <ScrollView
-              style={styles.body}
-              contentContainerStyle={styles.bodyContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
+    <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
+      {/* Blurred backdrop — tap the blurred area to close. */}
+      <ModalBlurBackdrop onPress={onClose} />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.centerRoot}
+        pointerEvents="box-none"
+      >
+        <View style={[styles.card, { backgroundColor: palette.bg.elevated }]}>
+          <View style={styles.header}>
+            <View style={styles.headerSpacer} />
+            <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
+              Профиль сотрудника
+            </Text>
+            <Pressable
+              onPress={onClose}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Закрыть"
+              style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
             >
-              <Field label="Фото">
-                <Pressable onPress={pickPhoto} style={styles.photoRow}>
-                  <View style={[styles.photoBox, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-                    {photoUrl ? (
-                      <View style={styles.photoCircle}>
-                        <NetImage uri={photoUrl} />
-                      </View>
-                    ) : (
-                      <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
-                    )}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.photoBtn, { color: colors.primary[600] }]}>
-                      {photoMutation.isPending ? 'Загружаем…' : photoUrl ? 'Изменить фото' : 'Загрузить фото'}
-                    </Text>
-                    <Text style={[styles.photoHint, { color: palette.text.tertiary }]}>
-                      Квадратное фото — лучшая обрезка под аватар.
-                    </Text>
-                  </View>
+              <Ionicons name="close" size={20} color={palette.text.secondary} />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={styles.body}
+            contentContainerStyle={styles.bodyContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <Field label="Фото">
+              <Pressable onPress={pickPhoto} style={styles.photoRow}>
+                <View style={[styles.photoBox, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+                  {photoUrl ? (
+                    <View style={styles.photoCircle}>
+                      <NetImage uri={photoUrl} />
+                    </View>
+                  ) : (
+                    <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.photoBtn, { color: colors.primary[600] }]}>
+                    {photoMutation.isPending ? 'Загружаем…' : photoUrl ? 'Изменить фото' : 'Загрузить фото'}
+                  </Text>
+                  <Text style={[styles.photoHint, { color: palette.text.tertiary }]}>
+                    Квадратное фото — лучшая обрезка под аватар.
+                  </Text>
+                </View>
+              </Pressable>
+            </Field>
+
+            <Field label="Дата приёма (YYYY-MM-DD)">
+              <Input value={hireDate} onChangeText={setHireDate} placeholder="2024-03-15" palette={palette} />
+            </Field>
+
+            <Field label="Должность">
+              <Input
+                value={positionTitle}
+                onChangeText={setPositionTitle}
+                placeholder="Старший мастер"
+                palette={palette}
+              />
+            </Field>
+
+            <Field label="Кастомный титул (необязательно)">
+              <Input
+                value={customTitle}
+                onChangeText={setCustomTitle}
+                placeholder="Гранд-мастер моторного цеха"
+                palette={palette}
+              />
+            </Field>
+
+            <Field label="WhatsApp (с кодом страны, без +)">
+              <Input
+                value={whatsapp}
+                onChangeText={setWhatsapp}
+                placeholder="79991234567"
+                keyboardType="number-pad"
+                palette={palette}
+              />
+            </Field>
+
+            <Field label="Специализации">
+              <View style={styles.specsRow}>
+                {specs.map((s) => (
+                  <Pressable key={s} onPress={() => removeSpec(s)} style={styles.specChip}>
+                    <Text style={styles.specText}>{s}</Text>
+                    <Ionicons name="close-circle-outline" size={14} color={colors.primary[700]} />
+                  </Pressable>
+                ))}
+              </View>
+              <View style={styles.addRow}>
+                <Input
+                  value={newSpec}
+                  onChangeText={setNewSpec}
+                  placeholder="Двигатель"
+                  palette={palette}
+                  onSubmitEditing={addSpec}
+                  style={{ flex: 1 }}
+                />
+                <Pressable onPress={addSpec} style={styles.addBtn}>
+                  <Ionicons name="add" size={20} color="#fff" />
                 </Pressable>
-              </Field>
+              </View>
+            </Field>
 
-              <Field label="Дата приёма (YYYY-MM-DD)">
-                <Input value={hireDate} onChangeText={setHireDate} placeholder="2024-03-15" palette={palette} />
-              </Field>
-
-              <Field label="Должность">
+            <View style={styles.row2}>
+              <Field label="План выручки / мес." style={styles.flex}>
                 <Input
-                  value={positionTitle}
-                  onChangeText={setPositionTitle}
-                  placeholder="Старший мастер"
-                  palette={palette}
-                />
-              </Field>
-
-              <Field label="Кастомный титул (необязательно)">
-                <Input
-                  value={customTitle}
-                  onChangeText={setCustomTitle}
-                  placeholder="Гранд-мастер моторного цеха"
-                  palette={palette}
-                />
-              </Field>
-
-              <Field label="WhatsApp (с кодом страны, без +)">
-                <Input
-                  value={whatsapp}
-                  onChangeText={setWhatsapp}
-                  placeholder="79991234567"
+                  value={kpiRevenue}
+                  onChangeText={setKpiRevenue}
+                  placeholder="500000"
                   keyboardType="number-pad"
                   palette={palette}
                 />
               </Field>
-
-              <Field label="Специализации">
-                <View style={styles.specsRow}>
-                  {specs.map((s) => (
-                    <Pressable key={s} onPress={() => removeSpec(s)} style={styles.specChip}>
-                      <Text style={styles.specText}>{s}</Text>
-                      <Ionicons name="close-circle-outline" size={14} color={colors.primary[700]} />
-                    </Pressable>
-                  ))}
-                </View>
-                <View style={styles.addRow}>
-                  <Input
-                    value={newSpec}
-                    onChangeText={setNewSpec}
-                    placeholder="Двигатель"
-                    palette={palette}
-                    onSubmitEditing={addSpec}
-                    style={{ flex: 1 }}
-                  />
-                  <Pressable onPress={addSpec} style={styles.addBtn}>
-                    <Ionicons name="add" size={20} color="#fff" />
-                  </Pressable>
-                </View>
+              <Field label="План чеков / мес." style={styles.flex}>
+                <Input
+                  value={kpiChecks}
+                  onChangeText={setKpiChecks}
+                  placeholder="30"
+                  keyboardType="number-pad"
+                  palette={palette}
+                />
               </Field>
+            </View>
+          </ScrollView>
 
-              <View style={styles.row2}>
-                <Field label="План выручки / мес." style={styles.flex}>
-                  <Input
-                    value={kpiRevenue}
-                    onChangeText={setKpiRevenue}
-                    placeholder="500000"
-                    keyboardType="number-pad"
-                    palette={palette}
-                  />
-                </Field>
-                <Field label="План чеков / мес." style={styles.flex}>
-                  <Input
-                    value={kpiChecks}
-                    onChangeText={setKpiChecks}
-                    placeholder="30"
-                    keyboardType="number-pad"
-                    palette={palette}
-                  />
-                </Field>
-              </View>
-            </ScrollView>
+          <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
+            <Pressable
+              onPress={onClose}
+              style={[styles.btn, styles.btnSecondary, { backgroundColor: palette.bg.muted }]}
+            >
+              <Text style={[styles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
+            </Pressable>
+            <Pressable
+              onPress={onSave}
+              disabled={updateMutation.isPending}
+              style={[styles.btn, styles.btnPrimary, updateMutation.isPending && styles.btnDisabled]}
+            >
+              {updateMutation.isPending ? (
+                <ActivityIndicator size="small" color={colors.white} />
+              ) : (
+                <Text style={styles.btnPrimaryText}>Сохранить</Text>
+              )}
+            </Pressable>
           </View>
-        </KeyboardAvoidingView>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </RNModal>
   );
 }
@@ -353,26 +388,51 @@ function Input({
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '92%',
-    paddingBottom: 24,
+  // Centered card root — above ModalBlurBackdrop, fills the screen so the
+  // card is centered. box-none so taps that miss the card reach the
+  // backdrop (tap-outside-to-close).
+  centerRoot: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[4],
+  },
+  card: {
+    width: '88%',
+    maxWidth: 460,
+    maxHeight: 560,
+    borderRadius: Platform.OS === 'android' ? 28 : 22,
+    overflow: 'hidden',
+    shadowColor: colors.black,
+    shadowOpacity: 0.25,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 12,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3],
+    paddingTop: spacing[3.5],
+    paddingBottom: spacing[2],
   },
-  headerTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
-  headerBtn: { fontSize: fontSize.base },
-  body: { flex: 1 },
-  bodyContent: { padding: spacing[4], paddingBottom: spacing[8], gap: spacing[3] },
+  headerSpacer: { width: 32, height: 32 },
+  headerTitle: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  body: { flexGrow: 0 },
+  bodyContent: { paddingHorizontal: spacing[4], paddingTop: spacing[1], paddingBottom: spacing[3], gap: spacing[3] },
   field: { gap: spacing[1.5] },
   label: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   input: {
@@ -418,4 +478,26 @@ const styles = StyleSheet.create({
   photoCircle: { width: '100%', height: '100%', overflow: 'hidden' },
   photoBtn: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
   photoHint: { fontSize: 12, marginTop: 2 },
+
+  // ── Footer CTA row ──
+  footer: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[4],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  btn: {
+    flex: 1,
+    height: Platform.OS === 'android' ? 44 : 48,
+    borderRadius: Platform.OS === 'android' ? 22 : 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnPrimary: { backgroundColor: colors.primary[600] },
+  btnSecondary: {},
+  btnDisabled: { opacity: 0.6 },
+  btnPrimaryText: { color: colors.white, fontSize: 15, fontWeight: '700', letterSpacing: -0.1 },
+  btnSecondaryText: { fontSize: 15, fontWeight: '600', letterSpacing: -0.1 },
 });

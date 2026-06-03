@@ -37,6 +37,7 @@ import Animated, {
   Easing,
   FadeOut,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withRepeat,
@@ -48,13 +49,24 @@ import { colors, spacing } from '../theme';
 import { Text } from '../platform/Typography';
 
 export default function SplashOverlay() {
-  const logoScale = useSharedValue(0.92);
+  // Honor Reduce Motion (Settings → Accessibility → Motion). When on we
+  // skip the spring/pulse entirely and just present the branded canvas
+  // at rest — no scale, no pulsing dots, only a gentle opacity reveal.
+  const reduceMotion = useReducedMotion();
+
+  const logoScale = useSharedValue(reduceMotion ? 1 : 0.92);
   const logoOpacity = useSharedValue(0);
   const subtitleOpacity = useSharedValue(0);
-  const subtitleY = useSharedValue(8);
-  const dotPulse = useSharedValue(0);
+  const subtitleY = useSharedValue(reduceMotion ? 0 : 8);
+  const dotPulse = useSharedValue(reduceMotion ? 0.7 : 0);
 
   useEffect(() => {
+    if (reduceMotion) {
+      // Static reveal: a short cross-fade only, no motion.
+      logoOpacity.value = withTiming(1, { duration: 200 });
+      subtitleOpacity.value = withTiming(1, { duration: 200 });
+      return;
+    }
     logoOpacity.value = withTiming(1, {
       duration: 350,
       easing: Easing.out(Easing.cubic),
@@ -70,7 +82,7 @@ export default function SplashOverlay() {
       -1,
       true,
     );
-  }, [logoOpacity, logoScale, subtitleOpacity, subtitleY, dotPulse]);
+  }, [reduceMotion, logoOpacity, logoScale, subtitleOpacity, subtitleY, dotPulse]);
 
   const logoStyle = useAnimatedStyle(() => ({
     opacity: logoOpacity.value,
@@ -96,7 +108,9 @@ export default function SplashOverlay() {
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       pointerEvents="none"
-      exiting={FadeOut.duration(240)}
+      // Opacity-only handoff to Login/Dashboard — fine under Reduce
+      // Motion too (no translation), just snappier.
+      exiting={FadeOut.duration(reduceMotion ? 160 : 240)}
     >
       <Animated.View style={styles.center}>
         <Animated.View style={[styles.logoWrap, logoStyle]}>

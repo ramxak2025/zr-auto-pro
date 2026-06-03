@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
+import ModalBlurBackdrop from './ModalBlurBackdrop';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -28,7 +29,7 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.overlay}>
-        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose} />
+        <ModalBlurBackdrop onPress={onClose} />
         <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
           <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
           <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
@@ -57,10 +58,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: spacing[4],
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   sheet: {
     backgroundColor: colors.white,

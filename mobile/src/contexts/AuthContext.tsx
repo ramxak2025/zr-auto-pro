@@ -20,7 +20,7 @@ import {
   scheduleApi,
   pushApi,
 } from '../api/services';
-import { onAuthExpired } from '../api/axios';
+import { onAuthExpired, setAuthToken } from '../api/axios';
 import { clearPersistentCache } from '../utils/persistentCache';
 import type { User, UserPermissions, UserRole } from '../../../shared/types';
 
@@ -58,6 +58,12 @@ interface AuthProviderProps {
  * Errors are swallowed — they'll surface naturally when the screen mounts.
  */
 function prefetchAfterLogin(qc: QueryClient): void {
+  // Unscoped fallback slot. ProductsScreen's real key includes the resolved
+  // main `warehouseId` (see the warehouse-scoped prefetch below, fired once
+  // `['warehouses']` resolves), so this slot alone was a structural MISS for
+  // the screen. We keep it as a cheap fallback for any caller that reads the
+  // un-scoped key, but the screen-matching warm-up happens in the
+  // warehouses `.then()` so the Склад tab is an actual cache hit.
   qc.prefetchQuery({
     queryKey: ['products', { search: '', limit: 500 }],
     queryFn: async () => {
@@ -108,6 +114,21 @@ function prefetchAfterLogin(qc: QueryClient): void {
           queryKey: ['warehouse-categories', { warehouseId: main.id }],
           queryFn: async () => (await warehouseCategoriesApi.getAll(main.id)).data,
           staleTime: 10 * 60_000,
+        }).catch(() => {});
+
+        // Склад first-open cache HIT. ProductsScreen reads
+        //   ['products', { search: '', limit: 500, warehouseId: <main.id> }]
+        // (it defaults to the main warehouse). The earlier un-scoped
+        // ['products', { search:'', limit:500 }] prefetch never matched that
+        // slot, so the screen still flashed empty + refetched. Warming the
+        // EXACT warehouse-scoped key here makes the first Склад open instant.
+        qc.prefetchQuery({
+          queryKey: ['products', { search: '', limit: 500, warehouseId: main.id }],
+          queryFn: async () => {
+            const res = await productsApi.getAll({ search: '', page: 1, limit: 500, warehouseId: main.id });
+            return res.data;
+          },
+          staleTime: 5 * 60_000,
         }).catch(() => {});
       }
     })
@@ -165,16 +186,22 @@ function prefetchAfterLogin(qc: QueryClient): void {
   }).catch(() => {});
 
   // ── Journal (Чеки) — owner explicitly reported this list opens
-  // slowly with a flash of empty. Match the EXACT default query key
-  // that ChecksScreen uses for the first page with no filters:
-  //   ['checks', page=1, search='', dateFrom='', dateTo='', masterId='']
-  // so the prefetch result lands directly in the slot the screen
-  // reads from. Persistent cache (PERSISTED_KEYS) takes over on
-  // cold start; this prefetch warms the slot the first time.
-  qc.prefetchQuery({
-    queryKey: ['checks', 1, '', '', '', ''],
-    queryFn: async () => {
-      const res = await checksApi.getAll({ page: 1, limit: 20 });
+  // slowly with a flash of empty. ChecksScreen reads via
+  // `useInfiniteQuery`, NOT `useQuery`, so the previous `['checks', …]`
+  // prefetch landed in a slot nothing reads (React Query compares keys
+  // structurally → a dead slot). Match the EXACT default infinite key
+  // the screen uses for the first page with no filters:
+  //   ['checks-infinite', search='', dateFrom='', dateTo='', masterId='']
+  // with `prefetchInfiniteQuery` + the same `initialPageParam` and a
+  // queryFn that mirrors the screen's page-1 request (limit=20). This
+  // way the screen's first render is a cache HIT. Persistent cache
+  // ('checks-infinite' is in PERSISTED_KEYS) carries it across cold
+  // starts; this prefetch warms the slot on the first login.
+  qc.prefetchInfiniteQuery({
+    queryKey: ['checks-infinite', '', '', '', ''],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam = 1 }) => {
+      const res = await checksApi.getAll({ page: pageParam as number, limit: 20 });
       return res.data;
     },
     staleTime: 60_000,
@@ -289,6 +316,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     };
     AsyncStorage.getItem('token').then((stored) => {
       if (stored) {
+        // Prime the axios in-memory token cache so the very first wave of
+        // post-mount requests (the `me()` below + any eager screen queries)
+        // skip the per-request AsyncStorage bridge read.
+        setAuthToken(stored);
         setToken(stored);
         authApi
           .me()
@@ -298,6 +329,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
             if (queryClient) prefetchAfterLogin(queryClient);
           })
           .catch(() => {
+            setAuthToken(null);
             AsyncStorage.removeItem('token');
             setToken(null);
           })
@@ -319,6 +351,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // state and resurrects a stale `queryClient` entry under a
       // re-authenticated session (mixing tenants A and B briefly).
       queryClient?.cancelQueries().catch(() => {});
+      // Clear the in-memory token + ETag cache (the axios 401 handler already
+      // called setAuthToken(null), but this listener also fires for the
+      // coalesced/secondary paths — idempotent and cheap).
+      setAuthToken(null);
       setToken(null);
       setUser(null);
       // Clear persistent cache so the next login starts fresh
@@ -345,7 +381,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       queryClient?.cancelQueries().catch(() => {});
       queryClient?.clear();
       await clearPersistentCache().catch(() => {});
+      // Drop tenant A's bearer + ETag cache BEFORE priming B's token, so a
+      // 304 against an A-era ETag can never resurrect A's body into B's
+      // session. setAuthToken(null) clears the ETag map; setAuthToken(t)
+      // installs B's bearer for every subsequent request without an
+      // AsyncStorage read on the prefetch fan-out.
+      setAuthToken(null);
       await AsyncStorage.setItem('token', t);
+      setAuthToken(t);
       setToken(t);
       setUser(u);
       if (queryClient) prefetchAfterLogin(queryClient);
@@ -368,6 +411,9 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     // after we've torn down state and revive an entry under the next
     // user's session.
     queryClient?.cancelQueries().catch(() => {});
+    // Drop in-memory bearer + ETag cache so subsequent requests are
+    // unauthenticated and no stale 304 body survives into the next session.
+    setAuthToken(null);
     await AsyncStorage.removeItem('token');
     await clearPersistentCache().catch(() => {});
     queryClient?.clear();

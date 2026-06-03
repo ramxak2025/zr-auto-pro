@@ -21,17 +21,21 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
+import PlateReassignDialog from '../components/PlateReassignDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SourcePickerSheet from '../components/SourcePickerSheet';
+import CarPlateField from '../components/CarPlateField';
+import type { PlateMode } from '../components/RussianPlateInput';
+import ClientCallsSection from '../components/ClientCallsSection';
+import LoyaltyBadge from '../components/LoyaltyBadge';
 import { UserRole } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Client, Car, Check, PerCarChecks } from '../../../shared/types';
+import type { Client, Car, Check } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
-import { processPlateMainInput } from '../utils/plateMask';
+import { detectPlateMode } from '../utils/plateMask';
 
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -164,9 +168,10 @@ export default function ClientDetailScreen() {
   const { hasPermission, isRole } = useAuth();
   const palette = useColors();
   const canViewProfit = hasPermission('profit_view');
-  // Notes / source — owner-only. We still render the section for
-  // director (a workshop boss can want to tag a client too) and for
-  // superadmin (test/debug).
+  // Notes / source EDITING — gated to director / superadmin / clients_edit.
+  // The «Только для сотрудников» card itself is now visible to ALL staff
+  // (#19.4) — only the ability to CHANGE notes/source stays gated, so a
+  // master sees the info read-only but can't reshape it.
   const canEditMeta = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
   const { id, focusCarId } = route.params as { id: string; focusCarId?: string };
   const isRetail = id === '__retail__';
@@ -182,10 +187,19 @@ export default function ClientDetailScreen() {
   const carRowYs = useRef<Record<string, number>>({});
   const focusHandled = useRef(false);
 
+  // Lazy-history trigger (audit #8). We record the Y of the «История
+  // чеков» header (onLayout) and the scroll viewport height, then flip
+  // `historyExpanded` the moment that header crosses into the visible
+  // viewport — fetching the full history just-in-time instead of on open.
+  const historyY = useRef<number>(Number.POSITIVE_INFINITY);
+  const viewportH = useRef<number>(0);
+
   // Car modal state
   const [carModalOpen, setCarModalOpen] = useState(false);
   const [editingCar, setEditingCar] = useState<Car | null>(null);
   const [plateNumber, setPlateNumber] = useState('');
+  const [plateMode, setPlateMode] = useState<PlateMode>('ru');
+  const [noPlate, setNoPlate] = useState(false);
   const [makeModel, setMakeModel] = useState('');
   const [carComment, setCarComment] = useState('');
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
@@ -212,30 +226,58 @@ export default function ClientDetailScreen() {
     enabled: !isRetail,
   });
 
-  // Fall back to legacy `client-checks` shape (flat list) when we use
-  // it as the primary source for analytics + history rendering.
-  const { data: checks } = useQuery<Check[]>({
+  // ── Eager vs lazy check history (audit #8) ─────────────────────────
+  // Opening the card must feel instant. The hero (LTV / last visit) and
+  // the first screenful of «История чеков» only need a HANDFUL of the
+  // most-recent checks — backend returns DESC by date, so the slim eager
+  // request already carries the last visit and the first page of history.
+  // The full history (used for the 12-month sparkline, per-car spend,
+  // top-services etc.) is fetched LAZILY — only after the user reaches /
+  // expands the «История чеков» section — so it never blocks first paint.
+  const EAGER_LIMIT = 10;
+  const FULL_LIMIT = 200;
+  // Flipped true when the history section scrolls into view (onLayout
+  // measured below) OR the user taps «Показать всю историю». Once true it
+  // stays true for the lifetime of the screen — the full query is then
+  // the source of truth for analytics + the complete grouped list.
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+
+  // EAGER — the exact key ClientsScreen warms on row press-in. Keep this
+  // key + limit in lockstep with ClientsScreen.prefetchClientDetail so a
+  // tapped row opens straight from cache.
+  const { data: eagerChecks } = useQuery<Check[]>({
     queryKey: isRetail ? ['retail-checks'] : ['client-checks', id],
     queryFn: async () => {
       const res = isRetail
-        ? await checksApi.getAll({ retail: 'true', limit: 200 })
-        : await checksApi.getAll({ clientId: id, limit: 200 });
+        ? await checksApi.getAll({ retail: 'true', limit: EAGER_LIMIT })
+        : await checksApi.getAll({ clientId: id, limit: EAGER_LIMIT });
       const raw = res.data as { data?: Check[] } | Check[];
       return Array.isArray(raw) ? raw : raw.data || [];
     },
   });
 
-  // Per-car aggregation — pre-grouped by backend so we don't repeat
-  // the work in JS. Used for the "Авто клиента" inline-expansion.
-  const { data: checksByCar } = useQuery<PerCarChecks[]>({
-    queryKey: ['client-checks-by-car', id],
+  // FULL — heavy history, only fired once the section is reached/expanded.
+  const { data: fullChecks } = useQuery<Check[]>({
+    queryKey: isRetail ? ['retail-checks-full', id] : ['client-checks-full', id],
     queryFn: async () => {
-      const res = await clientsApi.checksByCar(id);
-      return res.data;
+      const res = isRetail
+        ? await checksApi.getAll({ retail: 'true', limit: FULL_LIMIT })
+        : await checksApi.getAll({ clientId: id, limit: FULL_LIMIT });
+      const raw = res.data as { data?: Check[] } | Check[];
+      return Array.isArray(raw) ? raw : raw.data || [];
     },
-    enabled: !isRetail,
-    staleTime: 60_000,
+    enabled: historyExpanded,
   });
+
+  // Full set wins for analytics + the complete list once it lands; until
+  // then everything reads off the instant eager slice. Analytics computed
+  // off the eager slice are a faithful preview (last visit + recent
+  // numbers) and self-correct the moment the full set arrives.
+  const checks = historyExpanded && fullChecks ? fullChecks : eagerChecks;
+  // True while the full history is still loading after expansion — drives
+  // the «Показать всю историю» affordance spinner state.
+  const fullPending = historyExpanded && !fullChecks;
+
 
   // ── Derived analytics (memoised) ──────────────────────────────────
   // Numbers we surface in the hero / analytics sections. Avoid
@@ -328,6 +370,49 @@ export default function ClientDetailScreen() {
     return checks.filter((c) => c.car?.id === selectedCarId);
   }, [checks, selectedCarId]);
 
+  // Group filtered checks by date for the history section. Memoised
+  // (audit #8) — this used to rebuild on EVERY render (every scroll
+  // frame, every state poke), allocating fresh group arrays each time.
+  // Now it only recomputes when the underlying filtered list changes.
+  const groupedChecks = useMemo(() => {
+    const groups: { label: string; checks: Check[] }[] = [];
+    let last = '';
+    for (const check of filteredChecks) {
+      const group = formatDateGroup(check.date);
+      if (group !== last) {
+        groups.push({ label: group, checks: [check] });
+        last = group;
+      } else {
+        groups[groups.length - 1].checks.push(check);
+      }
+    }
+    return groups;
+  }, [filteredChecks]);
+
+  // Per-car analytics for the «Автомобили» cards (#19.4):
+  //  • lastMileage — mileage of the most-recent check for that car;
+  //  • spent       — sum of that car's check totals, net of returns
+  //    (a returned check doesn't count toward money spent on the car).
+  // Derived from the flat `checks` list we already fetch, so no extra
+  // request. Keyed by car id for O(1) lookup in the render loop.
+  const carStats = useMemo(() => {
+    const map = new Map<string, { spent: number; lastMileage: number | null; lastMileageAt: number }>();
+    for (const c of checks || []) {
+      const carId = c.car?.id;
+      if (!carId) continue;
+      const cur = map.get(carId) ?? { spent: 0, lastMileage: null, lastMileageAt: 0 };
+      if (!c.isReturned) cur.spent += c.totalRevenue || 0;
+      const t = new Date(c.date).getTime();
+      // Latest check that actually carries a mileage reading wins.
+      if (typeof c.mileage === 'number' && c.mileage > 0 && t >= cur.lastMileageAt) {
+        cur.lastMileage = c.mileage;
+        cur.lastMileageAt = t;
+      }
+      map.set(carId, cur);
+    }
+    return map;
+  }, [checks]);
+
   const createCarMutation = useMutation({
     mutationFn: (d: any) => carsApi.create(d),
     onSuccess: () => {
@@ -383,6 +468,8 @@ export default function ClientDetailScreen() {
   const openAddCar = () => {
     setEditingCar(null);
     setPlateNumber('');
+    setPlateMode('ru');
+    setNoPlate(false);
     setMakeModel('');
     setCarComment('');
     setCarModalOpen(true);
@@ -391,36 +478,115 @@ export default function ClientDetailScreen() {
   const openEditCar = (car: Car) => {
     setEditingCar(car);
     setPlateNumber(car.plateNumber);
+    // Prefill the mode from the stored plate so a foreign plate opens in
+    // INT mode (and stays editable as foreign instead of being re-masked).
+    setPlateMode(detectPlateMode(car.plateNumber));
+    setNoPlate(!!car.noPlate || !car.plateNumber);
     setMakeModel(car.makeModel);
     setCarComment(car.comment || '');
     setCarModalOpen(true);
   };
 
+  // Clean stored plate (empty when «без номеров»). CarPlateField already
+  // applies the RU mask / foreign normalisation, so no re-masking here.
+  const effectivePlate = noPlate ? '' : plateNumber.trim();
+
+  // The car payload sent to backend on both create and update. Plate is
+  // keyed by car_id server-side, so editing make/model OR plate via
+  // PATCH /cars/:id never orphans check history (#15.3).
+  const buildCarPayload = () => ({
+    plateNumber: effectivePlate,
+    makeModel,
+    comment: carComment || undefined,
+    clientId: id,
+    noPlate,
+  });
+
   const handleCarSubmit = async () => {
-    const payload = { plateNumber, makeModel, comment: carComment || undefined, clientId: id };
-    if (editingCar) {
-      updateCarMutation.mutate({ carId: editingCar.id, data: payload });
+    const payload = buildCarPayload();
+
+    // «Без номеров» or no plate at all → nothing to clash on, save directly.
+    if (noPlate || effectivePlate.length === 0) {
+      if (editingCar) updateCarMutation.mutate({ carId: editingCar.id, data: payload });
+      else createCarMutation.mutate(payload);
       return;
     }
+
     setCarSubmitting(true);
     try {
-      const res = await carsApi.lookupByPlate(plateNumber);
+      const res = await carsApi.lookupByPlate(effectivePlate);
       const existing = res.data;
-      if (existing) {
+      // A clash is only real if it's a DIFFERENT car. Editing this same car
+      // and keeping its plate must not trip the duplicate dialog.
+      if (existing && existing.id !== editingCar?.id) {
         setDuplicateCar(existing);
         return;
       }
-      createCarMutation.mutate(payload);
+      if (editingCar) updateCarMutation.mutate({ carId: editingCar.id, data: payload });
+      else createCarMutation.mutate(payload);
     } catch {
-      createCarMutation.mutate(payload);
+      // lookup failed (offline / 5xx) — proceed; backend still enforces.
+      if (editingCar) updateCarMutation.mutate({ carId: editingCar.id, data: payload });
+      else createCarMutation.mutate(payload);
     } finally {
       setCarSubmitting(false);
     }
   };
 
-  const handleCreateCarAnyway = () => {
+  // #15.3 — plate reassignment. The entered plate already lives on ANOTHER
+  // car. On confirm we move the plate to THIS car. Check history on both cars
+  // is keyed to car_id, so nothing is lost — only the plate moves.
+  //
+  // Order matters for crash-safety: we assign the plate HERE first, THEN strip
+  // it off the other car. There is no DB unique constraint on plate_number, so
+  // if the strip step fails after the assign succeeded we're left with a
+  // harmless DUPLICATE (both cars hold the plate) rather than an ORPHAN (the
+  // plate lost from both). A duplicate is recoverable on the next edit; an
+  // orphan silently destroys data.
+  const handleReassignPlate = async () => {
+    if (!duplicateCar) return;
+    // Snapshot before clearing state so the post-await branches read stable
+    // values regardless of re-renders — including the other car's PRIOR plate
+    // so a partial failure leaves the DB self-consistent.
+    const otherCarId = duplicateCar.id;
+    const otherOwnerId = duplicateCar.clientId;
     setDuplicateCar(null);
-    createCarMutation.mutate({ plateNumber, makeModel, comment: carComment || undefined, clientId: id });
+    setCarSubmitting(true);
+    try {
+      // 1) Assign the plate HERE first (create or update). If this fails, the
+      //    other car still owns the plate — nothing lost.
+      const payload = buildCarPayload();
+      if (editingCar) {
+        await carsApi.update(editingCar.id, payload);
+      } else {
+        await carsApi.create(payload);
+      }
+      // 2) Now free the plate on the other car. If THIS fails, we have a
+      //    harmless duplicate (no unique constraint), not an orphan.
+      await carsApi.update(otherCarId, { plateNumber: '', noPlate: true });
+      haptic('success');
+      await queryClient.invalidateQueries({ queryKey: ['client', id] });
+      await queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
+      // The other car's owner card (if cached) is now stale too.
+      if (otherOwnerId && otherOwnerId !== id) {
+        queryClient.invalidateQueries({ queryKey: ['client', otherOwnerId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      closeCarModal();
+    } catch {
+      // Partial failure: the DB may be in either intermediate state (only
+      // step 1 applied = duplicate, or nothing applied). Invalidate the same
+      // keys as the success path so the UI re-reads the real DB state instead
+      // of showing a stale optimistic view.
+      await queryClient.invalidateQueries({ queryKey: ['client', id] });
+      if (otherOwnerId && otherOwnerId !== id) {
+        queryClient.invalidateQueries({ queryKey: ['client', otherOwnerId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      Alert.alert('Ошибка', 'Не удалось переназначить госномер');
+    } finally {
+      setCarSubmitting(false);
+    }
   };
 
   const handleOpenExistingCar = () => {
@@ -437,8 +603,20 @@ export default function ClientDetailScreen() {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['client', id] });
     await queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
-    await queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
+    await queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
     setRefreshing(false);
+  };
+
+  // Fire the full-history fetch as soon as the «История чеков» header
+  // enters the viewport (audit #8). Cheap arithmetic on every scroll
+  // frame; once expanded we stop caring. A 200 px lead-in starts the
+  // request slightly before the section is actually on screen so the
+  // full list is usually ready by the time the user gets there.
+  const maybeExpandHistory = (scrollY: number) => {
+    if (historyExpanded) return;
+    if (scrollY + viewportH.current + 200 >= historyY.current) {
+      setHistoryExpanded(true);
+    }
   };
 
   // Sync notes draft when the underlying client loads so opening the
@@ -449,12 +627,12 @@ export default function ClientDetailScreen() {
     else setNotesDraft('');
   }, [client?.ownerNotes]);
 
-  // Auto-expand + scroll to the focused car when arriving from the
-  // Авто tab of ClientsScreen. We wait for both the client (so the
-  // car exists in client.cars) AND the per-car checks (so the inline
-  // panel renders correctly when expanded). Layout-measured Y is the
-  // single source of truth — RN doesn't expose a "scroll to mounted
-  // child" primitive, so we collect Y per row in onLayout, then jump.
+  // Scroll to + select the focused car when a caller passes `focusCarId`
+  // (e.g. a deep link). Selecting filters the unified «История чеков» to
+  // that car — there's no per-car expansion anymore (#19.4). Layout-
+  // measured Y is the single source of truth — RN doesn't expose a
+  // "scroll to mounted child" primitive, so we collect Y per row in
+  // onLayout, then jump.
   useEffect(() => {
     if (!focusCarId || focusHandled.current) return;
     if (!client) return;
@@ -462,9 +640,7 @@ export default function ClientDetailScreen() {
     if (!car) return;
     setSelectedCarId(focusCarId);
     // Defer the actual scroll until the next frame so onLayout has
-    // populated carRowYs for the (now visible) car row. Two frames
-    // is enough on iOS to absorb both the state update and the
-    // expansion layout pass.
+    // populated carRowYs for the (now visible) car row.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const y = carRowYs.current[focusCarId];
@@ -474,7 +650,15 @@ export default function ClientDetailScreen() {
         }
       });
     });
-  }, [focusCarId, client, checksByCar]);
+  }, [focusCarId, client]);
+
+  // The retail buyer view IS the check history — there's no hero/garage
+  // to defer behind, so expand immediately to load the full list (audit
+  // #8: the eager/lazy split only buys us anything on the rich client
+  // card, where the history sits below the fold).
+  useEffect(() => {
+    if (isRetail) setHistoryExpanded(true);
+  }, [isRetail]);
 
   // ── RETAIL BUYER VIEW (virtual) ────────────────────────────────────
   if (isRetail) {
@@ -502,6 +686,7 @@ export default function ClientDetailScreen() {
               onRefresh={async () => {
                 setRefreshing(true);
                 await queryClient.invalidateQueries({ queryKey: ['retail-checks'] });
+                await queryClient.invalidateQueries({ queryKey: ['retail-checks-full', id] });
                 setRefreshing(false);
               }}
               tintColor={colors.primary[600]}
@@ -575,19 +760,6 @@ export default function ClientDetailScreen() {
   if (!client)
     return <Text style={{ padding: 20, textAlign: 'center', color: palette.text.secondary }}>Клиент не найден</Text>;
 
-  // Group filtered checks by date for the history section.
-  const groupedChecks: { label: string; checks: Check[] }[] = [];
-  let lastGroup = '';
-  for (const check of filteredChecks) {
-    const group = formatDateGroup(check.date);
-    if (group !== lastGroup) {
-      groupedChecks.push({ label: group, checks: [check] });
-      lastGroup = group;
-    } else {
-      groupedChecks[groupedChecks.length - 1].checks.push(check);
-    }
-  }
-
   const initials = getInitials(client.fullName);
   const avatarColor = getAvatarColor(client.fullName);
   const cars = client.cars || [];
@@ -600,6 +772,11 @@ export default function ClientDetailScreen() {
         ref={scrollRef}
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
+        scrollEventThrottle={16}
+        onLayout={(e) => {
+          viewportH.current = e.nativeEvent.layout.height;
+        }}
+        onScroll={(e) => maybeExpandHistory(e.nativeEvent.contentOffset.y)}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
       >
         {/* HERO — avatar, source badge, first-visit date + 3 stat tiles. */}
@@ -657,6 +834,10 @@ export default function ClientDetailScreen() {
           </View>
         </AnimatedCard>
 
+        {/* LOYALTY — last satisfaction rating (#15.2 ⭐). Renders nothing
+            when the client has never been rated. */}
+        <LoyaltyBadge rating={client.lastRating} ratedAt={client.lastRatingAt} />
+
         {/* QUICK ACTIONS — call / WhatsApp / SMS / history */}
         <View style={styles.quickActionsRow}>
           <QuickAction
@@ -706,49 +887,48 @@ export default function ClientDetailScreen() {
           />
         </View>
 
-        {/* OWNER-ONLY: notes + source */}
-        {canEditMeta && (
-          <AnimatedCard
-            style={[styles.metaCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            index={1}
+        {/* STAFF-ONLY: notes + source. Visible to EVERY staff member
+            (#19.4). Editing the values stays gated to canEditMeta — a
+            master sees the info read-only (no chevron, no tap). */}
+        <AnimatedCard
+          style={[styles.metaCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          index={1}
+        >
+          <View style={styles.metaHeader}>
+            <Ionicons name="people-outline" size={14} color={palette.text.tertiary} />
+            <Text style={[styles.metaHeaderText, { color: palette.text.tertiary }]}>Только для сотрудников</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.metaRow, { borderBottomColor: palette.border.subtle }]}
+            activeOpacity={canEditMeta ? 0.7 : 1}
+            disabled={!canEditMeta}
+            onPress={() => setNotesModalOpen(true)}
           >
-            <View style={styles.metaHeader}>
-              <Ionicons name="lock-closed-outline" size={14} color={palette.text.tertiary} />
-              <Text style={[styles.metaHeaderText, { color: palette.text.tertiary }]}>Только для владельца</Text>
+            <Ionicons name="document-text-outline" size={16} color={palette.text.tertiary} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Заметки</Text>
+              <Text style={[styles.metaValue, { color: palette.text.primary }]} numberOfLines={2}>
+                {client.ownerNotes || (canEditMeta ? 'Нажмите, чтобы добавить' : 'Нет заметок')}
+              </Text>
             </View>
-            <TouchableOpacity
-              style={[styles.metaRow, { borderBottomColor: palette.border.subtle }]}
-              activeOpacity={0.7}
-              onPress={() => setNotesModalOpen(true)}
-            >
-              <Ionicons name="document-text-outline" size={16} color={palette.text.tertiary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Заметки владельца</Text>
-                <Text
-                  style={[styles.metaValue, { color: palette.text.primary }]}
-                  numberOfLines={2}
-                >
-                  {client.ownerNotes || 'Нажмите, чтобы добавить'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.metaRow, { borderBottomWidth: 0 }]}
-              activeOpacity={0.7}
-              onPress={() => setSourceOpen(true)}
-            >
-              <Ionicons name="pricetag-outline" size={16} color={palette.text.tertiary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Источник</Text>
-                <Text style={[styles.metaValue, { color: palette.text.primary }]}>
-                  {client.source || 'Не указан'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-            </TouchableOpacity>
-          </AnimatedCard>
-        )}
+            {canEditMeta && <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.metaRow, { borderBottomWidth: 0 }]}
+            activeOpacity={canEditMeta ? 0.7 : 1}
+            disabled={!canEditMeta}
+            onPress={() => setSourceOpen(true)}
+          >
+            <Ionicons name="pricetag-outline" size={16} color={palette.text.tertiary} />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Источник</Text>
+              <Text style={[styles.metaValue, { color: palette.text.primary }]}>
+                {client.source || 'Не указан'}
+              </Text>
+            </View>
+            {canEditMeta && <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />}
+          </TouchableOpacity>
+        </AnimatedCard>
 
         {/* INFO ROW — phone + comment */}
         <AnimatedCard
@@ -769,7 +949,11 @@ export default function ClientDetailScreen() {
           ) : null}
         </AnimatedCard>
 
-        {/* CARS — expandable rows showing inline checks per car */}
+        {/* CARS — one beautiful card per car: модель + госномер badge +
+            последний пробег + сумма, потраченная на ЭТО авто (#19.4).
+            NO per-car checks expansion — tapping a car never opens a
+            separate checks list; the unified «История чеков» below covers
+            sales + returns. */}
         <View style={styles.sectionHeader}>
           <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Автомобили ({cars.length})</Text>
           <TouchableOpacity style={[styles.smallBtn, { backgroundColor: palette.accent.primary }]} onPress={openAddCar}>
@@ -785,36 +969,32 @@ export default function ClientDetailScreen() {
             </Text>
           </View>
         ) : (
-          cars.map((car, idx) => (
-            <View
-              key={car.id}
-              onLayout={(e) => {
-                carRowYs.current[car.id] = e.nativeEvent.layout.y;
-              }}
-            >
-              <CarRow
-                car={car}
-                palette={palette}
-                index={idx}
-                checks={(checksByCar || []).find((g) => g.carId === car.id)?.checks || []}
-                expanded={selectedCarId === car.id}
-                onToggle={() => {
-                  haptic('select');
-                  setSelectedCarId((prev) => (prev === car.id ? null : car.id));
+          cars.map((car, idx) => {
+            const cs = carStats.get(car.id);
+            return (
+              <View
+                key={car.id}
+                onLayout={(e) => {
+                  carRowYs.current[car.id] = e.nativeEvent.layout.y;
                 }}
-                onEdit={() => openEditCar(car)}
-                onDelete={() => setDeleteCarId(car.id)}
-                canEdit={canEditMeta}
-                onOpenCheck={(checkId) =>
-                  navigation.navigate('Main', {
-                    screen: 'Checks',
-                    params: { screen: 'CheckDetail', params: { id: checkId } },
-                  })
-                }
-              />
-            </View>
-          ))
+              >
+                <CarCard
+                  car={car}
+                  palette={palette}
+                  index={idx}
+                  spent={cs?.spent ?? 0}
+                  lastMileage={cs?.lastMileage ?? null}
+                  canEdit={canEditMeta}
+                  onEdit={() => openEditCar(car)}
+                  onDelete={() => setDeleteCarId(car.id)}
+                />
+              </View>
+            );
+          })
         )}
+
+        {/* CALLS — calls with this client + inline recording playback (#15.2). */}
+        <ClientCallsSection clientId={id} sectionTitleStyle={styles.sectionHeader} />
 
         {/* ANALYTICS — sparkline + insights */}
         {stats.count > 0 && (
@@ -923,11 +1103,19 @@ export default function ClientDetailScreen() {
           </AnimatedCard>
         )}
 
-        {/* HISTORY — toggle (all / per-car) then a grouped list */}
-        <View style={styles.sectionHeader}>
+        {/* HISTORY — toggle (all / per-car) then a grouped list. The
+            onLayout records the section Y so we can lazy-fetch the full
+            history the moment it scrolls into view (audit #8). */}
+        <View
+          style={styles.sectionHeader}
+          onLayout={(e) => {
+            historyY.current = e.nativeEvent.layout.y;
+          }}
+        >
           <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>
-            История чеков ({filteredChecks.length})
+            История чеков{historyExpanded ? ` (${filteredChecks.length})` : ''}
           </Text>
+          {fullPending ? <ActivityIndicator size="small" color={palette.text.tertiary} /> : null}
         </View>
 
         {cars.length > 0 && (
@@ -1007,22 +1195,41 @@ export default function ClientDetailScreen() {
             </View>
           ))
         )}
+
+        {/* «Показать всю историю» affordance (audit #8). Until the full
+            history is loaded we render only the eager recent slice; this
+            button lets the user pull the rest on demand (it also fires
+            automatically once the section scrolls into view). Hidden once
+            the full set is present OR there's clearly nothing more to load
+            (eager returned fewer than its limit). */}
+        {!historyExpanded && (eagerChecks?.length ?? 0) >= EAGER_LIMIT ? (
+          <TouchableOpacity
+            style={[styles.showAllHistoryBtn, { borderColor: palette.border.subtle }]}
+            activeOpacity={0.7}
+            onPress={() => {
+              haptic('tap');
+              setHistoryExpanded(true);
+            }}
+          >
+            <Ionicons name="time-outline" size={15} color={palette.accent.primary} />
+            <Text style={[styles.showAllHistoryText, { color: palette.accent.primary }]}>
+              Показать всю историю
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </ScrollView>
 
       {/* Car Modal */}
       <Modal visible={carModalOpen} onClose={closeCarModal} title={editingCar ? 'Редактировать авто' : 'Добавить авто'}>
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Гос. номер</Text>
-          <TextInput
-            value={plateNumber}
-            onChangeText={(t) => setPlateNumber(processPlateMainInput(t.replace(/\s/g, '')))}
-            style={[
-              styles.formInput,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
-            ]}
-            placeholder="А000АА"
-            autoCapitalize="characters"
-            placeholderTextColor={palette.text.tertiary}
+          <CarPlateField
+            plate={plateNumber}
+            mode={plateMode}
+            noPlate={noPlate}
+            onChangePlate={setPlateNumber}
+            onChangeMode={setPlateMode}
+            onChangeNoPlate={setNoPlate}
           />
         </View>
         <View style={styles.formField}>
@@ -1148,20 +1355,17 @@ export default function ClientDetailScreen() {
         variant="danger"
       />
 
-      <DuplicateWarningDialog
+      <PlateReassignDialog
         visible={!!duplicateCar}
         onClose={() => setDuplicateCar(null)}
-        onCreateAnyway={handleCreateCarAnyway}
-        onOpenExisting={handleOpenExistingCar}
-        title="Такой автомобиль уже есть"
-        description={
-          duplicateCar?.clientId === id
-            ? `Госномер ${duplicateCar?.plateNumber} уже привязан к этому клиенту. Создать дубликат?`
-            : `Госномер ${duplicateCar?.plateNumber || plateNumber} уже привязан к другому клиенту.`
+        onReassign={handleReassignPlate}
+        onOpenOwner={
+          duplicateCar?.clientId && duplicateCar.clientId !== id ? handleOpenExistingCar : undefined
         }
-        existingLabel={duplicateCar?.makeModel || ''}
-        existingSubtitle={duplicateCar?.client ? `Клиент: ${duplicateCar.client.fullName}` : duplicateCar?.plateNumber}
-        openExistingLabel={duplicateCar?.clientId === id ? 'Закрыть' : 'Открыть владельца'}
+        plate={duplicateCar?.plateNumber || plateNumber}
+        otherCarLabel={duplicateCar?.makeModel || duplicateCar?.plateNumber || 'Автомобиль'}
+        otherOwnerName={duplicateCar?.client?.fullName ?? null}
+        busy={carSubmitting}
       />
     </View>
   );
@@ -1221,91 +1425,84 @@ function QuickAction({ icon, label, color, disabled, onPress, palette }: QuickAc
   );
 }
 
-interface CarRowProps {
+interface CarCardProps {
   car: Car;
   palette: ReturnType<typeof useColors>;
   index: number;
-  checks: PerCarChecks['checks'];
-  expanded: boolean;
-  onToggle: () => void;
+  /** Сумма, потраченная на ЭТО авто (net of returns). */
+  spent: number;
+  /** Последний пробег (из самого свежего чека с пробегом). */
+  lastMileage: number | null;
+  canEdit: boolean;
   onEdit: () => void;
   onDelete: () => void;
-  canEdit: boolean;
-  onOpenCheck: (checkId: string) => void;
 }
-function CarRow({ car, palette, index, checks, expanded, onToggle, onEdit, onDelete, canEdit, onOpenCheck }: CarRowProps) {
+function CarCard({ car, palette, index, spent, lastMileage, canEdit, onEdit, onDelete }: CarCardProps) {
   const carColor = getCarColor(car.id);
+  const plate = (car.plateNumber || '').toUpperCase();
   return (
     <AnimatedCard
       style={[styles.carCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       index={index + 1}
     >
-      <TouchableOpacity onPress={onToggle} activeOpacity={0.7} style={styles.carTop}>
+      <View style={styles.carTop}>
         <View style={styles.carInfo}>
           <View style={[styles.carIconWrap, { backgroundColor: carColor + '18' }]}>
-            <Ionicons name="car-sport" size={16} color={carColor} />
+            <Ionicons name="car-sport" size={18} color={carColor} />
           </View>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[styles.carModel, { color: palette.text.primary }]} numberOfLines={1}>
-              {car.makeModel || '—'}
+              {car.makeModel || 'Без модели'}
             </Text>
-            <View style={[styles.plateBadgeRow, { backgroundColor: palette.bg.muted }]}>
-              <Text style={[styles.plateBadgeText, { color: palette.text.primary }]}>{car.plateNumber}</Text>
-            </View>
+            {plate ? (
+              <View style={[styles.carPlateBadge, { borderColor: palette.border.strong }]}>
+                <Text style={styles.carPlateBadgeText}>{plate}</Text>
+              </View>
+            ) : (
+              <View style={[styles.plateBadgeRow, { backgroundColor: palette.bg.muted }]}>
+                <Text style={[styles.plateBadgeText, { color: palette.text.tertiary }]}>Без номера</Text>
+              </View>
+            )}
           </View>
         </View>
-        <View style={styles.carActions}>
-          {canEdit ? (
-            <>
-              <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
-                <Ionicons name="create-outline" size={15} color={palette.text.tertiary} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={onDelete} style={styles.iconBtn} hitSlop={8}>
-                <Ionicons name="trash-outline" size={15} color={colors.red[400]} />
-              </TouchableOpacity>
-            </>
-          ) : null}
-          <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color={palette.text.tertiary} />
-        </View>
-      </TouchableOpacity>
+        {canEdit ? (
+          <View style={styles.carActions}>
+            <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
+              <Ionicons name="create-outline" size={16} color={palette.text.tertiary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onDelete} style={styles.iconBtn} hitSlop={8}>
+              <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </View>
+
       {car.comment ? (
         <Text style={[styles.carComment, { color: palette.text.tertiary }]}>{car.comment}</Text>
       ) : null}
-      {expanded && (
-        <View style={[styles.carInlineChecks, { borderTopColor: palette.border.subtle }]}>
-          {checks.length === 0 ? (
-            <Text style={[styles.carInlineEmpty, { color: palette.text.tertiary }]}>Нет чеков для этого авто</Text>
-          ) : (
-            <>
-              {checks.slice(0, 5).map((c) => (
-                <TouchableOpacity
-                  key={c.id}
-                  style={[styles.carCheckLine, { borderBottomColor: palette.border.subtle }]}
-                  activeOpacity={0.7}
-                  onPress={() => onOpenCheck(c.id)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.carCheckTop, { color: palette.text.primary }]} numberOfLines={1}>
-                      #{c.number} · {formatDate(c.date)}
-                    </Text>
-                    <Text style={[styles.carCheckSub, { color: palette.text.secondary }]} numberOfLines={1}>
-                      {c.masterName || 'Без мастера'}
-                    </Text>
-                  </View>
-                  <Text style={[styles.carCheckAmount, { color: palette.text.primary }]}>
-                    {formatMoney(c.totalRevenue)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-              {checks.length > 5 ? (
-                <Text style={[styles.carInlineMore, { color: palette.text.tertiary }]}>
-                  Ещё {checks.length - 5} чек(ов) ниже в полной истории
-                </Text>
-              ) : null}
-            </>
-          )}
+
+      {/* Stat strip: последний пробег | потрачено на это авто. */}
+      <View style={[styles.carStatRow, { borderTopColor: palette.border.subtle }]}>
+        <View style={styles.carStatItem}>
+          <Ionicons name="speedometer-outline" size={14} color={palette.text.tertiary} />
+          <View>
+            <Text style={[styles.carStatLabel, { color: palette.text.tertiary }]}>Пробег</Text>
+            <Text style={[styles.carStatValue, { color: palette.text.primary }]} numberOfLines={1}>
+              {lastMileage != null ? `${lastMileage.toLocaleString('ru-RU')} км` : '—'}
+            </Text>
+          </View>
         </View>
-      )}
+        <View style={[styles.carStatDivider, { backgroundColor: palette.border.subtle }]} />
+        <View style={styles.carStatItem}>
+          <Ionicons name="wallet-outline" size={14} color={palette.text.tertiary} />
+          <View>
+            <Text style={[styles.carStatLabel, { color: palette.text.tertiary }]}>Потрачено</Text>
+            <Text style={[styles.carStatValue, { color: palette.text.primary }]} numberOfLines={1}>
+              {formatMoney(spent)}
+            </Text>
+          </View>
+        </View>
+      </View>
     </AnimatedCard>
   );
 }
@@ -1585,48 +1782,52 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: colors.gray[100],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3.5],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[2.5],
     marginTop: spacing[2],
   },
-  carTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  carInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flex: 1 },
-  carIconWrap: { width: 32, height: 32, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
-  carModel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
+  carTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  carInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flex: 1, minWidth: 0 },
+  carIconWrap: { width: 36, height: 36, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  carModel: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900], letterSpacing: -0.2 },
+  // ГОСТ-style mini plate badge (white plate, black rim) — the plate is
+  // the identity anchor of the car card.
+  carPlateBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    backgroundColor: '#FFFFFF',
+    marginTop: 4,
+  },
+  carPlateBadgeText: { fontSize: 13, fontWeight: '800', letterSpacing: 1, color: '#0A0A0A' },
   plateBadgeRow: {
     alignSelf: 'flex-start',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
     backgroundColor: colors.gray[100],
-    marginTop: 3,
+    marginTop: 4,
   },
   plateBadgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
-  carActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[0.5] },
+  carActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
   iconBtn: { padding: spacing[1.5], borderRadius: borderRadius.md },
-  carComment: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[1.5], marginLeft: spacing[10] },
+  carComment: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[2], marginLeft: 46 },
 
-  // Inline checks inside a car row
-  carInlineChecks: {
-    marginTop: spacing[2],
-    paddingTop: spacing[2],
-    borderTopWidth: StyleSheet.hairlineWidth,
-    gap: spacing[1],
-  },
-  carInlineEmpty: { fontSize: 12, paddingVertical: spacing[2] },
-  carInlineMore: { fontSize: 11, marginTop: spacing[1] },
-  carCheckLine: {
+  // Per-car stat strip — последний пробег | потрачено на это авто.
+  carStatRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[3],
-    paddingHorizontal: spacing[2],
-    paddingVertical: spacing[2],
-    borderRadius: borderRadius.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[3],
+    paddingTop: spacing[2.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  carCheckTop: { fontSize: 13, fontWeight: '600' },
-  carCheckSub: { fontSize: 11, marginTop: 2 },
-  carCheckAmount: { fontSize: 13, fontWeight: '700' },
+  carStatItem: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  carStatDivider: { width: StyleSheet.hairlineWidth, height: 28, marginHorizontal: spacing[2] },
+  carStatLabel: { fontSize: 10, fontWeight: '600', letterSpacing: 0.2, textTransform: 'uppercase' },
+  carStatValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, marginTop: 1 },
 
   // Analytics
   analyticsCard: {
@@ -1755,6 +1956,19 @@ const styles = StyleSheet.create({
 
   emptyChecks: { alignItems: 'center', paddingVertical: spacing[8] },
   emptyChecksText: { fontSize: fontSize.sm, marginTop: spacing[2] },
+
+  // «Показать всю историю» — lazy-history affordance (audit #8).
+  showAllHistoryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: spacing[3],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  showAllHistoryText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   // Form
   formField: { marginBottom: spacing[4] },

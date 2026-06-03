@@ -24,6 +24,7 @@ import ExpensesScreen from '../screens/ExpensesScreen';
 import UsersScreen from '../screens/UsersScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
 import MoreScreen from '../screens/MoreScreen';
+import KnowledgeBaseScreen from '../screens/KnowledgeBaseScreen';
 import MarketingScreen from '../screens/MarketingScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
@@ -172,12 +173,35 @@ function MoreStackNavigator() {
   return (
     <MoreStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
       <MoreStack.Screen name="MoreHome" component={MoreScreen} />
+      {/*
+        Section detail screens live INSIDE the MoreStack so that a tap
+        from a section list (Clients → ClientDetail, Suppliers →
+        SupplierDetail, CashFlow/Calls → CheckDetail) pushes onto THIS
+        stack. React Navigation resolves `navigate('ClientDetail')` to
+        the nearest ancestor navigator that owns the route — for a screen
+        already inside MoreStack that is MoreStack itself, NOT the root
+        Stack copy below. Result back-stack:
+          MoreHome → Clients → ClientDetail   (back steps in-section first)
+        instead of the old root push that skipped the section list and
+        also covered the floating tab bar. The duplicate ClientDetail /
+        SupplierDetail / CheckDetail registrations on the root Stack and
+        ChecksStack still serve callers OUTSIDE MoreStack (Dashboard
+        shortcuts, Checks tab) where covering the tab bar is intentional.
+        Note: a Dashboard shortcut into a section routes via
+        `MoreTab → <Section>` (see DashboardScreen / entityLinks), so the
+        section list is the entry point and its detail still pushes here —
+        back goes detail → section list → Ещё, never straight to Главная.
+      */}
+      <MoreStack.Screen name="ClientDetail" component={ClientDetailScreen} />
+      <MoreStack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
+      <MoreStack.Screen name="CheckDetail" component={CheckDetailScreen} />
       <MoreStack.Screen name="Employees" component={EmployeesScreen} />
       <MoreStack.Screen name="EmployeeDetail" component={EmployeeDetailScreen} />
       <MoreStack.Screen name="Trash" component={TrashScreen} />
       <MoreStack.Screen name="Subscription" component={SubscriptionScreen} />
       <MoreStack.Screen name="Schedule" component={gated('schedule_view', ScheduleScreen)} />
       <MoreStack.Screen name="Clients" component={gated('clients_view', ClientsScreen)} />
+      <MoreStack.Screen name="KnowledgeBase" component={KnowledgeBaseScreen} />
       <MoreStack.Screen name="Cars" component={gated('clients_view', CarsScreen)} />
       <MoreStack.Screen name="Services" component={gated('services_view', ServicesScreen)} />
       <MoreStack.Screen name="Suppliers" component={gated('suppliers_view', SuppliersScreen)} />

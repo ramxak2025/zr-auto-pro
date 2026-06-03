@@ -34,6 +34,24 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   remove: { lucide: 'Minus', solid: true },
   'remove-outline': { lucide: 'Minus' },
 
+  // ── filters / misc (were falling back to a meaningless Circle) ─────────
+  apps: { lucide: 'LayoutGrid', solid: true },
+  'apps-outline': { lucide: 'LayoutGrid' },
+  sparkles: { lucide: 'Sparkles', solid: true },
+  'sparkles-outline': { lucide: 'Sparkles' },
+  ellipse: { lucide: 'Circle', fill: true },
+  'ellipse-outline': { lucide: 'Circle' },
+  pricetag: { lucide: 'Tag', solid: true },
+  'help-circle': { lucide: 'HelpCircle', solid: true },
+  bulb: { lucide: 'Lightbulb', solid: true },
+  'bulb-outline': { lucide: 'Lightbulb' },
+  archive: { lucide: 'Archive', solid: true },
+  'archive-outline': { lucide: 'Archive' },
+  heart: { lucide: 'Heart', solid: true, fill: true },
+  'heart-outline': { lucide: 'Heart' },
+  medal: { lucide: 'Medal', solid: true },
+  'medal-outline': { lucide: 'Medal' },
+
   // ── arrows ────────────────────────────────────────────────────────────
   'arrow-back': { lucide: 'ArrowLeft', solid: true },
   'arrow-forward': { lucide: 'ArrowRight', solid: true },

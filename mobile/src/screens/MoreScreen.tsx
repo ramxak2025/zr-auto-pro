@@ -57,34 +57,28 @@ interface MenuSection {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Menu structure — owner-requested 7-group taxonomy, iOS Settings-style.
+// Menu structure — owner-requested 5-group taxonomy (#17), iOS Settings-style.
 //
-//   • КОМАНДА     — people: Employees, Schedule, Users, Salary.
-//   • ФИНАНСЫ     — owner-facing money: CashFlow, Expenses, Reports.
+//   • РАБОТА      — daily work: Schedule, Clients, Knowledge base (NEW stub).
+//   • ФИНАНСЫ     — owner-facing money: CashFlow ("Движение денег"),
+//                   Salary, Expenses, Reports ("Финансовые отчёты").
 //   • СКЛАД       — warehouse-side ops: Suppliers, Equipment, Analytics.
-//   • КЛИЕНТЫ     — single entry "Клиенты": customers + cars are now
-//                   unified inside the Clients screen (two-tab UX), so
-//                   there's no longer a separate "Авто" menu item.
 //   • МАРКЕТИНГ   — outreach: Marketing (reviews), Calls, Mailings, Integrations.
-//   • НАСТРОЙКИ   — admin of the tenant itself: Company, Subscription, Trash.
+//   • ОСТАЛЬНОЕ   — everything else: Employees, Users, Company, Subscription.
 //   • АДМИН       — superadmin-only platform tools.
 //
-// Items keep their existing roles / permissions / featureKey gates so
-// subscription paywalls and role visibility are unchanged. Order
-// within each group is the order the owner asked for.
+// "Корзина" (Trash) is intentionally NOT here — it already lives on the
+// Склад (Products) screen; the Trash route stays registered in the
+// navigator so in-app navigation from Products keeps working.
+//
+// Items keep their existing screen / icon / roles / permissions /
+// featureKey gates so subscription paywalls and role visibility are
+// unchanged. Order within each group is the order the owner asked for.
 // ─────────────────────────────────────────────────────────────────────────────
 const menuSections: MenuSection[] = [
   {
-    title: 'Команда',
+    title: 'Работа',
     items: [
-      {
-        label: 'Сотрудники',
-        description: 'Карточки персонала, статус, рейтинги',
-        screen: 'Employees',
-        icon: 'people-circle-outline',
-        iconBg: colors.cyan[50],
-        iconColor: colors.cyan[600],
-      },
       {
         label: 'Расписание',
         description: 'График работы и смены',
@@ -95,15 +89,41 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
-        label: 'Пользователи',
-        description: 'Управление доступом',
-        screen: 'Users',
-        permission: 'user_management',
-        featureKey: 'users_manage',
-        roles: ['director', 'superadmin'],
-        icon: 'shield-outline',
-        iconBg: colors.indigo[50],
-        iconColor: colors.indigo[600],
+        label: 'Клиенты',
+        // Owner requested clients + cars in ONE section. The combined
+        // Clients screen now hosts a "Клиенты / Авто" tab switcher, so
+        // a separate "Авто" menu entry is intentionally gone.
+        description: 'Клиенты, авто и история',
+        screen: 'Clients',
+        permission: 'clients_view',
+        featureKey: 'clients_view',
+        icon: 'people-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+      },
+      {
+        label: 'База знаний',
+        // NEW (#17) — placeholder. Future: учебный центр, регламенты,
+        // база знаний с поиском. Screen is a friendly "coming soon" stub.
+        description: 'Учебный центр и регламенты',
+        screen: 'KnowledgeBase',
+        icon: 'book-outline',
+        iconBg: colors.cyan[50],
+        iconColor: colors.cyan[600],
+      },
+    ],
+  },
+  {
+    title: 'Финансы',
+    items: [
+      {
+        label: 'Движение денег',
+        description: 'Поступления и выдачи по дням',
+        screen: 'CashFlow',
+        featureKey: 'cashflow_view',
+        icon: 'swap-horizontal-outline',
+        iconBg: colors.teal[50],
+        iconColor: colors.teal[600],
       },
       {
         label: 'Зарплата',
@@ -113,20 +133,6 @@ const menuSections: MenuSection[] = [
         icon: 'wallet-outline',
         iconBg: colors.green[50],
         iconColor: colors.green[600],
-      },
-    ],
-  },
-  {
-    title: 'Финансы',
-    items: [
-      {
-        label: 'Касса по дням',
-        description: 'Поступления и выдачи по дням',
-        screen: 'CashFlow',
-        featureKey: 'cashflow_view',
-        icon: 'swap-horizontal-outline',
-        iconBg: colors.teal[50],
-        iconColor: colors.teal[600],
       },
       {
         label: 'Расходы',
@@ -138,8 +144,8 @@ const menuSections: MenuSection[] = [
         iconColor: colors.rose[600],
       },
       {
-        label: 'Отчёты',
-        description: 'Финансовые отчёты',
+        label: 'Финансовые отчёты',
+        description: 'Прибыль, маржа, средний чек',
         screen: 'Reports',
         permission: 'financial_reports',
         featureKey: 'reports_view',
@@ -177,24 +183,6 @@ const menuSections: MenuSection[] = [
         icon: 'analytics-outline',
         iconBg: colors.teal[50],
         iconColor: colors.teal[600],
-      },
-    ],
-  },
-  {
-    title: 'Клиенты',
-    items: [
-      {
-        label: 'Клиенты',
-        // Owner requested clients + cars in ONE section. The combined
-        // Clients screen now hosts a "Клиенты / Авто" tab switcher, so
-        // a separate "Авто" menu entry is intentionally gone.
-        description: 'Клиенты, авто и история',
-        screen: 'Clients',
-        permission: 'clients_view',
-        featureKey: 'clients_view',
-        icon: 'people-outline',
-        iconBg: colors.blue[50],
-        iconColor: colors.blue[600],
       },
     ],
   },
@@ -242,8 +230,27 @@ const menuSections: MenuSection[] = [
     ],
   },
   {
-    title: 'Настройки',
+    title: 'Остальное',
     items: [
+      {
+        label: 'Сотрудники',
+        description: 'Карточки персонала, статус, рейтинги',
+        screen: 'Employees',
+        icon: 'people-circle-outline',
+        iconBg: colors.cyan[50],
+        iconColor: colors.cyan[600],
+      },
+      {
+        label: 'Пользователи',
+        description: 'Управление доступом',
+        screen: 'Users',
+        permission: 'user_management',
+        featureKey: 'users_manage',
+        roles: ['director', 'superadmin'],
+        icon: 'shield-outline',
+        iconBg: colors.indigo[50],
+        iconColor: colors.indigo[600],
+      },
       {
         label: 'Настройки компании',
         description: 'Реквизиты и данные для чеков',
@@ -261,15 +268,6 @@ const menuSections: MenuSection[] = [
         icon: 'card-outline',
         iconBg: colors.primary[50],
         iconColor: colors.primary[600],
-      },
-      {
-        label: 'Корзина',
-        description: 'Удалённые товары и категории',
-        screen: 'Trash',
-        roles: ['director', 'superadmin'],
-        icon: 'trash-outline',
-        iconBg: colors.gray[100],
-        iconColor: colors.gray[600],
       },
     ],
   },

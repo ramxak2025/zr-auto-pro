@@ -129,6 +129,8 @@ interface UserForm {
   salaryPercent: number;
   productSalaryPercent: number;
   isActive: boolean;
+  hiddenFromSchedule: boolean;
+  hiddenEverywhere: boolean;
   permissions: UserPermissions;
 }
 
@@ -247,6 +249,8 @@ const emptyForm: UserForm = {
   salaryPercent: 0,
   productSalaryPercent: 0,
   isActive: true,
+  hiddenFromSchedule: false,
+  hiddenEverywhere: false,
   permissions: { ...defaultPermissions },
 };
 
@@ -362,6 +366,8 @@ export default function UsersScreen() {
       salaryPercent: user.salaryPercent,
       productSalaryPercent: user.productSalaryPercent || 0,
       isActive: user.isActive,
+      hiddenFromSchedule: !!user.hiddenFromSchedule,
+      hiddenEverywhere: !!user.hiddenEverywhere,
       permissions: { ...defaultPermissions, ...user.permissions },
     });
     setModalOpen(true);
@@ -450,6 +456,8 @@ export default function UsersScreen() {
       salaryPercent: Number(form.salaryPercent),
       productSalaryPercent: Number(form.productSalaryPercent) || 0,
       isActive: form.isActive,
+      hiddenFromSchedule: form.hiddenFromSchedule,
+      hiddenEverywhere: form.hiddenEverywhere,
       permissions: form.permissions,
     };
 
@@ -689,6 +697,51 @@ export default function UsersScreen() {
               thumbColor={form.isActive ? colors.primary[600] : palette.bg.muted}
             />
           </View>
+
+          {/* Visibility — only director/admin/superadmin can change who is
+              hidden from the schedule grid / rating and who is hidden
+              everywhere (incl. master selection in Касса). */}
+          {isDirectorOrSuperadmin && (
+            <View
+              style={[
+                styles.visibilityGroup,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+              ]}
+            >
+              <View style={styles.visibilityRow}>
+                <View style={styles.visibilityTextWrap}>
+                  <Text style={[styles.visibilityTitle, { color: palette.text.primary }]}>
+                    Скрыть из графика и рейтинга
+                  </Text>
+                </View>
+                <Switch
+                  value={form.hiddenFromSchedule}
+                  onValueChange={(v) => setForm({ ...form, hiddenFromSchedule: v })}
+                  trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
+                  thumbColor={form.hiddenFromSchedule ? colors.primary[600] : palette.bg.card}
+                />
+              </View>
+
+              <View style={[styles.visibilityDivider, { backgroundColor: palette.border.subtle }]} />
+
+              <View style={styles.visibilityRow}>
+                <View style={styles.visibilityTextWrap}>
+                  <Text style={[styles.visibilityTitle, { color: palette.text.primary }]}>
+                    Скрыть везде
+                  </Text>
+                  <Text style={[styles.visibilitySub, { color: palette.text.tertiary }]}>
+                    Сотрудник не появится в списках, и на него нельзя будет создать чек в Кассе.
+                  </Text>
+                </View>
+                <Switch
+                  value={form.hiddenEverywhere}
+                  onValueChange={(v) => setForm({ ...form, hiddenEverywhere: v })}
+                  trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
+                  thumbColor={form.hiddenEverywhere ? colors.primary[600] : palette.bg.card}
+                />
+              </View>
+            </View>
+          )}
 
           {/* Permissions — grouped */}
           <View style={styles.formField}>
@@ -1033,6 +1086,24 @@ const styles = StyleSheet.create({
   roleChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[500] },
   roleChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[4] },
+  // Visibility toggles
+  visibilityGroup: {
+    marginBottom: spacing[4],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3.5],
+  },
+  visibilityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+  },
+  visibilityTextWrap: { flex: 1, minWidth: 0 },
+  visibilityTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  visibilitySub: { fontSize: 11, lineHeight: 15, marginTop: 2 },
+  visibilityDivider: { height: 1 },
   // Permissions — grouped
   permGroup: {
     marginBottom: spacing[3],

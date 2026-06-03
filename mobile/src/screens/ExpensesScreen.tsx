@@ -53,6 +53,7 @@ import {
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
+import { Switch } from 'react-native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -155,6 +156,38 @@ function parseDDMMYYYY(input: string): Date | null {
 
 function formatDDMMYYYY(d: Date): string {
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//  CheckBadge — crisp "selected" affordance (SF-Symbol checkmark.circle.fill).
+//
+//  ⚠️ Root cause of the "circle instead of a checkmark" artifact (#11.1):
+//  `@expo/vector-icons` is metro-aliased to an SVG shim that maps Ionicons
+//  names → lucide-react-native. `checkmark-circle` maps with `{ fill: true }`
+//  to lucide `CheckCircle`, which in lucide v1 aliases to `CircleCheckBig`
+//  (an OPEN arc + a check stroke). Rendered with `fill={color}` the arc fills
+//  into a solid blob and the check vanishes → user sees a bold filled circle.
+//  Fix (no shared-file edits): render the bare `checkmark` glyph (→ lucide
+//  `Check`, a stroke-only ✓ with no fill, no circle) on our own colored ring.
+// ────────────────────────────────────────────────────────────────────────
+
+function CheckBadge({ size = 18, color = colors.primary[600] }: { size?: number; color?: string }) {
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: color,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <Ionicons name="checkmark" size={Math.round(size * 0.66)} color={colors.white} />
+    </View>
+  );
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -624,6 +657,30 @@ export default function ExpensesScreen() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['expense-categories'] }),
   });
 
+  // Owner toggles «Требует одобрения» per category. Optimistic so the Switch
+  // flips instantly; rolled back on error. Director / admin / superadmin only
+  // (enforced both by UI gating and the backend role guard).
+  const updateCatMutation = useMutation({
+    mutationFn: ({ id, approvalRequired }: { id: string; approvalRequired: boolean }) =>
+      expensesApi.updateCategory(id, { approvalRequired }),
+    onMutate: async ({ id, approvalRequired }) => {
+      await queryClient.cancelQueries({ queryKey: ['expense-categories'] });
+      const prev = queryClient.getQueryData<Array<{ id: string; name: string; approvalRequired?: boolean }>>([
+        'expense-categories',
+      ]);
+      queryClient.setQueryData<Array<{ id: string; name: string; approvalRequired?: boolean }>>(
+        ['expense-categories'],
+        (old) => (old ? old.map((c) => (c.id === id ? { ...c, approvalRequired } : c)) : old),
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['expense-categories'], ctx.prev);
+      Alert.alert('Ошибка', 'Не удалось изменить настройку одобрения');
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['expense-categories'] }),
+  });
+
   // ── Derived: totals, breakdowns, top-5, recurring, filtered list ─────
   const { totalExpenses, categoryBreakdown, colorByName } = useMemo(() => {
     const total = expenses.reduce((s, e) => s + e.amount, 0);
@@ -1034,9 +1091,7 @@ export default function ExpensesScreen() {
                     <Text style={[styles.breakdownName, { color: palette.text.primary }]} numberOfLines={1}>
                       {cat.name}
                     </Text>
-                    {active && (
-                      <Ionicons name="checkmark-circle" size={14} color={colors.primary[600]} />
-                    )}
+                    {active && <CheckBadge size={14} />}
                   </View>
                   <Text style={[styles.breakdownAmount, { color: palette.text.primary }]}>
                     {formatMoney(cat.total)}
@@ -1185,8 +1240,10 @@ export default function ExpensesScreen() {
               <TouchableOpacity
                 onPress={() => setFilterEmployeeId('')}
                 hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                style={[styles.clearXBadge, { backgroundColor: colors.primary[100] }]}
               >
-                <Ionicons name="close-circle" size={14} color={colors.primary[600]} />
+                {/* `close` → lucide `X` (stroke-only) — avoids the filled-circle artifact */}
+                <Ionicons name="close" size={10} color={colors.primary[700]} />
               </TouchableOpacity>
             )}
           </TouchableOpacity>
@@ -1232,8 +1289,13 @@ export default function ExpensesScreen() {
           <Text style={[styles.activeFilterText, { color: colors.primary[700] }]} numberOfLines={1}>
             Фильтр: {filterCategory}
           </Text>
-          <TouchableOpacity onPress={() => handleCategoryFilter(null)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-            <Ionicons name="close-circle" size={16} color={colors.primary[600]} />
+          <TouchableOpacity
+            onPress={() => handleCategoryFilter(null)}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            style={[styles.clearXBadge, { backgroundColor: colors.primary[100] }]}
+          >
+            {/* `close` → lucide `X` (stroke-only) — avoids the filled-circle artifact */}
+            <Ionicons name="close" size={11} color={colors.primary[700]} />
           </TouchableOpacity>
         </View>
       )}
@@ -1312,7 +1374,9 @@ export default function ExpensesScreen() {
                 !selectedCategoryId && styles.catPickerItemActive,
               ]}
               onPress={() => setSelectedCategoryId('')}
+              activeOpacity={0.7}
             >
+              {!selectedCategoryId && <CheckBadge size={15} />}
               <Text
                 style={[
                   styles.catPickerText,
@@ -1323,27 +1387,42 @@ export default function ExpensesScreen() {
                 Без категории
               </Text>
             </TouchableOpacity>
-            {categories.map((c) => (
-              <TouchableOpacity
-                key={c.id}
-                style={[
-                  styles.catPickerItem,
-                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                  selectedCategoryId === c.id && styles.catPickerItemActive,
-                ]}
-                onPress={() => setSelectedCategoryId(c.id)}
-              >
-                <Text
+            {categories.map((c) => {
+              const catActive = selectedCategoryId === c.id;
+              return (
+                <TouchableOpacity
+                  key={c.id}
                   style={[
-                    styles.catPickerText,
-                    { color: palette.text.secondary },
-                    selectedCategoryId === c.id && styles.catPickerTextActive,
+                    styles.catPickerItem,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                    catActive && styles.catPickerItemActive,
                   ]}
+                  onPress={() => setSelectedCategoryId(c.id)}
+                  activeOpacity={0.7}
                 >
-                  {c.name}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  {catActive && <CheckBadge size={15} />}
+                  <Text
+                    style={[
+                      styles.catPickerText,
+                      { color: palette.text.secondary },
+                      catActive && styles.catPickerTextActive,
+                    ]}
+                  >
+                    {c.name}
+                  </Text>
+                  {/* Подсказка владельцу: категория с одобрением — расход
+                      сотрудника в ней уйдёт «На одобрении». */}
+                  {c.approvalRequired && (
+                    <Ionicons
+                      name="shield-checkmark-outline"
+                      size={12}
+                      color={catActive ? colors.primary[700] : palette.text.tertiary}
+                      style={{ marginLeft: 4 }}
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
         <View style={styles.formField}>
@@ -1447,6 +1526,15 @@ export default function ExpensesScreen() {
             <Ionicons name="add" size={20} color={colors.white} />
           </TouchableOpacity>
         </View>
+        {/* Owner explainer — как работает одобрение */}
+        <View style={[styles.approvalInfo, { backgroundColor: colors.amber[50] }]}>
+          <Ionicons name="shield-checkmark-outline" size={15} color={colors.amber[700]} />
+          <Text style={[styles.approvalInfoText, { color: colors.amber[700] }]}>
+            Если категория требует одобрения, расход сотрудника в ней попадёт «На одобрении» —
+            пока вы не подтвердите, он не учитывается. Ваши собственные расходы одобряются сразу.
+          </Text>
+        </View>
+
         {categories.length === 0 ? (
           <View style={styles.catEmptyState}>
             <Ionicons name="pricetag-outline" size={32} color={palette.text.tertiary} />
@@ -1454,14 +1542,47 @@ export default function ExpensesScreen() {
           </View>
         ) : (
           categories.map((c) => (
-            <View key={c.id} style={[styles.catListRow, { borderBottomColor: palette.border.subtle }]}>
-              <View style={styles.catListLeft}>
-                <View style={styles.catListDot} />
-                <Text style={[styles.catListName, { color: palette.text.primary }]}>{c.name}</Text>
+            <View
+              key={c.id}
+              style={[styles.catCard, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
+              <View style={styles.catCardTop}>
+                <View style={styles.catListLeft}>
+                  <View style={styles.catListDot} />
+                  <Text style={[styles.catListName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {c.name}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => deleteCatMutation.mutate(c.id)}
+                  style={styles.catListDeleteBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="trash-outline" size={17} color={palette.text.tertiary} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity onPress={() => deleteCatMutation.mutate(c.id)} style={styles.catListDeleteBtn}>
-                <Ionicons name="close-circle-outline" size={20} color={palette.text.tertiary} />
-              </TouchableOpacity>
+              <View style={[styles.catApprovalRow, { borderTopColor: palette.border.subtle }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.catApprovalLabel, { color: palette.text.primary }]}>
+                    Требует одобрения
+                  </Text>
+                  <Text style={[styles.catApprovalHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                    {c.approvalRequired
+                      ? 'Расходы сотрудников уходят на подтверждение'
+                      : 'Расходы добавляются без подтверждения'}
+                  </Text>
+                </View>
+                <Switch
+                  value={!!c.approvalRequired}
+                  onValueChange={(v) => {
+                    haptic('select');
+                    updateCatMutation.mutate({ id: c.id, approvalRequired: v });
+                  }}
+                  trackColor={{ false: palette.bg.card, true: colors.green[500] }}
+                  thumbColor={colors.white}
+                  ios_backgroundColor={palette.bg.card}
+                />
+              </View>
             </View>
           ))
         )}
@@ -1488,7 +1609,7 @@ export default function ExpensesScreen() {
           >
             Все сотрудники
           </Text>
-          {!filterEmployeeId && <Ionicons name="checkmark-circle" size={18} color={colors.primary[600]} />}
+          {!filterEmployeeId && <CheckBadge size={18} />}
         </TouchableOpacity>
         {employees.map((emp) => {
           const active = filterEmployeeId === emp.id;
@@ -1525,7 +1646,7 @@ export default function ExpensesScreen() {
                   </Text>
                 )}
               </View>
-              {active && <Ionicons name="checkmark-circle" size={18} color={colors.primary[600]} />}
+              {active && <CheckBadge size={18} />}
             </TouchableOpacity>
           );
         })}
@@ -1965,6 +2086,14 @@ const styles = StyleSheet.create({
   filterChipText: {
     fontSize: fontSize.xs,
   },
+  // Round ✕ badge — crisp `X` glyph on a tinted ring (no filled-circle glyph).
+  clearXBadge: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Active filter banner
   activeFilterBanner: {
@@ -2195,6 +2324,9 @@ const styles = StyleSheet.create({
     gap: spacing[2],
   },
   catPickerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[2],
     borderRadius: borderRadius.full,
@@ -2270,14 +2402,54 @@ const styles = StyleSheet.create({
   catEmptyText: {
     fontSize: fontSize.sm,
   },
-  catListRow: {
+  // Owner approval explainer
+  approvalInfo: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    padding: spacing[3],
+    borderRadius: borderRadius.lg,
+    marginBottom: spacing[3],
+  },
+  approvalInfoText: {
+    flex: 1,
+    fontSize: 11.5,
+    lineHeight: 16,
+    fontWeight: fontWeight.medium,
+  },
+  // Category card — name + delete on top, approval toggle beneath
+  catCard: {
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3.5],
+    paddingTop: spacing[3],
+    paddingBottom: spacing[1],
+    marginBottom: spacing[2.5],
+  },
+  catCardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing[3],
-    borderBottomWidth: 1,
+  },
+  catApprovalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    marginTop: spacing[2.5],
+    paddingTop: spacing[2.5],
+    paddingBottom: spacing[2],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  catApprovalLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+  },
+  catApprovalHint: {
+    fontSize: 11,
+    marginTop: 1,
   },
   catListLeft: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2.5],

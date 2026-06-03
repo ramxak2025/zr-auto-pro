@@ -32,14 +32,33 @@ interface IoniconsProps {
   style?: StyleProp<ViewStyle | TextStyle>;
 }
 
+function toPascal(n: string): string {
+  return n
+    .split('-')
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join('');
+}
+
 function resolveEntry(name: string): IconMapEntry {
   const mapped = IONICON_TO_LUCIDE[name];
   if (mapped) return mapped;
-  // Heuristic: try stripping the "-outline" suffix and look up the solid
-  // variant. Many places use `name-outline` for the outline-only style.
-  if (name.endsWith('-outline')) {
-    const solid = IONICON_TO_LUCIDE[name.replace(/-outline$/, '')];
-    if (solid) return { ...solid, solid: false };
+  // Heuristic: try stripping the "-outline" / "-sharp" suffix and look up
+  // the base variant. Many places use `name-outline` for the thin style.
+  const baseName = name.replace(/-(outline|sharp)$/, '');
+  if (baseName !== name) {
+    const m = IONICON_TO_LUCIDE[baseName];
+    if (m) return { ...m, solid: false };
+  }
+  // Smart fallback BEFORE the placeholder: many Ionicons names match a
+  // Lucide component 1:1 once PascalCased (sparkles→Sparkles, heart→Heart,
+  // archive→Archive, medal→Medal …). Use it so an unmapped name renders the
+  // RIGHT glyph instead of a meaningless Circle.
+  for (const cand of [name, baseName]) {
+    const pascal = toPascal(cand);
+    if (pascal && (Lucide as unknown as Record<string, unknown>)[pascal]) {
+      return { lucide: pascal, solid: !name.endsWith('-outline') };
+    }
   }
   return { lucide: 'Circle' };
 }

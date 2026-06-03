@@ -49,7 +49,6 @@ import {
   KeyboardAvoidingView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -57,6 +56,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
+import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
 import { equipmentApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -80,6 +80,16 @@ function formatMoney(v: number) {
       .toString()
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
+}
+
+// #14.3 — An item whose service life has run out (its `expiresAt` is in the
+// past) is NEVER auto-deleted. It just turns reddish in every list it appears
+// in. Storage-room items don't carry `expiresAt` (they have no issue date),
+// so this is defensive: it only fires for issued items that have one.
+function isExpired(item: { expiresAt?: string | null }): boolean {
+  if (!item?.expiresAt) return false;
+  const t = new Date(item.expiresAt).getTime();
+  return Number.isFinite(t) && t < Date.now();
 }
 
 function getInitials(fullName?: string | null): string {
@@ -129,10 +139,12 @@ function CenteredDialog({
   const palette = useColors();
   return (
     <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      {/* The scrim is itself pressable: tap-outside-to-close. The inner card
-          stops propagation so taps on it never close the dialog. */}
+      {/* Frosted blur backdrop (replaces the old rgba(0,0,0,0.45) dark scrim).
+          Tapping it closes the dialog; the inner card stops propagation so
+          taps on the card never close it. */}
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={dialogStyles.kavRoot}>
-        <TouchableOpacity activeOpacity={1} style={dialogStyles.scrim} onPress={onClose}>
+        <ModalBlurBackdrop onPress={onClose} />
+        <View style={dialogStyles.scrim} pointerEvents="box-none">
           <TouchableOpacity
             activeOpacity={1}
             style={[dialogStyles.card, { backgroundColor: palette.bg.elevated }]}
@@ -190,7 +202,7 @@ function CenteredDialog({
               </View>
             )}
           </TouchableOpacity>
-        </TouchableOpacity>
+        </View>
       </KeyboardAvoidingView>
     </RNModal>
   );
@@ -201,8 +213,9 @@ const dialogStyles = StyleSheet.create({
     flex: 1,
   },
   scrim: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    // Layout container that centres the card. The dark dim is gone — the
+    // frosted ModalBlurBackdrop behind it does the separation now (#14 blur).
+    ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing[4],
@@ -319,19 +332,15 @@ function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
 }
 
 // ─── Per-card frosted pill (counters at bottom of game card) ───────────────
+// PERF: NO per-card BlurView here. These pills live inside a scrolling card
+// grid; a per-pill UIVisualEffectView meant many live blur surfaces while
+// scrolling, on top of the always-on native Liquid Glass tab bar — jank +
+// jetsam memory pressure on device. A solid translucent scrim reads as
+// "frosted" against the dark card art at a fraction of the cost. Same cheap
+// path on both platforms.
 function FrostedPill({ icon, label }: { icon: string; label: string | number }) {
-  if (Platform.OS === 'ios') {
-    return (
-      <View style={styles.pillWrap}>
-        <BlurView intensity={28} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={styles.pillTint} />
-        <Text style={styles.pillIcon}>{icon}</Text>
-        <Text style={styles.pillLabel}>{label}</Text>
-      </View>
-    );
-  }
   return (
-    <View style={[styles.pillWrap, styles.pillAndroid]}>
+    <View style={[styles.pillWrap, styles.pillFrost]}>
       <Text style={styles.pillIcon}>{icon}</Text>
       <Text style={styles.pillLabel}>{label}</Text>
     </View>
@@ -506,10 +515,16 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
           </Text>
           <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary }}>{list.length}</Text>
         </View>
-        {list.map((item: any) => (
+        {list.map((item: any) => {
+          const expired = isExpired(item);
+          return (
           <View
             key={item.id}
-            style={[styles.equipItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            style={[
+              styles.equipItem,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              expired && styles.equipItemExpired,
+            ]}
           >
             {item.photo ? (
               <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
@@ -535,6 +550,12 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
                   Срок: {item.serviceLifeMonths} мес.
                 </Text>
               )}
+              {expired && (
+                <View style={styles.expiredPill}>
+                  <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
+                  <Text style={styles.expiredPillText}>Срок истёк</Text>
+                </View>
+              )}
             </View>
             {canEdit && (
               <View style={{ flexDirection: 'row', gap: spacing[1] }}>
@@ -553,7 +574,8 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
               </View>
             )}
           </View>
-        ))}
+          );
+        })}
       </View>
     );
   };
@@ -1125,13 +1147,163 @@ function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => vo
   );
 }
 
+// ─── Delete-storage-item choice dialog (#14.4) ─────────────────────────────
+// When a STORAGE item is deleted, the linked «Имущество» auto-expense can
+// either stay ("сервис понёс расход") or be reversed ("вернули деньги в
+// оборот"). Centered iOS dialog on a frosted ModalBlurBackdrop with two
+// explicit, full-width choice buttons + a cancel.
+function DeleteStorageItemDialog({
+  item,
+  pending,
+  onClose,
+  onChoose,
+}: {
+  item: any | null;
+  pending: boolean;
+  onClose: () => void;
+  onChoose: (reverseExpense: boolean) => void;
+}) {
+  const palette = useColors();
+  const visible = !!item;
+  return (
+    <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={dialogStyles.kavRoot}>
+        <ModalBlurBackdrop onPress={onClose} />
+        <View style={dialogStyles.scrim} pointerEvents="box-none">
+          <View style={[deleteStyles.card, { backgroundColor: palette.bg.elevated }]}>
+            <View style={[deleteStyles.iconBadge, { backgroundColor: colors.red[50] }]}>
+              <Ionicons name="trash-outline" size={24} color={colors.red[600]} />
+            </View>
+            <Text style={[deleteStyles.title, { color: palette.text.primary }]} numberOfLines={2}>
+              Удалить «{item?.name ?? ''}»?
+            </Text>
+            <Text style={[deleteStyles.subtitle, { color: palette.text.secondary }]}>
+              Что сделать с расходом за покупку этого имущества?
+            </Text>
+
+            {/* Choice 1 — keep the expense (default contract). */}
+            <TouchableOpacity
+              onPress={() => onChoose(false)}
+              disabled={pending}
+              activeOpacity={0.85}
+              style={[deleteStyles.choiceBtn, { backgroundColor: palette.bg.muted }, pending && { opacity: 0.5 }]}
+            >
+              <Ionicons name="receipt-outline" size={18} color={palette.text.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={[deleteStyles.choiceTitle, { color: palette.text.primary }]}>Расход остаётся</Text>
+                <Text style={[deleteStyles.choiceHint, { color: palette.text.tertiary }]}>
+                  Деньги уже потрачены — запись в Расходах сохранится
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* Choice 2 — reverse the expense (money back into circulation). */}
+            <TouchableOpacity
+              onPress={() => onChoose(true)}
+              disabled={pending}
+              activeOpacity={0.85}
+              style={[deleteStyles.choiceBtn, deleteStyles.choiceBtnPrimary, pending && { opacity: 0.5 }]}
+            >
+              <Ionicons name="arrow-undo-outline" size={18} color={colors.primary[700]} />
+              <View style={{ flex: 1 }}>
+                <Text style={[deleteStyles.choiceTitle, { color: colors.primary[700] }]}>Вернуть деньги в оборот</Text>
+                <Text style={[deleteStyles.choiceHint, { color: colors.primary[600] }]}>
+                  Возврат — расход в категории «Имущество» отменится
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={onClose} disabled={pending} style={deleteStyles.cancelBtn} activeOpacity={0.7}>
+              <Text style={[deleteStyles.cancelText, { color: palette.text.secondary }]}>Отменить</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </RNModal>
+  );
+}
+
+const deleteStyles = StyleSheet.create({
+  card: {
+    width: '88%',
+    maxWidth: 420,
+    borderRadius: Platform.OS === 'android' ? 28 : 20,
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[5],
+    paddingBottom: spacing[3],
+    alignItems: 'center',
+    shadowColor: colors.black,
+    shadowOpacity: 0.25,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 12,
+  },
+  iconBadge: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[3],
+  },
+  title: {
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: -0.2,
+  },
+  subtitle: {
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: spacing[1],
+    marginBottom: spacing[4],
+    lineHeight: 18,
+  },
+  choiceBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    width: '100%',
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    marginBottom: spacing[2],
+  },
+  choiceBtnPrimary: {
+    backgroundColor: colors.primary[50],
+    borderWidth: 1,
+    borderColor: colors.primary[200],
+  },
+  choiceTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+  },
+  choiceHint: {
+    fontSize: 11,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  cancelBtn: {
+    paddingVertical: spacing[3],
+    marginTop: spacing[1],
+  },
+  cancelText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+});
+
 // ─── Storage tab ───────────────────────────────────────────────────────────
 function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetBottom: number }) {
   const palette = useColors();
+  const qc = useQueryClient();
   const [selectedCat, setSelectedCat] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [showCreateItem, setShowCreateItem] = useState(false);
+  // #14.4 — the storage item the user tapped to delete; while set, the
+  // reverse-vs-keep-expense choice dialog is shown.
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
 
   const { data: categories = [] } = useQuery({
     queryKey: ['eq-cats'],
@@ -1140,6 +1312,22 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
   const { data: items = [] } = useQuery({
     queryKey: ['eq-storage', selectedCat],
     queryFn: async () => (await equipmentApi.getStorageItems(selectedCat ? { categoryId: selectedCat } : {})).data,
+  });
+
+  // #14.4 — delete a storage item. `reverseExpense` decides whether the linked
+  // «Имущество» auto-expense is also removed (money returned to circulation) or
+  // kept (the service really spent the money). Default contract = keep.
+  const removeMut = useMutation({
+    mutationFn: ({ id, reverseExpense }: { id: string; reverseExpense: boolean }) =>
+      equipmentApi.removeStorageItem(id, { reverseExpense }),
+    onSuccess: () => {
+      haptic('success');
+      qc.invalidateQueries({ queryKey: ['eq-storage'] });
+      qc.invalidateQueries({ queryKey: ['eq-storage-list'] });
+      qc.invalidateQueries({ queryKey: ['expenses'] });
+      setDeleteTarget(null);
+    },
+    onError: () => haptic('error'),
   });
 
   const catCounts: Record<string, number> = {};
@@ -1208,6 +1396,28 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
               </TouchableOpacity>
             ))
           )}
+
+          {/* #14.1 — clean "add folder" affordance directly under the last
+              folder. Visible only to users who can edit. The FAB stays too,
+              but this reads as the primary, discoverable way to add a folder
+              at the подсобка root. */}
+          {canEdit && categories.length > 0 && (
+            <TouchableOpacity
+              onPress={() => {
+                haptic('tap');
+                setShowCreateFolder(true);
+              }}
+              activeOpacity={0.85}
+              style={[styles.addFolderCard, { borderColor: palette.border.subtle }]}
+              accessibilityRole="button"
+              accessibilityLabel="Новая папка"
+            >
+              <View style={[styles.addFolderIcon, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="add" size={20} color={colors.primary[600]} />
+              </View>
+              <Text style={[styles.addFolderText, { color: colors.primary[600] }]}>Новая папка</Text>
+            </TouchableOpacity>
+          )}
         </View>
         {renderFab()}
         <CreateFolderDialog visible={showCreateFolder} onClose={() => setShowCreateFolder(false)} />
@@ -1236,10 +1446,16 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
             )}
           </View>
         ) : (
-          items.map((item: any) => (
+          items.map((item: any) => {
+            const expired = isExpired(item);
+            return (
             <View
               key={item.id}
-              style={[styles.equipItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              style={[
+                styles.equipItem,
+                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                expired && styles.equipItemExpired,
+              ]}
             >
               {item.photo ? (
                 <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
@@ -1261,9 +1477,29 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
                 <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
                   В наличии: {item.quantity} {item.unit}
                 </Text>
+                {expired && (
+                  <View style={styles.expiredPill}>
+                    <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
+                    <Text style={styles.expiredPillText}>Срок истёк</Text>
+                  </View>
+                )}
               </View>
+              {canEdit && (
+                <TouchableOpacity
+                  onPress={() => {
+                    haptic('tap');
+                    setDeleteTarget(item);
+                  }}
+                  style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Удалить предмет"
+                >
+                  <Ionicons name="trash-outline" size={14} color={colors.red[500]} />
+                </TouchableOpacity>
+              )}
             </View>
-          ))
+            );
+          })
         )}
         {photoUrl && <PhotoViewer url={photoUrl} onClose={() => setPhotoUrl(null)} />}
       </View>
@@ -1272,6 +1508,16 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
         visible={showCreateItem}
         categoryId={selectedCat}
         onClose={() => setShowCreateItem(false)}
+      />
+      <DeleteStorageItemDialog
+        item={deleteTarget}
+        pending={removeMut.isPending}
+        onClose={() => {
+          if (!removeMut.isPending) setDeleteTarget(null);
+        }}
+        onChoose={(reverseExpense) => {
+          if (deleteTarget) removeMut.mutate({ id: deleteTarget.id, reverseExpense });
+        }}
       />
     </>
   );
@@ -1336,10 +1582,16 @@ export default function EquipmentScreen() {
           <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary, marginBottom: spacing[3] }}>
             {myEquipment.length} предметов на {formatMoney(total)}
           </Text>
-          {myEquipment.map((item: any) => (
+          {myEquipment.map((item: any) => {
+            const expired = isExpired(item);
+            return (
             <View
               key={item.id}
-              style={[styles.equipItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              style={[
+                styles.equipItem,
+                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                expired && styles.equipItemExpired,
+              ]}
             >
               {item.photo ? (
                 <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
@@ -1356,9 +1608,16 @@ export default function EquipmentScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
                 <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
+                {expired && (
+                  <View style={styles.expiredPill}>
+                    <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
+                    <Text style={styles.expiredPillText}>Срок истёк</Text>
+                  </View>
+                )}
               </View>
             </View>
-          ))}
+            );
+          })}
         </ScrollView>
       </View>
     );
@@ -1551,12 +1810,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
   },
-  pillTint: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.18)',
-  },
-  pillAndroid: {
-    backgroundColor: 'rgba(0,0,0,0.42)',
+  // Solid frosted scrim replacing the per-card BlurView (see FrostedPill).
+  pillFrost: {
+    backgroundColor: 'rgba(17,24,39,0.46)',
   },
   pillIcon: { fontSize: 11 },
   pillLabel: {
@@ -1626,6 +1882,28 @@ const styles = StyleSheet.create({
     borderColor: colors.gray[100],
     marginBottom: spacing[2],
   },
+  // #14.3 — expired service-life look: soft red wash + red hairline border.
+  // Item is never auto-deleted, it just reads as "attention / overdue".
+  equipItemExpired: {
+    backgroundColor: colors.red[50],
+    borderColor: colors.red[200],
+  },
+  expiredPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    marginTop: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: colors.red[100],
+  },
+  expiredPillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.red[700],
+  },
   equipPhoto: { width: 48, height: 48, borderRadius: borderRadius.lg },
   equipName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   equipCost: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[600], marginTop: 2 },
@@ -1660,6 +1938,31 @@ const styles = StyleSheet.create({
   },
   folderName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   folderCount: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+
+  // #14.1 — "add folder" card under the last folder (dashed, low-emphasis,
+  // brand-tinted) — distinct from a real folder so it reads as an action.
+  addFolderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    borderStyle: 'dashed' as const,
+    backgroundColor: 'transparent',
+  },
+  addFolderIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addFolderText: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+  },
 
   // ── FAB (bottom-right) ──
   fabWrap: {

@@ -38,7 +38,11 @@ const queryClient = new QueryClient({
       // Keep query data alive for 30 min after last unmount, so a tab swipe
       // back doesn't lose the cache.
       gcTime: 30 * 60 * 1000,
-      retry: 2,
+      // 1 retry (was 2): with a 10s axios timeout, 2 retries meant a failing
+      // query could hang the UI for ~30s before surfacing. One retry covers
+      // the transient blip; persistent cache + placeholderData keep the
+      // screen populated meanwhile.
+      retry: 1,
       refetchOnWindowFocus: false,
       // Global stale-while-revalidate: when a queryKey changes (eg. paging,
       // search, filters), keep showing the previous data until the new one

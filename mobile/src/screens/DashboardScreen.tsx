@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import Svg, { Path, Defs, LinearGradient as SvgGrad, Stop, Line, Circle, RadialGradient } from 'react-native-svg';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import {
   checksApi,
@@ -1387,12 +1387,25 @@ const PeriodChips = React.memo(function PeriodChips({ value, onChange, palette }
 function CashPositionCard() {
   const palette = useColors();
   const navigation = useNavigation<any>();
+  // Near-live cash position: poll every 30s but only while the Dashboard is
+  // focused (no background battery drain when the user is on another tab).
+  // Paired with axios If-None-Match → most refetches are ~0-byte 304s. Pattern
+  // mirrors CallsScreen's focus-gated poll.
+  const [pollEnabled, setPollEnabled] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setPollEnabled(true);
+      return () => setPollEnabled(false);
+    }, []),
+  );
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-v2', 'today'],
     queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
     staleTime: 60_000,
     placeholderData: undefined,
     refetchOnMount: 'always',
+    refetchOnReconnect: true,
+    refetchInterval: pollEnabled ? 30_000 : false,
   });
 
   const cash = data?.cashPosition.cash ?? 0;

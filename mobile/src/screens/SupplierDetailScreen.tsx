@@ -19,6 +19,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import ProductPickerModal from '../components/ProductPickerModal';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type {
@@ -69,6 +70,12 @@ export default function SupplierDetailScreen() {
   const [deliveryModalOpen, setDeliveryModalOpen] = useState(false);
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItem[]>([]);
   const [deliveryComment, setDeliveryComment] = useState('');
+  // Backdated-invoice support — owner can stamp a delivery with a past
+  // date (накладные задним числом). Defaults to today; the backend
+  // honors `date?: string` on CreateDeliveryRequest. Reset to today
+  // every time the «Новая поставка» modal opens.
+  const [deliveryDate, setDeliveryDate] = useState<Date>(new Date());
+  const [deliveryDatePickerOpen, setDeliveryDatePickerOpen] = useState(false);
   const [productPickerOpen, setProductPickerOpen] = useState(false);
 
   // Payment form
@@ -432,6 +439,9 @@ export default function SupplierDetailScreen() {
     }
     createDeliveryMutation.mutate({
       supplierId: id,
+      // Backdated invoices — send the chosen date as ISO. Backend honors
+      // `date?: string`; omitting it would default to server "now".
+      date: deliveryDate.toISOString(),
       comment: deliveryComment || undefined,
       items: deliveryItems.map((i) => ({ productId: i.productId, quantity: i.quantity, price: i.price })),
     });
@@ -520,7 +530,7 @@ export default function SupplierDetailScreen() {
           name title. */}
       <IosScreenHeader
         title={supplier.name}
-        subtitle={isUsedPurchaseSupplier ? 'Покупка б/у товаров от клиентов и третьих лиц' : undefined}
+        subtitle={isUsedPurchaseSupplier ? 'Приём б/у запчастей от клиентов: долг поставщику растёт' : undefined}
         onBack={() => navigation.goBack()}
       />
 
@@ -610,7 +620,7 @@ export default function SupplierDetailScreen() {
             activeOpacity={0.85}
           >
             <Ionicons name="cube-outline" size={18} color={colors.white} />
-            <Text style={styles.quickPayText}>Покупка б/у товара</Text>
+            <Text style={styles.quickPayText}>Купить б/у запчасть</Text>
           </TouchableOpacity>
         ) : (
           // Secondary action: return defective stock to supplier. Always
@@ -751,6 +761,9 @@ export default function SupplierDetailScreen() {
                 onPress={() => {
                   setDeliveryItems([]);
                   setDeliveryComment('');
+                  // Stamp fresh "today" each open — owner can backdate it
+                  // inside the modal if they're entering a past invoice.
+                  setDeliveryDate(new Date());
                   setDeliveryModalOpen(true);
                 }}
               >
@@ -1018,6 +1031,22 @@ export default function SupplierDetailScreen() {
             </View>
           )}
 
+          {/* Дата поставки — позволяет заводить накладные задним числом.
+              По умолчанию сегодня; тап открывает календарь
+              (DateTimePickerModal, тот же, что в Расходах/Кассе). */}
+          <View style={styles.formField}>
+            <Text style={styles.formLabel}>Дата поставки</Text>
+            <TouchableOpacity
+              style={styles.dateField}
+              onPress={() => setDeliveryDatePickerOpen(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="calendar-outline" size={18} color={colors.primary[600]} />
+              <Text style={styles.dateFieldText}>{formatDate(deliveryDate.toISOString())}</Text>
+              <Ionicons name="chevron-down" size={16} color={colors.gray[400]} style={{ marginLeft: 'auto' }} />
+            </TouchableOpacity>
+          </View>
+
           <View style={styles.formField}>
             <Text style={styles.formLabel}>Комментарий</Text>
             <TextInput
@@ -1044,6 +1073,19 @@ export default function SupplierDetailScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {/* Delivery date picker — backdated invoices. Shares the same
+          calendar component used across Расходы / Касса / Отчёты. */}
+      <DateTimePickerModal
+        visible={deliveryDatePickerOpen}
+        value={deliveryDate}
+        mode="date"
+        onConfirm={(d) => {
+          setDeliveryDate(d);
+          setDeliveryDatePickerOpen(false);
+        }}
+        onCancel={() => setDeliveryDatePickerOpen(false)}
+      />
 
       {/* Product Picker with folder navigation */}
       <ProductPickerModal
@@ -1110,7 +1152,7 @@ export default function SupplierDetailScreen() {
       {/* Used-purchase modal — owner types a free-form product name +
           qty + price + optional folder. Backend auto-creates or
           increments the matching Б/У SKU and grows supplier debt. */}
-      <Modal visible={usedPurchaseModalOpen} onClose={() => setUsedPurchaseModalOpen(false)} title="Покупка б/у товара">
+      <Modal visible={usedPurchaseModalOpen} onClose={() => setUsedPurchaseModalOpen(false)} title="Покупка б/у запчасти">
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
           {/* Informational chip — owner needs to know the financial
               side of this action ends up in the «Покупка товара»
@@ -1632,6 +1674,20 @@ const styles = StyleSheet.create({
     marginBottom: spacing[3],
   },
   addItemText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.primary[600] },
+  // Date field — tappable row that opens the calendar picker. Styled
+  // like a read-only input so it reads as part of the form.
+  dateField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[300],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+  },
+  dateFieldText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   deliveryFormItem: {
     flexDirection: 'row',
     alignItems: 'center',

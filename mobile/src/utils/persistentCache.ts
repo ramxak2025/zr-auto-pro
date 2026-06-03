@@ -47,6 +47,10 @@ const PERSISTED_KEYS = [
   'suppliers',
   'clients',
   'cars',
+  // Client source list (откуда узнал о нас) — static reference data,
+  // invalidated only on edit. Persisted so the source picker is instant
+  // on cold start instead of flashing empty.
+  'client-sources',
   // Equipment (uses 'eq-*' keys)
   'eq-summary',
   'eq-storage-list',
@@ -152,6 +156,19 @@ const PERSISTED_KEYS = [
   'warehouse-analytics-category-margin',
   'warehouse-analytics-top-moving',
   'warehouse-analytics-top-margin',
+  // ── Detail cards — instant cold-open (2026-06-03) ──────────────
+  // ClientDetailScreen reads ['client', id] (header card) + ['client-checks',
+  // id] (history list) + ['client-checks-by-car', id]. EmployeeDetailScreen
+  // reads ['employee-full-profile', id] (the whole profile aggregate) +
+  // ['user', id]. All are keyed ONLY by a stable id (no search param → not
+  // search-volatile), so persisting their first segments lets a tapped card
+  // render from cache on cold start instead of a blocking spinner. A separate
+  // agent adds the pressIn prefetch of 'client-checks' for the list.
+  'client',
+  'client-checks',
+  'client-checks-by-car',
+  'employee-full-profile',
+  'user',
 ] as const;
 
 type PersistedKey = (typeof PERSISTED_KEYS)[number];

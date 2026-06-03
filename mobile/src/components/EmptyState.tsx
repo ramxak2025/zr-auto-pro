@@ -30,7 +30,7 @@ interface EmptyStateProps {
 export default function EmptyState({ title, description, icon, action }: EmptyStateProps) {
   const palette = useColors();
   return (
-    <Animated.View entering={FadeInDown.duration(380).springify().damping(18)} style={styles.container}>
+    <Animated.View entering={FadeInDown.duration(320)} style={styles.container}>
       {icon && (
         <View style={[styles.iconWrap, { backgroundColor: palette.bg.muted }]}>
           <Icon name={icon} size={28} color={palette.text.tertiary} />

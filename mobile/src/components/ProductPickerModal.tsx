@@ -11,9 +11,11 @@ import {
   PanResponder,
   Pressable,
   Alert,
+  AccessibilityInfo,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import CachedImage from './CachedImage';
+import ModalBlurBackdrop from './ModalBlurBackdrop';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQuery } from '@tanstack/react-query';
@@ -353,6 +355,39 @@ export default function ProductPickerModal({
     return out;
   }, [productSearch, sortedProductFolders, visibleProducts, folderAnnotations]);
 
+  // Card slide-up entrance. We drive it ourselves (instead of RNModal's
+  // built-in `animationType="slide"`) so the ModalBlurBackdrop stays a
+  // STATIC full-screen frosted layer and only the card slides in — the
+  // proper iOS sheet idiom. RNModal's "slide" would drag the blur up from
+  // the bottom with the card, which reads as a "rising blur panel".
+  const cardTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+  const reduceMotionRef = useRef(false);
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((r) => {
+        reduceMotionRef.current = !!r;
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (visible) {
+      if (reduceMotionRef.current) {
+        cardTranslateY.setValue(0);
+      } else {
+        cardTranslateY.setValue(SCREEN_HEIGHT * 0.5);
+        Animated.spring(cardTranslateY, {
+          toValue: 0,
+          useNativeDriver: true,
+          damping: 26,
+          stiffness: 260,
+          mass: 0.9,
+        }).start();
+      }
+    } else {
+      cardTranslateY.setValue(SCREEN_HEIGHT);
+    }
+  }, [visible, cardTranslateY]);
+
   // Swipe-to-go-back from the folder navigation
   const panX = useRef(new Animated.Value(0)).current;
   const panResponder = useRef(
@@ -421,10 +456,21 @@ export default function ProductPickerModal({
   const queryResolvedEmpty = visible && Array.isArray(allProducts) && allProducts.length === 0;
 
   return (
-    <RNModal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
+    <RNModal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
       <View style={styles.overlay}>
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={handleClose} />
-        <Animated.View style={[styles.container, { transform: [{ translateX: panX }] }]} {...panResponder.panHandlers}>
+        {/* Premium frosted blur backdrop (#6/#7) — replaces the old flat
+            rgba(0,0,0,0.4) dim. Static full-screen layer; tapping the
+            visible area above the card closes the picker. The card slides
+            up via `cardTranslateY` (not RNModal's "slide", which would
+            drag the blur up too); swipe-back stays on `panResponder`. */}
+        <ModalBlurBackdrop onPress={handleClose} />
+        <Animated.View
+          style={[
+            styles.container,
+            { transform: [{ translateX: panX }, { translateY: cardTranslateY }] },
+          ]}
+          {...panResponder.panHandlers}
+        >
           {/* Handle bar */}
           <View style={styles.handle}>
             <View style={styles.handleBar} />
@@ -617,7 +663,9 @@ export default function ProductPickerModal({
 }
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  // Transparent host: the dim is now a frosted ModalBlurBackdrop
+  // (absolute-fill, behind the card). Card stays pinned to the bottom.
+  overlay: { flex: 1, justifyContent: 'flex-end' },
   container: {
     height: SCREEN_HEIGHT * 0.82,
     backgroundColor: colors.white,

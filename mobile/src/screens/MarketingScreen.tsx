@@ -37,15 +37,35 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
-import { marketingApi, clientsApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
+import { marketingApi, clientsApi, clientSourcesApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
+import EmptyState from '../components/EmptyState';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { Client, ReviewAlert, ReviewPlatformLink, ReviewSettings } from '../../../shared/types';
+import { UserRole } from '../../../shared/types';
+
+const MAX_SOURCE_LEN = 100;
+
+/** Trim + collapse whitespace + case-insensitive dedupe + length clamp. */
+function normalizeSources(list: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of list) {
+    const value = raw.trim().replace(/\s+/g, ' ').slice(0, MAX_SOURCE_LEN);
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
 
 type TabKey = 'dashboard' | 'reviews';
 
@@ -244,11 +264,229 @@ function MotivationCard() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+//  Client-source list editor (owner-editable)
+//  This is the list that powers the "Откуда узнал" picker when creating
+//  a client. Edited here, consumed in ClientsScreen.
+// ─────────────────────────────────────────────────────────────────────
+
+function ClientSourcesCard() {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+
+  const sourcesQuery = useQuery({
+    queryKey: ['client-sources'],
+    queryFn: async () => (await clientSourcesApi.get()).data,
+    staleTime: 60_000,
+  });
+  const sources = sourcesQuery.data?.sources ?? [];
+
+  // Editor modal: editIndex === -1 → adding new, >= 0 → renaming existing.
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editIndex, setEditIndex] = useState(-1);
+  const [draft, setDraft] = useState('');
+
+  const save = useMutation({
+    mutationFn: (next: string[]) => clientSourcesApi.update(normalizeSources(next)),
+    onSuccess: (res) => {
+      queryClient.setQueryData(['client-sources'], res.data);
+      queryClient.invalidateQueries({ queryKey: ['client-sources'] });
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось сохранить список источников');
+    },
+  });
+
+  const openAdd = () => {
+    setEditIndex(-1);
+    setDraft('');
+    setEditorOpen(true);
+  };
+
+  const openRename = (index: number) => {
+    setEditIndex(index);
+    setDraft(sources[index] ?? '');
+    setEditorOpen(true);
+  };
+
+  const commitEditor = () => {
+    const value = draft.trim().replace(/\s+/g, ' ').slice(0, MAX_SOURCE_LEN);
+    if (!value) {
+      Alert.alert('Пустое значение', 'Введите название источника');
+      return;
+    }
+    const exists = sources.some(
+      (s, i) => i !== editIndex && s.toLowerCase() === value.toLowerCase(),
+    );
+    if (exists) {
+      Alert.alert('Уже есть', 'Такой источник уже в списке');
+      return;
+    }
+    const next = [...sources];
+    if (editIndex >= 0) next[editIndex] = value;
+    else next.push(value);
+    haptic('success');
+    setEditorOpen(false);
+    save.mutate(next);
+  };
+
+  const removeAt = (index: number) => {
+    const name = sources[index];
+    Alert.alert('Удалить источник?', name, [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: () => {
+          haptic('tap');
+          save.mutate(sources.filter((_, i) => i !== index));
+        },
+      },
+    ]);
+  };
+
+  return (
+    <>
+      <AnimatedCard
+        index={0}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <View style={styles.sectionHeaderRow}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+            <View style={[styles.giftBadge, { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons name="pricetags-outline" size={16} color={palette.accent.primary} />
+            </View>
+            <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>
+              Источники клиентов
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => {
+              haptic('tap');
+              openAdd();
+            }}
+            hitSlop={8}
+            style={[styles.sourceAddBtn, { backgroundColor: palette.accent.primarySoft }]}
+            accessibilityRole="button"
+            accessibilityLabel="Добавить источник"
+          >
+            <Ionicons name="add" size={18} color={palette.accent.primary} />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={[styles.motivationHint, { color: palette.text.tertiary }]}>
+          Откуда клиент узнал о сервисе. Этот список появляется при добавлении клиента. Если список пуст —
+          источник не запрашивается.
+        </Text>
+
+        {sourcesQuery.isLoading && sources.length === 0 ? (
+          <ActivityIndicator color={palette.accent.primary} style={{ marginVertical: spacing[4] }} />
+        ) : sources.length === 0 ? (
+          <EmptyState
+            title="Источников пока нет"
+            description="Добавьте первый источник, например «Авито» или «По рекомендации»"
+            action={{ label: 'Добавить', onPress: openAdd }}
+          />
+        ) : (
+          <View>
+            {sources.map((source, idx) => (
+              <View
+                key={`${source}-${idx}`}
+                style={[
+                  styles.sourceRow,
+                  idx > 0 && [styles.sourceRowBorder, { borderTopColor: palette.border.subtle }],
+                ]}
+              >
+                <View style={[styles.sourceBadge, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="pricetag-outline" size={14} color={palette.text.secondary} />
+                </View>
+                <Text style={[styles.sourceName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {source}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    haptic('tap');
+                    openRename(idx);
+                  }}
+                  hitSlop={8}
+                  style={styles.sourceIconBtn}
+                  accessibilityLabel="Переименовать"
+                >
+                  <Ionicons name="create-outline" size={18} color={palette.text.secondary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => removeAt(idx)}
+                  hitSlop={8}
+                  style={styles.sourceIconBtn}
+                  accessibilityLabel="Удалить"
+                >
+                  <Ionicons name="trash-outline" size={18} color={colors.red[500]} />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+      </AnimatedCard>
+
+      {/* Add / rename modal — Modal already renders ModalBlurBackdrop */}
+      <Modal
+        visible={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        title={editIndex >= 0 ? 'Переименовать источник' : 'Новый источник'}
+      >
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Название</Text>
+          <TextInput
+            value={draft}
+            onChangeText={setDraft}
+            maxLength={MAX_SOURCE_LEN}
+            style={[
+              styles.formInput,
+              {
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
+            placeholder="Например: Авито, Инстаграм, По рекомендации"
+            placeholderTextColor={palette.text.tertiary}
+            autoFocus
+            returnKeyType="done"
+            onSubmitEditing={commitEditor}
+          />
+        </View>
+        <TouchableOpacity
+          style={[
+            styles.primaryBtn,
+            { backgroundColor: palette.accent.primary, marginTop: spacing[1] },
+            (save.isPending || !draft.trim()) && { opacity: 0.55 },
+          ]}
+          disabled={save.isPending || !draft.trim()}
+          onPress={commitEditor}
+        >
+          {save.isPending ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : (
+            <>
+              <Ionicons name="checkmark-circle" size={16} color={colors.white} />
+              <Text style={styles.primaryBtnText}>Сохранить</Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 //  Сводка
 // ─────────────────────────────────────────────────────────────────────
 
 function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
   const palette = useColors();
+  const { isRole } = useAuth();
+  // Only owner-level roles configure the client-source list.
+  const canEditSources = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
   const dashboardQuery = useQuery({
     queryKey: ['marketing-dashboard'],
@@ -346,6 +584,9 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
 
       {/* Motivational gift editor */}
       <MotivationCard />
+
+      {/* Client-source list editor (owner-only) */}
+      {canEditSources && <ClientSourcesCard />}
 
       {/* Negative alerts highlight */}
       {unreadNegative > 0 && (
@@ -1115,6 +1356,36 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: spacing[3],
+  },
+
+  // Client sources
+  sourceAddBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sourceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingVertical: spacing[2.5],
+  },
+  sourceRowBorder: { borderTopWidth: 1 },
+  sourceBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sourceName: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  sourceIconBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   // Platforms

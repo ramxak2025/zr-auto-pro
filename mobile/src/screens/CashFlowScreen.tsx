@@ -14,10 +14,11 @@ import {
 } from 'react-native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
-import { checksApi, reportsApi, usersApi } from '../api/services';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { checksApi, expensesApi, reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import AnimatedCard from '../components/AnimatedCard';
@@ -183,6 +184,40 @@ function formatMoney(v: number) {
   );
 }
 
+// ── CheckBadge ─────────────────────────────────────────────────────────
+// Crisp "selected" affordance — SF-Symbol `checkmark.circle.fill` look.
+//
+// ⚠️ Root cause of the "bold/empty circle" artifact (#10.3 / #11.1):
+// `@expo/vector-icons` is metro-aliased to an SVG shim (IoniconsShim) that
+// maps Ionicons names → lucide-react-native. `checkmark-circle` is mapped
+// with `{ lucide: 'CheckCircle', fill: true }`. In lucide v1, `CheckCircle`
+// is an alias to `CircleCheckBig`, whose paths are an OPEN arc + a check
+// stroke (`M21.801 10A10…` + `m9 11 3 3L22 4`). With `fill={color}` the
+// open arc fills into a solid blob and the check stroke disappears — so the
+// user sees a bold filled circle with no visible check.
+//
+// Fix (no shared-file edits): render the bare `checkmark` glyph, which maps
+// to lucide `Check` (a stroke-only ✓ path with NO fill and NO circle), on
+// top of our own colored ring. Result is a crisp, always-visible check.
+function CheckBadge({ size = 18, color = colors.primary[600] }: { size?: number; color?: string }) {
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        backgroundColor: color,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+    >
+      <Ionicons name="checkmark" size={Math.round(size * 0.66)} color={colors.white} />
+    </View>
+  );
+}
+
 // ── EmployeePickerRow ──────────────────────────────────────────────────
 interface EmployeePickerRowProps {
   id: string;
@@ -215,7 +250,7 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
       >
         {fullName}
       </Text>
-      {active && <Ionicons name="checkmark-circle" size={18} color={colors.primary[600]} />}
+      {active && <CheckBadge size={18} />}
     </TouchableOpacity>
   );
 });
@@ -280,6 +315,18 @@ export default function CashFlowScreen() {
 
   const effectiveEmployeeId = mode === 'employee' ? employeeId : '';
 
+  // Near-live cash flow: poll every 30s but only while the screen is focused
+  // (no background battery drain / JS tick when the user is elsewhere). Paired
+  // with axios If-None-Match → most refetches are ~0-byte 304s. Pattern
+  // mirrors CallsScreen's focus-gated poll.
+  const [pollEnabled, setPollEnabled] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      setPollEnabled(true);
+      return () => setPollEnabled(false);
+    }, []),
+  );
+
   const { data: cashflow, isLoading } = useQuery<any>({
     queryKey: ['cashflow', dateFrom, dateTo, effectiveEmployeeId],
     queryFn: async () => {
@@ -289,6 +336,8 @@ export default function CashFlowScreen() {
       return res.data;
     },
     placeholderData: (prev: unknown) => prev,
+    refetchOnReconnect: true,
+    refetchInterval: pollEnabled ? 30_000 : false,
   });
 
   // Lazy per-day check list — fires only when a card is expanded.
@@ -302,7 +351,30 @@ export default function CashFlowScreen() {
       return res.data;
     },
     enabled: !!expandedDay,
-    placeholderData: (prev: unknown) => prev,
+    // No placeholderData: when the user switches days the rows must reset to
+    // undefined so the loading gate shows a spinner instead of briefly
+    // flashing the PREVIOUS day's checks + total. These keys aren't
+    // persisted, so nothing is lost on day change.
+  });
+
+  // Lazy per-day expense list — same trigger as the checks above, so an
+  // expanded day shows BOTH income (checks: plate + sum) and outflow
+  // (expenses: purpose + sum). Owner-style screen, so we never filter by
+  // master here — расходы предприятия не привязаны к выбранному мастеру.
+  const { data: expandedExpenses, isLoading: isLoadingExpenses } = useQuery<any[]>({
+    queryKey: ['cashflow-day-expenses', expandedDay],
+    queryFn: async () => {
+      if (!expandedDay) return [];
+      // Only APPROVED expenses are real outflow — pending/rejected must not
+      // count toward the day total or show as spend.
+      const res = await expensesApi.getAll({
+        dateFrom: expandedDay,
+        dateTo: expandedDay,
+        approvalStatus: 'approved',
+      });
+      return res.data as any[];
+    },
+    enabled: !!expandedDay,
   });
 
   // ── Handlers ─────────────────────────────────────────────────────────
@@ -310,6 +382,7 @@ export default function CashFlowScreen() {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['cashflow'] });
     await queryClient.invalidateQueries({ queryKey: ['cashflow-day-checks'] });
+    await queryClient.invalidateQueries({ queryKey: ['cashflow-day-expenses'] });
     setRefreshing(false);
   };
 
@@ -628,8 +701,11 @@ export default function CashFlowScreen() {
                   onPress={handleClearEmployee}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   accessibilityLabel="Сбросить выбор сотрудника"
+                  style={[styles.clearXBadge, { backgroundColor: palette.bg.muted }]}
                 >
-                  <Ionicons name="close-circle" size={14} color={palette.text.secondary} />
+                  {/* `close` → lucide `X` (stroke-only) avoids the filled-circle
+                      glyph artifact; our own ring gives the badge shape. */}
+                  <Ionicons name="close" size={11} color={palette.text.secondary} />
                 </TouchableOpacity>
               ) : null}
             </TouchableOpacity>
@@ -765,9 +841,17 @@ export default function CashFlowScreen() {
                       )}
                     </View>
 
-                    {/* Expanded — list of checks for this day */}
+                    {/* Expanded — income (checks) + outflow (expenses) for
+                        this day. Both lists lazy-load on expand. */}
                     {isOpen && (
                       <View style={[styles.checksSection, { borderTopColor: palette.border.subtle }]}>
+                        {/* ── Доходы: чеки (госномер + сумма) ──────────── */}
+                        <View style={styles.detailSubLabelRow}>
+                          <View style={[styles.detailDot, { backgroundColor: colors.green[500] }]} />
+                          <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>
+                            Чеки
+                          </Text>
+                        </View>
                         {isLoadingChecks && !expandedChecks ? (
                           <View style={{ paddingVertical: spacing[3], alignItems: 'center' }}>
                             <ActivityIndicator color={colors.primary[500]} />
@@ -781,6 +865,25 @@ export default function CashFlowScreen() {
                             <CheckRow key={c.id} check={c} palette={palette} onPress={() => openCheck(c.id)} />
                           ))
                         )}
+
+                        {/* ── Расходы: назначение + сумма ──────────────── */}
+                        {isLoadingExpenses && !expandedExpenses ? null : expandedExpenses &&
+                          expandedExpenses.length > 0 ? (
+                          <View style={[styles.expensesBlock, { borderTopColor: palette.border.subtle }]}>
+                            <View style={styles.detailSubLabelRow}>
+                              <View style={[styles.detailDot, { backgroundColor: colors.rose[500] }]} />
+                              <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>
+                                Расходы
+                              </Text>
+                              <Text style={[styles.expensesTotal, { color: colors.rose[600] }]}>
+                                −{formatMoney(expandedExpenses.reduce((s, e) => s + (e.amount || 0), 0))}
+                              </Text>
+                            </View>
+                            {expandedExpenses.map((e: any) => (
+                              <ExpenseRow key={e.id} expense={e} palette={palette} />
+                            ))}
+                          </View>
+                        ) : null}
                       </View>
                     )}
                   </AnimatedCard>
@@ -797,12 +900,9 @@ export default function CashFlowScreen() {
       </ScrollView>
 
       {/* Employee picker modal */}
-      <Modal visible={showEmployeePicker} transparent animationType="fade">
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowEmployeePicker(false)}
-        >
+      <Modal visible={showEmployeePicker} transparent animationType="fade" onRequestClose={() => setShowEmployeePicker(false)}>
+        <View style={styles.modalRoot}>
+          <ModalBlurBackdrop onPress={() => setShowEmployeePicker(false)} />
           <TouchableOpacity activeOpacity={1} style={[styles.modalContent, { backgroundColor: palette.bg.card }]}>
             <View style={[styles.modalHeader, { borderBottomColor: palette.border.subtle }]}>
               <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Выберите сотрудника</Text>
@@ -853,7 +953,7 @@ export default function CashFlowScreen() {
               ))}
             </ScrollView>
           </TouchableOpacity>
-        </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* Календарь — два независимых пика: from, потом to. После from
@@ -954,6 +1054,40 @@ function CheckRow({
       <Text style={[styles.checkAmount, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue || 0)}</Text>
       <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
     </TouchableOpacity>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ExpenseRow — one-line outflow row inside an expanded day card.
+// Purpose (назначение = описание / категория) + amount. Non-tappable: this
+// screen is read-only «движение денег»; editing lives in the Expenses screen.
+// ─────────────────────────────────────────────────────────────────────────────
+function ExpenseRow({ expense, palette }: { expense: any; palette: ReturnType<typeof useColors> }) {
+  const purpose: string =
+    (expense?.description && String(expense.description).trim()) ||
+    expense?.categoryName ||
+    'Расход';
+  const sub: string | undefined =
+    expense?.description && expense?.categoryName ? expense.categoryName : undefined;
+  return (
+    <View style={styles.checkRow}>
+      <View style={[styles.checkIcon, { backgroundColor: colors.rose[50] }]}>
+        <Ionicons name="arrow-down" size={14} color={colors.rose[600]} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.checkPrimary, { color: palette.text.primary }]} numberOfLines={1}>
+          {purpose}
+        </Text>
+        {!!sub && (
+          <Text style={[styles.checkSecondary, { color: palette.text.tertiary }]} numberOfLines={1}>
+            {sub}
+          </Text>
+        )}
+      </View>
+      <Text style={[styles.checkAmount, { color: colors.rose[600] }]}>
+        −{formatMoney(expense?.amount || 0)}
+      </Text>
+    </View>
   );
 }
 
@@ -1078,6 +1212,14 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   modeSegTextActive: { color: colors.gray[900], fontWeight: '700' },
+  // Round ✕ badge — crisp `X` glyph on a muted ring (no filled-circle glyph).
+  clearXBadge: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Totals card — hero
   totalsCard: {
@@ -1156,6 +1298,31 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2],
     textAlign: 'center',
   },
+  // Sub-label row inside an expanded day ("Чеки" / "Расходы")
+  detailSubLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: spacing[1],
+  },
+  detailDot: { width: 6, height: 6, borderRadius: 3 },
+  detailSubLabel: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  // Расходы block — sits beneath the checks, separated by a hairline.
+  expensesBlock: {
+    marginTop: spacing[2.5],
+    paddingTop: spacing[2.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  expensesTotal: {
+    marginLeft: 'auto',
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+  },
   checkRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1183,10 +1350,10 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // Modal
-  modalOverlay: {
+  // Modal — backdrop is ModalBlurBackdrop (frosted blur), this is just the
+  // centering container above it.
+  modalRoot: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 24,

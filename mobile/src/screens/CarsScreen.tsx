@@ -1,5 +1,13 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  RefreshControl,
+  ActivityIndicator,
+  ScrollView,
+} from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,15 +47,22 @@ export default function CarsScreen() {
   const [page, setPage] = useState(1);
   const limit = 30;
   const [refreshing, setRefreshing] = useState(false);
+  // «Без номеров» filter — keep only plateless cars (noPlate flag or empty plate).
+  const [noPlateOnly, setNoPlateOnly] = useState(false);
   // Inline-checks expansion — one car at a time. Setting to null
   // collapses everything (cheaper than rendering a list of expanded
   // states; the user usually scans one car at a time).
   const [expandedCarId, setExpandedCarId] = useState<string | null>(null);
 
   const carsQuery = useQuery<{ data: Car[]; total: number } | Car[]>({
-    queryKey: ['cars', { search, page, limit }],
+    // noPlate is part of the key ONLY when active, so the normal (all-cars)
+    // cache key stays `['cars', { search, page, limit }]` and toggling the
+    // chip refetches the server-filtered set instead of paginating page 1.
+    queryKey: ['cars', noPlateOnly ? { search, page, limit, noPlate: true } : { search, page, limit }],
     queryFn: async () => {
-      const res = await carsApi.getAll({ search, page, limit });
+      const res = await carsApi.getAll(
+        noPlateOnly ? { search, page, limit, noPlate: true } : { search, page, limit },
+      );
       return res.data;
     },
     placeholderData: (prev) => prev,
@@ -72,6 +87,8 @@ export default function CarsScreen() {
   // backend ordering (server search is substring against multiple
   // fields and may surface a makeModel match above a plate hit).
   const sortedCars = useMemo<Car[]>(() => {
+    // No client-side plate filtering: when «без номеров» is active the server
+    // already returns ONLY plateless cars across all pages.
     if (!search || !looksLikePlateQuery(search)) return rawCars;
     const q = normalizePlateQuery(search);
     const hits: Car[] = [];
@@ -154,22 +171,71 @@ export default function CarsScreen() {
             setSearch(v);
             setPage(1);
           }}
-          placeholder="Госномер или марка"
+          placeholder="Госномер (RU/INT) или марка"
         />
       </View>
 
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipsRow}
+      >
+        <CarFilterChip
+          active={!noPlateOnly}
+          label="Все"
+          icon="apps-outline"
+          onPress={() => {
+            haptic('select');
+            setNoPlateOnly(false);
+            setPage(1);
+          }}
+          palette={palette}
+        />
+        <CarFilterChip
+          active={noPlateOnly}
+          label="Без номеров"
+          icon="help-circle-outline"
+          onPress={() => {
+            haptic('select');
+            setNoPlateOnly((v) => !v);
+            setPage(1);
+          }}
+          palette={palette}
+        />
+      </ScrollView>
+
       {data === undefined ? (
         <ListSkeleton count={8} />
-      ) : sortedCars.length === 0 && !isLoading ? (
+      ) : sortedCars.length === 0 && !isLoading && !search && !noPlateOnly ? (
+        // Genuinely-empty unfiltered list — a full-screen EmptyState is fine
+        // here (there's nothing to paginate). For search / «без номеров» we
+        // keep the list mounted (below) so onEndReached can load deeper pages.
         <EmptyState
           title="Нет автомобилей"
-          description={search ? 'Ничего не найдено' : 'Автомобили появятся после добавления к клиентам'}
+          description="Автомобили появятся после добавления к клиентам"
         />
       ) : (
         <FlashList
           data={sortedCars}
           keyExtractor={(item) => item.id}
           renderItem={renderCar}
+          // Keep the list mounted even when empty so onEndReached keeps
+          // firing — emptiness shows via ListEmptyComponent, never by
+          // unmounting the list.
+          ListEmptyComponent={
+            !isLoading ? (
+              <EmptyState
+                title={
+                  search
+                    ? 'Ничего не найдено'
+                    : noPlateOnly
+                      ? 'Нет авто без номеров'
+                      : 'Нет автомобилей'
+                }
+                description={search ? `Запрос: «${search}»` : undefined}
+              />
+            ) : null
+          }
           contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
           removeClippedSubviews
           refreshControl={
@@ -182,6 +248,40 @@ export default function CarsScreen() {
         />
       )}
     </View>
+  );
+}
+
+interface CarFilterChipProps {
+  active: boolean;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  palette: ReturnType<typeof useColors>;
+}
+
+// Compact filter chip — mirrors the Клиенты screen chip so the «без
+// номеров» control feels identical across both car surfaces.
+function CarFilterChip({ active, label, icon, onPress, palette }: CarFilterChipProps) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[
+        styles.chip,
+        {
+          backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
+          borderColor: active ? palette.accent.primary : palette.border.subtle,
+        },
+      ]}
+    >
+      <Ionicons name={icon} size={13} color={active ? palette.accent.primary : palette.text.secondary} />
+      <Text
+        style={[styles.chipLabel, { color: active ? palette.accent.primaryText : palette.text.secondary }]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
   );
 }
 
@@ -252,6 +352,22 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   freshnessRow: { paddingHorizontal: spacing[4], alignItems: 'flex-end', minHeight: 14 },
   searchWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  chipsRow: {
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[3],
+    gap: spacing[2],
+    alignItems: 'center',
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  chipLabel: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
   list: { paddingHorizontal: 0, paddingBottom: spacing[8] },
 
   carRow: {

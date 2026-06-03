@@ -466,7 +466,10 @@ export default function CheckCreateScreen() {
     },
   });
 
-  const masters = useMemo(() => (allUsers || []).filter((u) => u.isActive), [allUsers]);
+  const masters = useMemo(
+    () => (allUsers || []).filter((u) => u.isActive && !u.hiddenEverywhere),
+    [allUsers],
+  );
 
   const { data: allServices } = useQuery<Service[]>({
     queryKey: ['all-services'],
@@ -1369,13 +1372,14 @@ export default function CheckCreateScreen() {
                 </View>
 
                 {selectedCar && (
-                  /* — Medium plate (58pt) centered + label row
-                       "Автомобиль: <make/model>" under. The 'medium'
-                       preset gives ГОСТ digit/flag/RUS room to breathe
-                       inside the right strip without the cramped 48pt
-                       look reported on physical iPhones. */
+                  /* — Compact plate (48pt, proportional ГОСТ preset)
+                       centered + label row "Автомобиль: <make/model>"
+                       under. Below it, structurally tied to THIS car:
+                       the last-visit line and the active-warranty chips —
+                       so they read as "this car was last here on … and
+                       these items are still under warranty". */
                   <View style={[styles.selectedCarStack, { borderTopColor: palette.border.subtle }]}>
-                    <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="medium" />
+                    <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="compact" />
                     <Text style={[styles.selectedCarLabel, { color: palette.text.primary }]} numberOfLines={1}>
                       <Text style={[styles.selectedCarLabelKey, { color: palette.text.tertiary }]}>Автомобиль: </Text>
                       {selectedCar.makeModel || '—'}
@@ -1385,15 +1389,16 @@ export default function CheckCreateScreen() {
                         {selectedCar.comment}
                       </Text>
                     )}
+                    {/* Per-car meta block: last visit (WHEN only, no
+                        details) + active warranties. Both hide themselves
+                        when empty, so this stays clean for first-time /
+                        out-of-warranty cars. */}
+                    <View style={styles.selectedCarMetaFull}>
+                      <LastVisitBadge clientId={selectedClient.id} carId={selectedCar.id} />
+                      <ActiveWarrantiesSection carId={selectedCar.id} />
+                    </View>
                   </View>
                 )}
-                <LastVisitBadge clientId={selectedClient.id} carId={selectedCar?.id} />
-                {/* Active warranties for this client / car. Premium
-                    section with per-item urgency chips (green/amber/
-                    red by daysLeft). Backend auto-redeems on check
-                    finalisation, so this block is informational and
-                    hides itself when there are no active warranties. */}
-                <ActiveWarrantiesSection clientId={selectedClient.id} carId={selectedCar?.id} />
               </View>
             ) : (
               <>
@@ -2533,6 +2538,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.gray[500],
     textAlign: 'center' as const,
+  },
+  // Full-width meta block under the plate/label. The parent stack centers
+  // its children, but the last-visit line and warranty chips need the full
+  // card width — stretch + reset the parent gap's top margin so they sit
+  // flush under the car label.
+  selectedCarMetaFull: {
+    alignSelf: 'stretch' as const,
+    marginTop: -spacing[1],
   },
   sectionSubLabel: {
     fontSize: 11,

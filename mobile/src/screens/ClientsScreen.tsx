@@ -17,10 +17,10 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { clientsApi, carsApi } from '../api/services';
+import { clientsApi, carsApi, checksApi } from '../api/services';
 import { formatPhone } from '../../../shared/validation/phone';
-import { processPlateMainInput } from '../utils/plateMask';
 import { normalizePlateQuery, looksLikePlateQuery, plateMatches } from '../utils/plateNormalize';
+import { normalizePlateForSearch } from '../utils/plateMask';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { UserRole } from '../../../shared/types';
@@ -32,10 +32,15 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import FreshnessBadge from '../components/FreshnessBadge';
 import SourcePickerSheet from '../components/SourcePickerSheet';
+import SourcePickerInline from '../components/SourcePickerInline';
+import CarPlateField from '../components/CarPlateField';
+import PlateResultCard from '../components/PlateResultCard';
+import RussianPlateInput, { type PlateMode } from '../components/RussianPlateInput';
+import PlateModeSwitcher from '../components/PlateModeSwitcher';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import type { Client, Car, PaginatedResponse } from '../../../shared/types';
+import type { Client, Car, Check, PaginatedResponse } from '../../../shared/types';
 
 // ─── Avatar helpers (mirror ClientDetailScreen so initials/colour match) ───
 function getInitials(name: string): string {
@@ -61,14 +66,15 @@ function getAvatarColor(name: string): string {
   return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
 }
 
-type ClientFilter = 'all' | 'regular' | 'new' | 'source';
+type ClientFilter = 'all' | 'regular' | 'new' | 'source' | 'noplate';
 
-// Top-level tab inside the unified Clients screen — owner asked to
-// merge "Клиенты" and "Авто" into a single section, so the screen now
-// hosts a segmented switcher right under the header. Persist nothing —
-// the user almost always re-enters from /Ещё/Клиенты and wants the
-// people view first.
-type ClientsView = 'clients' | 'cars';
+// Top-level mode of the Clients screen (queue #19.3). DEFAULT is the
+// госномер (plate) search — the owner's primary entry point is "у меня
+// машина с номером X, найди клиента". The mode toggle lives as an icon
+// in the header trailing slot (left of the «+»):
+//   'plate'  — поиск по госномеру (RU/INT), Касса-style plate input;
+//   'client' — поиск клиентов по имени / авто / телефону + фильтры.
+type ClientsMode = 'plate' | 'client';
 
 // "Постоянные" / "Новые" thresholds — derived from createdAt only.
 // "Новые" = created within the last 30 days. "Постоянные" = client
@@ -86,24 +92,23 @@ export default function ClientsScreen() {
   const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
   const tabBarHeight = useTabBarHeight();
 
-  // Tab switcher state — see ClientsView. Default: people.
-  const [view, setView] = useState<ClientsView>('clients');
+  // Mode — see ClientsMode. Default: plate (госномер) search.
+  const [mode, setMode] = useState<ClientsMode>('plate');
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<ClientFilter>('all');
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
-  // Picker visibility — both the "filter by source" picker and the
-  // create-modal's source picker reuse the same sheet component.
+  // Picker visibility — the "filter by source" picker uses the RN-Modal
+  // sheet; the create-modal's source picker uses the in-place inline
+  // overlay (a Modal-over-Modal won't present reliably on iOS — #19.3).
   const [sourceFilterOpen, setSourceFilterOpen] = useState(false);
   const [formSourceOpen, setFormSourceOpen] = useState(false);
 
-  // Авто-tab keeps its own search query so switching tabs doesn't lose
-  // either context. It also has a smaller page-size to match the
-  // previous standalone CarsScreen behaviour.
-  const [carSearch, setCarSearch] = useState('');
-  const [carPage, setCarPage] = useState(1);
-  const carLimit = 30;
+  // Plate-search state (Касса-style). `plateSearch` is the clean stored
+  // string from RussianPlateInput, `plateMode` toggles RU / INT.
+  const [plateSearch, setPlateSearch] = useState('');
+  const [plateMode, setPlateMode] = useState<PlateMode>('ru');
 
   const limit = 20;
   const [refreshing, setRefreshing] = useState(false);
@@ -116,8 +121,12 @@ export default function ClientsScreen() {
   const [comment, setComment] = useState('');
   const [formSource, setFormSource] = useState<string | null>(null);
   // Inline car block — shown only when creating, never when editing.
+  // Now routes through CarPlateField (RU/foreign + «без номеров») so a
+  // foreign plate isn't mangled by the RU-only mask anymore.
   const [carPlate, setCarPlate] = useState('');
   const [carMakeModel, setCarMakeModel] = useState('');
+  const [carMode, setCarMode] = useState<PlateMode>('ru');
+  const [carNoPlate, setCarNoPlate] = useState(false);
 
   // Delete confirm
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -132,18 +141,23 @@ export default function ClientsScreen() {
     placeholderData: (prev) => prev,
   });
 
-  // Авто-tab data. Only fires when the user actually switches to that
-  // view — keeps the people-tab cold-start free of an extra request.
-  // The shape used to be either `Car[]` or `{ data, total }` depending
-  // on the backend pagination path; preserve that flexibility.
-  const carsQuery = useQuery<{ data: Car[]; total: number } | Car[]>({
-    queryKey: ['cars', { search: carSearch, page: carPage, limit: carLimit }],
+  // ── Plate-search query (Касса-style, #19.3) ─────────────────────────
+  // Mirrors CheckCreateScreen: search clients by the normalized plate so
+  // a latin "P332PA05" finds the same client as Cyrillic "Р332РА05". The
+  // server returns clients (with their cars[]), we flatten to {client,car}
+  // rows below. Only fires when ≥2 chars are typed → no cold-start cost.
+  const normalizedPlate = useMemo(
+    () => normalizePlateForSearch(plateSearch, plateMode),
+    [plateSearch, plateMode],
+  );
+  const plateQuery = useQuery<Client[]>({
+    queryKey: ['clients-plate', normalizedPlate, plateMode],
     queryFn: async () => {
-      const res = await carsApi.getAll({ search: carSearch, page: carPage, limit: carLimit });
-      return res.data;
+      const res = await clientsApi.getAll({ search: normalizedPlate, limit: 20 });
+      return res.data.data || [];
     },
+    enabled: mode === 'plate' && normalizedPlate.length >= 2,
     placeholderData: (prev) => prev,
-    enabled: view === 'cars',
   });
 
   // Client+optional-car create. Mirror the previous behaviour but with
@@ -155,7 +169,7 @@ export default function ClientsScreen() {
       phone: string;
       comment?: string;
       source?: string | null;
-      car?: { plateNumber: string; makeModel: string };
+      car?: { plateNumber: string; makeModel: string; noPlate: boolean };
     }) => {
       const clientRes = await clientsApi.create({
         fullName: d.fullName,
@@ -163,11 +177,14 @@ export default function ClientsScreen() {
         comment: d.comment,
         source: d.source ?? null,
       });
-      if (d.car && d.car.plateNumber) {
+      // Attach the inline car when the user either typed a plate OR ticked
+      // «без номеров» (a plateless car is still a real car worth tracking).
+      if (d.car && (d.car.plateNumber || d.car.noPlate)) {
         await carsApi.create({
-          plateNumber: d.car.plateNumber,
+          plateNumber: d.car.noPlate ? '' : d.car.plateNumber,
           makeModel: d.car.makeModel || '',
           clientId: clientRes.data.id,
+          noPlate: d.car.noPlate,
         });
       }
       return clientRes.data;
@@ -206,8 +223,11 @@ export default function ClientsScreen() {
     setPhone('');
     setComment('');
     setFormSource(null);
+    setFormSourceOpen(false);
     setCarPlate('');
     setCarMakeModel('');
+    setCarMode('ru');
+    setCarNoPlate(false);
     setModalOpen(true);
   };
 
@@ -217,10 +237,13 @@ export default function ClientsScreen() {
     setPhone(client.phone);
     setComment(client.comment || '');
     setFormSource(client.source ?? null);
+    setFormSourceOpen(false);
     // Edit modal never shows the inline-car block — that's only for
     // creation. Clear so reopen on a different client doesn't leak.
     setCarPlate('');
     setCarMakeModel('');
+    setCarMode('ru');
+    setCarNoPlate(false);
     setModalOpen(true);
   };
 
@@ -245,11 +268,19 @@ export default function ClientsScreen() {
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const normalizedCarPlate = processPlateMainInput(carPlate.replace(/\s/g, ''));
-  const hasInlineCar = !editingClient && normalizedCarPlate.length > 0;
+  // CarPlateField already returns a clean stored plate (RU mask or foreign
+  // normalisation applied), so we don't re-mask here — re-masking with the
+  // RU-only processor was the original foreign-plate bug.
+  const normalizedCarPlate = carPlate.trim();
+  // An inline car is attached when the user typed a plate, OR ticked
+  // «без номеров», OR just filled the make/model (a real car without a
+  // known plate yet). Only a fully empty block is skipped.
+  const hasInlineCar =
+    !editingClient && (carNoPlate || normalizedCarPlate.length > 0 || carMakeModel.trim().length > 0);
 
   const submitFlow = async (opts?: { forceCar?: boolean }) => {
-    if (hasInlineCar && !opts?.forceCar) {
+    // Duplicate check only matters when there's an actual plate to clash on.
+    if (hasInlineCar && !carNoPlate && normalizedCarPlate.length > 0 && !opts?.forceCar) {
       try {
         const res = await carsApi.lookupByPlate(normalizedCarPlate);
         if (res.data) {
@@ -265,7 +296,9 @@ export default function ClientsScreen() {
       phone,
       comment: comment || undefined,
       source: formSource,
-      car: hasInlineCar ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel } : undefined,
+      car: hasInlineCar
+        ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, noPlate: carNoPlate }
+        : undefined,
     });
   };
 
@@ -321,21 +354,19 @@ export default function ClientsScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    if (view === 'cars') {
-      await queryClient.invalidateQueries({ queryKey: ['cars'] });
+    if (mode === 'plate') {
+      await queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
     } else {
       await queryClient.invalidateQueries({ queryKey: ['clients'] });
     }
     setRefreshing(false);
   };
 
-  // Tab switch — fire a soft selection haptic, mirroring the iOS
-  // UISegmentedControl feel. Resets neither search nor pagination so
-  // the user keeps their state per tab.
-  const switchView = (next: ClientsView) => {
-    if (next === view) return;
+  // Mode toggle (header icon) — flip plate-search ⇄ client-search. Fires a
+  // soft selection haptic, mirroring the iOS segmented-control feel.
+  const toggleMode = () => {
     haptic('select');
-    setView(next);
+    setMode((m) => (m === 'plate' ? 'client' : 'plate'));
   };
 
   const rawClients = data?.data || [];
@@ -375,6 +406,14 @@ export default function ClientsScreen() {
       });
     } else if (filter === 'source' && sourceFilter) {
       base = base.filter((c) => (c.source || '').toLowerCase() === sourceFilter.toLowerCase());
+    } else if (filter === 'noplate') {
+      // Clients that have at least one car without a plate (or marked
+      // «без номеров»), or no cars at all — i.e. nothing to identify by plate.
+      base = base.filter((c) => {
+        const cs = c.cars || [];
+        if (cs.length === 0) return true;
+        return cs.some((car) => car.noPlate || !car.plateNumber);
+      });
     }
     return base;
   }, [rawClients, search, filter, sourceFilter]);
@@ -387,55 +426,63 @@ export default function ClientsScreen() {
     [rawClients],
   );
 
-  // Retail pin visibility — owner asked for the retail-buyer hero to
-  // appear in BOTH tabs, since it's the gateway to retail-check
-  // history regardless of which lens (people / cars) you're using.
-  // On the people tab we suppress it during search / non-"Все" filter
-  // so the pin doesn't compete with active filtering. On the cars
-  // tab we only suppress it during plate search — otherwise the pin
-  // sits permanently at the top.
-  const showRetailPin =
-    view === 'clients'
-      ? !search && filter === 'all'
-      : !carSearch;
+  // Retail pin visibility — the retail-buyer hero is the gateway to
+  // retail-check history. We show it on the people (client) list when
+  // it's unfiltered. Plate mode reaches retail via its own pinned row.
+  const showRetailPin = !search && filter === 'all';
 
   // FlashList data — without the retail row (it lives outside the
   // virtual list as a sticky hero). Keep memoised so the virtualiser
   // doesn't see a new reference on every parent re-render.
   const displayClients = useMemo<Client[]>(() => filteredClients, [filteredClients]);
 
-  // ── Авто-tab derivations ──────────────────────────────────────────
-  // Pagination response is either an array (legacy) or a `{data,total}`
-  // envelope; normalise into `rawCars` so the list renderer doesn't
-  // care. Plate-priority sort mirrors the standalone CarsScreen so a
-  // partial plate query like "Х80" surfaces matching cars first even if
-  // the backend ranking would put a makeModel substring above them.
-  const carsData = carsQuery.data;
-  const rawCars = useMemo<Car[]>(
-    () => (Array.isArray(carsData) ? (carsData as Car[]) : ((carsData as any)?.data ?? [])),
-    [carsData],
-  );
-  const carsTotal = Array.isArray(carsData) ? rawCars.length : ((carsData as any)?.total ?? rawCars.length);
-  const carsHasMore = carPage * carLimit < carsTotal;
-
-  const sortedCars = useMemo<Car[]>(() => {
-    if (!carSearch || !looksLikePlateQuery(carSearch)) return rawCars;
-    const q = normalizePlateQuery(carSearch);
-    const hits: Car[] = [];
-    const misses: Car[] = [];
-    for (const car of rawCars) {
-      (plateMatches(car.plateNumber, q) ? hits : misses).push(car);
+  // ── Plate-search derivations (#19.3) ───────────────────────────────
+  // Flatten the server's clients[] into {client, car} rows, prioritising
+  // cars whose normalized plate contains the query (Касса parity). Cars
+  // without a plate are excluded — plate mode is about identifying a car
+  // by its госномер; plateless cars are found via client mode.
+  const plateResults = useMemo<{ client: Client; car: Car }[]>(() => {
+    const list = plateQuery.data || [];
+    const q = normalizedPlate;
+    const hits: { client: Client; car: Car }[] = [];
+    const misses: { client: Client; car: Car }[] = [];
+    for (const client of list) {
+      for (const car of client.cars || []) {
+        if (!car.plateNumber) continue;
+        const matches =
+          q.length > 0 &&
+          normalizePlateForSearch(car.plateNumber, plateMode).includes(q);
+        (matches ? hits : misses).push({ client, car });
+      }
     }
     return [...hits, ...misses];
-  }, [rawCars, carSearch]);
+  }, [plateQuery.data, normalizedPlate, plateMode]);
 
-  // Prefetch-on-tap — same idea as before.
+  const retailPinTargetId = retailFromServer?.id || '__retail__';
+
+  // Prefetch-on-tap (audit P0). Fired on `onPressIn` — overlapping the
+  // navigation push animation — so ClientDetailScreen opens straight from
+  // cache. We warm TWO things:
+  //   1) ['client', id]            — the client profile (hero / cars);
+  //   2) ['client-checks', id]     — the SLIM recent-checks slice that
+  //      drives the hero stats + last visit + first screenful of history.
+  // The check key/limit/queryFn below mirror ClientDetailScreen's EAGER
+  // query EXACTLY (limit 10) — diverge and the prefetch silently misses.
   const prefetchClientDetail = useCallback(
     (clientId: string) => {
       if (clientId === '__retail__') return;
       queryClient.prefetchQuery({
         queryKey: ['client', clientId],
         queryFn: async () => (await clientsApi.getById(clientId)).data,
+        staleTime: 60_000,
+      });
+      queryClient.prefetchQuery({
+        queryKey: ['client-checks', clientId],
+        queryFn: async (): Promise<Check[]> => {
+          const res = await checksApi.getAll({ clientId, limit: 10 });
+          const raw = res.data as { data?: Check[] } | Check[];
+          return Array.isArray(raw) ? raw : raw.data || [];
+        },
         staleTime: 60_000,
       });
     },
@@ -527,109 +574,60 @@ export default function ClientsScreen() {
     [canDelete, navigation, palette, prefetchClientDetail],
   );
 
-  // Авто-tab row renderer. Plate is the visual anchor (a vehicle is
-  // identified by its plate first, owner second). Tap navigates to the
-  // owning ClientDetail and asks it to scroll-and-expand this car via
-  // `focusCarId` so the flow "Авто → tap → see this car's checks" is
-  // one tap end-to-end. Cars without an owner just fall back to a
-  // muted state — they shouldn't be tappable.
-  const renderCar = useCallback(
-    ({ item }: { item: Car }) => {
-      const ownerName = item.client?.fullName;
-      const ownerId = item.clientId;
-      const isOrphan = !ownerId;
-      return (
-        <TouchableOpacity
-          style={[styles.carRow, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
-          activeOpacity={isOrphan ? 1 : 0.6}
-          disabled={isOrphan}
-          onPress={() => {
-            if (isOrphan) return;
-            navigation.navigate('ClientDetail', { id: ownerId, focusCarId: item.id });
-          }}
-          onPressIn={() => {
-            if (!isOrphan) prefetchClientDetail(ownerId);
-          }}
-        >
-          <View style={styles.carPlateColumn}>
-            {item.plateNumber ? (
-              <View style={[styles.carPlateBadge, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-                <Text style={[styles.carPlateText, { color: palette.text.primary }]}>{item.plateNumber}</Text>
-              </View>
-            ) : (
-              <View style={[styles.carIconBox, { backgroundColor: palette.accent.primarySoft }]}>
-                <Ionicons name="car-sport-outline" size={20} color={palette.accent.primary} />
-              </View>
-            )}
-          </View>
-          <View style={styles.info}>
-            <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
-              {item.makeModel || 'Без модели'}
-            </Text>
-            <View style={styles.subLine}>
-              {ownerName ? (
-                <>
-                  <Ionicons name="person-outline" size={11} color={palette.text.tertiary} />
-                  <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-                    {ownerName}
-                  </Text>
-                </>
-              ) : (
-                <Text style={[styles.cardSub, { color: palette.text.tertiary }]} numberOfLines={1}>
-                  Без владельца
-                </Text>
-              )}
-            </View>
-          </View>
-          {isOrphan ? null : (
-            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
-          )}
-        </TouchableOpacity>
-      );
-    },
-    [navigation, palette, prefetchClientDetail],
+  // Plate-result row renderer (#19.3). The госномер is the visual anchor
+  // (PlateResultCard renders a ГОСТ plate badge), with авто + клиент to
+  // its right — the same hierarchy the owner sees in the Касса. Tapping
+  // opens the owning client's card (no per-car expansion).
+  const renderPlateResult = useCallback(
+    ({ item }: { item: { client: Client; car: Car } }) => (
+      <PlateResultCard
+        plate={item.car.plateNumber}
+        makeModel={item.car.makeModel}
+        clientName={item.client.fullName}
+        onPress={() => navigation.navigate('ClientDetail', { id: item.client.id })}
+        onPressIn={() => prefetchClientDetail(item.client.id)}
+      />
+    ),
+    [navigation, prefetchClientDetail],
   );
 
-  // Retail-pin hero — gradient card pinned above the FlashList. The pin
-  // is OUTSIDE the virtualised list so it never collides with row keys
-  // and FlashList can stay homogenous.
-  const RetailPin = () => {
-    if (!showRetailPin) return null;
-    const targetId = retailFromServer?.id || '__retail__';
-    return (
-      <TouchableOpacity
-        activeOpacity={0.85}
-        onPress={() => navigation.navigate('ClientDetail', { id: targetId })}
-        style={styles.retailWrap}
+  // Retail-pin hero — gradient card. The pin is OUTSIDE the virtualised
+  // list so it never collides with row keys and FlashList can stay
+  // homogenous. Reachable in both modes so the __retail__ detail path
+  // is never lost.
+  const RetailPin = () => (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={() => navigation.navigate('ClientDetail', { id: retailPinTargetId })}
+      style={styles.retailWrap}
+    >
+      <LinearGradient
+        colors={[colors.primary[500], colors.primary[700]]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.retailCard}
       >
-        <LinearGradient
-          colors={[colors.primary[500], colors.primary[700]]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.retailCard}
-        >
-          <View style={styles.retailIconWrap}>
-            <Ionicons name="cart-outline" size={22} color={colors.white} />
-          </View>
-          <View style={styles.retailContent}>
-            <Text style={styles.retailTitle}>Розничный покупатель</Text>
-            <Text style={styles.retailSubtitle}>Быстрые продажи без клиента</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.white} />
-        </LinearGradient>
-      </TouchableOpacity>
-    );
-  };
+        <View style={styles.retailIconWrap}>
+          <Ionicons name="cart-outline" size={22} color={colors.white} />
+        </View>
+        <View style={styles.retailContent}>
+          <Text style={styles.retailTitle}>Розничный покупатель</Text>
+          <Text style={styles.retailSubtitle}>Быстрые продажи без клиента</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.white} />
+      </LinearGradient>
+    </TouchableOpacity>
+  );
 
-  // Pick the freshness signal for the active tab so the badge doesn't
-  // lie when the user is on Авто but the underlying clients query is
-  // still loading.
+  // Pick the freshness signal for the active mode so the badge doesn't
+  // lie when the user is in plate mode but the underlying clients query
+  // is still loading.
   const activeFreshness =
-    view === 'cars'
+    mode === 'plate'
       ? {
-          isFetching: carsQuery.isFetching,
-          isLoading: carsQuery.isLoading,
-          dataUpdatedAt: carsQuery.dataUpdatedAt,
+          isFetching: plateQuery.isFetching,
+          isLoading: plateQuery.isLoading,
+          dataUpdatedAt: plateQuery.dataUpdatedAt,
         }
       : { isFetching, isLoading, dataUpdatedAt };
 
@@ -639,14 +637,32 @@ export default function ClientsScreen() {
         title="Клиенты"
         onBack={() => navigation.goBack()}
         trailing={
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
-            onPress={openCreateModal}
-            accessibilityRole="button"
-            accessibilityLabel="Добавить клиента"
-          >
-            <Ionicons name="add" size={18} color={colors.white} />
-          </TouchableOpacity>
+          // trailing = [mode icon][+]. The mode icon flips plate-search ⇄
+          // client-search (#19.3). Plate mode → show a "people" icon (tap to
+          // search clients); client mode → show a "car" icon (tap to search
+          // by госномер). The glyph names the DESTINATION mode.
+          <View style={styles.trailingRow}>
+            <TouchableOpacity
+              style={[styles.modeBtn, { backgroundColor: palette.bg.muted }]}
+              onPress={toggleMode}
+              accessibilityRole="button"
+              accessibilityLabel={mode === 'plate' ? 'Искать клиентов' : 'Искать по госномеру'}
+            >
+              <Ionicons
+                name={mode === 'plate' ? 'people-outline' : 'car-sport-outline'}
+                size={19}
+                color={palette.text.primary}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
+              onPress={openCreateModal}
+              accessibilityRole="button"
+              accessibilityLabel="Добавить клиента"
+            >
+              <Ionicons name="add" size={18} color={colors.white} />
+            </TouchableOpacity>
+          </View>
         }
       />
 
@@ -654,29 +670,62 @@ export default function ClientsScreen() {
         <FreshnessBadge query={activeFreshness} />
       </View>
 
-      {/* Segmented switcher — Клиенты / Авто. iOS-style pill with a
-          single sliding selection. Owner asked to unify the two screens
-          but keep both perspectives accessible without leaving Клиенты. */}
-      <View style={styles.segmentedWrap}>
-        <View style={[styles.segmented, { backgroundColor: palette.bg.muted }]}>
-          <SegmentButton
-            label="Клиенты"
-            icon="people-outline"
-            active={view === 'clients'}
-            onPress={() => switchView('clients')}
-            palette={palette}
-          />
-          <SegmentButton
-            label="Авто"
-            icon="car-sport-outline"
-            active={view === 'cars'}
-            onPress={() => switchView('cars')}
-            palette={palette}
-          />
-        </View>
-      </View>
+      {mode === 'plate' ? (
+        // ── ПОИСК ПО ГОСНОМЕРУ (default) ────────────────────────────────
+        // Касса-style plate input. Result cards anchor on the госномер.
+        <>
+          <View style={styles.plateSearchWrap}>
+            <View style={styles.plateLabelRow}>
+              <Text style={[styles.plateSearchLabel, { color: palette.text.secondary }]}>
+                ПОИСК ПО ГОСНОМЕРУ
+              </Text>
+              <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
+            </View>
+            <RussianPlateInput
+              value={plateSearch}
+              onChangeText={setPlateSearch}
+              mode={plateMode}
+              autoFocus={false}
+            />
+          </View>
 
-      {view === 'clients' ? (
+          <FlashList
+            data={plateResults}
+            keyExtractor={(item) => `${item.client.id}-${item.car.id}`}
+            renderItem={renderPlateResult}
+            ListHeaderComponent={
+              <View style={{ paddingHorizontal: spacing[4] }}>
+                <RetailPin />
+              </View>
+            }
+            ListEmptyComponent={
+              normalizedPlate.length >= 2 && !plateQuery.isFetching ? (
+                <EmptyState
+                  icon="car"
+                  title="Ничего не найдено"
+                  description={`Госномер «${plateSearch}» не найден`}
+                />
+              ) : normalizedPlate.length < 2 ? (
+                <EmptyState
+                  icon="search"
+                  title="Введите госномер"
+                  description="Найдите авто и клиента по номеру — RU или INT"
+                />
+              ) : null
+            }
+            contentContainerStyle={{
+              paddingHorizontal: spacing[4],
+              paddingBottom: tabBarHeight + spacing[4],
+            }}
+            keyboardShouldPersistTaps="handled"
+            removeClippedSubviews
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+            }
+          />
+        </>
+      ) : (
+        // ── ПОИСК КЛИЕНТОВ (имя / авто / телефон) + фильтры ─────────────
         <>
           <View style={styles.searchWrap}>
             <SearchInput
@@ -685,87 +734,89 @@ export default function ClientsScreen() {
                 setSearch(v);
                 setPage(1);
               }}
-              placeholder="Госномер, имя или телефон"
+              placeholder="Имя, авто или телефон"
             />
           </View>
 
-          {/* Filter chips — Все / По источнику / Постоянные / Новые. */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipsRow}
-          >
-            <FilterChip
-              active={filter === 'all'}
-              label="Все"
-              icon="apps-outline"
-              onPress={() => {
-                haptic('select');
-                setFilter('all');
-                setSourceFilter(null);
-              }}
-              palette={palette}
-            />
-            <FilterChip
-              active={filter === 'source'}
-              label={
-                filter === 'source' && sourceFilter
-                  ? `Источник: ${sourceFilter}`
-                  : 'По источнику'
-              }
-              icon="pricetag-outline"
-              onPress={() => {
-                haptic('select');
-                setSourceFilterOpen(true);
-              }}
-              palette={palette}
-              dismissable={filter === 'source'}
-              onDismiss={
-                filter === 'source'
-                  ? () => {
-                      setFilter('all');
-                      setSourceFilter(null);
-                    }
-                  : undefined
-              }
-            />
-            <FilterChip
-              active={filter === 'regular'}
-              label="Постоянные"
-              icon="repeat-outline"
-              onPress={() => {
-                haptic('select');
-                setFilter('regular');
-                setSourceFilter(null);
-              }}
-              palette={palette}
-            />
-            <FilterChip
-              active={filter === 'new'}
-              label="Новые"
-              icon="sparkles-outline"
-              onPress={() => {
-                haptic('select');
-                setFilter('new');
-                setSourceFilter(null);
-              }}
-              palette={palette}
-            />
-          </ScrollView>
+          {/* Filter chips — Все / По источнику / Постоянные / Новые /
+              Без номеров. Pinned row height so the chips hug the top
+              instead of stretching+centering in the flex column (#19.1). */}
+          <View style={styles.chipsBar}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipsRow}
+            >
+              <FilterChip
+                active={filter === 'all'}
+                label="Все"
+                icon="apps-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter('all');
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+              <FilterChip
+                active={filter === 'source'}
+                label={
+                  filter === 'source' && sourceFilter ? `Источник: ${sourceFilter}` : 'По источнику'
+                }
+                icon="pricetag-outline"
+                onPress={() => {
+                  haptic('select');
+                  setSourceFilterOpen(true);
+                }}
+                palette={palette}
+                dismissable={filter === 'source'}
+                onDismiss={
+                  filter === 'source'
+                    ? () => {
+                        setFilter('all');
+                        setSourceFilter(null);
+                      }
+                    : undefined
+                }
+              />
+              <FilterChip
+                active={filter === 'regular'}
+                label="Постоянные"
+                icon="repeat-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter('regular');
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+              <FilterChip
+                active={filter === 'new'}
+                label="Новые"
+                icon="sparkles-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter('new');
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+              <FilterChip
+                active={filter === 'noplate'}
+                label="Без номеров"
+                icon="help-circle-outline"
+                onPress={() => {
+                  haptic('select');
+                  setFilter((f) => (f === 'noplate' ? 'all' : 'noplate'));
+                  setSourceFilter(null);
+                }}
+                palette={palette}
+              />
+            </ScrollView>
+          </View>
 
           {data === undefined ? (
             <ListSkeleton count={8} />
-          ) : filteredClients.length === 0 && !search && !isLoading && filter === 'all' ? (
-            <View style={{ flex: 1 }}>
-              <View style={{ paddingHorizontal: spacing[4] }}>
-                <RetailPin />
-              </View>
-              <EmptyState
-                title="Нет клиентов"
-                description="Добавьте первого клиента"
-                action={{ label: 'Добавить клиента', onPress: openCreateModal }}
-              />
-            </View>
           ) : (
             <FlashList
               data={displayClients}
@@ -780,10 +831,28 @@ export default function ClientsScreen() {
               }
               ListEmptyComponent={
                 !isLoading ? (
-                  <EmptyState
-                    title={filter === 'new' ? 'Нет новых клиентов' : filter === 'regular' ? 'Нет постоянных клиентов' : 'Ничего не найдено'}
-                    description={search ? `Запрос: «${search}»` : undefined}
-                  />
+                  filteredClients.length === 0 && !search && filter === 'all' ? (
+                    <EmptyState
+                      icon="people"
+                      title="Нет клиентов"
+                      description="Добавьте первого клиента"
+                      action={{ label: 'Добавить клиента', onPress: openCreateModal }}
+                    />
+                  ) : (
+                    <EmptyState
+                      icon="search"
+                      title={
+                        filter === 'new'
+                          ? 'Нет новых клиентов'
+                          : filter === 'regular'
+                            ? 'Нет постоянных клиентов'
+                            : filter === 'noplate'
+                              ? 'Нет клиентов без номеров'
+                              : 'Ничего не найдено'
+                      }
+                      description={search ? `Запрос: «${search}»` : undefined}
+                    />
+                  )
                 ) : null
               }
               contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
@@ -793,63 +862,6 @@ export default function ClientsScreen() {
               }
               onEndReached={() => {
                 if (hasMore) setPage((p) => p + 1);
-              }}
-              onEndReachedThreshold={0.5}
-            />
-          )}
-        </>
-      ) : (
-        // ── Авто view ────────────────────────────────────────────────
-        // Same iosCard rhythm as the people view. Retail pin still
-        // sits at the top — it's the gateway to retail-check history
-        // regardless of which lens the owner is currently using.
-        <>
-          <View style={styles.searchWrap}>
-            <SearchInput
-              value={carSearch}
-              onChange={(v) => {
-                setCarSearch(v);
-                setCarPage(1);
-              }}
-              placeholder="Госномер или марка"
-            />
-          </View>
-
-          {carsData === undefined ? (
-            <ListSkeleton count={8} />
-          ) : sortedCars.length === 0 && !carsQuery.isLoading ? (
-            <View style={{ flex: 1 }}>
-              <View style={{ paddingHorizontal: spacing[4] }}>
-                <RetailPin />
-              </View>
-              <EmptyState
-                title={carSearch ? 'Ничего не найдено' : 'Нет автомобилей'}
-                description={
-                  carSearch
-                    ? `Запрос: «${carSearch}»`
-                    : 'Автомобили появятся после добавления к клиентам'
-                }
-              />
-            </View>
-          ) : (
-            <FlashList
-              data={sortedCars}
-              keyExtractor={(item) => item.id}
-              renderItem={renderCar}
-              ListHeaderComponent={
-                showRetailPin ? (
-                  <View style={{ paddingHorizontal: spacing[4] }}>
-                    <RetailPin />
-                  </View>
-                ) : null
-              }
-              contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
-              removeClippedSubviews
-              refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-              }
-              onEndReached={() => {
-                if (carsHasMore) setCarPage((p) => p + 1);
               }}
               onEndReachedThreshold={0.5}
             />
@@ -888,9 +900,9 @@ export default function ClientsScreen() {
           />
         </View>
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Источник *</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Источник</Text>
           <TouchableOpacity
-            onPress={() => setFormSourceOpen(true)}
+            onPress={() => setFormSourceOpen((v) => !v)}
             activeOpacity={0.7}
             style={[
               styles.formInput,
@@ -906,8 +918,21 @@ export default function ClientsScreen() {
             >
               {formSource ?? 'Выберите источник'}
             </Text>
-            <Ionicons name="chevron-down" size={16} color={palette.text.tertiary} />
+            <Ionicons
+              name={formSourceOpen ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={palette.text.tertiary}
+            />
           </TouchableOpacity>
+          {/* In-flow source picker — NOT a nested RN Modal (a Modal over the
+              open create-Modal won't present on iOS → the list never opened,
+              #19.3). Expands right under the field. */}
+          <SourcePickerInline
+            visible={formSourceOpen}
+            onClose={() => setFormSourceOpen(false)}
+            selected={formSource}
+            onPick={(value) => setFormSource(value)}
+          />
         </View>
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
@@ -956,21 +981,13 @@ export default function ClientsScreen() {
             </View>
             <View style={styles.formField}>
               <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Госномер</Text>
-              <TextInput
-                value={carPlate}
-                onChangeText={(t) => setCarPlate(processPlateMainInput(t.replace(/\s/g, '')))}
-                style={[
-                  styles.formInput,
-                  {
-                    backgroundColor: palette.bg.muted,
-                    borderColor: palette.border.subtle,
-                    color: palette.text.primary,
-                  },
-                ]}
-                placeholder="А000АА"
-                autoCapitalize="characters"
-                autoCorrect={false}
-                placeholderTextColor={palette.text.tertiary}
+              <CarPlateField
+                plate={carPlate}
+                mode={carMode}
+                noPlate={carNoPlate}
+                onChangePlate={setCarPlate}
+                onChangeMode={setCarMode}
+                onChangeNoPlate={setCarNoPlate}
               />
             </View>
           </View>
@@ -1052,58 +1069,7 @@ export default function ClientsScreen() {
         }}
         title="Фильтр по источнику"
       />
-
-      {/* Source picker — opens for the create/edit form */}
-      <SourcePickerSheet
-        visible={formSourceOpen}
-        onClose={() => setFormSourceOpen(false)}
-        selected={formSource}
-        onPick={(value) => setFormSource(value)}
-        title="Источник клиента"
-      />
     </View>
-  );
-}
-
-interface SegmentButtonProps {
-  active: boolean;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  onPress: () => void;
-  palette: ReturnType<typeof useColors>;
-}
-
-// Segmented switcher button — visually mimics iOS UISegmentedControl
-// "thumb": active pill rides on the muted track, casts a soft shadow,
-// and lifts the text/icon into accent colour. Keep this internal —
-// it's tightly coupled to the segmented track styles.
-function SegmentButton({ active, label, icon, onPress, palette }: SegmentButtonProps) {
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      activeOpacity={0.85}
-      style={[
-        cnStyles.segmentBtn,
-        active && [cnStyles.segmentBtnActive, { backgroundColor: palette.bg.card }],
-      ]}
-      accessibilityRole="tab"
-      accessibilityState={{ selected: active }}
-    >
-      <Ionicons
-        name={icon}
-        size={14}
-        color={active ? palette.accent.primary : palette.text.secondary}
-      />
-      <Text
-        style={[
-          cnStyles.segmentBtnText,
-          { color: active ? palette.text.primary : palette.text.secondary },
-        ]}
-        numberOfLines={1}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
   );
 }
 
@@ -1156,6 +1122,15 @@ function FilterChip({ active, label, icon, onPress, palette, dismissable, onDism
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+  // Header trailing slot: [mode icon][+]. Mode icon flips plate ⇄ client.
+  trailingRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  modeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   addBtn: {
     width: 36,
     height: 36,
@@ -1170,19 +1145,33 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     minHeight: 14,
   },
-  // Segmented tab switcher container. Sits between the freshness row
-  // and the per-tab search bar so the user can flip Клиенты ↔ Авто
-  // without scrolling the list.
-  segmentedWrap: {
+  // Plate-search header (Касса-style). The label row hosts the RU/INT
+  // switcher to the right of the section label.
+  plateSearchWrap: {
     paddingHorizontal: spacing[4],
-    paddingTop: spacing[1],
-    paddingBottom: spacing[2.5],
+    paddingBottom: spacing[3],
   },
-  segmented: {
+  plateLabelRow: {
     flexDirection: 'row',
-    borderRadius: borderRadius.full,
-    padding: 3,
-    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing[2],
+  },
+  plateSearchLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  // Filter-chips row — PINNED height so it hugs the chips instead of
+  // stretching+vertically-centering in the flex column (#19.1 root cause,
+  // same bug fixed on the Schedule legend). flexGrow/flexShrink 0 + a
+  // fixed height keep the layout compact.
+  chipsBar: {
+    height: 44,
+    flexGrow: 0,
+    flexShrink: 0,
+    justifyContent: 'center',
   },
   list: { paddingHorizontal: 0, paddingBottom: spacing[8] },
 
@@ -1268,36 +1257,6 @@ const styles = StyleSheet.create({
   },
   sourceTagText: { fontSize: 10, fontWeight: '600' },
 
-  // Авто-tab row — same overall shape as the people row but the plate
-  // sits in a dedicated column on the left as the visual anchor (cars
-  // are identified by plate first, owner second), and there's no
-  // source tag / swipe actions.
-  carRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    backgroundColor: colors.white,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.gray[200],
-  },
-  carPlateColumn: { minWidth: 96, alignItems: 'flex-start' },
-  carPlateBadge: {
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: 6,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-  },
-  carPlateText: { fontSize: 14, fontWeight: '700', letterSpacing: 0.7 },
-  carIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
   // Swipe
   swipeActionsRow: { flexDirection: 'row' },
   swipeEditAction: {
@@ -1367,7 +1326,6 @@ const styles = StyleSheet.create({
   submitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.white },
   chipsRow: {
     paddingHorizontal: spacing[4],
-    paddingBottom: spacing[3],
     gap: spacing[2],
     alignItems: 'center',
   },
@@ -1386,29 +1344,6 @@ const cnStyles = StyleSheet.create({
   },
   chipLabel: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
   chipDismiss: { marginLeft: 2 },
-
-  // Segment button — iOS-style "thumb" on a muted track. Active state
-  // is supplied via inline backgroundColor (palette.bg.card) so the
-  // pill picks up the screen's elevated surface in both light and
-  // dark themes.
-  segmentBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-  },
-  segmentBtnActive: {
-    shadowColor: colors.black,
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
-  },
-  segmentBtnText: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
 
   inlineCarBlock: {
     marginTop: spacing[2],
