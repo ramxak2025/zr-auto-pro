@@ -14,7 +14,7 @@ import AppNavigator from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
 import { colors } from './src/theme';
-import { hydrateCache, attachPersistence } from './src/utils/persistentCache';
+import { hydrateCache, hydratePriorityCache, attachPersistence } from './src/utils/persistentCache';
 import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
 
 // Configure how notifications are handled when the app is in the foreground.
@@ -55,6 +55,7 @@ const queryClient = new QueryClient({
 
 export default function App() {
   const [cacheReady, setCacheReady] = useState(false);
+  const [priorityHydrated, setPriorityHydrated] = useState(false);
   const [authResolved, setAuthResolved] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
   const persistenceCleanup = useRef<(() => void) | null>(null);
@@ -73,15 +74,24 @@ export default function App() {
     // freshest cash position immediately, instead of yesterday's snapshot
     // plus a manual pull-to-refresh.
     foregroundCleanup.current = attachForegroundRevalidation(queryClient);
-    // Hydration runs in the background — we do NOT gate the first render
-    // on it. With an expanded whitelist (~25 keys), the AsyncStorage
-    // multiGet + JSON.parse loop costs ~200-500ms on a cold start. While
-    // it runs, the UI is already interactive; once a cached entry is
-    // hydrated, `setQueryData` flips any active `useQuery` to that data
-    // instantly (no flicker, no loading state — global `placeholderData`
-    // covers the transition).
-    hydrateCache(queryClient).finally(() => {
-      if (!cancelled) setCacheReady(true);
+    // Audit #8.7 — cold-start hydrate race. Step 1: synchronously hydrate
+    // ONLY the priority first-screen keys (Dashboard / Журнал / Склад),
+    // bounded to ~80ms. The splash stays up until this resolves so a fast
+    // user reaching those screens never sees an empty flash. This is cheap:
+    // a filtered multiGet over a handful of keys, with an internal watchdog
+    // that guarantees boot is never blocked past the budget.
+    hydratePriorityCache(queryClient).finally(() => {
+      if (!cancelled) setPriorityHydrated(true);
+      // Step 2: the FULL whitelist (~60 keys) hydrates in the background —
+      // we do NOT gate first render on it. The AsyncStorage multiGet +
+      // JSON.parse loop costs ~200-500ms; while it runs the UI is already
+      // interactive, and once a cached entry lands, `setQueryData` flips any
+      // active `useQuery` to that data instantly (no flicker — global
+      // `placeholderData` covers the transition). Re-hydrating the priority
+      // keys here is idempotent.
+      hydrateCache(queryClient).finally(() => {
+        if (!cancelled) setCacheReady(true);
+      });
     });
     return () => {
       cancelled = true;
@@ -126,10 +136,38 @@ export default function App() {
     return () => sub.remove();
   }, []);
 
-  // Splash is gated only on auth resolution + font load. Persistent cache
-  // hydration is decoupled — it runs in the background and updates queries
-  // as it progresses. See the effect above for rationale.
-  const showSplash = !authResolved || !fontsReady;
+  // Live-cash push listener — the backend sends a DATA-ONLY Expo push
+  // `{ data: { type: 'cash-changed', tenantId } }` to OTHER tenant users
+  // after a check / payment / expense. When received in the foreground we
+  // invalidate the money query keys so the open screen updates live across
+  // devices — a faster path that pairs with the existing 30s focus-poll.
+  // Rapid pushes are coalesced (ignore if we invalidated < 2s ago) so a
+  // burst of writes on another device triggers a single refetch wave here.
+  useEffect(() => {
+    let lastInvalidatedAt = 0;
+    const COALESCE_MS = 2000;
+    const sub = Notifications.addNotificationReceivedListener((notification) => {
+      const data = notification.request.content.data as Record<string, unknown>;
+      if (data?.type !== 'cash-changed') return;
+      const now = Date.now();
+      if (now - lastInvalidatedAt < COALESCE_MS) return;
+      lastInvalidatedAt = now;
+      // Money keys mirrored from the write-side invalidations in
+      // CheckCreate / CheckDetail / Checks / Salary / CashFlow screens.
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Splash is gated on auth resolution + font load + the bounded priority
+  // hydration. The FULL persistent-cache hydration stays decoupled — it runs
+  // in the background and updates queries as it progresses. Gating on
+  // `priorityHydrated` (capped at ~80ms) closes the audit #8.7 empty-flash on
+  // the first screens without measurably slowing boot. See the effect above.
+  const showSplash = !authResolved || !fontsReady || !priorityHydrated;
 
   return (
     <ErrorBoundary>

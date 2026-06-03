@@ -15,7 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Swipeable } from 'react-native-gesture-handler';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi, checksApi } from '../api/services';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -96,7 +96,6 @@ export default function ClientsScreen() {
   const [mode, setMode] = useState<ClientsMode>('plate');
 
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<ClientFilter>('all');
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
   // Picker visibility — the "filter by source" picker uses the RN-Modal
@@ -132,11 +131,34 @@ export default function ClientsScreen() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<PaginatedResponse<Client>>({
-    queryKey: ['clients', { search, page, limit }],
-    queryFn: async () => {
-      const res = await clientsApi.getAll({ search, page, limit });
+  // People-list — infinite scroll. The page number is intentionally OUT of
+  // the queryKey so every loaded page shares one cache entry and rows
+  // ACCUMULATE as the user scrolls (audit #8.6). The previous page-in-key
+  // `useQuery` swapped page N for page N+1, dropping the earlier rows and
+  // causing an extra refetch each time `onEndReached` fired. Mirrors the
+  // Журнал (`ChecksScreen`) infinite-query pattern. The `filter`/`source`
+  // bits are part of the key so a chip change resets paging to page 1
+  // automatically (server search is unaffected by client-side chips, but
+  // keeping them in the key keeps the cache entry semantically correct and
+  // avoids stale page accumulation across filters).
+  const {
+    data,
+    isLoading,
+    isFetching,
+    dataUpdatedAt,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<PaginatedResponse<Client>>({
+    queryKey: ['clients-infinite', { search, filter, source: sourceFilter }],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam = 1 }) => {
+      const res = await clientsApi.getAll({ search, page: pageParam as number, limit });
       return res.data;
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((acc, p) => acc + (p?.data?.length ?? 0), 0);
+      return loaded < (lastPage?.total ?? 0) ? allPages.length + 1 : undefined;
     },
     placeholderData: (prev) => prev,
   });
@@ -190,7 +212,12 @@ export default function ClientsScreen() {
       return clientRes.data;
     },
     onSuccess: () => {
+      // Refresh both the legacy `['clients']` key (persisted / plate-mode
+      // helpers) and the new people-list infinite key so the freshly
+      // created client shows up without a manual pull-to-refresh.
       queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       haptic('success');
       closeModal();
@@ -203,6 +230,8 @@ export default function ClientsScreen() {
       clientsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       closeModal();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при обновлении клиента'),
@@ -212,6 +241,8 @@ export default function ClientsScreen() {
     mutationFn: (id: string) => clientsApi.remove(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       haptic('success');
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении клиента'),
@@ -357,7 +388,9 @@ export default function ClientsScreen() {
     if (mode === 'plate') {
       await queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
     } else {
-      await queryClient.invalidateQueries({ queryKey: ['clients'] });
+      // People-list now lives under the infinite key — invalidate that so
+      // pull-to-refresh actually refetches the loaded pages.
+      await queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
     }
     setRefreshing(false);
   };
@@ -369,9 +402,14 @@ export default function ClientsScreen() {
     setMode((m) => (m === 'plate' ? 'client' : 'plate'));
   };
 
-  const rawClients = data?.data || [];
-  const total = data?.total || 0;
-  const hasMore = page * limit < total;
+  // Flatten every loaded page into one accumulated array. page 1 is the
+  // freshest server slice; page 2+ are appended below as the user scrolls.
+  // Memoised on `data.pages` so a parent re-render doesn't churn a new array
+  // (which would bust FlashList's row recycling).
+  const rawClients = useMemo<Client[]>(
+    () => (data?.pages ?? []).flatMap((p) => p?.data ?? []),
+    [data?.pages],
+  );
 
   // The list backend already returns retail buyer first when not
   // searching (server sorts by `is_retail DESC NULLS LAST`). When the
@@ -731,8 +769,9 @@ export default function ClientsScreen() {
             <SearchInput
               value={search}
               onChange={(v) => {
+                // No manual page reset — `search` lives in the infinite-query
+                // key, so a new query resets paging to page 1 automatically.
                 setSearch(v);
-                setPage(1);
               }}
               placeholder="Имя, авто или телефон"
             />
@@ -861,9 +900,19 @@ export default function ClientsScreen() {
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
               onEndReached={() => {
-                if (hasMore) setPage((p) => p + 1);
+                // Accumulate the next page instead of swapping the current
+                // one (audit #8.6). Guarded so a fast fling doesn't fire
+                // overlapping page fetches.
+                if (hasNextPage && !isFetchingNextPage) fetchNextPage();
               }}
               onEndReachedThreshold={0.5}
+              ListFooterComponent={
+                isFetchingNextPage ? (
+                  <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color={colors.primary[500]} />
+                  </View>
+                ) : null
+              }
             />
           )}
         </>

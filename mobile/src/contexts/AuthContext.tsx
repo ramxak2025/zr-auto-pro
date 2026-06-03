@@ -37,6 +37,66 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+// AsyncStorage slot for the persisted user object. Mirrored alongside the
+// 'token' slot so a cold start can render the shell from cache before /me
+// resolves (optimistic restore). MUST be wiped on logout / 401 (tenant safety
+// — user B must never see user A's cached identity). The axios 401 handler
+// already removes this key too; AuthContext keeps it in sync on its own paths.
+const STORAGE_USER_KEY = 'user';
+
+/** Persist the authenticated user object for optimistic cold-start restore. */
+async function persistUser(u: User): Promise<void> {
+  try {
+    await AsyncStorage.setItem(STORAGE_USER_KEY, JSON.stringify(u));
+  } catch {
+    // best-effort — losing the cache only costs a network wait next cold start
+  }
+}
+
+/** Read + parse the cached user, or null if absent / corrupt. */
+async function readCachedUser(): Promise<User | null> {
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_USER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string') {
+      return parsed as User;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** True when an axios error is a genuine 401 (session expired / revoked). */
+function isAuthExpiry(err: unknown): boolean {
+  return (err as { response?: { status?: number } })?.response?.status === 401;
+}
+
+/**
+ * Fetch the current user with a bounded retry. Retries up to 2 times
+ * (~400ms, ~800ms backoff) but ONLY on non-401 failures — a genuine 401 is
+ * a real expiry and must surface immediately so the caller can log out.
+ * Network / timeout / 5xx are transient and worth a couple of retries before
+ * we decide to keep the optimistically-restored session.
+ */
+async function fetchMeWithRetry(): Promise<User> {
+  const delays = [400, 800];
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      const res = await authApi.me();
+      return res.data as User;
+    } catch (err) {
+      lastErr = err;
+      // Don't burn retries on a real expiry — propagate the 401 now.
+      if (isAuthExpiry(err) || attempt === delays.length) throw err;
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+  }
+  throw lastErr;
+}
+
 interface AuthProviderProps {
   children: ReactNode;
   /**
@@ -308,36 +368,84 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Load token on mount
+  // Load token + cached user on mount (optimistic restore + status-aware
+  // background revalidation).
   useEffect(() => {
+    let cancelled = false;
+    let resolved = false;
+    // `finish` flips the splash exactly once. With optimistic restore it
+    // fires as soon as token+user are read from disk — the shell renders
+    // from cache with NO network wait; /me revalidates in the background.
     const finish = () => {
+      if (resolved || cancelled) return;
+      resolved = true;
       setLoading(false);
       onAuthResolve?.();
     };
-    AsyncStorage.getItem('token').then((stored) => {
-      if (stored) {
-        // Prime the axios in-memory token cache so the very first wave of
-        // post-mount requests (the `me()` below + any eager screen queries)
-        // skip the per-request AsyncStorage bridge read.
-        setAuthToken(stored);
-        setToken(stored);
-        authApi
-          .me()
-          .then((res: any) => {
-            setUser(res.data);
-            // Token still valid — kick off prefetch for warm session
-            if (queryClient) prefetchAfterLogin(queryClient);
-          })
-          .catch(() => {
-            setAuthToken(null);
-            AsyncStorage.removeItem('token');
-            setToken(null);
-          })
-          .finally(finish);
-      } else {
+
+    (async () => {
+      // Read token AND the cached user together so we can restore the whole
+      // session optimistically before the first /me round-trip.
+      const [stored, cachedUser] = await Promise.all([
+        AsyncStorage.getItem('token').catch(() => null),
+        readCachedUser(),
+      ]);
+      if (cancelled) return;
+
+      if (!stored) {
+        // No token → logged out. Drop any stray cached user (tenant safety).
+        AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
+        finish();
+        return;
+      }
+
+      // Prime the axios in-memory token cache so the very first wave of
+      // post-mount requests (the `me()` below + any eager screen queries)
+      // skip the per-request AsyncStorage bridge read.
+      setAuthToken(stored);
+      setToken(stored);
+
+      // Optimistic restore: if we also have a cached user, render the shell
+      // immediately from cache. This kills the "flash of Login" on cold
+      // start — the user sees their app instantly while /me revalidates.
+      if (cachedUser) {
+        setUser(cachedUser);
         finish();
       }
-    });
+
+      // Background (or blocking, when no cached user) revalidation of /me
+      // with a bounded, 401-aware retry.
+      try {
+        const fresh = await fetchMeWithRetry();
+        if (cancelled) return;
+        setUser(fresh);
+        persistUser(fresh).catch(() => {});
+        // Token still valid — kick off prefetch for a warm session.
+        if (queryClient) prefetchAfterLogin(queryClient);
+      } catch (err) {
+        if (cancelled) return;
+        if (isAuthExpiry(err)) {
+          // Genuine expiry (401) — clear token + cached user and fall back to
+          // Login. A valid token is only ever wiped on a REAL 401.
+          setAuthToken(null);
+          AsyncStorage.removeItem('token').catch(() => {});
+          AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
+          setToken(null);
+          setUser(null);
+        }
+        // Non-401 (network / timeout / 5xx, or `!err.response`): DO NOTHING.
+        // Keep the optimistically-restored cached session — a transient
+        // failure must never log a user out. The token survives untouched.
+      } finally {
+        // No-op if we already finished optimistically; otherwise (no cached
+        // user) this is where the splash finally dismisses.
+        finish();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // onAuthResolve is captured intentionally — we only fire it for the
     // initial mount cycle, not on prop changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -357,6 +465,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setAuthToken(null);
       setToken(null);
       setUser(null);
+      // Wipe the cached user identity too — tenant safety. (The axios 401
+      // handler already removes it, but this listener also covers the
+      // coalesced/secondary paths; idempotent and cheap.)
+      AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
       // Clear persistent cache so the next login starts fresh
       clearPersistentCache().catch(() => {});
       queryClient?.clear();
@@ -388,6 +500,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // AsyncStorage read on the prefetch fan-out.
       setAuthToken(null);
       await AsyncStorage.setItem('token', t);
+      // Persist B's user AFTER clearPersistentCache() above (which only wipes
+      // 'rqcache:v1:*', not the 'user' slot) so the next cold start restores
+      // B — never a leftover A. Part of the same cross-tenant isolation as the
+      // token / QueryClient / ETag resets above.
+      await persistUser(u);
       setAuthToken(t);
       setToken(t);
       setUser(u);
@@ -399,9 +516,13 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   const refreshUser = useCallback(async () => {
     try {
       const res = await authApi.me();
-      setUser(res.data);
+      const fresh = res.data as User;
+      setUser(fresh);
+      // Keep the cold-start cache in sync so the next optimistic restore
+      // reflects the latest profile (role / permissions / name changes).
+      persistUser(fresh).catch(() => {});
     } catch {
-      // ignore
+      // ignore — a transient failure keeps the current session intact
     }
   }, []);
 
@@ -415,6 +536,9 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     // unauthenticated and no stale 304 body survives into the next session.
     setAuthToken(null);
     await AsyncStorage.removeItem('token');
+    // Wipe the cached user identity — tenant safety: user B logging in on the
+    // same device must never restore user A optimistically.
+    await AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
     await clearPersistentCache().catch(() => {});
     queryClient?.clear();
     setToken(null);

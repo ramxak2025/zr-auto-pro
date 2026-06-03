@@ -1,0 +1,70 @@
+import * as Sentry from '@sentry/react-native';
+import Constants from 'expo-constants';
+
+import { onAuthExpired } from './api/axios';
+
+/**
+ * Crash + error reporting for the mobile app.
+ *
+ * Single guardrail across this whole file: nothing reaches Sentry unless a DSN
+ * is configured AND we're in a release build. With an empty DSN (the default —
+ * `app.json` ships `extra.sentryDsn: ""`) every export below is a transparent
+ * no-op: `Sentry.init` is never called, `Sentry.wrap` passes the component
+ * through untouched, and the helpers return immediately. The app then behaves
+ * exactly as it did before Sentry was wired in — no network traffic, no quota
+ * burned, no startup risk. The owner activates reporting by pasting a DSN into
+ * `app.json` → `extra.sentryDsn` and rebuilding; no other code change needed.
+ */
+
+function getDsn(): string | undefined {
+  const dsn = Constants.expoConfig?.extra?.sentryDsn;
+  return typeof dsn === 'string' && dsn.length > 0 ? dsn : undefined;
+}
+
+// `enabled` is the source of truth for every guarded call below. It is only
+// true when a real DSN exists and we are NOT in a dev build (so Metro / local
+// runs never emit events even if a DSN happens to be present).
+let enabled = false;
+
+export function initSentry(): void {
+  const dsn = getDsn();
+  if (!dsn) {
+    // No DSN → full no-op. Never init, never subscribe, never send.
+    return;
+  }
+
+  enabled = !__DEV__;
+
+  Sentry.init({
+    dsn,
+    enabled,
+    tracesSampleRate: 0.1,
+    enableNativeCrashHandling: true,
+  });
+
+  // Make forced logouts (a wave of 401s the axios layer collapses into one
+  // `onAuthExpired`) searchable as breadcrumb-rich warning events. The
+  // emitter takes a no-arg listener and returns an unsubscribe fn (unused —
+  // app-lifetime subscription).
+  onAuthExpired(() => {
+    if (!enabled) return;
+    Sentry.captureMessage('auth_expired_forced_logout', 'warning');
+  });
+}
+
+/** Report a caught error. No-op unless Sentry is enabled. */
+export function captureException(err: unknown, extra?: Record<string, unknown>): void {
+  if (!enabled) return;
+  Sentry.captureException(err, extra ? { extra } : undefined);
+}
+
+/**
+ * Associate subsequent events with the current session. Only non-PII
+ * identifiers — never phone numbers, names or other personal data.
+ */
+export function setSentryUser(user: { id: string; tenantId: string }): void {
+  if (!enabled) return;
+  Sentry.setUser({ id: user.id, tenantId: user.tenantId });
+}
+
+export { Sentry };

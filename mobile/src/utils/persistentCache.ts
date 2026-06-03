@@ -199,6 +199,76 @@ function isPersisted(key: string | null): key is PersistedKey {
   return !!key && (PERSISTED_KEYS as readonly string[]).includes(key);
 }
 
+/**
+ * Priority first-screen keys — hydrated SYNCHRONOUSLY (awaited, bounded)
+ * before the first paint so the screens a user reaches fastest after the
+ * splash dismisses (Dashboard, then a one-tap away Журнал / Склад) never
+ * flash empty. Everything else hydrates in the background via `hydrateCache`.
+ *
+ * Audit #8.7: `hydrateCache` does NOT block first render (~200-500ms for the
+ * full ~60-key whitelist), so a fast user reaching Журнал/Склад before
+ * hydration completes saw an empty flash. Synchronously hydrating just this
+ * tiny subset closes that gap while keeping boot fast — only a handful of
+ * `multiGet` reads + `JSON.parse` calls, bounded by `PRIORITY_HYDRATE_BUDGET_MS`.
+ *
+ * Keep this list SHORT — every entry adds to the pre-paint budget.
+ */
+const PRIORITY_KEYS: readonly PersistedKey[] = [
+  // Dashboard (initial route) — owner Hero/KPI cards.
+  'dashboard-v2',
+  'dashboard-chart',
+  // Журнал (Чеки) — first list a tap away, owner-reported empty-flash.
+  'checks-infinite',
+  // Склад — warehouse switcher rows + first product page + categories.
+  'warehouses',
+  'warehouse-categories',
+  'products',
+];
+
+const PRIORITY_KEY_SET = new Set<string>(PRIORITY_KEYS);
+
+/** Budget for the synchronous priority hydration. We never block boot longer
+ *  than this — if AsyncStorage is slow we bail and let the background pass
+ *  (`hydrateCache`) finish the rest. ~80ms keeps cold start snappy. */
+const PRIORITY_HYDRATE_BUDGET_MS = 80;
+
+/**
+ * Tenant-isolation gate shared by both hydration passes. Returns the auth
+ * token, or `null` if the previous session is over — in which case it also
+ * flushes orphaned `rqcache:v1:*` entries so a half-completed logout (process
+ * killed mid-clear) can't leak tenant A's data into tenant B's next login.
+ */
+async function readTokenOrFlush(): Promise<string | null> {
+  const token = await AsyncStorage.getItem('token');
+  if (!token) {
+    const orphanKeys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(STORAGE_PREFIX));
+    if (orphanKeys.length > 0) {
+      await AsyncStorage.multiRemove(orphanKeys).catch(() => {});
+    }
+    return null;
+  }
+  return token;
+}
+
+/**
+ * Parse one stored pair and write it into the QueryClient if valid + fresh +
+ * whitelisted. Shared by both the priority and background passes so the
+ * validation rules (max-age, whitelist, shape) never drift.
+ */
+function applyStoredPair(qc: QueryClient, raw: string | null, now: number): void {
+  if (!raw) return;
+  try {
+    const parsed: StoredEntry = JSON.parse(raw);
+    if (!parsed?.queryKey || parsed.data === undefined) return;
+    if (now - (parsed.storedAt ?? 0) > MAX_STALE_MS) return;
+    const f = firstKey(parsed.queryKey);
+    if (!isPersisted(f)) return;
+    qc.setQueryData(parsed.queryKey, parsed.data);
+  } catch {
+    // skip corrupted entry
+  }
+}
+
 function storageKey(qk: QueryKey): string {
   // Stringify the full query key so different params (e.g. month in
   // ['schedule', '2026-05-01', '2026-05-31']) get separate slots.
@@ -245,14 +315,9 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     // the previous session is over and no persisted entries should be
     // resurrected into the QueryClient. We also flush any orphan entries
     // so the next login starts clean.
-    const token = await AsyncStorage.getItem('token');
-    if (!token) {
-      const orphanKeys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(STORAGE_PREFIX));
-      if (orphanKeys.length > 0) {
-        await AsyncStorage.multiRemove(orphanKeys).catch(() => {});
-      }
-      return;
-    }
+    const token = await readTokenOrFlush();
+    if (!token) return;
+
     const allKeys = await AsyncStorage.getAllKeys();
     const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
     if (ourKeys.length === 0) return;
@@ -266,17 +331,7 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     for (let i = 0; i < pairs.length; i += CHUNK) {
       const slice = pairs.slice(i, i + CHUNK);
       for (const [, raw] of slice) {
-        if (!raw) continue;
-        try {
-          const parsed: StoredEntry = JSON.parse(raw);
-          if (!parsed?.queryKey || parsed.data === undefined) continue;
-          if (now - (parsed.storedAt ?? 0) > MAX_STALE_MS) continue;
-          const f = firstKey(parsed.queryKey);
-          if (!isPersisted(f)) continue;
-          qc.setQueryData(parsed.queryKey, parsed.data);
-        } catch {
-          // skip corrupted entry
-        }
+        applyStoredPair(qc, raw, now);
       }
       if (i + CHUNK < pairs.length) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -285,6 +340,58 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
   } catch {
     // AsyncStorage unavailable — proceed without hydration
   }
+}
+
+/**
+ * Synchronously hydrate ONLY the priority first-screen keys, bounded by
+ * `PRIORITY_HYDRATE_BUDGET_MS`. Awaited before first paint (see App.tsx) so
+ * Dashboard / Журнал / Склад render from cache with no empty flash, while the
+ * full whitelist hydrates in the background via `hydrateCache`.
+ *
+ * Resolves quickly: it only reads the handful of storage entries whose first
+ * key is in `PRIORITY_KEYS` (via `getAllKeys` + a filtered `multiGet`), and a
+ * watchdog guarantees we never block boot past the budget even on a slow
+ * AsyncStorage bridge. Re-hydrating the same keys later in `hydrateCache` is
+ * idempotent (`setQueryData` with equal data is a no-op for observers).
+ *
+ * Tenant-safe: shares the same token gate as `hydrateCache`, so a logged-out
+ * device hydrates nothing and orphans are flushed.
+ */
+export async function hydratePriorityCache(qc: QueryClient): Promise<void> {
+  const work = (async () => {
+    try {
+      const token = await readTokenOrFlush();
+      if (!token) return;
+
+      const allKeys = await AsyncStorage.getAllKeys();
+      // Keep only OUR slots whose first key is a priority key. The stored key
+      // is `STORAGE_PREFIX + JSON.stringify(queryKey)`, so a priority entry
+      // serialises as e.g. `rqcache:v1:["dashboard-v2",...]` — a cheap string
+      // prefix test per priority key avoids parsing every slot.
+      const priorityStorageKeys = allKeys.filter((k) => {
+        if (!k.startsWith(STORAGE_PREFIX)) return false;
+        for (const pk of PRIORITY_KEY_SET) {
+          if (k.startsWith(`${STORAGE_PREFIX}["${pk}"`)) return true;
+        }
+        return false;
+      });
+      if (priorityStorageKeys.length === 0) return;
+      const pairs = await AsyncStorage.multiGet(priorityStorageKeys);
+      const now = Date.now();
+      for (const [, raw] of pairs) {
+        applyStoredPair(qc, raw, now);
+      }
+    } catch {
+      // AsyncStorage unavailable — background pass will fill in later.
+    }
+  })();
+
+  // Watchdog: never block boot beyond the budget. Whichever settles first wins;
+  // any priority key not yet hydrated is still covered by `hydrateCache`.
+  await Promise.race([
+    work,
+    new Promise<void>((resolve) => setTimeout(resolve, PRIORITY_HYDRATE_BUDGET_MS)),
+  ]);
 }
 
 /**

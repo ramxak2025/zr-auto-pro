@@ -65,6 +65,7 @@
     },
     "extra": {
       "apiUrl": "https://autexa.pw/api",
+      "sentryDsn": "",
       "eas": {
         "projectId": "2d08b9be-9503-4e31-9198-8ec7093e44d7"
       }
@@ -85,8 +86,19 @@
           }
         }
       ],
-      ["expo-camera", { "cameraPermission": "Приложению нужен доступ к камере для сканирования штрих-кодов товаров" }],
-      ["expo-notifications", { "icon": "./assets/icon.png", "color": "#2563eb" }],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Приложению нужен доступ к камере для сканирования штрих-кодов товаров"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#2563eb"
+        }
+      ],
       "./plugins/withWidgetExtension"
     ]
   }
