@@ -20,22 +20,26 @@ import {
   ImagePlus,
   ChevronRight,
   FileText,
+  GraduationCap,
+  Wrench,
+  ThumbsUp,
+  ThumbsDown,
+  AlertCircle,
+  CalendarClock,
+  RefreshCw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi, uploadsApi } from '../api/services';
-import type {
-  KnowledgeArticle,
-  KnowledgeArticleType,
-  KnowledgeAttachment,
-  KnowledgeCategory,
-} from '../types';
+import type { KnowledgeArticle, KnowledgeArticleType, KnowledgeAttachment, KnowledgeCategory } from '../types';
 import { UserRole } from '../types';
-import { formatDateTime } from '../../../shared/utils/formatters';
+import { formatDateTime, formatDateShort } from '../../../shared/utils/formatters';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import MarkdownView from '../components/MarkdownView';
+import LearningCenter from './knowledge/LearningCenter';
+import TroubleshootingReference from './knowledge/TroubleshootingReference';
 
 // ───────────────────────────────────────────────────────────────────────
 //  Query keys (shared convention: ['knowledge', <resource>, ...args])
@@ -56,15 +60,24 @@ function formatBytes(bytes?: number): string {
   return `${(kb / 1024).toFixed(1)} МБ`;
 }
 
+/** Russian plural for «просмотр / просмотра / просмотров». */
+function pluralizeViews(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'просмотр';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'просмотра';
+  return 'просмотров';
+}
+
 type View = { mode: 'browse' } | { mode: 'reader'; id: string };
+type Section = 'articles' | 'learning' | 'troubleshooting';
 
 export default function KnowledgeBasePage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const isManager =
-    !!user &&
-    [UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN].includes(user.role);
+  const isManager = !!user && [UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN].includes(user.role);
 
+  const [section, setSection] = useState<Section>('articles');
   const [view, setView] = useState<View>({ mode: 'browse' });
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
@@ -105,8 +118,7 @@ export default function KnowledgeBasePage() {
   const [editorArticle, setEditorArticle] = useState<KnowledgeArticle | 'new' | null>(null);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
 
-  const invalidateLists = () =>
-    queryClient.invalidateQueries({ queryKey: ['knowledge', 'articles'] });
+  const invalidateLists = () => queryClient.invalidateQueries({ queryKey: ['knowledge', 'articles'] });
 
   if (view.mode === 'reader') {
     return (
@@ -134,16 +146,12 @@ export default function KnowledgeBasePage() {
           </div>
           <div>
             <h1 className="page-title">База знаний</h1>
-            <p className="text-sm text-gray-500">Статьи, инструкции и регламенты автосервиса</p>
+            <p className="text-sm text-gray-500">Статьи, обучение и справочник автосервиса</p>
           </div>
         </div>
-        {isManager && (
+        {isManager && section === 'articles' && (
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setCategoryManagerOpen(true)}
-              className="btn-secondary btn-sm"
-              title="Категории"
-            >
+            <button onClick={() => setCategoryManagerOpen(true)} className="btn-secondary btn-sm" title="Категории">
               <FolderPlus className="h-4 w-4" />
               <span className="hidden sm:inline">Категории</span>
             </button>
@@ -155,173 +163,204 @@ export default function KnowledgeBasePage() {
         )}
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-        <input
-          type="search"
-          value={searchInput}
-          onChange={(e) => onSearchChange(e.target.value)}
-          placeholder="Поиск по статьям и регламентам…"
-          className="input pl-10"
-        />
-      </div>
-
-      {/* Type + category filters */}
-      <div className="flex flex-wrap gap-2">
-        <TypeChip label="Всё" active={activeType === null} onClick={() => setActiveType(null)} />
-        <TypeChip
+      {/* Section tabs */}
+      <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
+        <SectionTab
           label="Статьи"
-          active={activeType === 'article'}
-          onClick={() => setActiveType('article')}
+          icon={FileText}
+          active={section === 'articles'}
+          onClick={() => setSection('articles')}
         />
-        <TypeChip
-          label="Регламенты"
-          active={activeType === 'regulation'}
-          onClick={() => setActiveType('regulation')}
+        <SectionTab
+          label="Учебный центр"
+          icon={GraduationCap}
+          active={section === 'learning'}
+          onClick={() => setSection('learning')}
+        />
+        <SectionTab
+          label="Справочник"
+          icon={Wrench}
+          active={section === 'troubleshooting'}
+          onClick={() => setSection('troubleshooting')}
         />
       </div>
 
-      <div className="flex flex-col gap-6 lg:flex-row">
-        {/* Category sidebar */}
-        <aside className="lg:w-56 lg:flex-shrink-0">
-          <div className="card overflow-hidden">
-            <button
-              onClick={() => setActiveCategory(null)}
-              className={`flex w-full items-center justify-between px-4 py-2.5 text-sm transition-colors ${
-                activeCategory === null
-                  ? 'bg-primary-50 font-semibold text-primary-700'
-                  : 'text-gray-700 hover:bg-gray-50'
-              }`}
-            >
-              Все категории
-            </button>
-            {categories.map((cat) => (
-              <button
-                key={cat.id}
-                onClick={() => setActiveCategory(cat.id)}
-                className={`flex w-full items-center justify-between border-t border-gray-100 px-4 py-2.5 text-sm transition-colors ${
-                  activeCategory === cat.id
-                    ? 'bg-primary-50 font-semibold text-primary-700'
-                    : 'text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                <span className="truncate">{cat.name}</span>
-                <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
-              </button>
-            ))}
-            {categories.length === 0 && (
-              <p className="border-t border-gray-100 px-4 py-3 text-xs text-gray-400">
-                Категорий пока нет
-              </p>
-            )}
-          </div>
-        </aside>
+      {section === 'learning' && <LearningCenter isManager={isManager} categories={categories} />}
 
-        {/* Articles */}
-        <div className="flex-1 space-y-6">
-          {articlesLoading ? (
-            <div className="flex justify-center py-16">
-              <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
-            </div>
-          ) : articles.length === 0 ? (
-            <EmptyState
-              icon={BookOpen}
-              title="Ничего не найдено"
-              description={
-                search
-                  ? 'Попробуйте изменить запрос или выбрать другую категорию.'
-                  : isManager
-                    ? 'Создайте первую статью, чтобы наполнить базу знаний.'
-                    : 'В этой категории пока нет материалов.'
-              }
-              action={
-                isManager && !search
-                  ? { label: 'Создать статью', onClick: () => setEditorArticle('new') }
-                  : undefined
-              }
+      {section === 'troubleshooting' && <TroubleshootingReference isManager={isManager} />}
+
+      {section === 'articles' && (
+        <>
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="search"
+              value={searchInput}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder="Поиск по статьям и регламентам…"
+              className="input pl-10"
             />
-          ) : (
-            <>
-              {pinned.length > 0 && (
-                <section>
-                  <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
-                    <Pin className="h-4 w-4" /> Закреплённые
-                  </h2>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {pinned.map((a) => (
-                      <ArticleCard
-                        key={a.id}
-                        article={a}
-                        onOpen={() => setView({ mode: 'reader', id: a.id })}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-              <section>
-                {pinned.length > 0 && (
-                  <h2 className="mb-3 text-sm font-semibold text-gray-500">Все материалы</h2>
+          </div>
+
+          {/* Type + category filters */}
+          <div className="flex flex-wrap gap-2">
+            <TypeChip label="Всё" active={activeType === null} onClick={() => setActiveType(null)} />
+            <TypeChip label="Статьи" active={activeType === 'article'} onClick={() => setActiveType('article')} />
+            <TypeChip
+              label="Регламенты"
+              active={activeType === 'regulation'}
+              onClick={() => setActiveType('regulation')}
+            />
+          </div>
+
+          <div className="flex flex-col gap-6 lg:flex-row">
+            {/* Category sidebar */}
+            <aside className="lg:w-56 lg:flex-shrink-0">
+              <div className="card overflow-hidden">
+                <button
+                  onClick={() => setActiveCategory(null)}
+                  className={`flex w-full items-center justify-between px-4 py-2.5 text-sm transition-colors ${
+                    activeCategory === null
+                      ? 'bg-primary-50 font-semibold text-primary-700'
+                      : 'text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  Все категории
+                </button>
+                {categories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    onClick={() => setActiveCategory(cat.id)}
+                    className={`flex w-full items-center justify-between border-t border-gray-100 px-4 py-2.5 text-sm transition-colors ${
+                      activeCategory === cat.id
+                        ? 'bg-primary-50 font-semibold text-primary-700'
+                        : 'text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <span className="truncate">{cat.name}</span>
+                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
+                  </button>
+                ))}
+                {categories.length === 0 && (
+                  <p className="border-t border-gray-100 px-4 py-3 text-xs text-gray-400">Категорий пока нет</p>
                 )}
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {recent.map((a) => (
-                    <ArticleCard
-                      key={a.id}
-                      article={a}
-                      onOpen={() => setView({ mode: 'reader', id: a.id })}
-                    />
-                  ))}
+              </div>
+            </aside>
+
+            {/* Articles */}
+            <div className="flex-1 space-y-6">
+              {articlesLoading ? (
+                <div className="flex justify-center py-16">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
                 </div>
-              </section>
-            </>
+              ) : articles.length === 0 ? (
+                <EmptyState
+                  icon={BookOpen}
+                  title="Ничего не найдено"
+                  description={
+                    search
+                      ? 'Попробуйте изменить запрос или выбрать другую категорию.'
+                      : isManager
+                        ? 'Создайте первую статью, чтобы наполнить базу знаний.'
+                        : 'В этой категории пока нет материалов.'
+                  }
+                  action={
+                    isManager && !search
+                      ? { label: 'Создать статью', onClick: () => setEditorArticle('new') }
+                      : undefined
+                  }
+                />
+              ) : (
+                <>
+                  {pinned.length > 0 && (
+                    <section>
+                      <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
+                        <Pin className="h-4 w-4" /> Закреплённые
+                      </h2>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {pinned.map((a) => (
+                          <ArticleCard key={a.id} article={a} onOpen={() => setView({ mode: 'reader', id: a.id })} />
+                        ))}
+                      </div>
+                    </section>
+                  )}
+                  <section>
+                    {pinned.length > 0 && <h2 className="mb-3 text-sm font-semibold text-gray-500">Все материалы</h2>}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {recent.map((a) => (
+                        <ArticleCard key={a.id} article={a} onOpen={() => setView({ mode: 'reader', id: a.id })} />
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Author modal (from browse view) */}
+          {isManager && editorArticle && (
+            <ArticleEditorModal
+              article={editorArticle === 'new' ? null : editorArticle}
+              categories={categories}
+              onClose={() => setEditorArticle(null)}
+              onSaved={() => {
+                setEditorArticle(null);
+                invalidateLists();
+              }}
+            />
           )}
-        </div>
-      </div>
 
-      {/* Author modal (from browse view) */}
-      {isManager && editorArticle && (
-        <ArticleEditorModal
-          article={editorArticle === 'new' ? null : editorArticle}
-          categories={categories}
-          onClose={() => setEditorArticle(null)}
-          onSaved={() => {
-            setEditorArticle(null);
-            invalidateLists();
-          }}
-        />
-      )}
-
-      {/* Category manager modal */}
-      {isManager && (
-        <CategoryManagerModal
-          isOpen={categoryManagerOpen}
-          onClose={() => setCategoryManagerOpen(false)}
-          categories={categories}
-        />
+          {/* Category manager modal */}
+          {isManager && (
+            <CategoryManagerModal
+              isOpen={categoryManagerOpen}
+              onClose={() => setCategoryManagerOpen(false)}
+              categories={categories}
+            />
+          )}
+        </>
       )}
     </div>
   );
 }
 
 // ───────────────────────────────────────────────────────────────────────
-//  Type filter chip
+//  Section tab
 // ───────────────────────────────────────────────────────────────────────
-function TypeChip({
+function SectionTab({
   label,
+  icon: Icon,
   active,
   onClick,
 }: {
   label: string;
+  icon: typeof FileText;
   active: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       onClick={onClick}
+      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+        active ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Type filter chip
+// ───────────────────────────────────────────────────────────────────────
+function TypeChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
       className={`press-soft rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-        active
-          ? 'bg-primary-600 text-white'
-          : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+        active ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
       }`}
     >
       {label}
@@ -332,26 +371,12 @@ function TypeChip({
 // ───────────────────────────────────────────────────────────────────────
 //  Article card (browse)
 // ───────────────────────────────────────────────────────────────────────
-function ArticleCard({
-  article,
-  onOpen,
-}: {
-  article: KnowledgeArticle;
-  onOpen: () => void;
-}) {
+function ArticleCard({ article, onOpen }: { article: KnowledgeArticle; onOpen: () => void }) {
   const isRegulation = article.type === 'regulation';
   return (
-    <button
-      onClick={onOpen}
-      className="card-interactive flex flex-col overflow-hidden text-left"
-    >
+    <button onClick={onOpen} className="card-interactive flex flex-col overflow-hidden text-left">
       {article.coverImage && (
-        <img
-          src={article.coverImage}
-          alt=""
-          className="h-28 w-full object-cover"
-          loading="lazy"
-        />
+        <img src={article.coverImage} alt="" className="h-28 w-full object-cover" loading="lazy" />
       )}
       <div className="flex flex-1 flex-col p-4">
         <div className="mb-1.5 flex items-center gap-2">
@@ -367,9 +392,7 @@ function ArticleCard({
           {!article.published && <span className="badge-gray">Черновик</span>}
         </div>
         <h3 className="text-sm font-semibold text-gray-900 line-clamp-2">{article.title}</h3>
-        {article.excerpt && (
-          <p className="mt-1 text-xs text-gray-500 line-clamp-2">{article.excerpt}</p>
-        )}
+        {article.excerpt && <p className="mt-1 text-xs text-gray-500 line-clamp-2">{article.excerpt}</p>}
         {article.categoryName && (
           <p className="mt-auto pt-2 text-xs font-medium text-gray-400">{article.categoryName}</p>
         )}
@@ -415,14 +438,39 @@ function ArticleReader({
     mutationFn: () => knowledgeApi.acknowledge(articleId),
     onSuccess: (res) => {
       // Optimistically update the cached article so the green ✓ appears instantly.
+      // The response carries the version that was acknowledged — sync it so a
+      // later in-place version bump is detected correctly.
       queryClient.setQueryData<KnowledgeArticle>(KEY.article(articleId), (prev) =>
-        prev ? { ...prev, acknowledged: !!res.data.acknowledgedAt } : prev,
+        prev
+          ? {
+              ...prev,
+              acknowledged: !!res.data.acknowledgedAt,
+              version: res.data.version ?? prev.version,
+            }
+          : prev,
       );
       queryClient.invalidateQueries({ queryKey: KEY.acks(articleId) });
       queryClient.invalidateQueries({ queryKey: KEY.pendingCount });
       toast.success('Отмечено: ознакомлен');
     },
     onError: () => toast.error('Не удалось отметить'),
+  });
+
+  const feedbackMutation = useMutation({
+    mutationFn: (helpful: boolean) => knowledgeApi.articleFeedback(articleId, helpful),
+    onSuccess: (res) => {
+      queryClient.setQueryData<KnowledgeArticle>(KEY.article(articleId), (prev) =>
+        prev
+          ? {
+              ...prev,
+              helpfulCount: res.data.helpfulCount,
+              notHelpfulCount: res.data.notHelpfulCount,
+              myFeedback: res.data.myFeedback,
+            }
+          : prev,
+      );
+    },
+    onError: () => toast.error('Не удалось отправить оценку'),
   });
 
   const deleteMutation = useMutation({
@@ -477,9 +525,7 @@ function ArticleReader({
       </div>
 
       <article className="card overflow-hidden">
-        {article.coverImage && (
-          <img src={article.coverImage} alt="" className="max-h-64 w-full object-cover" />
-        )}
+        {article.coverImage && <img src={article.coverImage} alt="" className="max-h-64 w-full object-cover" />}
         <div className="p-6 sm:p-8">
           {/* Meta */}
           <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -493,34 +539,57 @@ function ArticleReader({
               </span>
             )}
             {article.categoryName && <span className="badge-gray">{article.categoryName}</span>}
+            {article.carMake && <span className="badge-blue">{article.carMake}</span>}
+            {isRegulation && article.mandatory && (
+              <span className="badge-red gap-1">
+                <AlertCircle className="h-3 w-3" /> Обязательно
+              </span>
+            )}
+            {isRegulation && article.dueDate && (
+              <span className="badge-warning gap-1">
+                <CalendarClock className="h-3 w-3" /> Срок: {formatDateShort(article.dueDate)}
+              </span>
+            )}
+            {typeof article.version === 'number' && article.version > 1 && (
+              <span className="badge-gray">Версия {article.version}</span>
+            )}
             {!article.published && <span className="badge-gray">Черновик</span>}
           </div>
 
           <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">{article.title}</h1>
-          <p className="mt-1.5 text-xs text-gray-400">
-            Обновлено {formatDateTime(article.updatedAt)}
+          <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
+            <span>Обновлено {formatDateTime(article.updatedAt)}</span>
+            {typeof article.viewCount === 'number' && (
+              <span className="inline-flex items-center gap-1">
+                <Eye className="h-3.5 w-3.5" /> {article.viewCount} {pluralizeViews(article.viewCount)}
+              </span>
+            )}
           </p>
 
-          {/* Regulation acknowledgment banner */}
+          {/* Regulation acknowledgment banner — version-aware re-ack */}
           {isRegulation && (
             <div className="mt-5">
               {article.acknowledged ? (
                 <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
-                  <Check className="h-5 w-5" /> Вы ознакомлены с этим регламентом
+                  <Check className="h-5 w-5" /> Вы ознакомлены с этой версией регламента
                 </div>
               ) : (
-                <button
-                  onClick={() => ackMutation.mutate()}
-                  disabled={ackMutation.isPending}
-                  className="btn-primary"
-                >
-                  {ackMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Check className="h-4 w-4" />
+                <div className="space-y-3">
+                  {typeof article.version === 'number' && article.version > 1 && (
+                    <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+                      <RefreshCw className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                      <span>Регламент обновлён до версии {article.version} — ознакомьтесь заново.</span>
+                    </div>
                   )}
-                  Ознакомлен
-                </button>
+                  <button onClick={() => ackMutation.mutate()} disabled={ackMutation.isPending} className="btn-primary">
+                    {ackMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Check className="h-4 w-4" />
+                    )}
+                    Ознакомлен
+                  </button>
+                </div>
               )}
             </div>
           )}
@@ -551,21 +620,50 @@ function ArticleReader({
                   >
                     <Paperclip className="h-4 w-4 flex-shrink-0 text-gray-400" />
                     <span className="flex-1 truncate text-gray-800">{att.name}</span>
-                    {att.size ? (
-                      <span className="text-xs text-gray-400">{formatBytes(att.size)}</span>
-                    ) : null}
+                    {att.size ? <span className="text-xs text-gray-400">{formatBytes(att.size)}</span> : null}
                   </a>
                 ))}
               </div>
             </div>
           )}
+
+          {/* Helpfulness feedback */}
+          <div className="mt-8 border-t border-gray-100 pt-5">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm font-medium text-gray-600">Статья была полезной?</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => feedbackMutation.mutate(true)}
+                  disabled={feedbackMutation.isPending}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+                    article.myFeedback === true
+                      ? 'border-green-300 bg-green-50 text-green-700'
+                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <ThumbsUp className="h-4 w-4" />
+                  {typeof article.helpfulCount === 'number' ? article.helpfulCount : 0}
+                </button>
+                <button
+                  onClick={() => feedbackMutation.mutate(false)}
+                  disabled={feedbackMutation.isPending}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+                    article.myFeedback === false
+                      ? 'border-red-300 bg-red-50 text-red-700'
+                      : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <ThumbsDown className="h-4 w-4" />
+                  {typeof article.notHelpfulCount === 'number' ? article.notHelpfulCount : 0}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </article>
 
       {/* Acks panel */}
-      {isManager && acksOpen && (
-        <AcksModal articleId={articleId} onClose={() => setAcksOpen(false)} />
-      )}
+      {isManager && acksOpen && <AcksModal articleId={articleId} onClose={() => setAcksOpen(false)} />}
 
       {/* Editor modal (from reader) */}
       {isManager && editorArticle && (
@@ -618,21 +716,14 @@ function AcksModal({ articleId, onClose }: { articleId: string; onClose: () => v
                 {data.acknowledgedCount} из {data.totalAudience} ознакомлены
               </span>
               <span className="text-sm font-semibold text-green-600">
-                {data.totalAudience > 0
-                  ? Math.round((data.acknowledgedCount / data.totalAudience) * 100)
-                  : 0}
-                %
+                {data.totalAudience > 0 ? Math.round((data.acknowledgedCount / data.totalAudience) * 100) : 0}%
               </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded-full bg-gray-100">
               <div
                 className="h-full rounded-full bg-green-500 transition-all"
                 style={{
-                  width: `${
-                    data.totalAudience > 0
-                      ? (data.acknowledgedCount / data.totalAudience) * 100
-                      : 0
-                  }%`,
+                  width: `${data.totalAudience > 0 ? (data.acknowledgedCount / data.totalAudience) * 100 : 0}%`,
                 }}
               />
             </div>
@@ -648,10 +739,7 @@ function AcksModal({ articleId, onClose }: { articleId: string; onClose: () => v
             ) : (
               <ul className="space-y-1.5">
                 {data.acknowledged.map((a) => (
-                  <li
-                    key={a.userId}
-                    className="flex items-center justify-between rounded-lg bg-green-50 px-3 py-2"
-                  >
+                  <li key={a.userId} className="flex items-center justify-between rounded-lg bg-green-50 px-3 py-2">
                     <span className="text-sm font-medium text-gray-800">{a.userName}</span>
                     <span className="text-xs text-gray-500">{formatDateTime(a.acknowledgedAt)}</span>
                   </li>
@@ -668,10 +756,7 @@ function AcksModal({ articleId, onClose }: { articleId: string; onClose: () => v
               </h4>
               <ul className="space-y-1.5">
                 {data.pending.map((p) => (
-                  <li
-                    key={p.userId}
-                    className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600"
-                  >
+                  <li key={p.userId} className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600">
                     {p.userName}
                   </li>
                 ))}
@@ -704,11 +789,13 @@ function ArticleEditorModal({
   const [type, setType] = useState<KnowledgeArticleType>(article?.type ?? 'article');
   const [categoryId, setCategoryId] = useState<string>(article?.categoryId ?? '');
   const [coverImage, setCoverImage] = useState<string | null>(article?.coverImage ?? null);
-  const [attachments, setAttachments] = useState<KnowledgeAttachment[]>(
-    article?.attachments ?? [],
-  );
+  const [attachments, setAttachments] = useState<KnowledgeAttachment[]>(article?.attachments ?? []);
   const [pinned, setPinned] = useState(article?.pinned ?? false);
   const [published, setPublished] = useState(article?.published ?? true);
+  const [mandatory, setMandatory] = useState(article?.mandatory ?? false);
+  const [dueDate, setDueDate] = useState(article?.dueDate ? article.dueDate.slice(0, 10) : '');
+  const [carMake, setCarMake] = useState(article?.carMake ?? '');
+  const [bumpVersion, setBumpVersion] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
@@ -727,10 +814,13 @@ function ArticleEditorModal({
         attachments,
         pinned,
         published,
+        carMake: carMake.trim() || null,
+        // Regulation-only fields; harmless for plain articles.
+        mandatory: type === 'regulation' ? mandatory : false,
+        dueDate: type === 'regulation' && dueDate ? dueDate : null,
+        ...(isEdit && type === 'regulation' && bumpVersion ? { bumpVersion: true } : {}),
       };
-      return isEdit
-        ? knowledgeApi.updateArticle(article!.id, payload)
-        : knowledgeApi.createArticle(payload);
+      return isEdit ? knowledgeApi.updateArticle(article!.id, payload) : knowledgeApi.createArticle(payload);
     },
     onSuccess: () => {
       toast.success(isEdit ? 'Статья обновлена' : 'Статья создана');
@@ -810,11 +900,7 @@ function ArticleEditorModal({
           </div>
           <div>
             <label className="label">Категория</label>
-            <select
-              value={categoryId}
-              onChange={(e) => setCategoryId(e.target.value)}
-              className="input"
-            >
+            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input">
               <option value="">Без категории</option>
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
@@ -829,11 +915,7 @@ function ArticleEditorModal({
         <div>
           <div className="mb-1.5 flex items-center justify-between">
             <label className="label mb-0">Содержание (Markdown)</label>
-            <button
-              type="button"
-              onClick={() => setShowPreview((v) => !v)}
-              className="btn-ghost btn-sm"
-            >
+            <button type="button" onClick={() => setShowPreview((v) => !v)} className="btn-ghost btn-sm">
               {showPreview ? (
                 <>
                   <EyeOff className="h-3.5 w-3.5" /> Скрыть превью
@@ -886,11 +968,7 @@ function ArticleEditorModal({
               disabled={uploadingCover}
               className="btn-secondary btn-sm"
             >
-              {uploadingCover ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ImagePlus className="h-4 w-4" />
-              )}
+              {uploadingCover ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
               Загрузить обложку
             </button>
           )}
@@ -919,9 +997,7 @@ function ArticleEditorModal({
                 >
                   <Paperclip className="h-4 w-4 flex-shrink-0 text-gray-400" />
                   <span className="flex-1 truncate text-gray-800">{att.name}</span>
-                  {att.size ? (
-                    <span className="text-xs text-gray-400">{formatBytes(att.size)}</span>
-                  ) : null}
+                  {att.size ? <span className="text-xs text-gray-400">{formatBytes(att.size)}</span> : null}
                   <button
                     type="button"
                     onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
@@ -939,11 +1015,7 @@ function ArticleEditorModal({
             disabled={uploadingAttachment}
             className="btn-secondary btn-sm"
           >
-            {uploadingAttachment ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Paperclip className="h-4 w-4" />
-            )}
+            {uploadingAttachment ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
             Добавить файл
           </button>
           <input
@@ -957,6 +1029,47 @@ function ArticleEditorModal({
             }}
           />
         </div>
+
+        {/* Car make (contextual KB) */}
+        <div>
+          <label className="label">Марка авто (необязательно)</label>
+          <input
+            value={carMake}
+            onChange={(e) => setCarMake(e.target.value)}
+            placeholder="Например: Lada — оставьте пустым для всех марок"
+            className="input"
+          />
+        </div>
+
+        {/* Regulation-specific options */}
+        {type === 'regulation' && (
+          <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/40 p-4">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-gray-700">
+              <input
+                type="checkbox"
+                checked={mandatory}
+                onChange={(e) => setMandatory(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <AlertCircle className="h-4 w-4 text-amber-500" /> Обязательно для ознакомления
+            </label>
+            <div>
+              <label className="label">Срок ознакомления</label>
+              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="input" />
+            </div>
+            {isEdit && (
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={bumpVersion}
+                  onChange={(e) => setBumpVersion(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                />
+                <RefreshCw className="h-4 w-4 text-gray-400" /> Поднять версию — потребовать повторное ознакомление
+              </label>
+            )}
+          </div>
+        )}
 
         {/* Toggles */}
         <div className="flex flex-wrap gap-4 border-t border-gray-100 pt-4">
@@ -976,11 +1089,7 @@ function ArticleEditorModal({
               onChange={(e) => setPublished(e.target.checked)}
               className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
             />
-            {published ? (
-              <Eye className="h-4 w-4 text-gray-400" />
-            ) : (
-              <EyeOff className="h-4 w-4 text-gray-400" />
-            )}
+            {published ? <Eye className="h-4 w-4 text-gray-400" /> : <EyeOff className="h-4 w-4 text-gray-400" />}
             Опубликовано
           </label>
         </div>
@@ -990,11 +1099,7 @@ function ArticleEditorModal({
           <button onClick={onClose} className="btn-secondary">
             Отмена
           </button>
-          <button
-            onClick={() => saveMutation.mutate()}
-            disabled={!canSave}
-            className="btn-primary"
-          >
+          <button onClick={() => saveMutation.mutate()} disabled={!canSave} className="btn-primary">
             {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             {isEdit ? 'Сохранить' : 'Создать'}
           </button>
@@ -1033,8 +1138,7 @@ function CategoryManagerModal({
   });
 
   const renameMutation = useMutation({
-    mutationFn: (vars: { id: string; name: string }) =>
-      knowledgeApi.updateCategory(vars.id, { name: vars.name }),
+    mutationFn: (vars: { id: string; name: string }) => knowledgeApi.updateCategory(vars.id, { name: vars.name }),
     onSuccess: () => {
       invalidate();
       setEditing(null);
@@ -1097,17 +1201,13 @@ function CategoryManagerModal({
                       />
                       <button
                         onClick={() =>
-                          editing.name.trim() &&
-                          renameMutation.mutate({ id: cat.id, name: editing.name.trim() })
+                          editing.name.trim() && renameMutation.mutate({ id: cat.id, name: editing.name.trim() })
                         }
                         className="text-green-600 hover:text-green-700"
                       >
                         <Check className="h-4 w-4" />
                       </button>
-                      <button
-                        onClick={() => setEditing(null)}
-                        className="text-gray-400 hover:text-gray-600"
-                      >
+                      <button onClick={() => setEditing(null)} className="text-gray-400 hover:text-gray-600">
                         <X className="h-4 w-4" />
                       </button>
                     </>
@@ -1120,10 +1220,7 @@ function CategoryManagerModal({
                       >
                         <Pencil className="h-4 w-4" />
                       </button>
-                      <button
-                        onClick={() => setConfirmDeleteId(cat.id)}
-                        className="text-gray-400 hover:text-red-600"
-                      >
+                      <button onClick={() => setConfirmDeleteId(cat.id)} className="text-gray-400 hover:text-red-600">
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </>
