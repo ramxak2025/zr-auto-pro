@@ -504,6 +504,28 @@ export default function CheckDetailScreen() {
           <TouchableOpacity onPress={generatePdf} style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}>
             <Ionicons name="document-text-outline" size={17} color={colors.violet[600]} />
           </TouchableOpacity>
+          {/* Возврат заказ-наряда — компактная trailing-иконка в шапке.
+              Видна только директору/админу/superadmin. На уже возвращённом
+              чеке остаётся, но в disabled-состоянии (приглушённая, без
+              нажатия) — пользователь видит, что возврат уже оформлен, и
+              понимает почему действие недоступно. */}
+          {canFileReturn && (
+            <TouchableOpacity
+              onPress={openReturnModal}
+              disabled={isReturned}
+              style={[styles.actionBtn, { backgroundColor: isReturned ? palette.bg.muted : colors.red[50] }]}
+              accessibilityRole="button"
+              accessibilityLabel={isReturned ? 'Возврат уже оформлен' : 'Оформить возврат'}
+              accessibilityState={{ disabled: isReturned }}
+              hitSlop={6}
+            >
+              <Ionicons
+                name="arrow-undo-outline"
+                size={17}
+                color={isReturned ? palette.text.tertiary : colors.red[600]}
+              />
+            </TouchableOpacity>
+          )}
           {canEdit && (
             <TouchableOpacity
               onPress={() => navigation.navigate('CheckCreate', { id: check.id })}
@@ -962,36 +984,9 @@ export default function CheckDetailScreen() {
           )}
         </View>
 
-        {/* Возврат заказ-наряда — финальный CTA внизу скролла.
-            Видна только директору/админу/superadmin. На уже возвращённом
-            чеке вместо кнопки рендерим disabled-плашку «Возврат оформлен»,
-            чтобы пользователь понимал почему действие недоступно. */}
-        {canFileReturn && (
-          isReturned ? (
-            <View
-              style={[
-                styles.returnDoneBanner,
-                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-              ]}
-            >
-              <Ionicons name="arrow-undo" size={16} color={colors.red[600]} />
-              <Text style={[styles.returnDoneText, { color: palette.text.primary }]}>
-                Возврат оформлен. Дальнейшие изменения невозможны.
-              </Text>
-            </View>
-          ) : (
-            <TouchableOpacity
-              onPress={openReturnModal}
-              activeOpacity={0.85}
-              style={styles.returnCtaBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Сделать возврат"
-            >
-              <Ionicons name="arrow-undo-outline" size={18} color={colors.red[600]} />
-              <Text style={styles.returnCtaText}>Сделать возврат</Text>
-            </TouchableOpacity>
-          )
-        )}
+        {/* Триггер возврата перенесён в trailing-иконку шапки (см. header).
+            Уже возвращённый чек дополнительно помечен бейджем «ВОЗВРАЩЁН»
+            рядом с номером чека. */}
       </Animated.ScrollView>
 
       {/* Return modal — единый поток для full / partial.
@@ -1618,29 +1613,6 @@ const styles = StyleSheet.create({
     color: colors.white,
     letterSpacing: 0.4,
   },
-  returnCtaBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    paddingVertical: spacing[3],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1.5,
-    borderColor: colors.red[200],
-    backgroundColor: colors.red[50],
-  },
-  returnCtaText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.red[700] },
-  returnDoneBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[3.5],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-  },
-  returnDoneText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, flex: 1 },
-
   // ── Return modal styles ───────────────────────────────────────────
   returnScopeRow: {
     flexDirection: 'row',

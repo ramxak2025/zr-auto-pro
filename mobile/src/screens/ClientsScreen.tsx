@@ -580,6 +580,14 @@ export default function ClientsScreen() {
 
       return (
         <Swipeable
+          // FlashList v2 RECYCLES the view holder when this row scrolls off
+          // and a different client scrolls in. The legacy RNGH `Swipeable`
+          // keeps internal Animated drag/open state that is NOT tied to the
+          // item — a recycled holder would mutate a stale animated node and
+          // momentarily render an inconsistent (blank) frame. Keying the
+          // Swipeable to `item.id` forces a fresh instance per client on
+          // recycle, so no stale swipe state leaks between rows.
+          key={item.id}
           renderRightActions={() => (
             <View style={styles.swipeActionsRow}>
               <TouchableOpacity style={styles.swipeEditAction} onPress={() => openEditModal(item)} activeOpacity={0.85}>
@@ -756,7 +764,10 @@ export default function ClientsScreen() {
               paddingBottom: tabBarHeight + spacing[4],
             }}
             keyboardShouldPersistTaps="handled"
-            removeClippedSubviews
+            // Same reasoning as the people-list below: disable FlashList v2's
+            // default top-anchoring (it's a chat feature, not what a search
+            // result list wants) and drop the v2-ignored removeClippedSubviews.
+            maintainVisibleContentPosition={{ disabled: true }}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
@@ -895,7 +906,16 @@ export default function ClientsScreen() {
                 ) : null
               }
               contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
-              removeClippedSubviews
+              // FlashList v2 enables `maintainVisibleContentPosition` BY
+              // DEFAULT (it's built for chat UIs that grow at the top). On a
+              // contacts-style list with variable-height rows that re-anchors
+              // the top on every recycle/measure pass, which is exactly the
+              // "rows disappear from the top as I scroll down" artifact the
+              // owner reported. A clients list only ever appends pages at the
+              // BOTTOM, so we explicitly disable MVCP for normal list scroll.
+              // (`removeClippedSubviews` is a no-op in FlashList v2 — the
+              // recycler does its own offscreen culling — so it's dropped.)
+              maintainVisibleContentPosition={{ disabled: true }}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }

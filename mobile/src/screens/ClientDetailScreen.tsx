@@ -30,6 +30,7 @@ import CarPlateField from '../components/CarPlateField';
 import type { PlateMode } from '../components/RussianPlateInput';
 import ClientCallsSection from '../components/ClientCallsSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
+import SectionHeader from '../components/SectionHeader';
 import { UserRole } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import type { Client, Car, Check } from '../../../shared/types';
@@ -717,14 +718,16 @@ export default function ClientDetailScreen() {
             </View>
           </LinearGradient>
 
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Чеки ({checks?.length || 0})</Text>
-          </View>
+          <SectionHeader title="Чеки" count={checks?.length || 0} />
 
           {!checks || checks.length === 0 ? (
-            <View style={styles.emptyChecks}>
-              <Ionicons name="receipt-outline" size={32} color={palette.text.tertiary} />
-              <Text style={[styles.emptyChecksText, { color: palette.text.tertiary }]}>Нет чеков</Text>
+            <View
+              style={[styles.emptyChecks, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <View style={[styles.emptyChecksIcon, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="receipt-outline" size={22} color={palette.text.tertiary} />
+              </View>
+              <Text style={[styles.emptyChecksText, { color: palette.text.secondary }]}>Нет чеков</Text>
             </View>
           ) : (
             retailGrouped.map((group, gi) => (
@@ -779,58 +782,51 @@ export default function ClientDetailScreen() {
         onScroll={(e) => maybeExpandHistory(e.nativeEvent.contentOffset.y)}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
       >
-        {/* HERO — avatar, source badge, first-visit date + 3 stat tiles. */}
+        {/* HERO — avatar, name, phone, source badge, first-visit date. */}
         <AnimatedCard
           style={[styles.heroCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           index={0}
         >
-          <View style={styles.heroTop}>
-            <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
-              <Text style={styles.avatarText}>{initials}</Text>
-            </View>
-            <View style={styles.heroInfo}>
-              <Text style={[styles.clientName, { color: palette.text.primary }]} numberOfLines={1}>
-                {client.fullName}
-              </Text>
-              <View style={styles.heroBadgesRow}>
-                {client.source ? (
-                  <TouchableOpacity
-                    onPress={() => canEditMeta && setSourceOpen(true)}
-                    activeOpacity={canEditMeta ? 0.7 : 1}
-                    style={[styles.sourceBadge, { backgroundColor: palette.accent.primarySoft }]}
-                  >
-                    <Ionicons name="pricetag" size={11} color={palette.accent.primaryText} />
-                    <Text style={[styles.sourceBadgeText, { color: palette.accent.primaryText }]}>
-                      {client.source}
-                    </Text>
-                  </TouchableOpacity>
-                ) : canEditMeta ? (
-                  <TouchableOpacity
-                    onPress={() => setSourceOpen(true)}
-                    activeOpacity={0.7}
-                    style={[styles.sourceBadgeEmpty, { borderColor: palette.border.strong }]}
-                  >
-                    <Ionicons name="add" size={12} color={palette.text.tertiary} />
-                    <Text style={[styles.sourceBadgeEmptyText, { color: palette.text.tertiary }]}>
-                      Источник
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-                <Text style={[styles.heroDate, { color: palette.text.tertiary }]}>
-                  Клиент с {formatDate(client.createdAt)}
-                </Text>
-              </View>
+          <View style={[styles.avatarLg, { backgroundColor: avatarColor }]}>
+            <Text style={styles.avatarLgText}>{initials}</Text>
+          </View>
+          <Text style={[styles.clientName, { color: palette.text.primary }]} numberOfLines={2}>
+            {client.fullName}
+          </Text>
+          <Text style={[styles.heroPhone, { color: palette.text.secondary }]}>{formatPhone(client.phone)}</Text>
+          <View style={styles.heroBadgesRow}>
+            {client.source ? (
+              <TouchableOpacity
+                onPress={() => canEditMeta && setSourceOpen(true)}
+                activeOpacity={canEditMeta ? 0.7 : 1}
+                style={[styles.sourceBadge, { backgroundColor: palette.accent.primarySoft }]}
+              >
+                <Ionicons name="pricetag" size={11} color={palette.accent.primaryText} />
+                <Text style={[styles.sourceBadgeText, { color: palette.accent.primaryText }]}>{client.source}</Text>
+              </TouchableOpacity>
+            ) : canEditMeta ? (
+              <TouchableOpacity
+                onPress={() => setSourceOpen(true)}
+                activeOpacity={0.7}
+                style={[styles.sourceBadgeEmpty, { borderColor: palette.border.strong }]}
+              >
+                <Ionicons name="add" size={12} color={palette.text.tertiary} />
+                <Text style={[styles.sourceBadgeEmptyText, { color: palette.text.tertiary }]}>Источник</Text>
+              </TouchableOpacity>
+            ) : null}
+            <View style={[styles.heroDateChip, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="calendar-outline" size={11} color={palette.text.tertiary} />
+              <Text style={[styles.heroDate, { color: palette.text.tertiary }]}>с {formatDate(client.createdAt)}</Text>
             </View>
           </View>
 
-          <View style={[styles.statTilesRow]}>
+          {/* KEY STATS — tidy three-up row of stat tiles. */}
+          <View style={[styles.statTilesRow, { borderTopColor: palette.border.subtle }]}>
             <StatTile label="Чеков" value={String(stats.count)} palette={palette} />
+            <View style={[styles.statTileDivider, { backgroundColor: palette.border.subtle }]} />
             <StatTile label="LTV" value={formatMoney(stats.total)} palette={palette} />
-            <StatTile
-              label="Средний"
-              value={stats.count > 0 ? formatMoney(stats.avg) : '—'}
-              palette={palette}
-            />
+            <View style={[styles.statTileDivider, { backgroundColor: palette.border.subtle }]} />
+            <StatTile label="Средний" value={stats.count > 0 ? formatMoney(stats.avg) : '—'} palette={palette} />
           </View>
         </AnimatedCard>
 
@@ -887,64 +883,55 @@ export default function ClientDetailScreen() {
           />
         </View>
 
-        {/* STAFF-ONLY: notes + source. Visible to EVERY staff member
-            (#19.4). Editing the values stays gated to canEditMeta — a
-            master sees the info read-only (no chevron, no tap). */}
+        {/* STAFF-ONLY: notes + source + comment. Visible to EVERY staff
+            member (#19.4). Editing notes/source stays gated to canEditMeta —
+            a master sees the info read-only (no chevron, no tap). */}
+        <SectionHeader title="Информация" />
         <AnimatedCard
           style={[styles.metaCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           index={1}
         >
-          <View style={styles.metaHeader}>
-            <Ionicons name="people-outline" size={14} color={palette.text.tertiary} />
-            <Text style={[styles.metaHeaderText, { color: palette.text.tertiary }]}>Только для сотрудников</Text>
-          </View>
           <TouchableOpacity
             style={[styles.metaRow, { borderBottomColor: palette.border.subtle }]}
             activeOpacity={canEditMeta ? 0.7 : 1}
             disabled={!canEditMeta}
             onPress={() => setNotesModalOpen(true)}
           >
-            <Ionicons name="document-text-outline" size={16} color={palette.text.tertiary} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Заметки</Text>
-              <Text style={[styles.metaValue, { color: palette.text.primary }]} numberOfLines={2}>
+            <View style={[styles.metaIcon, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="document-text-outline" size={15} color={palette.text.secondary} />
+            </View>
+            <View style={styles.metaText}>
+              <Text style={[styles.metaLabel, { color: palette.text.tertiary }]}>Заметки для сотрудников</Text>
+              <Text style={[styles.metaValue, { color: palette.text.primary }]} numberOfLines={3}>
                 {client.ownerNotes || (canEditMeta ? 'Нажмите, чтобы добавить' : 'Нет заметок')}
               </Text>
             </View>
-            {canEditMeta && <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />}
+            {canEditMeta && <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />}
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.metaRow, { borderBottomWidth: 0 }]}
+            style={[styles.metaRow, client.comment ? { borderBottomColor: palette.border.subtle } : { borderBottomWidth: 0 }]}
             activeOpacity={canEditMeta ? 0.7 : 1}
             disabled={!canEditMeta}
             onPress={() => setSourceOpen(true)}
           >
-            <Ionicons name="pricetag-outline" size={16} color={palette.text.tertiary} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.metaLabel, { color: palette.text.secondary }]}>Источник</Text>
-              <Text style={[styles.metaValue, { color: palette.text.primary }]}>
-                {client.source || 'Не указан'}
-              </Text>
+            <View style={[styles.metaIcon, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="pricetag-outline" size={15} color={palette.text.secondary} />
             </View>
-            {canEditMeta && <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />}
+            <View style={styles.metaText}>
+              <Text style={[styles.metaLabel, { color: palette.text.tertiary }]}>Источник</Text>
+              <Text style={[styles.metaValue, { color: palette.text.primary }]}>{client.source || 'Не указан'}</Text>
+            </View>
+            {canEditMeta && <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />}
           </TouchableOpacity>
-        </AnimatedCard>
-
-        {/* INFO ROW — phone + comment */}
-        <AnimatedCard
-          style={[styles.infoCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          index={2}
-        >
-          <View style={[styles.infoRow, { borderBottomColor: palette.border.subtle }]}>
-            <Ionicons name="call-outline" size={15} color={palette.text.tertiary} />
-            <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Телефон</Text>
-            <Text style={[styles.infoValue, { color: palette.text.primary }]}>{formatPhone(client.phone)}</Text>
-          </View>
           {client.comment ? (
-            <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-              <Ionicons name="chatbubble-outline" size={15} color={palette.text.tertiary} />
-              <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Комментарий</Text>
-              <Text style={[styles.infoValue, { color: palette.text.primary }]}>{client.comment}</Text>
+            <View style={[styles.metaRow, { borderBottomWidth: 0 }]}>
+              <View style={[styles.metaIcon, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="chatbubble-outline" size={15} color={palette.text.secondary} />
+              </View>
+              <View style={styles.metaText}>
+                <Text style={[styles.metaLabel, { color: palette.text.tertiary }]}>Комментарий</Text>
+                <Text style={[styles.metaValue, { color: palette.text.primary }]}>{client.comment}</Text>
+              </View>
             </View>
           ) : null}
         </AnimatedCard>
@@ -954,16 +941,26 @@ export default function ClientDetailScreen() {
             NO per-car checks expansion — tapping a car never opens a
             separate checks list; the unified «История чеков» below covers
             sales + returns. */}
-        <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Автомобили ({cars.length})</Text>
-          <TouchableOpacity style={[styles.smallBtn, { backgroundColor: palette.accent.primary }]} onPress={openAddCar}>
-            <Text style={styles.smallBtnText}>+ Добавить</Text>
-          </TouchableOpacity>
-        </View>
+        <SectionHeader
+          title="Гараж"
+          count={cars.length}
+          trailing={
+            <TouchableOpacity
+              style={[styles.addBtn, { backgroundColor: palette.accent.primarySoft }]}
+              onPress={openAddCar}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add" size={14} color={palette.accent.primaryText} />
+              <Text style={[styles.addBtnText, { color: palette.accent.primaryText }]}>Добавить</Text>
+            </TouchableOpacity>
+          }
+        />
 
         {cars.length === 0 ? (
           <View style={[styles.emptyCars, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-            <Ionicons name="car-sport-outline" size={24} color={palette.text.tertiary} />
+            <View style={[styles.emptyCarsIcon, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="car-sport-outline" size={22} color={palette.text.tertiary} />
+            </View>
             <Text style={[styles.emptyCarsText, { color: palette.text.secondary }]}>
               У клиента ещё нет автомобилей
             </Text>
@@ -994,16 +991,18 @@ export default function ClientDetailScreen() {
         )}
 
         {/* CALLS — calls with this client + inline recording playback (#15.2). */}
-        <ClientCallsSection clientId={id} sectionTitleStyle={styles.sectionHeader} />
+        <ClientCallsSection clientId={id} sectionTitleStyle={styles.callsSectionHeader} />
 
         {/* ANALYTICS — sparkline + insights */}
         {stats.count > 0 && (
+          <>
+          <SectionHeader title="Аналитика" />
           <AnimatedCard
             style={[styles.analyticsCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             index={3}
           >
             <View style={styles.analyticsHeader}>
-              <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Аналитика</Text>
+              <Text style={[styles.cardTitle, { color: palette.text.primary }]}>Активность клиента</Text>
               <View
                 style={[
                   styles.riskBadge,
@@ -1101,21 +1100,22 @@ export default function ClientDetailScreen() {
               </View>
             )}
           </AnimatedCard>
+          </>
         )}
 
         {/* HISTORY — toggle (all / per-car) then a grouped list. The
             onLayout records the section Y so we can lazy-fetch the full
             history the moment it scrolls into view (audit #8). */}
         <View
-          style={styles.sectionHeader}
           onLayout={(e) => {
             historyY.current = e.nativeEvent.layout.y;
           }}
         >
-          <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>
-            История чеков{historyExpanded ? ` (${filteredChecks.length})` : ''}
-          </Text>
-          {fullPending ? <ActivityIndicator size="small" color={palette.text.tertiary} /> : null}
+          <SectionHeader
+            title="История чеков"
+            count={historyExpanded ? filteredChecks.length : null}
+            trailing={fullPending ? <ActivityIndicator size="small" color={palette.text.tertiary} /> : null}
+          />
         </View>
 
         {cars.length > 0 && (
@@ -1380,8 +1380,8 @@ interface StatTileProps {
 }
 function StatTile({ label, value, palette }: StatTileProps) {
   return (
-    <View style={[styles.statTile, { backgroundColor: palette.bg.muted }]}>
-      <Text style={[styles.statTileValue, { color: palette.text.primary }]} numberOfLines={1}>
+    <View style={styles.statTile}>
+      <Text style={[styles.statTileValue, { color: palette.text.primary }]} numberOfLines={1} adjustsFontSizeToFit>
         {value}
       </Text>
       <Text style={[styles.statTileLabel, { color: palette.text.tertiary }]}>{label}</Text>
@@ -1484,8 +1484,8 @@ function CarCard({ car, palette, index, spent, lastMileage, canEdit, onEdit, onD
       {/* Stat strip: последний пробег | потрачено на это авто. */}
       <View style={[styles.carStatRow, { borderTopColor: palette.border.subtle }]}>
         <View style={styles.carStatItem}>
-          <Ionicons name="speedometer-outline" size={14} color={palette.text.tertiary} />
-          <View>
+          <Ionicons name="speedometer-outline" size={15} color={palette.text.tertiary} />
+          <View style={styles.carStatCol}>
             <Text style={[styles.carStatLabel, { color: palette.text.tertiary }]}>Пробег</Text>
             <Text style={[styles.carStatValue, { color: palette.text.primary }]} numberOfLines={1}>
               {lastMileage != null ? `${lastMileage.toLocaleString('ru-RU')} км` : '—'}
@@ -1494,8 +1494,8 @@ function CarCard({ car, palette, index, spent, lastMileage, canEdit, onEdit, onD
         </View>
         <View style={[styles.carStatDivider, { backgroundColor: palette.border.subtle }]} />
         <View style={styles.carStatItem}>
-          <Ionicons name="wallet-outline" size={14} color={palette.text.tertiary} />
-          <View>
+          <Ionicons name="wallet-outline" size={15} color={palette.text.tertiary} />
+          <View style={styles.carStatCol}>
             <Text style={[styles.carStatLabel, { color: palette.text.tertiary }]}>Потрачено</Text>
             <Text style={[styles.carStatValue, { color: palette.text.primary }]} numberOfLines={1}>
               {formatMoney(spent)}
@@ -1629,18 +1629,33 @@ const styles = StyleSheet.create({
   retailStatValue: { color: colors.white, fontSize: 14, fontWeight: '700' },
   retailStatLabel: { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  // Hero
+  // Hero — centred avatar / name / phone, then a divided stat row.
   heroCard: {
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[4],
-    gap: spacing[3],
+    paddingTop: spacing[5],
+    paddingBottom: spacing[4],
+    alignItems: 'center',
   },
-  heroTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  heroInfo: { flex: 1, minWidth: 0 },
-  heroBadgesRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' },
-  heroDate: { fontSize: 11 },
+  heroBadgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    marginTop: spacing[3],
+    flexWrap: 'wrap',
+  },
+  heroDateChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  heroDate: { fontSize: 11, fontWeight: '500' },
+  heroPhone: { fontSize: 14, fontWeight: '500', marginTop: spacing[1], fontVariant: ['tabular-nums'] },
   sourceBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1662,28 +1677,42 @@ const styles = StyleSheet.create({
   },
   sourceBadgeEmptyText: { fontSize: 10, fontWeight: '500' },
 
-  avatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+  avatarLg: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarText: { fontSize: 18, fontWeight: '700', color: colors.white },
-  clientName: { fontSize: 17, fontWeight: '700', letterSpacing: -0.3, color: colors.gray[900] },
+  avatarLgText: { fontSize: 24, fontWeight: '700', color: colors.white, letterSpacing: 0.5 },
+  clientName: {
+    fontSize: 20,
+    fontWeight: '700',
+    letterSpacing: -0.4,
+    color: colors.gray[900],
+    textAlign: 'center',
+    marginTop: spacing[3],
+  },
 
-  // Stat tiles row
-  statTilesRow: { flexDirection: 'row', gap: spacing[2] },
+  // Stat tiles row — three even columns split by hairline dividers.
+  statTilesRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    alignSelf: 'stretch',
+    marginTop: spacing[4],
+    paddingTop: spacing[3.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   statTile: {
     flex: 1,
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[1],
     alignItems: 'center',
-    gap: 2,
+    justifyContent: 'center',
+    gap: 3,
   },
-  statTileValue: { fontSize: 14, fontWeight: '700', letterSpacing: -0.2 },
-  statTileLabel: { fontSize: 11 },
+  statTileDivider: { width: StyleSheet.hairlineWidth, alignSelf: 'stretch', marginVertical: spacing[0.5] },
+  statTileValue: { fontSize: 15, fontWeight: '700', letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
+  statTileLabel: { fontSize: 11, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.4 },
 
   // Quick action row
   quickActionsRow: {
@@ -1712,109 +1741,96 @@ const styles = StyleSheet.create({
   },
   quickActionLabel: { fontSize: 11, fontWeight: '600' },
 
-  // Meta (owner-only)
+  // Meta (staff-only info — note / source / comment)
   metaCard: {
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     paddingHorizontal: spacing[4],
-    paddingVertical: spacing[3],
-    gap: spacing[2],
+    paddingVertical: spacing[0.5],
   },
-  metaHeader: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  metaHeaderText: { fontSize: 11, fontWeight: '600', letterSpacing: 0.2, textTransform: 'uppercase' },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[3],
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  metaLabel: { fontSize: 11, fontWeight: '600' },
-  metaValue: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, marginTop: 2 },
-
-  // Info card
-  infoCard: {
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2],
+  metaIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  infoRow: {
+  metaText: { flex: 1, minWidth: 0, gap: 2 },
+  metaLabel: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.3 },
+  metaValue: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, lineHeight: 19 },
+
+  // «+ Добавить» affordance in a section header.
+  addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[2],
-    paddingVertical: spacing[2.5],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
-  },
-  infoLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
-  infoValue: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-    color: colors.gray[900],
-    flex: 1,
-    textAlign: 'right',
-  },
-
-  // Section
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing[2] },
-  sectionTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  smallBtn: {
-    backgroundColor: colors.primary[600],
-    paddingHorizontal: spacing[3],
+    gap: 2,
+    paddingHorizontal: spacing[2.5],
     paddingVertical: spacing[1.5],
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.full,
   },
-  smallBtnText: { color: colors.white, fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  addBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
   // Empty cars
   emptyCars: {
     alignItems: 'center',
-    paddingVertical: spacing[5],
+    paddingVertical: spacing[6],
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
-    gap: spacing[2],
+    gap: spacing[3],
   },
-  emptyCarsText: { fontSize: fontSize.sm },
+  emptyCarsIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyCarsText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
 
   // Car cards
   carCard: {
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     borderColor: colors.gray[100],
-    paddingHorizontal: spacing[3.5],
-    paddingTop: spacing[3],
-    paddingBottom: spacing[2.5],
-    marginTop: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3.5],
+    paddingBottom: spacing[3],
   },
   carTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  carInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flex: 1, minWidth: 0 },
-  carIconWrap: { width: 36, height: 36, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
+  carInfo: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], flex: 1, minWidth: 0 },
+  carIconWrap: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   carModel: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900], letterSpacing: -0.2 },
   // ГОСТ-style mini plate badge (white plate, black rim) — the plate is
   // the identity anchor of the car card.
   carPlateBadge: {
     alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 6,
     borderWidth: 1.5,
     backgroundColor: '#FFFFFF',
-    marginTop: 4,
+    marginTop: 6,
   },
-  carPlateBadgeText: { fontSize: 13, fontWeight: '800', letterSpacing: 1, color: '#0A0A0A' },
+  carPlateBadgeText: { fontSize: 13, fontWeight: '800', letterSpacing: 1.2, color: '#0A0A0A' },
   plateBadgeRow: {
     alignSelf: 'flex-start',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
     backgroundColor: colors.gray[100],
-    marginTop: 4,
+    marginTop: 6,
   },
-  plateBadgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
-  carActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
-  iconBtn: { padding: spacing[1.5], borderRadius: borderRadius.md },
-  carComment: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[2], marginLeft: 46 },
+  plateBadgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
+  carActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[0.5] },
+  iconBtn: { padding: spacing[2], borderRadius: borderRadius.md },
+  carComment: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[2.5], marginLeft: 52, lineHeight: 17 },
 
   // Per-car stat strip — последний пробег | потрачено на это авто.
   carStatRow: {
@@ -1825,9 +1841,16 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   carStatItem: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  carStatDivider: { width: StyleSheet.hairlineWidth, height: 28, marginHorizontal: spacing[2] },
-  carStatLabel: { fontSize: 10, fontWeight: '600', letterSpacing: 0.2, textTransform: 'uppercase' },
-  carStatValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, marginTop: 1 },
+  carStatCol: { flex: 1, minWidth: 0, gap: 1 },
+  carStatDivider: { width: StyleSheet.hairlineWidth, height: 30, marginHorizontal: spacing[3] },
+  carStatLabel: { fontSize: 10, fontWeight: '600', letterSpacing: 0.3, textTransform: 'uppercase' },
+  carStatValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+
+  // Card title — 16pt semibold heading used inside a card body.
+  cardTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+  // Section-header rhythm forwarded to <ClientCallsSection /> so its own
+  // header lines up with the SectionHeader component used elsewhere.
+  callsSectionHeader: { marginTop: spacing[2], marginBottom: 0, paddingHorizontal: spacing[1] },
 
   // Analytics
   analyticsCard: {
@@ -1864,7 +1887,7 @@ const styles = StyleSheet.create({
   favMasterRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
 
   // Car filter chips
-  carChipsScroll: { marginTop: spacing[2] },
+  carChipsScroll: { marginTop: spacing[1] },
   carChipsRow: { flexDirection: 'row', gap: spacing[1.5] },
   carChip: {
     paddingHorizontal: spacing[3],
@@ -1954,8 +1977,22 @@ const styles = StyleSheet.create({
   profitPositive: { color: colors.green[600] },
   profitNegative: { color: colors.red[500] },
 
-  emptyChecks: { alignItems: 'center', paddingVertical: spacing[8] },
-  emptyChecksText: { fontSize: fontSize.sm, marginTop: spacing[2] },
+  emptyChecks: {
+    alignItems: 'center',
+    paddingVertical: spacing[6],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    gap: spacing[3],
+    marginTop: spacing[1],
+  },
+  emptyChecksIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyChecksText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
 
   // «Показать всю историю» — lazy-history affordance (audit #8).
   showAllHistoryBtn: {

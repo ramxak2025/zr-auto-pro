@@ -1389,13 +1389,16 @@ export default function CheckCreateScreen() {
                         {selectedCar.comment}
                       </Text>
                     )}
-                    {/* Per-car meta block: last visit (WHEN only, no
-                        details) + active warranties. Both hide themselves
-                        when empty, so this stays clean for first-time /
-                        out-of-warranty cars. */}
+                    {/* Per-client meta block: last visit (WHEN only, no
+                        details) + active warranties ACROSS ALL the client's
+                        cars. Both are scoped to the client (not the single
+                        default-selected car) so a warranty / visit on another
+                        of the client's cars still surfaces. Both hide
+                        themselves when empty, so this stays clean for
+                        first-time / out-of-warranty clients. */}
                     <View style={styles.selectedCarMetaFull}>
-                      <LastVisitBadge clientId={selectedClient.id} carId={selectedCar.id} />
-                      <ActiveWarrantiesSection carId={selectedCar.id} />
+                      <LastVisitBadge clientId={selectedClient.id} />
+                      <ActiveWarrantiesSection clientId={selectedClient.id} />
                     </View>
                   </View>
                 )}

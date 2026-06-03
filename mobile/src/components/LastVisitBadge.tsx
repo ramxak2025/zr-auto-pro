@@ -8,7 +8,7 @@ import { fontSize, fontWeight, spacing } from '../theme';
 
 /**
  * LastVisitBadge — compact single line under the selected-car card on the
- * cash screen showing WHEN this client/car was last here, and NOTHING
+ * cash screen showing WHEN this client was last here, and NOTHING
  * else (no revenue, no master, no line-item details). The owner's ask:
  * "show the last check neatly = when it was, no details".
  *
@@ -19,9 +19,24 @@ import { fontSize, fontWeight, spacing } from '../theme';
  * `enabled` and `staleTime: 60s` so it never slows the Касса open. While
  * loading, on first-visit, or on error it renders NOTHING — no flicker,
  * no empty band.
+ *
+ * Reliability notes (why this used to show "not always"):
+ *   1. The query is scoped to the RESOLVED `clientId` — "when was THIS
+ *      CLIENT last here". Scoping additionally by `carId` made it
+ *      flaky: if the client's most-recent visit was on a different car
+ *      than the default-selected one, the per-car query returned an older
+ *      visit or nothing. `carId` is still accepted for API parity but is
+ *      no longer used to narrow the request.
+ *   2. `enabled` is gated strictly on `clientId` so we never fire (and
+ *      cache) a `{ clientId: undefined }` request that later re-keys.
+ *   3. `placeholderData: prev => prev` keeps the previous answer on screen
+ *      while a refetch (e.g. a car switch) is in flight, so a momentary
+ *      `undefined` never makes the line vanish and reappear.
  */
 interface LastVisitBadgeProps {
+  /** Resolved client id — the visit is looked up for the whole client. */
   clientId?: string;
+  /** Accepted for API parity; not used to scope the lookup (see notes). */
   carId?: string;
 }
 
@@ -71,21 +86,26 @@ function formatRelative(iso: string): string | null {
   return `${days} ${declensionDays(days)} назад`;
 }
 
-export default function LastVisitBadge({ clientId, carId }: LastVisitBadgeProps) {
+export default function LastVisitBadge({ clientId }: LastVisitBadgeProps) {
   const palette = useColors();
-  const enabled = !!clientId || !!carId;
+  const enabled = !!clientId;
 
   const { data } = useQuery({
-    queryKey: ['last-visit', { clientId, carId }],
+    // Scope to the client only — see the reliability notes above. The key
+    // is the bare clientId so the cache entry is stable across car switches.
+    queryKey: ['last-visit', clientId],
     queryFn: async () => {
-      const res = await checksApi.getLastVisit({ clientId, carId });
+      const res = await checksApi.getLastVisit({ clientId });
       return res.data;
     },
     enabled,
     staleTime: 60_000,
+    // Keep the prior answer visible while a refetch is in flight so the
+    // line never flickers out and back in.
+    placeholderData: (prev) => prev,
   });
 
-  // No car/client, still loading, first-ever visit, or error → render
+  // No client, still loading, first-ever visit, or error → render
   // nothing. A "first visit" placeholder would just add noise to a dense
   // form; the absence of the line IS the signal.
   if (!enabled || !data?.date) return null;

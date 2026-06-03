@@ -1,7 +1,7 @@
 /**
  * ActiveWarrantiesSection — premium informational block rendered inside
- * the selected-car area of the cash screen. It surfaces what is still
- * under warranty FOR THE PICKED CAR, e.g.:
+ * the selected-client area of the cash screen. It surfaces what is still
+ * under warranty FOR THE WHOLE CLIENT (across every car they own), e.g.:
  *
  *   ┌─────────────────────────────────────────────┐
  *   │ 🛡 На гарантии        2 активные гарантии   │
@@ -17,20 +17,26 @@
  *       1-13 days → amber   (ending soon)
  *       ≤ 0 days → red      (defensive — backend filters expired out)
  *
- * Data contract (Wave 1 backend):
- *   `warrantyApi.activeForCar(carId)` → `WarrantyActive[]`
- *     = { id, itemType: 'product'|'service', itemName, warrantyDays, expiresAt }
- *   Returns active (not used, not expired) claims, soonest-to-expire
- *   first; empty array if none. The remaining-time label is computed
- *   client-side from `expiresAt` via the shared `warrantyFormat` util so
- *   it stays accurate even if the badge is shown hours after the fetch.
+ * Data contract:
+ *   `warrantyApi.active({ clientId, carId? })` → `ActiveWarranty[]`
+ *     = { kind: 'product'|'service', name, expiresAt, daysLeft }
+ *   Returns ALL active (not used, not expired) warranties for the client,
+ *   soonest-to-expire first; empty array if none. Scoping by `clientId`
+ *   (rather than a single `carId`) is deliberate: the owner's mental model
+ *   is "THIS CLIENT has something under warranty", not "this exact car".
+ *   Previously the section queried `activeForCar(carId)`, so a warranty on
+ *   a different car than the default-selected one never showed.
+ *
+ *   `daysLeft` is supplied by the backend; we still recompute defensively
+ *   from `expiresAt` when it is missing/non-finite so the chip stays
+ *   accurate even hours after the fetch.
  *
  * Behaviour:
- *   - Query key `['warranty-active-car', carId]`, gated by
- *     `enabled: !!carId`, `staleTime: 60s` — cheap, never blocks the
+ *   - Query key `['warranty-active-client', clientId]`, gated by
+ *     `enabled: !!clientId`, `staleTime: 60s` — cheap, never blocks the
  *     Касса open.
  *   - Renders NOTHING (no empty band, no loading flicker) when there is
- *     no car, no data yet, or zero active warranties — the form is dense
+ *     no client, no data yet, or zero active warranties — the form is dense
  *     enough without a placeholder.
  *   - Dark-mode aware via `useColors()`.
  *
@@ -46,9 +52,12 @@ import { warrantyApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { fontSize, fontWeight, spacing, borderRadius } from '../theme';
 import { formatDaysLeft } from '../utils/warrantyFormat';
-import type { WarrantyActive } from '../../../shared/types';
+import type { ActiveWarranty } from '../../../shared/types';
 
 interface ActiveWarrantiesSectionProps {
+  /** Resolved client id — warranties are shown across ALL the client's cars. */
+  clientId?: string;
+  /** Optional: scope to a single car. Default (undefined) shows the whole client. */
   carId?: string;
 }
 
@@ -70,6 +79,18 @@ function daysUntil(expiresAt: string): number {
   if (!Number.isFinite(ms)) return 0;
   if (ms <= 0) return 0;
   return Math.ceil(ms / 86_400_000);
+}
+
+/**
+ * Resolve the days-left to show on the chip. Prefers the backend-computed
+ * `daysLeft`, falling back to a client-side computation from `expiresAt`
+ * when the backend value is missing or not a finite number.
+ */
+function resolveDaysLeft(w: ActiveWarranty): number {
+  if (typeof w.daysLeft === 'number' && Number.isFinite(w.daysLeft)) {
+    return w.daysLeft;
+  }
+  return daysUntil(w.expiresAt);
 }
 
 /**
@@ -97,21 +118,24 @@ function urgencyTones(daysLeft: number, isDark: boolean) {
     : { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' };
 }
 
-export default function ActiveWarrantiesSection({ carId }: ActiveWarrantiesSectionProps) {
+export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarrantiesSectionProps) {
   const palette = useColors();
   const isDark = palette.mode === 'dark';
 
-  const { data } = useQuery<WarrantyActive[]>({
-    queryKey: ['warranty-active-car', carId],
+  const { data } = useQuery<ActiveWarranty[]>({
+    // Key on clientId only — the section always shows the whole client's
+    // active warranties. `carId` (when passed) only narrows the request
+    // params; including it in the key as a tail keeps the cache correct.
+    queryKey: ['warranty-active-client', clientId, carId],
     queryFn: async () => {
-      const res = await warrantyApi.activeForCar(carId!);
+      const res = await warrantyApi.active({ clientId, carId });
       return res.data || [];
     },
-    enabled: !!carId,
+    enabled: !!clientId,
     staleTime: 60_000,
   });
 
-  if (!carId) return null;
+  if (!clientId) return null;
   const items = data || [];
   if (items.length === 0) return null;
 
@@ -131,19 +155,19 @@ export default function ActiveWarrantiesSection({ carId }: ActiveWarrantiesSecti
       </View>
       <View style={[styles.divider, { backgroundColor: palette.border.subtle }]} />
       <View style={styles.list}>
-        {items.map((w) => {
-          const daysLeft = daysUntil(w.expiresAt);
+        {items.map((w, i) => {
+          const daysLeft = resolveDaysLeft(w);
           const tone = urgencyTones(daysLeft, isDark);
-          const iconName = w.itemType === 'product' ? 'cube-outline' : 'build-outline';
+          const iconName = w.kind === 'product' ? 'cube-outline' : 'build-outline';
           return (
-            <View key={w.id} style={styles.row}>
+            <View key={`${w.kind}:${w.name}:${w.expiresAt}:${i}`} style={styles.row}>
               <View
                 style={[styles.iconWrap, { backgroundColor: palette.bg.canvas, borderColor: palette.border.subtle }]}
               >
                 <Ionicons name={iconName} size={14} color={palette.text.secondary} />
               </View>
               <Text style={[styles.itemName, { color: palette.text.primary }]} numberOfLines={1}>
-                {w.itemName}
+                {w.name}
               </Text>
               <View style={[styles.chip, { backgroundColor: tone.bg, borderColor: tone.border }]}>
                 <Ionicons name="time-outline" size={11} color={tone.text} style={styles.chipIcon} />
