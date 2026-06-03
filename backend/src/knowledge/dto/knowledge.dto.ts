@@ -8,7 +8,10 @@ import {
   IsArray,
   ValidateNested,
   IsNumber,
+  IsDateString,
+  Min,
   MaxLength,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -98,6 +101,21 @@ export class CreateArticleDto {
   @IsOptional()
   @IsBoolean()
   published?: boolean;
+
+  // ─── Регламенты+ extras ─────────────────────────────────────────────────
+  @IsOptional()
+  @IsBoolean()
+  mandatory?: boolean;
+
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string | null;
+
+  /** Optional car-make tag for contextual KB (e.g. 'Lada'). null = all makes. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  carMake?: string | null;
 }
 
 export class UpdateArticleDto {
@@ -138,6 +156,29 @@ export class UpdateArticleDto {
   @IsOptional()
   @IsBoolean()
   published?: boolean;
+
+  // ─── Регламенты+ extras ─────────────────────────────────────────────────
+  @IsOptional()
+  @IsBoolean()
+  mandatory?: boolean;
+
+  // null clears the due date.
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  carMake?: string | null;
+
+  /**
+   * When true (or when the body actually changes), bump the regulation's
+   * version — which re-requires every user to acknowledge the new version.
+   */
+  @IsOptional()
+  @IsBoolean()
+  bumpVersion?: boolean;
 }
 
 // ─── Query params for the list endpoint ──────────────────────────────────────
@@ -162,4 +203,248 @@ export class ListArticlesQueryDto {
   @IsOptional()
   @IsString()
   pinned?: string;
+}
+
+// ─── A. Учебный центр — courses, lessons, quizzes ─────────────────────────────
+
+export class CreateCourseDto {
+  @IsString()
+  @MaxLength(300)
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  coverImage?: string;
+
+  @IsOptional()
+  @IsUUID()
+  categoryId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  published?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  sortOrder?: number;
+}
+
+export class UpdateCourseDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  coverImage?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  categoryId?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  published?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  sortOrder?: number;
+}
+
+export class QuizQuestionDto {
+  @IsString()
+  @MaxLength(500)
+  question!: string;
+
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(10)
+  options!: string[];
+
+  @IsInt()
+  @Min(0)
+  correctIndex!: number;
+}
+
+export class CreateLessonDto {
+  @IsString()
+  @MaxLength(300)
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  body?: string;
+
+  @IsOptional()
+  @IsInt()
+  sortOrder?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => QuizQuestionDto)
+  quiz?: QuizQuestionDto[] | null;
+}
+
+export class UpdateLessonDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  body?: string;
+
+  @IsOptional()
+  @IsInt()
+  sortOrder?: number;
+
+  // null clears the quiz.
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => QuizQuestionDto)
+  quiz?: QuizQuestionDto[] | null;
+}
+
+export class CompleteLessonDto {
+  /** Answer index per quiz question. Required only when the lesson has a quiz. */
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  answers?: number[];
+}
+
+// ─── B. Article feedback ──────────────────────────────────────────────────────
+
+export class ArticleFeedbackDto {
+  @IsBoolean()
+  helpful!: boolean;
+}
+
+// ─── C. Troubleshooting (типовые неисправности) ───────────────────────────────
+
+export class CreateTroubleshootingDto {
+  @IsString()
+  @MaxLength(300)
+  title!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  system?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  carMake?: string | null;
+
+  @IsOptional()
+  @IsString()
+  symptom?: string;
+
+  @IsOptional()
+  @IsString()
+  cause?: string;
+
+  @IsOptional()
+  @IsString()
+  solution?: string;
+
+  @IsOptional()
+  @IsIn(['low', 'med', 'high'])
+  severity?: 'low' | 'med' | 'high' | null;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(30)
+  tags?: string[];
+}
+
+export class UpdateTroubleshootingDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  system?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  carMake?: string | null;
+
+  @IsOptional()
+  @IsString()
+  symptom?: string;
+
+  @IsOptional()
+  @IsString()
+  cause?: string;
+
+  @IsOptional()
+  @IsString()
+  solution?: string;
+
+  @IsOptional()
+  @IsIn(['low', 'med', 'high'])
+  severity?: 'low' | 'med' | 'high' | null;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(30)
+  tags?: string[];
+}
+
+export class ListTroubleshootingQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  search?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  system?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  carMake?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  tag?: string;
+}
+
+// ─── D. Contextual KB (for a check/car) ───────────────────────────────────────
+
+export class ForCarQueryDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  make?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  model?: string;
 }

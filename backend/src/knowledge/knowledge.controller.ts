@@ -9,16 +9,29 @@ import {
   CreateArticleDto,
   UpdateArticleDto,
   ListArticlesQueryDto,
+  CreateCourseDto,
+  UpdateCourseDto,
+  CreateLessonDto,
+  UpdateLessonDto,
+  CompleteLessonDto,
+  ArticleFeedbackDto,
+  CreateTroubleshootingDto,
+  UpdateTroubleshootingDto,
+  ListTroubleshootingQueryDto,
+  ForCarQueryDto,
 } from './dto/knowledge.dto';
 
 /**
- * «База знаний» — searchable KB (categories + articles + attachments) plus
- * regulations with per-user acknowledgment.
+ * «База знаний» — searchable KB + regulations (063) extended into a full
+ * learning + reference system (064):
+ *   A. Учебный центр — courses → lessons → progress + quizzes + completion.
+ *   B. Регламенты+ — versioning, mandatory, due date, view count, feedback.
+ *   C. Справочник типовых неисправностей (troubleshooting).
+ *   D. Контекстная KB — articles/troubleshooting for a car make.
  *
- * READ: any authenticated user. WRITE (create/update/delete categories &
- * articles, view who-acked): manager roles only — director / admin /
- * superadmin (the same set other modules use). All queries are tenant-scoped
- * by the JWT's tenantID inside the service.
+ * READ: any authenticated user. WRITE (create/update/delete, view acks/progress
+ * of others): manager roles only — director / admin / superadmin. All queries
+ * are tenant-scoped by the JWT's tenantID inside the service.
  */
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('knowledge')
@@ -50,6 +63,115 @@ export class KnowledgeController {
     return this.knowledge.deleteCategory(user.tenantID, id);
   }
 
+  // ─── A. Учебный центр — courses & lessons ──────────────────────────────────
+  // Declared before /articles routes; distinct /courses prefix → no collision.
+
+  @Get('courses')
+  listCourses(@CurrentUser() user: JwtPayload) {
+    return this.knowledge.listCourses(user.tenantID, user.role, user.userID);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Post('courses')
+  createCourse(@CurrentUser() user: JwtPayload, @Body() dto: CreateCourseDto) {
+    return this.knowledge.createCourse(user.tenantID, user.userID, dto);
+  }
+
+  // Static-tail routes BEFORE the bare /courses/:id so they're never captured
+  // as a course id.
+  @Roles('director', 'admin', 'superadmin')
+  @Get('courses/:id/progress/:userId')
+  courseProgressForUser(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Param('userId') userId: string) {
+    return this.knowledge.courseProgressForUser(user.tenantID, id, userId);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Post('courses/:id/lessons')
+  createLesson(@CurrentUser() user: JwtPayload, @Param('id') courseId: string, @Body() dto: CreateLessonDto) {
+    return this.knowledge.createLesson(user.tenantID, courseId, dto);
+  }
+
+  @Get('courses/:id')
+  getCourse(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.knowledge.getCourse(user.tenantID, user.role, user.userID, id);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Patch('courses/:id')
+  updateCourse(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: UpdateCourseDto) {
+    return this.knowledge.updateCourse(user.tenantID, id, dto);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Delete('courses/:id')
+  deleteCourse(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.knowledge.deleteCourse(user.tenantID, id);
+  }
+
+  // Lessons addressed by their own id (update/delete/complete).
+  @Post('lessons/:id/complete')
+  completeLesson(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: CompleteLessonDto) {
+    return this.knowledge.completeLesson(user.tenantID, user.userID, id, dto);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Patch('lessons/:id')
+  updateLesson(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: UpdateLessonDto) {
+    return this.knowledge.updateLesson(user.tenantID, id, dto);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Delete('lessons/:id')
+  deleteLesson(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.knowledge.deleteLesson(user.tenantID, id);
+  }
+
+  // ─── C. Troubleshooting (типовые неисправности) ────────────────────────────
+
+  @Get('troubleshooting')
+  listTroubleshooting(@CurrentUser() user: JwtPayload, @Query() query: ListTroubleshootingQueryDto) {
+    return this.knowledge.listTroubleshooting(user.tenantID, query);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Post('troubleshooting')
+  createTroubleshooting(@CurrentUser() user: JwtPayload, @Body() dto: CreateTroubleshootingDto) {
+    return this.knowledge.createTroubleshooting(user.tenantID, user.userID, dto);
+  }
+
+  @Get('troubleshooting/:id')
+  getTroubleshooting(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.knowledge.getTroubleshooting(user.tenantID, id);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Patch('troubleshooting/:id')
+  updateTroubleshooting(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') id: string,
+    @Body() dto: UpdateTroubleshootingDto,
+  ) {
+    return this.knowledge.updateTroubleshooting(user.tenantID, id, dto);
+  }
+
+  @Roles('director', 'admin', 'superadmin')
+  @Delete('troubleshooting/:id')
+  deleteTroubleshooting(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.knowledge.deleteTroubleshooting(user.tenantID, id);
+  }
+
+  // ─── D. Contextual KB (for a check/car) ────────────────────────────────────
+
+  @Get('for-car')
+  forCar(@CurrentUser() user: JwtPayload, @Query() query: ForCarQueryDto) {
+    return this.knowledge.forCar(user.tenantID, user.role, query);
+  }
+
+  @Get('checklists')
+  listChecklists(@CurrentUser() user: JwtPayload) {
+    return this.knowledge.listChecklists(user.tenantID, user.role);
+  }
+
   // ─── Regulation counters (declared before /articles/:id so the static
   //     "regulations" segment can never be captured as an article id) ─────────
 
@@ -77,8 +199,7 @@ export class KnowledgeController {
     return this.knowledge.createArticle(user.tenantID, user.userID, dto);
   }
 
-  // who-acknowledged — manager only. Declared before GET /articles/:id is fine
-  // (distinct trailing segment) but kept adjacent for clarity.
+  // who-acknowledged — manager only.
   @Roles('director', 'admin', 'superadmin')
   @Get('articles/:id/acks')
   listAcks(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
@@ -89,6 +210,12 @@ export class KnowledgeController {
   @Post('articles/:id/ack')
   acknowledge(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.knowledge.acknowledge(user.tenantID, user.userID, id);
+  }
+
+  // any user may leave helpful / not-helpful feedback
+  @Post('articles/:id/feedback')
+  articleFeedback(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ArticleFeedbackDto) {
+    return this.knowledge.articleFeedback(user.tenantID, user.userID, id, dto);
   }
 
   @Get('articles/:id')

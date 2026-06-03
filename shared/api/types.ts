@@ -2,7 +2,13 @@
 //  Shared API Request/Response types
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import type { User, KnowledgeArticleType, KnowledgeAttachment } from '../types';
+import type {
+  User,
+  KnowledgeArticleType,
+  KnowledgeAttachment,
+  KnowledgeQuizQuestion,
+  TroubleshootingSeverity,
+} from '../types';
 
 export interface LoginRequest {
   phone: string;
@@ -505,6 +511,18 @@ export interface KnowledgeArticleInput {
   attachments?: KnowledgeAttachment[];
   pinned?: boolean;
   published?: boolean;
+  // ─── Регламенты+ (064) ────────────────────────────────────────────────────
+  /** Regulation must be acknowledged by the audience. */
+  mandatory?: boolean;
+  /** ISO date; pass null to clear. */
+  dueDate?: string | null;
+  /** Car-make tag for contextual KB; pass null to clear. */
+  carMake?: string | null;
+  /**
+   * Update only: force a version bump (re-requires acknowledgment). A real body
+   * change auto-bumps a regulation even without this flag.
+   */
+  bumpVersion?: boolean;
 }
 
 export interface ListArticlesParams {
@@ -514,4 +532,60 @@ export interface ListArticlesParams {
   search?: string;
   /** Send 'true' to return only pinned articles. */
   pinned?: 'true' | 'false';
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Learning center requests (064)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface KnowledgeCourseInput {
+  title: string;
+  description?: string;
+  coverImage?: string | null;
+  /** Pass null to clear on update. */
+  categoryId?: string | null;
+  published?: boolean;
+  sortOrder?: number;
+}
+
+export interface KnowledgeLessonInput {
+  title: string;
+  /** Markdown. */
+  body?: string;
+  sortOrder?: number;
+  /** Full quiz incl. correctIndex (manager). Pass null to clear. */
+  quiz?: KnowledgeQuizQuestion[] | null;
+}
+
+export interface CompleteLessonInput {
+  /** Answer index per quiz question — required only when the lesson has a quiz. */
+  answers?: number[];
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Troubleshooting requests (064)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface TroubleshootingInput {
+  title: string;
+  system?: string | null;
+  carMake?: string | null;
+  symptom?: string;
+  cause?: string;
+  solution?: string;
+  severity?: TroubleshootingSeverity | null;
+  tags?: string[];
+}
+
+export interface ListTroubleshootingParams {
+  /** Free-text — matched against title/symptom/cause/solution via pg_trgm. */
+  search?: string;
+  system?: string;
+  carMake?: string;
+  tag?: string;
+}
+
+export interface ForCarParams {
+  make?: string;
+  model?: string;
 }

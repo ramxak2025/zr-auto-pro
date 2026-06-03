@@ -1062,8 +1062,26 @@ export interface KnowledgeArticle {
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
-  /** For type='regulation' on getArticle: whether THIS user has acked it. */
+  /** For type='regulation' on getArticle: whether THIS user has acked the CURRENT version. */
   acknowledged?: boolean;
+
+  // ─── Регламенты+ (064) ────────────────────────────────────────────────────
+  /** Current revision. A version bump re-requires acknowledgment. (getArticle) */
+  version?: number;
+  /** Regulation must be acknowledged by the audience. */
+  mandatory?: boolean;
+  /** ISO date by which a mandatory regulation should be acknowledged. */
+  dueDate?: string;
+  /** Total times this article was opened (fire-and-forget counter). */
+  viewCount?: number;
+  /** Optional car-make tag for contextual KB (e.g. 'Lada'). null/absent = all makes. */
+  carMake?: string;
+  /** helpful-vote count (getArticle). */
+  helpfulCount?: number;
+  /** not-helpful-vote count (getArticle). */
+  notHelpfulCount?: number;
+  /** THIS user's own feedback vote: true=helpful, false=not, undefined=no vote yet. */
+  myFeedback?: boolean;
 }
 
 export interface KnowledgeAck {
@@ -1087,4 +1105,121 @@ export interface KnowledgeAcksResponse {
 export interface RegulationUserSummary {
   total: number;
   acknowledged: number;
+}
+
+/** Response of POST /knowledge/articles/:id/feedback. */
+export interface ArticleFeedbackResult {
+  helpfulCount: number;
+  notHelpfulCount: number;
+  /** The vote just recorded by THIS user. */
+  myFeedback: boolean;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Учебный центр / Learning center (064) — courses → lessons → progress
+//  + quizzes + completion. READ: any user; WRITE: manager roles.
+// ───────────────────────────────────────────────────────────────────────
+
+/** A single quiz question. `correctIndex` is only present for managers (editing). */
+export interface KnowledgeQuizQuestion {
+  question: string;
+  options: string[];
+  /** Index of the correct option. Omitted in learner-facing payloads. */
+  correctIndex?: number;
+}
+
+/**
+ * Course shape. The list endpoint (`listCourses`) and getCourse share this base;
+ * getCourse additionally returns `lessons`. Progress fields are per signed-in user.
+ */
+export interface KnowledgeCourse {
+  id: string;
+  title: string;
+  description: string;
+  coverImage?: string;
+  categoryId?: string;
+  published: boolean;
+  sortOrder: number;
+  lessonCount: number;
+  /** Lessons completed by THIS user. */
+  completedLessons: number;
+  /** 0–100, derived from completedLessons / lessonCount. */
+  progressPercent: number;
+  /** Whether THIS user has a course_completion row. */
+  completed: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /** Present only on getCourse. */
+  lessons?: KnowledgeLesson[];
+}
+
+export interface KnowledgeLesson {
+  id: string;
+  title: string;
+  /** Markdown. */
+  body: string;
+  sortOrder: number;
+  /** Whether THIS user completed the lesson. */
+  completed: boolean;
+  hasQuiz: boolean;
+  /** Present when hasQuiz; learner payloads omit each question's correctIndex. */
+  quiz?: KnowledgeQuizQuestion[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Response of POST /knowledge/lessons/:id/complete. */
+export interface LessonProgress {
+  lessonId: string;
+  lessonCompleted: boolean;
+  courseId: string;
+  /** True when this completion finished every lesson in the course. */
+  courseCompleted: boolean;
+  progress: { completed: number; total: number };
+}
+
+/** Response of GET /knowledge/courses/:id/progress/:userId (manager). */
+export interface CourseProgress {
+  courseId: string;
+  userId: string;
+  total: number;
+  completed: number;
+  /** 0–100. */
+  percent: number;
+  /** ISO timestamp of course completion, or null if not completed. */
+  completedAt: string | null;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Справочник типовых неисправностей / Troubleshooting (064)
+// ───────────────────────────────────────────────────────────────────────
+
+export type TroubleshootingSeverity = 'low' | 'med' | 'high';
+
+export interface Troubleshooting {
+  id: string;
+  /** Short symptom headline. */
+  title: string;
+  /** e.g. «Двигатель», «Тормоза». */
+  system?: string;
+  /** Applies to this car make; absent = all makes. */
+  carMake?: string;
+  symptom: string;
+  cause: string;
+  /** Markdown. */
+  solution: string;
+  severity?: TroubleshootingSeverity;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Response of GET /knowledge/for-car. */
+export interface KnowledgeForCar {
+  make: string | null;
+  model: string | null;
+  /** Slim articles: general (car_make null) + make-specific. */
+  articles: KnowledgeArticle[];
+  /** Troubleshooting entries for this make (empty when no make given). */
+  troubleshooting: Troubleshooting[];
 }

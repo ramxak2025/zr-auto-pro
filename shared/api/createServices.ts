@@ -17,32 +17,128 @@ interface HttpClient {
   delete<T = any>(url: string, config?: unknown): Promise<{ data: T }>;
 }
 import type {
-  User, Tenant, Plan, Client, Car, Product, Service, Check, Supplier,
-  Delivery, SupplierPayment, MasterSalary, SalarySummary, SalaryPayment,
-  FinancialReport, DashboardStats, EmployeeRanking, Shift, ScheduleEntry,
-  WorkMode, StockMovement, PaginatedResponse, SubscriptionInfo, PlatformStats,
-  TodayEmployeeStatus, MarketingDashboard, ReviewResponse, ReviewAlert,
-  MessagingIntegration, ReviewPlatformLink, ReviewSettings, PublicReviewData,
-  Warehouse, WarrantyClaim, CheckPhoto, CheckTemplate, CallFunnel, ReminderSettings,
-  CheckReturn, ScheduleSettings, EmployeeProfile, EmployeeDocument,
-  EmployeeAchievement, EmployeeFullProfile, DashboardV2, ClientsNewVsReturning,
-  OwnerAlert, BestDayOfWeek, RecentReview, RetentionStats,
-  WarehouseSummary, VelocityRow, ReorderItem, CategoryMargin, TopProduct,
-  ActiveWarranty, WarrantyActive, ClientSources, PerCarChecks, SalaryPremium, SalaryPenalty,
-  ExpenseCategory, JournalDoc,
-  KnowledgeCategory, KnowledgeArticle, KnowledgeAcksResponse, RegulationUserSummary,
+  User,
+  Tenant,
+  Plan,
+  Client,
+  Car,
+  Product,
+  Service,
+  Check,
+  Supplier,
+  Delivery,
+  SupplierPayment,
+  MasterSalary,
+  SalarySummary,
+  SalaryPayment,
+  FinancialReport,
+  DashboardStats,
+  EmployeeRanking,
+  Shift,
+  ScheduleEntry,
+  WorkMode,
+  StockMovement,
+  PaginatedResponse,
+  SubscriptionInfo,
+  PlatformStats,
+  TodayEmployeeStatus,
+  MarketingDashboard,
+  ReviewResponse,
+  ReviewAlert,
+  MessagingIntegration,
+  ReviewPlatformLink,
+  ReviewSettings,
+  PublicReviewData,
+  Warehouse,
+  WarrantyClaim,
+  CheckPhoto,
+  CheckTemplate,
+  CallFunnel,
+  ReminderSettings,
+  CheckReturn,
+  ScheduleSettings,
+  EmployeeProfile,
+  EmployeeDocument,
+  EmployeeAchievement,
+  EmployeeFullProfile,
+  DashboardV2,
+  ClientsNewVsReturning,
+  OwnerAlert,
+  BestDayOfWeek,
+  RecentReview,
+  RetentionStats,
+  WarehouseSummary,
+  VelocityRow,
+  ReorderItem,
+  CategoryMargin,
+  TopProduct,
+  ActiveWarranty,
+  WarrantyActive,
+  ClientSources,
+  PerCarChecks,
+  SalaryPremium,
+  SalaryPenalty,
+  ExpenseCategory,
+  JournalDoc,
+  KnowledgeCategory,
+  KnowledgeArticle,
+  KnowledgeAcksResponse,
+  RegulationUserSummary,
+  ArticleFeedbackResult,
+  KnowledgeCourse,
+  KnowledgeLesson,
+  LessonProgress,
+  CourseProgress,
+  Troubleshooting,
+  KnowledgeForCar,
 } from '../types';
 import type {
-  LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams, CarsQuery,
-  DateRangeParams, CashFlowParams, CreateUserRequest, UpdateUserRequest, CreateClientRequest,
-  UpdateClientRequest, CreateCarRequest, UpdateCarRequest, CreateProductRequest,
-  UpdateProductRequest, StockUpdateRequest, CreateServiceRequest, UpdateServiceRequest,
-  CreateCheckRequest, UpdateCheckRequest, CreateSupplierRequest, UpdateSupplierRequest,
-  CreateDeliveryRequest, CreatePaymentRequest, CreateScheduleRequest, UpdateScheduleRequest,
-  CreateWorkModeRequest, UpdateWorkModeRequest, CreateTenantRequest, UpdateTenantRequest,
-  CreatePlanRequest, UpdatePlanRequest,
-  ImportPreviewRequest, ImportPreviewResponse, ImportConfirmRequest, ImportConfirmResponse,
-  KnowledgeCategoryInput, KnowledgeArticleInput, ListArticlesParams,
+  LoginRequest,
+  LoginResponse,
+  RegisterRequest,
+  PaginationParams,
+  ChecksParams,
+  CarsQuery,
+  DateRangeParams,
+  CashFlowParams,
+  CreateUserRequest,
+  UpdateUserRequest,
+  CreateClientRequest,
+  UpdateClientRequest,
+  CreateCarRequest,
+  UpdateCarRequest,
+  CreateProductRequest,
+  UpdateProductRequest,
+  StockUpdateRequest,
+  CreateServiceRequest,
+  UpdateServiceRequest,
+  CreateCheckRequest,
+  UpdateCheckRequest,
+  CreateSupplierRequest,
+  UpdateSupplierRequest,
+  CreateDeliveryRequest,
+  CreatePaymentRequest,
+  CreateScheduleRequest,
+  UpdateScheduleRequest,
+  CreateWorkModeRequest,
+  UpdateWorkModeRequest,
+  CreateTenantRequest,
+  UpdateTenantRequest,
+  CreatePlanRequest,
+  UpdatePlanRequest,
+  ImportPreviewRequest,
+  ImportPreviewResponse,
+  ImportConfirmRequest,
+  ImportConfirmResponse,
+  KnowledgeCategoryInput,
+  KnowledgeArticleInput,
+  ListArticlesParams,
+  KnowledgeCourseInput,
+  KnowledgeLessonInput,
+  CompleteLessonInput,
+  TroubleshootingInput,
+  ListTroubleshootingParams,
+  ForCarParams,
 } from './types';
 
 export function createAuthApi(api: HttpClient) {
@@ -64,8 +160,10 @@ export function createUsersApi(api: HttpClient) {
     update: (id: string, data: UpdateUserRequest) => api.patch<User>(`/users/${id}`, data),
     remove: (id: string) => api.delete(`/users/${id}`),
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
-    setProductCommissions: (id: string, data: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> }) =>
-      api.post(`/users/${id}/product-commissions`, data),
+    setProductCommissions: (
+      id: string,
+      data: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> },
+    ) => api.post(`/users/${id}/product-commissions`, data),
     updateOrder: (orderedIds: string[]) => api.post('/users/order', { orderedIds }),
   };
 }
@@ -112,11 +210,9 @@ export function createClientsApi(api: HttpClient) {
     remove: (id: string) => api.delete(`/clients/${id}`),
     exportCsv: () => api.get('/clients/export-csv', { responseType: 'blob' }),
     /** Update just the source tag (faster path than full client update). */
-    updateSource: (id: string, source: string | null) =>
-      api.patch<Client>(`/clients/${id}/source`, { source }),
+    updateSource: (id: string, source: string | null) => api.patch<Client>(`/clients/${id}/source`, { source }),
     /** Update just the owner notes. */
-    updateNotes: (id: string, notes: string | null) =>
-      api.patch<Client>(`/clients/${id}/notes`, { notes }),
+    updateNotes: (id: string, notes: string | null) => api.patch<Client>(`/clients/${id}/notes`, { notes }),
     /** Client's checks grouped by car. */
     checksByCar: (id: string) => api.get<PerCarChecks[]>(`/clients/${id}/checks-by-car`),
     /** Returns existing client with the given phone in the current tenant, or null. */
@@ -146,8 +242,7 @@ export function createCarsApi(api: HttpClient) {
     update: (id: string, data: UpdateCarRequest) => api.patch<Car>(`/cars/${id}`, data),
     remove: (id: string) => api.delete(`/cars/${id}`),
     /** Recent checks for one car. limit capped at 200 server-side. */
-    checks: (carId: string, params?: { limit?: number }) =>
-      api.get<Check[]>(`/cars/${carId}/checks`, { params }),
+    checks: (carId: string, params?: { limit?: number }) => api.get<Check[]>(`/cars/${carId}/checks`, { params }),
     /** Returns existing car with the given plate (normalized) in the current tenant, or null. */
     lookupByPlate: (plate: string) =>
       api.get<{
@@ -163,16 +258,23 @@ export function createCarsApi(api: HttpClient) {
 
 export function createProductsApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams & { warehouseId?: string }) => api.get<PaginatedResponse<Product>>('/products', { params }),
+    getAll: (params?: PaginationParams & { warehouseId?: string }) =>
+      api.get<PaginatedResponse<Product>>('/products', { params }),
     getLowStock: () => api.get<Product[]>('/products/low-stock'),
     getMovements: (params?: PaginationParams) => api.get<StockMovement[]>('/products/movements', { params }),
-    getWarehouseStats: () => api.get<{ totalCostValue: number; totalSellValue: number; totalItems: number; monthProductCost: number; lastMonthProductCost: number }>('/products/warehouse-stats'),
+    getWarehouseStats: () =>
+      api.get<{
+        totalCostValue: number;
+        totalSellValue: number;
+        totalItems: number;
+        monthProductCost: number;
+        lastMonthProductCost: number;
+      }>('/products/warehouse-stats'),
     getById: (id: string) => api.get<Product>(`/products/${id}`),
     create: (data: CreateProductRequest) => api.post<Product>('/products', data),
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
     /** Set just the sell price on an existing product. */
-    setSellPrice: (id: string, sellPrice: number) =>
-      api.patch<Product>(`/products/${id}/sell-price`, { sellPrice }),
+    setSellPrice: (id: string, sellPrice: number) => api.patch<Product>(`/products/${id}/sell-price`, { sellPrice }),
     remove: (id: string) => api.delete(`/products/${id}`),
     // ── Trash bin ─────────────────────────────────────────────────────
     // Soft-deleted products live in the trash. They stay searchable here
@@ -186,14 +288,29 @@ export function createProductsApi(api: HttpClient) {
     getProductMovements: (id: string) => api.get<any[]>(`/products/${id}/movements`),
     getProductPriceHistory: (id: string) => api.get<any[]>(`/products/${id}/price-history`),
     exportCsv: () => api.get('/products/export-csv', { responseType: 'blob' }),
-    importCsv: (items: Array<{ name: string; category?: string; costPrice?: number; sellPrice?: number; stock?: number; minStock?: number; unit?: string }>) =>
-      api.post<{ created: number; updated: number; skipped?: number; total: number; errors?: string[] }>('/products/import-csv', { items }, { timeout: 120_000 }),
+    importCsv: (
+      items: Array<{
+        name: string;
+        category?: string;
+        costPrice?: number;
+        sellPrice?: number;
+        stock?: number;
+        minStock?: number;
+        unit?: string;
+      }>,
+    ) =>
+      api.post<{ created: number; updated: number; skipped?: number; total: number; errors?: string[] }>(
+        '/products/import-csv',
+        { items },
+        { timeout: 120_000 },
+      ),
   };
 }
 
 export function createServicesApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams & { category?: string }) => api.get<PaginatedResponse<Service>>('/services', { params }),
+    getAll: (params?: PaginationParams & { category?: string }) =>
+      api.get<PaginatedResponse<Service>>('/services', { params }),
     getById: (id: string) => api.get<Service>(`/services/${id}`),
     create: (data: CreateServiceRequest) => api.post<Service>('/services', data),
     update: (id: string, data: UpdateServiceRequest) => api.patch<Service>(`/services/${id}`, data),
@@ -205,7 +322,13 @@ export function createChecksApi(api: HttpClient) {
   return {
     getAll: (params?: ChecksParams) => api.get<PaginatedResponse<Check>>('/checks', { params }),
     getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
-    getDashboardChart: (period: string, offset?: number) => api.get<{ points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>; totalRevenue: number; totalProfit: number; totalChecks: number }>('/checks/dashboard/chart', { params: { period, offset: offset ?? 0 } }),
+    getDashboardChart: (period: string, offset?: number) =>
+      api.get<{
+        points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>;
+        totalRevenue: number;
+        totalProfit: number;
+        totalChecks: number;
+      }>('/checks/dashboard/chart', { params: { period, offset: offset ?? 0 } }),
     getRanking: () => api.get<EmployeeRanking>('/checks/ranking'),
     /**
      * Returns the most recent (non-deferred) check for the given client and/or
@@ -246,10 +369,8 @@ export function createSuppliersApi(api: HttpClient) {
      * warehouse stock, lowers supplier debt by qty*purchasePrice, and
      * logs the audit row in stock_movements.
      */
-    returnDefect: (
-      id: string,
-      body: { productId: string; qty: number; purchasePrice?: number; note?: string },
-    ) => api.post<{ id: string }>(`/suppliers/${id}/return-defect`, body),
+    returnDefect: (id: string, body: { productId: string; qty: number; purchasePrice?: number; note?: string }) =>
+      api.post<{ id: string }>(`/suppliers/${id}/return-defect`, body),
     /**
      * "Покупка б/у товара" — buy a second-hand item from a client through
      * the pinned system supplier. Only callable against the supplier with
@@ -318,8 +439,7 @@ export function createSalaryApi(api: HttpClient) {
     },
     // Penalties (штрафы, 056_salary_penalties). Director / admin / superadmin
     // only — they subtract from the employee's remaining owed salary.
-    listPenalties: (params?: { userId?: string }) =>
-      api.get<SalaryPenalty[]>('/salary/penalties', { params }),
+    listPenalties: (params?: { userId?: string }) => api.get<SalaryPenalty[]>('/salary/penalties', { params }),
     addPenalty: (data: { userId: string; amount: number; description?: string; date?: string }) =>
       api.post<SalaryPenalty>('/salary/penalties', data),
     removePenalty: (id: string) => api.delete(`/salary/penalties/${id}`),
@@ -329,7 +449,11 @@ export function createSalaryApi(api: HttpClient) {
 export function createReportsApi(api: HttpClient) {
   return {
     getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
-    getCashFlow: (params: CashFlowParams) => api.get<{ days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>; totals: { cash: number; card: number; warranty: number; total: number } }>('/reports/cashflow', { params }),
+    getCashFlow: (params: CashFlowParams) =>
+      api.get<{
+        days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>;
+        totals: { cash: number; card: number; warranty: number; total: number };
+      }>('/reports/cashflow', { params }),
     /**
      * Defect + writeoff aggregates for the period. Owners use this to see
      * how much value rolled into the defect warehouse, how much was
@@ -359,8 +483,7 @@ export function createReportsApi(api: HttpClient) {
     alerts: () => api.get<OwnerAlert[]>('/reports/alerts'),
     bestDayOfWeek: (params: { from: string; to: string }) =>
       api.get<BestDayOfWeek>('/reports/best-day-of-week', { params }),
-    recentReviews: (limit?: number) =>
-      api.get<RecentReview[]>('/reports/recent-reviews', { params: { limit } }),
+    recentReviews: (limit?: number) => api.get<RecentReview[]>('/reports/recent-reviews', { params: { limit } }),
     retention: (params: { period: 'week' | 'month' | 'year' }) =>
       api.get<RetentionStats>('/reports/retention', { params }),
   };
@@ -397,11 +520,9 @@ export function createWarrantyApi(api: HttpClient) {
      * CheckCreate screen to show "Диагностика ещё N дней" chips when a car is
      * picked. Empty array if the car has none.
      */
-    activeForCar: (carId: string) =>
-      api.get<WarrantyActive[]>(`/warranty-claims/active-for-car/${carId}`),
+    activeForCar: (carId: string) => api.get<WarrantyActive[]>(`/warranty-claims/active-for-car/${carId}`),
     /** Mark the warranty as used against a specific (newly-created) check. */
-    redeem: (id: string, checkId: string) =>
-      api.post<WarrantyClaim>(`/warranty-claims/${id}/redeem`, { checkId }),
+    redeem: (id: string, checkId: string) => api.post<WarrantyClaim>(`/warranty-claims/${id}/redeem`, { checkId }),
   };
 }
 
@@ -410,7 +531,14 @@ export function createStockMovementsApi(api: HttpClient) {
     list: (params?: { warehouseId?: string; productId?: string; type?: string; dateFrom?: string; dateTo?: string }) =>
       api.get<StockMovement[]>('/stock-movements', { params }),
     create: (body: {
-      type: 'inventory' | 'income' | 'expense' | 'writeoff' | 'defect_transfer' | 'used_transfer' | 'defect_return_to_supplier';
+      type:
+        | 'inventory'
+        | 'income'
+        | 'expense'
+        | 'writeoff'
+        | 'defect_transfer'
+        | 'used_transfer'
+        | 'defect_return_to_supplier';
       productId: string;
       quantity: number;
       purchasePrice?: number;
@@ -426,12 +554,8 @@ export function createStockMovementsApi(api: HttpClient) {
      * provide source warehouse + product + qty + reason. Backend resolves
      * the defect warehouse from kind='defect' for the tenant.
      */
-    transferToDefect: (body: {
-      productId: string;
-      fromWarehouseId: string;
-      quantity: number;
-      reason: string;
-    }) => api.post<{ id: string }>('/stock-movements/transfer-to-defect', body),
+    transferToDefect: (body: { productId: string; fromWarehouseId: string; quantity: number; reason: string }) =>
+      api.post<{ id: string }>('/stock-movements/transfer-to-defect', body),
   };
 }
 
@@ -453,9 +577,20 @@ export function createScheduleApi(api: HttpClient) {
     getWorkModes: () => api.get<WorkMode[]>('/schedule/work-modes'),
     createWorkMode: (data: CreateWorkModeRequest) => api.post<WorkMode>('/schedule/work-modes', data),
     updateWorkMode: (id: string, data: UpdateWorkModeRequest) => api.patch(`/schedule/work-modes/${id}`, data),
-    applyWorkMode: (data: { workModeId: string; userId?: string; dateFrom: string; dateTo: string }) => api.post<{ created: number }>('/schedule/apply-work-mode', data),
+    applyWorkMode: (data: { workModeId: string; userId?: string; dateFrom: string; dateTo: string }) =>
+      api.post<{ created: number }>('/schedule/apply-work-mode', data),
     getToday: () => api.get<TodayEmployeeStatus[]>('/schedule/today'),
-    getMyStats: () => api.get<{ totalScheduled: number; totalWorked: number; totalLate: number; totalLateMinor: number; totalLateMajor: number; totalOnTime: number; totalDaysOff: number; avgLateMinutes: number }>('/schedule/my-stats'),
+    getMyStats: () =>
+      api.get<{
+        totalScheduled: number;
+        totalWorked: number;
+        totalLate: number;
+        totalLateMinor: number;
+        totalLateMajor: number;
+        totalOnTime: number;
+        totalDaysOff: number;
+        avgLateMinutes: number;
+      }>('/schedule/my-stats'),
   };
 }
 
@@ -493,7 +628,8 @@ export function createExpensesApi(api: HttpClient) {
           createdAt: string;
         }>
       >('/expenses', { params }),
-    create: (data: { categoryId?: string; amount: number; description?: string; date?: string }) => api.post('/expenses', data),
+    create: (data: { categoryId?: string; amount: number; description?: string; date?: string }) =>
+      api.post('/expenses', data),
     /** Owner approves a pending expense — flips approval_status to 'approved'. Director / admin / superadmin only. */
     approve: (id: string) => api.patch(`/expenses/${id}/approve`),
     /** Owner rejects a pending expense — flips approval_status to 'rejected'. Director / admin / superadmin only. */
@@ -514,10 +650,7 @@ export function createWarehouseCategoriesApi(api: HttpClient) {
         warehouseId ? { params: { warehouseId } } : undefined,
       ),
     create: (path: string, warehouseId?: string) =>
-      api.post<{ id: string; path: string }>(
-        '/warehouse/categories',
-        warehouseId ? { path, warehouseId } : { path },
-      ),
+      api.post<{ id: string; path: string }>('/warehouse/categories', warehouseId ? { path, warehouseId } : { path }),
     remove: (id: string, opts?: { moveTo?: string; deleteContents?: boolean }) => {
       const params = new URLSearchParams();
       if (opts?.moveTo !== undefined) params.set('moveTo', opts.moveTo);
@@ -533,14 +666,24 @@ export function createWarehouseCategoriesApi(api: HttpClient) {
 export function createMarketingApi(api: HttpClient) {
   return {
     getDashboard: () => api.get<MarketingDashboard>('/marketing/dashboard'),
-    getReviews: (params?: { employeeId?: string; minRating?: number; maxRating?: number; month?: string }) => api.get<ReviewResponse[]>('/marketing/reviews', { params }),
+    getReviews: (params?: { employeeId?: string; minRating?: number; maxRating?: number; month?: string }) =>
+      api.get<ReviewResponse[]>('/marketing/reviews', { params }),
     getAlerts: () => api.get<ReviewAlert[]>('/marketing/alerts'),
     markAlertRead: (id: string) => api.patch(`/marketing/alerts/${id}/read`),
     getIntegrations: () => api.get<MessagingIntegration[]>('/marketing/integrations'),
-    upsertIntegration: (data: { id?: string; providerType: string; apiKey: string; senderName?: string; senderPhone?: string; webhookUrl?: string; isActive?: boolean }) => api.post<MessagingIntegration[]>('/marketing/integrations', data),
+    upsertIntegration: (data: {
+      id?: string;
+      providerType: string;
+      apiKey: string;
+      senderName?: string;
+      senderPhone?: string;
+      webhookUrl?: string;
+      isActive?: boolean;
+    }) => api.post<MessagingIntegration[]>('/marketing/integrations', data),
     removeIntegration: (id: string) => api.delete(`/marketing/integrations/${id}`),
     getPlatformLinks: () => api.get<ReviewPlatformLink[]>('/marketing/platform-links'),
-    upsertPlatformLink: (data: { platform: string; url: string; isActive?: boolean }) => api.post<ReviewPlatformLink[]>('/marketing/platform-links', data),
+    upsertPlatformLink: (data: { platform: string; url: string; isActive?: boolean }) =>
+      api.post<ReviewPlatformLink[]>('/marketing/platform-links', data),
     removePlatformLink: (id: string) => api.delete(`/marketing/platform-links/${id}`),
     getSettings: () => api.get<ReviewSettings>('/marketing/settings'),
     updateSettings: (data: Partial<ReviewSettings>) => api.patch<ReviewSettings>('/marketing/settings', data),
@@ -556,14 +699,18 @@ export function createMarketingApi(api: HttpClient) {
 export function createPublicReviewApi(api: HttpClient) {
   return {
     getByToken: (token: string) => api.get<PublicReviewData>(`/marketing/review/${token}`),
-    submit: (token: string, data: { rating: number; comment?: string; redirectedTo?: string }) => api.post<{ success: boolean }>(`/marketing/review/${token}`, data),
+    submit: (token: string, data: { rating: number; comment?: string; redirectedTo?: string }) =>
+      api.post<{ success: boolean }>(`/marketing/review/${token}`, data),
   };
 }
 
 export function createCallsApi(api: HttpClient) {
   return {
     getCalls: (params: { date?: string; dateFrom?: string; dateTo?: string }) =>
-      api.get<{ calls: any[]; summary: { total: number; incoming: number; outgoing: number; missed: number; notCalledBack: number } }>('/calls', { params }),
+      api.get<{
+        calls: any[];
+        summary: { total: number; incoming: number; outgoing: number; missed: number; notCalledBack: number };
+      }>('/calls', { params }),
     getClientCalls: (clientId: string, params?: { dateFrom?: string; dateTo?: string }) =>
       api.get<{ calls: any[]; total: number }>(`/calls/client/${clientId}`, { params }),
     /**
@@ -573,12 +720,9 @@ export function createCallsApi(api: HttpClient) {
      */
     getByClient: (clientId: string, params?: { dateFrom?: string; dateTo?: string }) =>
       api.get<{ calls: any[]; total: number }>(`/calls/client/${clientId}`, { params }),
-    getClientSms: (clientId: string) =>
-      api.get<any[]>(`/calls/client/${clientId}/sms`),
-    getClientSmsHistory: (clientId: string) =>
-      api.get<any[]>(`/calls/client/${clientId}/sms`),
-    getRecordingUrl: (url: string) =>
-      api.get<{ url: string }>('/calls/recording', { params: { url } }),
+    getClientSms: (clientId: string) => api.get<any[]>(`/calls/client/${clientId}/sms`),
+    getClientSmsHistory: (clientId: string) => api.get<any[]>(`/calls/client/${clientId}/sms`),
+    getRecordingUrl: (url: string) => api.get<{ url: string }>('/calls/recording', { params: { url } }),
   };
 }
 
@@ -618,8 +762,7 @@ export function createEquipmentApi(api: HttpClient) {
 
 export function createCheckPhotosApi(api: HttpClient) {
   return {
-    getByCheck: (checkId: string) =>
-      api.get<CheckPhoto[]>(`/check-photos/${checkId}`),
+    getByCheck: (checkId: string) => api.get<CheckPhoto[]>(`/check-photos/${checkId}`),
     upload: (checkId: string, formData: unknown) =>
       api.post<CheckPhoto>(`/check-photos/${checkId}`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -641,10 +784,8 @@ export function createCheckTemplatesApi(api: HttpClient) {
 
 export function createPushApi(api: HttpClient) {
   return {
-    register: (token: string, platform: 'ios' | 'android') =>
-      api.post('/push/token', { token, platform }),
-    unregister: (token: string) =>
-      api.delete('/push/token', { data: { token } } as unknown),
+    register: (token: string, platform: 'ios' | 'android') => api.post('/push/token', { token, platform }),
+    unregister: (token: string) => api.delete('/push/token', { data: { token } } as unknown),
   };
 }
 
@@ -654,8 +795,7 @@ export function createPushApi(api: HttpClient) {
 
 export function createReturnsApi(api: HttpClient) {
   return {
-    list: (params?: { from?: string; to?: string }) =>
-      api.get<CheckReturn[]>('/returns', { params }),
+    list: (params?: { from?: string; to?: string }) => api.get<CheckReturn[]>('/returns', { params }),
     create: (
       checkId: string,
       body: {
@@ -676,8 +816,7 @@ export function createReturnsApi(api: HttpClient) {
 export function createScheduleSettingsApi(api: HttpClient) {
   return {
     get: () => api.get<ScheduleSettings>('/schedule/settings'),
-    update: (data: Partial<ScheduleSettings>) =>
-      api.post<ScheduleSettings>('/schedule/settings', data),
+    update: (data: Partial<ScheduleSettings>) => api.post<ScheduleSettings>('/schedule/settings', data),
   };
 }
 
@@ -687,8 +826,7 @@ export function createScheduleSettingsApi(api: HttpClient) {
 
 export function createEmployeesApi(api: HttpClient) {
   return {
-    update: (id: string, body: Partial<EmployeeProfile>) =>
-      api.patch<EmployeeProfile>(`/employees/${id}`, body),
+    update: (id: string, body: Partial<EmployeeProfile>) => api.patch<EmployeeProfile>(`/employees/${id}`, body),
     uploadPhoto: (id: string, form: unknown) =>
       api.post<{ photoUrl: string }>(`/employees/${id}/photo`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -712,22 +850,16 @@ export function createEmployeesApi(api: HttpClient) {
       const qs = include.length > 0 ? `?include=${include.join(',')}` : '';
       return api.get<EmployeeFullProfile>(`/employees/${id}/full-profile${qs}`);
     },
-    documents: (id: string) =>
-      api.get<EmployeeDocument[]>(`/employees/${id}/documents`),
+    documents: (id: string) => api.get<EmployeeDocument[]>(`/employees/${id}/documents`),
     uploadDocument: (id: string, form: unknown) =>
       api.post<EmployeeDocument>(`/employees/${id}/documents`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       } as unknown),
-    deleteDocument: (id: string, docId: string) =>
-      api.delete(`/employees/${id}/documents/${docId}`),
-    achievements: (id: string) =>
-      api.get<EmployeeAchievement[]>(`/employees/${id}/achievements`),
-    addAchievement: (
-      id: string,
-      body: { name: string; description?: string; icon?: string; color?: string },
-    ) => api.post<EmployeeAchievement>(`/employees/${id}/achievements`, body),
-    removeAchievement: (id: string, achId: string) =>
-      api.delete(`/employees/${id}/achievements/${achId}`),
+    deleteDocument: (id: string, docId: string) => api.delete(`/employees/${id}/documents/${docId}`),
+    achievements: (id: string) => api.get<EmployeeAchievement[]>(`/employees/${id}/achievements`),
+    addAchievement: (id: string, body: { name: string; description?: string; icon?: string; color?: string }) =>
+      api.post<EmployeeAchievement>(`/employees/${id}/achievements`, body),
+    removeAchievement: (id: string, achId: string) => api.delete(`/employees/${id}/achievements/${achId}`),
   };
 }
 
@@ -772,13 +904,7 @@ export function createJournalApi(api: HttpClient) {
     warehouseDocs: (params: {
       from?: string;
       to?: string;
-      type?:
-        | 'purchase'
-        | 'return_to_supplier'
-        | 'defect_transfer'
-        | 'writeoff'
-        | 'supplier_payment'
-        | 'used_purchase';
+      type?: 'purchase' | 'return_to_supplier' | 'defect_transfer' | 'writeoff' | 'supplier_payment' | 'used_purchase';
     }) => api.get<JournalDoc[]>('/journal/warehouse-docs', { params }),
   };
 }
@@ -790,8 +916,7 @@ export function createImportsApi(api: HttpClient) {
   const longTimeout = { timeout: 600_000 };
   return {
     /** Returns a CSV template for clients+cars import (text/csv). */
-    getClientsCarsTemplate: () =>
-      api.get<string>('/imports/clients-cars/template', { responseType: 'text' as any }),
+    getClientsCarsTemplate: () => api.get<string>('/imports/clients-cars/template', { responseType: 'text' as any }),
     /** Dry-run: validates and groups rows, returns preview without writing. */
     previewClientsCars: (data: ImportPreviewRequest) =>
       api.post<ImportPreviewResponse>('/imports/clients-cars/preview', data, longTimeout),
@@ -810,31 +935,65 @@ export function createKnowledgeApi(api: HttpClient) {
   return {
     // Categories
     listCategories: () => api.get<KnowledgeCategory[]>('/knowledge/categories'),
-    createCategory: (data: KnowledgeCategoryInput) =>
-      api.post<KnowledgeCategory>('/knowledge/categories', data),
+    createCategory: (data: KnowledgeCategoryInput) => api.post<KnowledgeCategory>('/knowledge/categories', data),
     updateCategory: (id: string, data: Partial<KnowledgeCategoryInput>) =>
       api.patch<KnowledgeCategory>(`/knowledge/categories/${id}`, data),
     deleteCategory: (id: string) => api.delete<{ message: string }>(`/knowledge/categories/${id}`),
 
     // Articles — list is slim (no body/attachments), getArticle is full.
-    listArticles: (params?: ListArticlesParams) =>
-      api.get<KnowledgeArticle[]>('/knowledge/articles', { params }),
+    listArticles: (params?: ListArticlesParams) => api.get<KnowledgeArticle[]>('/knowledge/articles', { params }),
     getArticle: (id: string) => api.get<KnowledgeArticle>(`/knowledge/articles/${id}`),
-    createArticle: (data: KnowledgeArticleInput) =>
-      api.post<KnowledgeArticle>('/knowledge/articles', data),
+    createArticle: (data: KnowledgeArticleInput) => api.post<KnowledgeArticle>('/knowledge/articles', data),
     updateArticle: (id: string, data: KnowledgeArticleInput) =>
       api.patch<KnowledgeArticle>(`/knowledge/articles/${id}`, data),
     deleteArticle: (id: string) => api.delete<{ message: string }>(`/knowledge/articles/${id}`),
 
     // Acknowledgments
     acknowledge: (id: string) =>
-      api.post<{ acknowledgedAt: string | null }>(`/knowledge/articles/${id}/ack`),
+      api.post<{ acknowledgedAt: string | null; version: number }>(`/knowledge/articles/${id}/ack`),
     listAcks: (id: string) => api.get<KnowledgeAcksResponse>(`/knowledge/articles/${id}/acks`),
 
+    // Article feedback (helpful / not-helpful)
+    articleFeedback: (id: string, helpful: boolean) =>
+      api.post<ArticleFeedbackResult>(`/knowledge/articles/${id}/feedback`, { helpful }),
+
     // Regulation badge counters
-    regulationsPendingCount: () =>
-      api.get<{ count: number }>('/knowledge/regulations/pending-count'),
+    regulationsPendingCount: () => api.get<{ count: number }>('/knowledge/regulations/pending-count'),
     regulationSummaryForUser: (userId: string) =>
       api.get<RegulationUserSummary>(`/knowledge/regulations/summary-for-user/${userId}`),
+
+    // ─── Учебный центр — courses ───────────────────────────────────────────
+    listCourses: () => api.get<KnowledgeCourse[]>('/knowledge/courses'),
+    getCourse: (id: string) => api.get<KnowledgeCourse>(`/knowledge/courses/${id}`),
+    createCourse: (data: KnowledgeCourseInput) => api.post<KnowledgeCourse>('/knowledge/courses', data),
+    updateCourse: (id: string, data: Partial<KnowledgeCourseInput>) =>
+      api.patch<KnowledgeCourse>(`/knowledge/courses/${id}`, data),
+    deleteCourse: (id: string) => api.delete<{ message: string }>(`/knowledge/courses/${id}`),
+    courseProgress: (courseId: string, userId: string) =>
+      api.get<CourseProgress>(`/knowledge/courses/${courseId}/progress/${userId}`),
+
+    // ─── Lessons ───────────────────────────────────────────────────────────
+    createLesson: (courseId: string, data: KnowledgeLessonInput) =>
+      api.post<KnowledgeLesson>(`/knowledge/courses/${courseId}/lessons`, data),
+    updateLesson: (id: string, data: Partial<KnowledgeLessonInput>) =>
+      api.patch<KnowledgeLesson>(`/knowledge/lessons/${id}`, data),
+    deleteLesson: (id: string) => api.delete<{ message: string }>(`/knowledge/lessons/${id}`),
+    /** Mark a lesson done. Pass `answers` when the lesson has a quiz (must pass). */
+    completeLesson: (id: string, answers?: number[]) =>
+      api.post<LessonProgress>(`/knowledge/lessons/${id}/complete`, { answers } as CompleteLessonInput),
+
+    // ─── Troubleshooting (типовые неисправности) ───────────────────────────
+    listTroubleshooting: (params?: ListTroubleshootingParams) =>
+      api.get<Troubleshooting[]>('/knowledge/troubleshooting', { params }),
+    getTroubleshooting: (id: string) => api.get<Troubleshooting>(`/knowledge/troubleshooting/${id}`),
+    createTroubleshooting: (data: TroubleshootingInput) =>
+      api.post<Troubleshooting>('/knowledge/troubleshooting', data),
+    updateTroubleshooting: (id: string, data: Partial<TroubleshootingInput>) =>
+      api.patch<Troubleshooting>(`/knowledge/troubleshooting/${id}`, data),
+    deleteTroubleshooting: (id: string) => api.delete<{ message: string }>(`/knowledge/troubleshooting/${id}`),
+
+    // ─── Contextual KB ─────────────────────────────────────────────────────
+    forCar: (params: ForCarParams) => api.get<KnowledgeForCar>('/knowledge/for-car', { params }),
+    listChecklists: () => api.get<KnowledgeArticle[]>('/knowledge/checklists'),
   };
 }
