@@ -25,6 +25,9 @@ import UsersScreen from '../screens/UsersScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
 import MoreScreen from '../screens/MoreScreen';
 import KnowledgeBaseScreen from '../screens/KnowledgeBaseScreen';
+import KnowledgeCategoryScreen from '../screens/KnowledgeCategoryScreen';
+import KnowledgeArticleScreen from '../screens/KnowledgeArticleScreen';
+import KnowledgeEditorScreen from '../screens/KnowledgeEditorScreen';
 import MarketingScreen from '../screens/MarketingScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
@@ -202,6 +205,9 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Schedule" component={gated('schedule_view', ScheduleScreen)} />
       <MoreStack.Screen name="Clients" component={gated('clients_view', ClientsScreen)} />
       <MoreStack.Screen name="KnowledgeBase" component={KnowledgeBaseScreen} />
+      <MoreStack.Screen name="KnowledgeCategory" component={KnowledgeCategoryScreen} />
+      <MoreStack.Screen name="KnowledgeArticle" component={KnowledgeArticleScreen} />
+      <MoreStack.Screen name="KnowledgeEditor" component={KnowledgeEditorScreen} />
       <MoreStack.Screen name="Cars" component={gated('clients_view', CarsScreen)} />
       <MoreStack.Screen name="Services" component={gated('services_view', ServicesScreen)} />
       <MoreStack.Screen name="Suppliers" component={gated('suppliers_view', SuppliersScreen)} />

@@ -18,7 +18,7 @@ import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { uploadsApi, authApi, subscriptionApi } from '../api/services';
+import { uploadsApi, authApi, subscriptionApi, knowledgeApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
@@ -297,6 +297,8 @@ interface MenuRowProps {
   separatorColor: string;
   /** Tertiary tone for chevron / lock — theme-aware. */
   iconMutedColor: string;
+  /** Optional attention count — renders a red dot/badge on the icon. */
+  badgeCount?: number;
 }
 
 const MenuRow = React.memo(function MenuRow({
@@ -308,12 +310,18 @@ const MenuRow = React.memo(function MenuRow({
   descColor,
   separatorColor,
   iconMutedColor,
+  badgeCount = 0,
 }: MenuRowProps) {
   return (
     <>
       <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.55}>
         <View style={[styles.menuIcon, { backgroundColor: item.iconBg }]}>
           <Ionicons name={item.icon} size={20} color={locked ? iconMutedColor : item.iconColor} />
+          {badgeCount > 0 && (
+            <View style={styles.menuBadge}>
+              <Text style={styles.menuBadgeText}>{badgeCount > 9 ? '9+' : String(badgeCount)}</Text>
+            </View>
+          )}
         </View>
         <View style={styles.menuTextWrap}>
           <Text style={[styles.menuLabel, { color: locked ? iconMutedColor : labelColor }]} numberOfLines={1}>
@@ -355,6 +363,15 @@ export default function MoreScreen() {
     },
     staleTime: 5 * 60 * 1000,
   });
+
+  // Pending regulations → red-dot badge on «База знаний». Cheap, cached,
+  // background-revalidated. Failure is silent (badge just won't show).
+  const { data: pendingRegs } = useQuery<{ count: number }>({
+    queryKey: ['knowledge-regulations-pending'],
+    queryFn: async () => (await knowledgeApi.regulationsPendingCount()).data,
+    staleTime: 60 * 1000,
+  });
+  const pendingRegsCount = pendingRegs?.count ?? 0;
 
   const currentPlan = sub?.plans?.find((p) => p.name === sub?.planName);
   const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
@@ -490,6 +507,7 @@ export default function MoreScreen() {
                     descColor={palette.text.secondary}
                     separatorColor={palette.border.subtle}
                     iconMutedColor={palette.text.tertiary}
+                    badgeCount={item.screen === 'KnowledgeBase' ? pendingRegsCount : 0}
                   />
                 ))}
               </View>
@@ -604,6 +622,25 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  menuBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 4,
+    backgroundColor: colors.red[500],
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.white,
+  },
+  menuBadgeText: {
+    color: colors.white,
+    fontSize: 10,
+    fontWeight: '700',
   },
   menuTextWrap: { flex: 1, minWidth: 0 },
   menuLabel: { fontSize: 16, fontWeight: '600', color: colors.gray[900], letterSpacing: -0.2 },

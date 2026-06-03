@@ -60,7 +60,7 @@ import {
   useNavigation,
   useRoute,
 } from '@react-navigation/native';
-import { checksApi, employeesApi, equipmentApi, scheduleApi, usersApi } from '../api/services';
+import { checksApi, employeesApi, equipmentApi, knowledgeApi, scheduleApi, usersApi } from '../api/services';
 import CachedImage from '../components/CachedImage';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton, Skeleton } from '../components/Skeleton';
@@ -76,6 +76,7 @@ import type {
   Check,
   EmployeeFullProfile,
   EmployeeAchievement,
+  RegulationUserSummary,
   TodayEmployeeStatus,
   User,
 } from '../../../shared/types';
@@ -506,6 +507,14 @@ export default function EmployeeDetailScreen() {
           <CardHeader icon="construct-outline" title="Инвентарь" palette={palette} />
           <Inventory employeeId={id} palette={palette} />
         </Card>
+
+        {/* ── ЕГО РЕГЛАМЕНТЫ (manager-only, lazy) ─────────────────────── */}
+        {isOwnerLike ? (
+          <Card palette={palette}>
+            <CardHeader icon="shield-checkmark-outline" title="Регламенты" palette={palette} />
+            <RegulationsSummary employeeId={id} accent={rankInfo.accent} palette={palette} />
+          </Card>
+        ) : null}
 
         {/* ── 6. ЕГО ЗНАЧКИ ───────────────────────────────────────────── */}
         <Card palette={palette}>
@@ -1097,6 +1106,58 @@ function Inventory({ employeeId, palette }: { employeeId: string; palette: Palet
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+//  ЕГО РЕГЛАМЕНТЫ — lazy, how many regulations this employee acknowledged.
+//  Manager view only (gated by the caller). Minimal: one progress line.
+// ──────────────────────────────────────────────────────────────────────────
+
+function RegulationsSummary({
+  employeeId,
+  accent,
+  palette,
+}: {
+  employeeId: string;
+  accent: string;
+  palette: Palette;
+}) {
+  const { data, isLoading } = useQuery<RegulationUserSummary>({
+    queryKey: ['knowledge-regulation-summary', employeeId],
+    queryFn: async () => (await knowledgeApi.regulationSummaryForUser(employeeId)).data,
+    staleTime: 60_000,
+  });
+
+  if (isLoading && !data) {
+    return <Skeleton height={40} radius={borderRadius.lg} />;
+  }
+
+  const total = data?.total ?? 0;
+  const acknowledged = data?.acknowledged ?? 0;
+
+  if (total === 0) {
+    return <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>Регламентов пока нет.</Text>;
+  }
+
+  const allDone = acknowledged >= total;
+  const ratio = total > 0 ? Math.max(0, Math.min(1, acknowledged / total)) : 0;
+  const barColor = allDone ? colors.green[500] : accent;
+
+  return (
+    <View style={{ gap: spacing[2] }}>
+      <View style={styles.regSummaryRow}>
+        <Text style={[styles.regSummaryValue, { color: palette.text.primary }]}>
+          {acknowledged}/{total}
+        </Text>
+        <Text style={[styles.regSummaryLabel, { color: allDone ? colors.green[600] : palette.text.secondary }]}>
+          {allDone ? 'Все ознакомлен' : 'ознакомлен'}
+        </Text>
+      </View>
+      <View style={[styles.regSummaryTrack, { backgroundColor: palette.bg.muted }]}>
+        <View style={[styles.regSummaryFill, { width: `${ratio * 100}%`, backgroundColor: barColor }]} />
+      </View>
+    </View>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 //  Achievements Modal
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -1389,6 +1450,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   mutedText: { fontSize: 12 },
+
+  // ── Регламенты summary ───────────────────────────────────────────────
+  regSummaryRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing[2] },
+  regSummaryValue: { fontSize: 22, fontWeight: '700', letterSpacing: -0.4 },
+  regSummaryLabel: { fontSize: 13, fontWeight: '500' },
+  regSummaryTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
+  regSummaryFill: { height: 6, borderRadius: 3 },
 
   // ── Stat tiles (показатели) ──────────────────────────────────────────
   statsGrid: {

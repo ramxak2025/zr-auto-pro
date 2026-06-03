@@ -34,6 +34,7 @@ import {
   createWarehouseAnalyticsApi,
   createClientSourcesApi,
   createJournalApi,
+  createKnowledgeApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -71,6 +72,7 @@ export const employeesApi = createEmployeesApi(api);
 export const warehouseAnalyticsApi = createWarehouseAnalyticsApi(api);
 export const clientSourcesApi = createClientSourcesApi(api);
 export const journalApi = createJournalApi(api);
+export const knowledgeApi = createKnowledgeApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {
