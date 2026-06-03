@@ -90,6 +90,24 @@ function createIdbPersister(): Persister {
 }
 
 /**
+ * Wipe the persisted React Query cache from IndexedDB.
+ *
+ * Called on logout / before a different user logs in so the dehydrated
+ * snapshot of tenant A's lists (products, clients, checks…) can never be
+ * rehydrated into tenant B's session on a shared browser. Mirrors mobile's
+ * `clearPersistentCache()` (which clears the AsyncStorage `rqcache:` keys).
+ *
+ * Best-effort: a failure here must not block the logout flow.
+ */
+export async function clearPersistentCache(): Promise<void> {
+  try {
+    await del(KEY, idbStore);
+  } catch {
+    // best-effort — IndexedDB may be unavailable (private mode / quota)
+  }
+}
+
+/**
  * Wire up persistence. Side-effect only — the helper returns an unsubscribe
  * function from `persistQueryClient`, but we keep persistence for the entire
  * page lifetime, so we don't expose it.

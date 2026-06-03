@@ -1434,17 +1434,30 @@ export default function ProductsPage() {
 
   const allProducts = productsData?.data || [];
 
-  // Fetch inventory movements to determine last check dates for products
+  // Inventory movements feed ONLY the "recently checked" badge on folder cards
+  // (see `folderCheckInfo` below). It's auxiliary decoration, not core data, so
+  // we lazy-load it:
+  //   - `enabled` only when the folder/root tree is on screen (i.e. NOT while
+  //     searching) and products exist — the badge never renders during search,
+  //     so don't pay for the fetch there.
+  //   - `limit: 200` matches the backend, which hard-caps `/products/movements`
+  //     at `LIMIT 200 ORDER BY created_at DESC` and ignores larger values.
+  //     The old `limit: 5000` was a no-op illusion that suggested a 5000-row
+  //     payload; 200 newest-first rows are enough to derive the latest
+  //     inventory date per product for the badge.
+  const movementsEnabled = !searchText && allProducts.length > 0;
   const { data: inventoryMovements } = useQuery<StockMovement[]>({
     queryKey: ['inventory-movements'],
     queryFn: async () => {
-      const res = await productsApi.getMovements({ limit: 5000 });
+      const res = await productsApi.getMovements({ limit: 200 });
       // res.data can be StockMovement[] or { data: StockMovement[] } depending on API
       const raw = res.data as any;
       const list: StockMovement[] = Array.isArray(raw) ? raw : (raw?.data ?? []);
       return list.filter((m: StockMovement) => m.type === 'inventory');
     },
     staleTime: 60_000,
+    enabled: movementsEnabled,
+    placeholderData: (prev) => prev,
   });
 
   // Map: productId -> last inventory date string

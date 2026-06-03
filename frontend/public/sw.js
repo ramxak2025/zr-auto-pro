@@ -221,6 +221,22 @@ self.addEventListener('sync', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'ONLINE') replayMutations();
+
+  // Cross-tenant isolation: on logout / session change the client asks the SW
+  // to drop every cached /api response. The API cache is keyed by URL only
+  // (ignoring Authorization), so a leftover entry would otherwise be served to
+  // the NEXT user on a shared browser/kiosk. We fully delete & recreate the
+  // API cache so no stale tenant-A payload survives the next login.
+  if (event.data?.type === 'CLEAR_API_CACHE') {
+    event.waitUntil(
+      caches.delete(API_CACHE).then(() => {
+        // ACK so the client can await completion before login proceeds.
+        if (event.ports && event.ports[0]) {
+          event.ports[0].postMessage({ type: 'API_CACHE_CLEARED' });
+        }
+      })
+    );
+  }
 });
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

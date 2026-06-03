@@ -11,6 +11,8 @@ import {
   subscriptionApi,
 } from '../api/services';
 import { User, UserPermissions, UserRole } from '../types';
+import { clearPersistentCache } from '../utils/persistentCache';
+import { purgeApiCache } from '../utils/swCache';
 
 /**
  * Warm the React Query cache with data the user is likely to open next.
@@ -107,6 +109,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (phone: string, password: string) => {
     const res = await authApi.login({ phone, password });
     const { token: t, user: u } = res.data;
+
+    // Cross-tenant safety: `logout()` is the normal off-boarding path, but a
+    // crash / kill / 401 hard-redirect can leave the previous user's data in
+    // the in-memory cache, the persist IndexedDB store, or the SW API cache.
+    // Start every layer empty BEFORE we write user B's token and prefetch
+    // B's data, so A's payloads can never bleed into B's session.
+    await queryClient.cancelQueries().catch(() => {});
+    queryClient.clear();
+    await clearPersistentCache();
+    await purgeApiCache();
+
     localStorage.setItem('token', t);
     setToken(t);
     setUser(u);
@@ -126,7 +139,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     authApi.logout().catch(() => {});
+
+    // ── Cross-tenant isolation ────────────────────────────────────────────
+    // On a shared browser/kiosk the next user must not see ANY of this user's
+    // data. We tear down every cache layer that could survive a logout:
+    //
+    //   1. cancelQueries() — abort in-flight refetches so a late response can't
+    //      land after teardown and resurrect a stale entry under the next
+    //      session (the same fix mobile shipped in commit 0a741a9).
+    //   2. queryClient.clear() — drop the in-memory React Query cache.
+    //   3. clearPersistentCache() — delete the dehydrated snapshot in the
+    //      `@tanstack/react-query-persist-client` IndexedDB store, otherwise it
+    //      rehydrates into the next session.
+    //   4. purgeApiCache() — drop the service worker's `autexa-api-*` Cache
+    //      Storage, which is keyed by URL only (ignores Authorization) and
+    //      would otherwise serve tenant A's `/api` payloads to tenant B.
+    //
+    // Steps 1–2 are synchronous and run before we clear the token, so nothing
+    // stale is in memory by the time the redirect to /login fires. Steps 3–4
+    // are async best-effort; we run them but don't block the redirect.
+    void queryClient.cancelQueries().catch(() => {});
+    queryClient.clear();
+    void clearPersistentCache();
+    void purgeApiCache();
+
     localStorage.removeItem('token');
+    localStorage.removeItem('user');
     setToken(null);
     setUser(null);
   };

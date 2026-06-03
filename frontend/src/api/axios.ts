@@ -1,4 +1,6 @@
 import axios, { AxiosError } from 'axios';
+import { clearPersistentCache } from '../utils/persistentCache';
+import { purgeApiCache } from '../utils/swCache';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -41,7 +43,19 @@ api.interceptors.response.use(
       const now = Date.now();
       if (window.location.pathname !== '/login' && now - lastRedirectTime > 2000) {
         lastRedirectTime = now;
-        window.location.href = '/login';
+        // Cross-tenant isolation: this redirect is a full page reload, which
+        // does NOT run AuthContext.logout(). The SW API cache and the persist
+        // IndexedDB store survive the reload, so purge them here too before
+        // navigating — otherwise tenant A's `/api` payloads / dehydrated lists
+        // could be served to the next login on a shared browser.
+        void clearPersistentCache();
+        void purgeApiCache();
+        // Give the purge a brief head start, then redirect regardless — never
+        // hang the user on a stuck SW. The direct caches.delete() inside
+        // purgeApiCache() resolves in a few ms, so 200ms is ample.
+        setTimeout(() => {
+          window.location.href = '/login';
+        }, 200);
       }
     }
 
