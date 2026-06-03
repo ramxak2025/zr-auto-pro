@@ -1,11 +1,4 @@
-import {
-  Injectable,
-  Inject,
-  BadRequestException,
-  ForbiddenException,
-  NotFoundException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, Inject, BadRequestException, ForbiddenException, NotFoundException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import sharp from 'sharp';
 import * as fs from 'fs';
@@ -29,6 +22,30 @@ const MANAGER_ONLY_FIELDS = new Set([
   'ownerNotes',
 ]);
 
+/** Which heavy aggregates the caller opted into via `?include=`. */
+type FullProfileInclude = { heatmap: boolean; timeline: boolean };
+
+/**
+ * Parse the raw `?include=` query value (CSV like `heatmap,timeline`) into a
+ * resolved include-set. Anything we don't recognise is ignored. `undefined`
+ * (no param) → both off, i.e. the LIGHT default profile.
+ */
+function normalizeInclude(raw?: FullProfileInclude | string | string[]): FullProfileInclude {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return { heatmap: !!raw.heatmap, timeline: !!raw.timeline };
+  }
+  const tokens = new Set<string>();
+  const push = (v: string) =>
+    v
+      .split(',')
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean)
+      .forEach((t) => tokens.add(t));
+  if (typeof raw === 'string') push(raw);
+  else if (Array.isArray(raw)) raw.forEach((v) => typeof v === 'string' && push(v));
+  return { heatmap: tokens.has('heatmap'), timeline: tokens.has('timeline') };
+}
+
 @Injectable()
 export class EmployeesService {
   private readonly logger = new Logger('EmployeesService');
@@ -40,23 +57,17 @@ export class EmployeesService {
    *  - The employee themselves may only update photoUrl + whatsapp on their own row.
    *  Anything outside this matrix is rejected with 403.
    */
-  async update(
-    actorID: string,
-    actorRole: string,
-    tenantID: string,
-    employeeId: string,
-    dto: Record<string, unknown>,
-  ) {
+  async update(actorID: string, actorRole: string, tenantID: string, employeeId: string, dto: Record<string, unknown>) {
     const isManager = PRIVATE_ROLES.has(actorRole);
     const isSelf = actorID === employeeId;
     if (!isManager && !isSelf) {
       throw new ForbiddenException({ message: 'Нет доступа к этому сотруднику' });
     }
 
-    const { rows: targetRows } = await this.pool.query(
-      'SELECT id FROM users WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-      [employeeId, tenantID],
-    );
+    const { rows: targetRows } = await this.pool.query('SELECT id FROM users WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
+      employeeId,
+      tenantID,
+    ]);
     if (targetRows.length === 0) {
       throw new NotFoundException({ message: 'Сотрудник не найден' });
     }
@@ -265,10 +276,11 @@ export class EmployeesService {
   }
 
   async removeDocument(tenantID: string, employeeId: string, docId: string) {
-    const result = await this.pool.query(
-      `DELETE FROM employee_documents WHERE id=$1 AND user_id=$2 AND tenant_id=$3`,
-      [docId, employeeId, tenantID],
-    );
+    const result = await this.pool.query(`DELETE FROM employee_documents WHERE id=$1 AND user_id=$2 AND tenant_id=$3`, [
+      docId,
+      employeeId,
+      tenantID,
+    ]);
     if (result.rowCount === 0) {
       throw new NotFoundException({ message: 'Документ не найден' });
     }
@@ -355,12 +367,26 @@ export class EmployeesService {
 
   /**
    * Composite endpoint returning everything the employee detail screen needs.
-   * Cached for 60s per (tenant, employee). Invalidated by photo/profile/
-   * achievement mutations. Recomputed lazily on cache miss.
+   * Cached for 60s per (tenant, employee, include-set). Invalidated by
+   * photo/profile/achievement mutations. Recomputed lazily on cache miss.
+   *
+   * The two heaviest aggregates — the 365-day `yearHeatmap` GROUP BY and the
+   * `careerTimeline` (top-months scan + assembly) — are OPT-IN via `include`.
+   * No client renders them by default anymore (the mobile detail screen was
+   * trimmed; the web detail page never called this endpoint), so by default
+   * we skip that server work entirely and return empty arrays for those two
+   * fields. A caller that still wants them passes `?include=heatmap,timeline`.
+   *
+   * The response SHAPE is unchanged — `yearHeatmap` / `careerTimeline` are
+   * always present, just empty when not requested. This keeps old clients that
+   * read the fields (without crashing on missing keys) working.
    */
-  async fullProfile(tenantID: string, employeeId: string) {
-    const cacheKey = `employee:${tenantID}:${employeeId}:full`;
-    return ttlCache.wrap(cacheKey, 60_000, () => this.computeFullProfile(tenantID, employeeId));
+  async fullProfile(tenantID: string, employeeId: string, include?: FullProfileInclude | string | string[]) {
+    const want = normalizeInclude(include);
+    // The cache key carries the include-set so a light request and a heavy
+    // request don't clobber each other's cached payloads.
+    const cacheKey = `employee:${tenantID}:${employeeId}:full:${want.heatmap ? 'h' : ''}${want.timeline ? 't' : ''}`;
+    return ttlCache.wrap(cacheKey, 60_000, () => this.computeFullProfile(tenantID, employeeId, want));
   }
 
   /**
@@ -400,7 +426,7 @@ export class EmployeesService {
     };
   }
 
-  private async computeFullProfile(tenantID: string, employeeId: string) {
+  private async computeFullProfile(tenantID: string, employeeId: string, include: FullProfileInclude) {
     // getProfile is the ONLY existence check — it throws 404 for a genuinely
     // missing tenant user and that 404 must propagate. Everything after it is
     // derived analytics; if any of it fails (DB error / statement timeout on a
@@ -409,7 +435,7 @@ export class EmployeesService {
     const profile = await this.getProfile(tenantID, employeeId);
 
     try {
-      return await this.computeAnalytics(tenantID, employeeId, profile);
+      return await this.computeAnalytics(tenantID, employeeId, profile, include);
     } catch (err) {
       this.logger.error(
         `fullProfile analytics failed for ${employeeId} (returning base profile): ${
@@ -424,6 +450,7 @@ export class EmployeesService {
     tenantID: string,
     employeeId: string,
     profile: Awaited<ReturnType<EmployeesService['getProfile']>>,
+    include: FullProfileInclude,
   ) {
     // Discipline + activity quick stats (last 30 days)
     const { rows: monthAgg } = await this.pool.query(
@@ -465,11 +492,11 @@ export class EmployeesService {
     const efficiency =
       profile.monthlyKpiRevenue && profile.monthlyKpiRevenue > 0
         ? Math.min(100, Math.round((monthRevenue / profile.monthlyKpiRevenue) * 100))
-        : Math.min(100, Math.round((monthRevenue / 1) || 0)); // when no KPI, just show revenue as efficiency=0
+        : Math.min(100, Math.round(monthRevenue / 1 || 0)); // when no KPI, just show revenue as efficiency=0
 
     const activity = Math.min(100, Math.round((monthChecks / Math.max(profile.monthlyKpiChecks || 30, 1)) * 100));
     const rating = Math.round(avgRating * 20); // 5 stars → 100%
-    const quality = Math.min(100, Math.round((discipline * 0.5 + rating * 0.5)));
+    const quality = Math.min(100, Math.round(discipline * 0.5 + rating * 0.5));
 
     // Streaks
     const streaks = await this.computeStreaks(tenantID, employeeId);
@@ -477,21 +504,26 @@ export class EmployeesService {
     // Lifetime totals + best day / best month + top car brands
     const lifetime = await this.computeLifetime(tenantID, employeeId);
 
-    // Year heatmap: 365 day buckets
-    const { rows: heat } = await this.pool.query(
-      `SELECT date::date AS day, COUNT(*) AS checks, COALESCE(SUM(total_revenue), 0) AS revenue
-         FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
-          AND date >= now() - interval '365 days'
-        GROUP BY date::date
-        ORDER BY day`,
-      [tenantID, employeeId],
-    );
-    const yearHeatmap = heat.map((r) => ({
-      day: typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10),
-      checks: parseInt(r.checks) || 0,
-      revenue: parseFloat(r.revenue) || 0,
-    }));
+    // Year heatmap: 365 day buckets. Heavy GROUP BY — only computed when the
+    // caller opted in via `?include=heatmap`. Otherwise it stays an empty
+    // array and we skip the scan entirely.
+    let yearHeatmap: Array<{ day: string; checks: number; revenue: number }> = [];
+    if (include.heatmap) {
+      const { rows: heat } = await this.pool.query(
+        `SELECT date::date AS day, COUNT(*) AS checks, COALESCE(SUM(total_revenue), 0) AS revenue
+           FROM checks
+          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+            AND date >= now() - interval '365 days'
+          GROUP BY date::date
+          ORDER BY day`,
+        [tenantID, employeeId],
+      );
+      yearHeatmap = heat.map((r) => ({
+        day: typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10),
+        checks: parseInt(r.checks) || 0,
+        revenue: parseFloat(r.revenue) || 0,
+      }));
+    }
 
     // Team ranks
     const teamRank = await this.computeTeamRank(tenantID, employeeId);
@@ -517,49 +549,61 @@ export class EmployeesService {
       return { serviceId: r.id as string, name: r.name as string, count, tier };
     });
 
-    // Career timeline — hire + top months + custom achievements
+    // Achievements are always returned (badges card is rendered by every
+    // client). They're also reused to seed the optional career timeline below.
+    const achievements = await this.listAchievements(tenantID, employeeId);
+
+    // Career timeline — hire + top months + custom achievements. The top-months
+    // scan + assembly is only done when the caller opted in via
+    // `?include=timeline`. Otherwise it stays an empty array.
     const careerTimeline: Array<{
       date: string;
       kind: 'hire' | 'promotion' | 'top_month' | 'custom';
       title: string;
       description?: string;
     }> = [];
-    if (profile.hireDate) {
-      careerTimeline.push({
-        date: typeof profile.hireDate === 'string' ? profile.hireDate : new Date(profile.hireDate).toISOString().slice(0, 10),
-        kind: 'hire',
-        title: 'Принят на работу',
-      });
+    if (include.timeline) {
+      if (profile.hireDate) {
+        careerTimeline.push({
+          date:
+            typeof profile.hireDate === 'string'
+              ? profile.hireDate
+              : new Date(profile.hireDate).toISOString().slice(0, 10),
+          kind: 'hire',
+          title: 'Принят на работу',
+        });
+      }
+      const { rows: topMonths } = await this.pool.query(
+        `SELECT to_char(date_trunc('month', date), 'YYYY-MM-01') AS ym,
+                SUM(total_revenue) AS revenue
+           FROM checks
+          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+          GROUP BY ym
+          ORDER BY revenue DESC
+          LIMIT 3`,
+        [tenantID, employeeId],
+      );
+      for (const m of topMonths) {
+        careerTimeline.push({
+          date: m.ym,
+          kind: 'top_month',
+          title: 'Топовый месяц',
+          description: `${Math.round(parseFloat(m.revenue))}₽`,
+        });
+      }
+      for (const a of achievements) {
+        careerTimeline.push({
+          date:
+            typeof a.awardedAt === 'string'
+              ? a.awardedAt.slice(0, 10)
+              : new Date(a.awardedAt).toISOString().slice(0, 10),
+          kind: 'custom',
+          title: a.name,
+          description: a.description ?? undefined,
+        });
+      }
+      careerTimeline.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     }
-    const { rows: topMonths } = await this.pool.query(
-      `SELECT to_char(date_trunc('month', date), 'YYYY-MM-01') AS ym,
-              SUM(total_revenue) AS revenue
-         FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
-        GROUP BY ym
-        ORDER BY revenue DESC
-        LIMIT 3`,
-      [tenantID, employeeId],
-    );
-    for (const m of topMonths) {
-      careerTimeline.push({
-        date: m.ym,
-        kind: 'top_month',
-        title: 'Топовый месяц',
-        description: `${Math.round(parseFloat(m.revenue))}₽`,
-      });
-    }
-    const achievements = await this.listAchievements(tenantID, employeeId);
-    for (const a of achievements) {
-      careerTimeline.push({
-        date:
-          typeof a.awardedAt === 'string' ? a.awardedAt.slice(0, 10) : new Date(a.awardedAt).toISOString().slice(0, 10),
-        kind: 'custom',
-        title: a.name,
-        description: a.description ?? undefined,
-      });
-    }
-    careerTimeline.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
     return {
       profile,
@@ -590,8 +634,7 @@ export class EmployeesService {
     today.setHours(0, 0, 0, 0);
     let cursor = today;
     for (const r of dayRows) {
-      const dayStr =
-        typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10);
+      const dayStr = typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day).toISOString().slice(0, 10);
       const cursorStr = cursor.toISOString().slice(0, 10);
       if (dayStr === cursorStr) {
         checksStreak++;

@@ -43,6 +43,51 @@ export class PushService {
     }
   }
 
+  /**
+   * Fan out a SILENT, DATA-ONLY push to every device of every OTHER user in a
+   * tenant (the actor is excluded). Used for live cross-device cache
+   * invalidation — e.g. `{ type: 'cash-changed', tenantId }` so other open
+   * apps refetch money queries the moment a sale/expense lands.
+   *
+   * Data-only contract: NO title / body / sound, plus `_contentAvailable:true`
+   * so iOS delivers it as a background content-available push (no banner) and
+   * Android treats it as a data message. This MUST NOT show a visible
+   * notification — it's an accelerator, not an alert.
+   *
+   * Best-effort: any failure is swallowed (push is never the source of truth).
+   * Callers should fire-and-forget AFTER their DB commit so push latency never
+   * blocks the API response.
+   */
+  async sendDataToTenant(tenantID: string, excludeUserId: string | null, data: Record<string, unknown>): Promise<void> {
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT pt.token
+           FROM push_tokens pt
+           JOIN users u ON u.id = pt.user_id
+          WHERE u.tenant_id = $1
+            AND ($2::uuid IS NULL OR pt.user_id <> $2)`,
+        [tenantID, excludeUserId],
+      );
+      if (rows.length === 0) return;
+
+      // Expo accepts up to 100 messages per request — chunk to stay safe even
+      // for large tenants.
+      const messages = rows.map((r: { token: string }) => ({
+        to: r.token,
+        // Silent: no title/body/sound, content-available so it doesn't banner.
+        _contentAvailable: true,
+        priority: 'high',
+        data,
+      }));
+
+      for (let i = 0; i < messages.length; i += 100) {
+        await this.postToExpo(messages.slice(i, i + 100));
+      }
+    } catch (err) {
+      this.logger.error(`sendDataToTenant failed for tenant=${tenantID}: ${err}`);
+    }
+  }
+
   private postToExpo(messages: unknown[]): Promise<void> {
     return new Promise((resolve) => {
       const payload = JSON.stringify(messages);

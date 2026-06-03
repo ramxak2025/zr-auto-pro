@@ -691,8 +691,25 @@ export function createEmployeesApi(api: HttpClient) {
       api.post<{ photoUrl: string }>(`/employees/${id}/photo`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       } as unknown),
-    fullProfile: (id: string) =>
-      api.get<EmployeeFullProfile>(`/employees/${id}/full-profile`),
+    /**
+     * Employee composite profile. The backend treats the 365-day `yearHeatmap`
+     * and `careerTimeline` as OPT-IN via `?include=` — when not requested they
+     * come back as empty arrays, so the server skips that GROUP BY / scan on
+     * the most-opened path.
+     *
+     * Default here is `['heatmap']` (NOT light) on purpose: the live mobile
+     * detail screen derives salary period totals from `yearHeatmap`, so the
+     * factory keeps requesting it to stay backward-compatible with shipped
+     * clients. `careerTimeline` is never requested by default (no client draws
+     * it), which is where the saved work comes from.
+     *
+     * Pass an explicit array to override: `[]` for the truly light profile,
+     * `['heatmap','timeline']` to get both back.
+     */
+    fullProfile: (id: string, include: Array<'heatmap' | 'timeline'> = ['heatmap']) => {
+      const qs = include.length > 0 ? `?include=${include.join(',')}` : '';
+      return api.get<EmployeeFullProfile>(`/employees/${id}/full-profile${qs}`);
+    },
     documents: (id: string) =>
       api.get<EmployeeDocument[]>(`/employees/${id}/documents`),
     uploadDocument: (id: string, form: unknown) =>

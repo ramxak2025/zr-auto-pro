@@ -9,6 +9,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -99,9 +100,12 @@ export class EmployeesController {
     });
   }
 
+  // `?include=heatmap,timeline` opts into the two heavy aggregates (365-day
+  // heatmap + career timeline). Omitting it returns the LIGHT profile — the
+  // default for all current clients — which skips that server work.
   @Get(':id/full-profile')
-  fullProfile(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.employees.fullProfile(user.tenantID, id);
+  fullProfile(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('include') include?: string) {
+    return this.employees.fullProfile(user.tenantID, id, include);
   }
 
   // ── Documents ──────────────────────────────────────────────────────────
@@ -183,11 +187,7 @@ export class EmployeesController {
 
   @Roles('director', 'admin', 'superadmin')
   @Delete(':id/documents/:docId')
-  removeDocument(
-    @Param('id') id: string,
-    @Param('docId') docId: string,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  removeDocument(@Param('id') id: string, @Param('docId') docId: string, @CurrentUser() user: JwtPayload) {
     return this.employees.removeDocument(user.tenantID, id, docId);
   }
 
@@ -210,11 +210,7 @@ export class EmployeesController {
 
   @Roles('director', 'admin', 'superadmin')
   @Delete(':id/achievements/:achId')
-  removeAchievement(
-    @Param('id') id: string,
-    @Param('achId') achId: string,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  removeAchievement(@Param('id') id: string, @Param('achId') achId: string, @CurrentUser() user: JwtPayload) {
     return this.employees.removeAchievement(user.tenantID, id, achId);
   }
 }

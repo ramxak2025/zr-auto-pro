@@ -22,6 +22,37 @@ import { invalidateReportsForTenant } from '../common/reports-cache';
 // user input as the table name, the helper rejects it.
 const TENANT_OWNED_TABLES = new Set(['users', 'clients', 'cars', 'services', 'products']);
 
+/**
+ * Opaque keyset cursor for the checks journal: base64url of `<date>|<id>`.
+ * `date` is the row's ISO timestamp, `id` its UUID — together they form the
+ * (date DESC, id DESC) keyset. Opaque on purpose so the FE just round-trips
+ * `nextCursor` without parsing it.
+ */
+function encodeCheckCursor(date: unknown, id: unknown): string {
+  const iso = date instanceof Date ? date.toISOString() : String(date);
+  return Buffer.from(`${iso}|${String(id)}`, 'utf8').toString('base64url');
+}
+
+/**
+ * Decode a keyset cursor. Returns null for a missing / empty / malformed
+ * cursor (the caller then treats it as "first page" — newest rows). Never
+ * throws on bad input.
+ */
+function parseCheckCursor(raw: unknown): { date: string; id: string } | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    const sep = decoded.lastIndexOf('|');
+    if (sep <= 0) return null;
+    const date = decoded.slice(0, sep);
+    const id = decoded.slice(sep + 1);
+    if (!date || !id) return null;
+    return { date, id };
+  } catch {
+    return null;
+  }
+}
+
 @Injectable()
 export class ChecksService {
   private readonly logger = new Logger('ChecksService');
@@ -84,6 +115,21 @@ export class ChecksService {
     invalidateReportsForTenant(tenantID);
   }
 
+  /**
+   * Fire-and-forget a SILENT data-only push so other open apps in the same
+   * tenant know the cash position moved and refetch their money queries. The
+   * actor is excluded (their own client already updated optimistically).
+   *
+   * Never awaited on the request path and never throws — push is an
+   * accelerator, not the source of truth.
+   */
+  private emitCashChanged(tenantID: string, actorUserId: string | null) {
+    if (!this.pushService) return;
+    this.pushService.sendDataToTenant(tenantID, actorUserId, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+      /* best-effort */
+    });
+  }
+
   private mapCheck(row: any) {
     return {
       id: row.id,
@@ -121,6 +167,18 @@ export class ChecksService {
     const page = parseInt(query.page) || 1;
     const limit = parseInt(query.limit) || 50;
     const offset = (page - 1) * limit;
+
+    // OPTIONAL keyset pagination. Presence of the `cursor` query param (even
+    // empty) switches to a (date DESC, id DESC) keyset instead of OFFSET —
+    // O(log N) at any depth, backed by idx_checks_tenant_date_id. PURELY
+    // ADDITIVE: with no `cursor` param the response and behaviour are
+    // byte-for-byte the classic offset path. First keyset page: pass an empty
+    // `?cursor=` to fetch the newest rows; then follow `nextCursor` (null =
+    // end of feed). The keyset response keeps the same `{ data, total, page,
+    // limit }` shape and just adds `nextCursor`, so offset clients are
+    // unaffected.
+    const keysetMode = query.cursor !== undefined;
+    const cursor = keysetMode ? parseCheckCursor(query.cursor) : null;
 
     let where = 'ch.tenant_id = $1';
     const params: any[] = [tenantID];
@@ -170,21 +228,51 @@ export class ChecksService {
       : await this.pool.query(`SELECT COUNT(*) as total FROM checks ch WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
-    params.push(limit, offset);
-    const { rows } = await this.pool.query(
-      `SELECT ch.*,
-              m.full_name as master_name, m.avatar as master_avatar,
-              cl.full_name as client_name, cl.phone as client_phone,
-              ca.plate_number, ca.make_model
-       FROM checks ch
-       LEFT JOIN users m ON m.id = ch.master_id
-       LEFT JOIN clients cl ON cl.id = ch.client_id
-       LEFT JOIN cars ca ON ca.id = ch.car_id
-       WHERE ${where}
-       ORDER BY ch.date DESC, ch.created_at DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
-      params,
-    );
+    let rows: any[];
+    if (keysetMode) {
+      // Keyset: order by the (date DESC, id DESC) index so Postgres seeks
+      // instead of sorting. A valid cursor adds the "older than" predicate;
+      // an empty cursor (first page) just takes the newest rows.
+      let keysetWhere = where;
+      if (cursor) {
+        keysetWhere += ` AND (ch.date, ch.id) < ($${idx}, $${idx + 1})`;
+        params.push(cursor.date, cursor.id);
+        idx += 2;
+      }
+      params.push(limit);
+      const res = await this.pool.query(
+        `SELECT ch.*,
+                m.full_name as master_name, m.avatar as master_avatar,
+                cl.full_name as client_name, cl.phone as client_phone,
+                ca.plate_number, ca.make_model
+         FROM checks ch
+         LEFT JOIN users m ON m.id = ch.master_id
+         LEFT JOIN clients cl ON cl.id = ch.client_id
+         LEFT JOIN cars ca ON ca.id = ch.car_id
+         WHERE ${keysetWhere}
+         ORDER BY ch.date DESC, ch.id DESC
+         LIMIT $${idx}`,
+        params,
+      );
+      rows = res.rows;
+    } else {
+      params.push(limit, offset);
+      const res = await this.pool.query(
+        `SELECT ch.*,
+                m.full_name as master_name, m.avatar as master_avatar,
+                cl.full_name as client_name, cl.phone as client_phone,
+                ca.plate_number, ca.make_model
+         FROM checks ch
+         LEFT JOIN users m ON m.id = ch.master_id
+         LEFT JOIN clients cl ON cl.id = ch.client_id
+         LEFT JOIN cars ca ON ca.id = ch.car_id
+         WHERE ${where}
+         ORDER BY ch.date DESC, ch.created_at DESC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        params,
+      );
+      rows = res.rows;
+    }
 
     const fields = parseFields(query.fields);
     const checks = rows.map((row) => {
@@ -204,6 +292,15 @@ export class ChecksService {
       // already has serviceTotal + productTotal in the row.
       return filterShape(ch as Record<string, unknown>, fields);
     });
+
+    // Keyset mode: emit the cursor for the NEXT page (the last row's
+    // date,id), or null when this page didn't fill `limit` (end of feed).
+    // Computed from the raw rows so it's independent of any ?fields= filter.
+    if (keysetMode) {
+      const last = rows.length === limit ? rows[rows.length - 1] : undefined;
+      const nextCursor = last ? encodeCheckCursor(last.date, last.id) : null;
+      return { data: checks, total, page, limit, nextCursor };
+    }
 
     return { data: checks, total, page, limit };
   }
@@ -554,6 +651,13 @@ export class ChecksService {
       // the dashboard reflects it immediately instead of up to 30s late.
       this.invalidateReports(tenantID);
 
+      // Live cross-device sync: a real (non-draft) sale moves the cash
+      // position — nudge every OTHER device in the tenant to refetch. Deferred
+      // drafts don't touch cash, so skip them to avoid silent-push noise.
+      if (!dto.isDeferred) {
+        this.emitCashChanged(tenantID, userID);
+      }
+
       const savedCheck = await this.getById(checkId, tenantID);
 
       // Push notification to master when assigned by someone else
@@ -577,10 +681,10 @@ export class ChecksService {
     }
   }
 
-  async update(id: string, tenantID: string, userRole: string, dto: any) {
+  async update(id: string, tenantID: string, userRole: string, dto: any, actorUserId: string | null = null) {
     // If services or products are provided, do a full re-edit (only for deferred checks)
     if (dto.services !== undefined || dto.products !== undefined) {
-      return this.fullUpdate(id, tenantID, userRole, dto);
+      return this.fullUpdate(id, tenantID, userRole, dto, actorUserId);
     }
 
     const sets: string[] = [];
@@ -632,6 +736,10 @@ export class ChecksService {
     // dashboard tiles — invalidate the tenant's report caches.
     this.invalidateReports(tenantID);
 
+    // Live cross-device sync: this edit moved the cash position — nudge every
+    // OTHER device in the tenant to refetch money queries (silent, data-only).
+    this.emitCashChanged(tenantID, actorUserId);
+
     // Push directors/admins when check is marked paid
     if (this.pushService && dto.paymentStatus === 'paid') {
       const updatedRow = rows[0];
@@ -656,7 +764,13 @@ export class ChecksService {
     return this.getById(id, tenantID);
   }
 
-  private async fullUpdate(id: string, tenantID: string, userRole: string, dto: any) {
+  private async fullUpdate(
+    id: string,
+    tenantID: string,
+    userRole: string,
+    dto: any,
+    actorUserId: string | null = null,
+  ) {
     // Verify check exists and is deferred
     const { rows: checkRows } = await this.pool.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2', [
       id,
@@ -870,6 +984,9 @@ export class ChecksService {
 
       await client.query('COMMIT');
       this.invalidateReports(tenantID);
+      // Re-editing a check's lines (and/or closing a deferred draft) moves the
+      // cash position — nudge other devices to refetch (silent, data-only).
+      this.emitCashChanged(tenantID, actorUserId);
       return this.getById(id, tenantID);
     } catch (err) {
       await client.query('ROLLBACK');

@@ -43,6 +43,13 @@ export interface ChecksParams extends PaginationParams {
   dateFrom?: string;
   dateTo?: string;
   retail?: string;
+  /**
+   * OPTIONAL keyset cursor (opaque, from a previous response's `nextCursor`).
+   * Presence switches the journal to keyset pagination — the offset
+   * `{ page, limit }` path is untouched when this is omitted. Pass an empty
+   * string to fetch the first keyset page (newest checks).
+   */
+  cursor?: string;
 }
 
 export interface DateRangeParams {

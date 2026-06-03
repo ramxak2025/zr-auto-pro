@@ -363,6 +363,13 @@ export interface PaginatedResponse<T> {
   total: number;
   page: number;
   limit: number;
+  /**
+   * OPTIONAL keyset cursor for the NEXT page. Only present on endpoints that
+   * support keyset pagination (currently the checks journal) AND only when the
+   * caller requested it via a `cursor` param. `null` means end-of-feed.
+   * Offset-only callers never see this field — it stays undefined.
+   */
+  nextCursor?: string | null;
 }
 
 export interface FinancialReport {

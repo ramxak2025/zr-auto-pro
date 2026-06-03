@@ -1,13 +1,24 @@
-import { Injectable, Inject, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  Optional,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { invalidateReportsForTenant } from '../common/reports-cache';
+import { PushService } from '../push/push.service';
 
 const PRIVILEGED_ROLES = new Set(['director', 'admin', 'superadmin']);
 
 @Injectable()
 export class ExpensesService {
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    @Optional() private pushService?: PushService,
+  ) {}
 
   // --- Categories ---
 
@@ -216,6 +227,15 @@ export class ExpensesService {
     // tenant's cached report aggregates. We invalidate on pending too; cheap
     // and keeps the alert set in sync once it's later approved.
     invalidateReportsForTenant(tenantID);
+
+    // Live cross-device sync: a new expense moves the cash position (or, when
+    // pending, the approval queue) — nudge every OTHER device in the tenant to
+    // refetch money queries. Silent, data-only, fire-and-forget after commit.
+    if (this.pushService) {
+      this.pushService.sendDataToTenant(tenantID, userID, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+        /* best-effort */
+      });
+    }
     return {
       id: r.id,
       categoryId: r.category_id,

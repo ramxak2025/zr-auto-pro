@@ -51,7 +51,7 @@ export class ChecksController {
 
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.checksService.update(id, user.tenantID, user.role, dto);
+    return this.checksService.update(id, user.tenantID, user.role, dto, user.userID);
   }
 
   @Roles('director', 'admin', 'superadmin')
