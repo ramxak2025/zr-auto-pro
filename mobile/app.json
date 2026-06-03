@@ -95,7 +95,8 @@
         {
           "android": {
             "usesCleartextTraffic": false,
-            "newArchEnabled": true
+            "newArchEnabled": true,
+            "minSdkVersion": 24
           },
           "ios": {
             "newArchEnabled": true
