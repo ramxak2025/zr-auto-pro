@@ -20,6 +20,7 @@ import {
   CalendarDays,
   Megaphone,
   Lock,
+  GraduationCap,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionApi } from '../api/services';
@@ -50,6 +51,7 @@ const navItems: NavItem[] = [
   { label: 'Расписание', path: '/schedule', icon: CalendarDays, featureKey: 'schedule_view' },
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports', featureKey: 'reports_view' },
   { label: 'Маркетинг', path: '/marketing', icon: Megaphone },
+  { label: 'База знаний', path: '/knowledge', icon: GraduationCap },
   { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management', featureKey: 'users_manage' },
 ];
 
@@ -65,7 +67,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
   { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
   { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
   { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
-  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow', '/schedule', '/tariff', '/clients/retail', '/marketing', '/calls', '/equipment'] },
+  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow', '/schedule', '/tariff', '/clients/retail', '/marketing', '/calls', '/equipment', '/knowledge'] },
 ];
 
 const roleBadgeColors: Record<string, string> = {

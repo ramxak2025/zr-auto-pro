@@ -26,6 +26,7 @@ import {
   createWarehousesApi,
   createWarrantyApi,
   createStockMovementsApi,
+  createKnowledgeApi,
 } from '../../../shared/api/createServices';
 
 // Re-export all API request types for any file that imports them from here
@@ -39,6 +40,7 @@ export type {
   CreatePaymentRequest, CreateScheduleRequest, UpdateScheduleRequest,
   CreateWorkModeRequest, UpdateWorkModeRequest, CreateTenantRequest,
   UpdateTenantRequest, CreatePlanRequest, UpdatePlanRequest,
+  KnowledgeCategoryInput, KnowledgeArticleInput, ListArticlesParams,
 } from '../../../shared/api/types';
 
 // --- Instantiate all API modules with the platform-specific axios instance ---
@@ -69,6 +71,7 @@ export const importsApi = createImportsApi(api);
 export const warehousesApi = createWarehousesApi(api);
 export const warrantyApi = createWarrantyApi(api);
 export const stockMovementsApi = createStockMovementsApi(api);
+export const knowledgeApi = createKnowledgeApi(api);
 
 // --- Platform-specific: Image compression + Upload (uses Canvas API) ---
 

@@ -21,6 +21,7 @@ import {
   Lock,
   Phone,
   Package,
+  BookOpen,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -140,6 +141,14 @@ const menuItems: MenuItem[] = [
     icon: Megaphone,
     color: 'bg-violet-50',
     iconColor: 'text-violet-600',
+  },
+  {
+    label: 'База знаний',
+    description: 'Статьи, инструкции и регламенты',
+    path: '/knowledge',
+    icon: BookOpen,
+    color: 'bg-sky-50',
+    iconColor: 'text-sky-600',
   },
   {
     label: 'Пользователи',
