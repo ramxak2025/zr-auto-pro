@@ -499,7 +499,9 @@ function ArticleReader({
   const isRegulation = article.type === 'regulation';
 
   return (
-    <div className="space-y-6">
+    // pb-24 on mobile keeps the regulation «Ознакомлен» button (and feedback
+    // buttons) clear of the floating bottom tab bar; md:pb-0 restores desktop.
+    <div className="space-y-6 pb-24 md:pb-0">
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <button onClick={onBack} className="btn-ghost btn-sm -ml-2">

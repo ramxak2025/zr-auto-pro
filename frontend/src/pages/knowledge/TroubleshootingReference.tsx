@@ -301,7 +301,9 @@ function TroubleshootingDetail({
   }
 
   return (
-    <div className="space-y-6">
+    // pb-24 on mobile keeps the bottom of the solution card / tags clear of the
+    // floating bottom tab bar; md:pb-0 restores desktop spacing.
+    <div className="space-y-6 pb-24 md:pb-0">
       <div className="flex items-center justify-between">
         <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
           <ArrowLeft className="h-4 w-4" /> К справочнику

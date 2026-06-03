@@ -261,7 +261,9 @@ function CourseDetail({
   const lessons = course.lessons ?? [];
 
   return (
-    <div className="space-y-6">
+    // pb-24 on mobile keeps the last lesson row / «Добавить урок» clear of the
+    // floating bottom tab bar; md:pb-0 restores desktop spacing.
+    <div className="space-y-6 pb-24 md:pb-0">
       {/* Toolbar */}
       <div className="flex items-center justify-between">
         <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
@@ -503,7 +505,9 @@ function LessonView({ courseId, lessonId, onBack }: { courseId: string; lessonId
   };
 
   return (
-    <div className="space-y-6">
+    // pb-24 on mobile keeps the «Сдать тест»/«Отметить как пройденный» button
+    // clear of the floating bottom tab bar; md:pb-0 restores desktop spacing.
+    <div className="space-y-6 pb-24 md:pb-0">
       <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
         <ArrowLeft className="h-4 w-4" /> К урокам
       </button>

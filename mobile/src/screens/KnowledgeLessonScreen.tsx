@@ -21,7 +21,6 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
@@ -37,6 +36,14 @@ import type { KnowledgeCourse, KnowledgeLesson, LessonProgress } from '../../../
 
 type ParamList = { KnowledgeLesson: { courseId: string; lessonId: string; title?: string } };
 
+/**
+ * Height of the sticky CTA band ABOVE the floating tab bar:
+ * button minHeight (52) + stickyWrap paddingTop (spacing[3] = 12) + breathing
+ * room. The scroll content reserves this on top of tabBarHeight so the last
+ * quiz/content never hides under the CTA.
+ */
+const STICKY_CTA_BAND = 52 + spacing[3] + spacing[3];
+
 interface QuizError {
   correct: number;
   total: number;
@@ -47,7 +54,6 @@ export default function KnowledgeLessonScreen() {
   const route = useRoute<RouteProp<ParamList, 'KnowledgeLesson'>>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
 
   const { courseId, lessonId } = route.params ?? ({} as ParamList['KnowledgeLesson']);
@@ -166,7 +172,9 @@ export default function KnowledgeLessonScreen() {
         <EmptyState icon="warning" title="Урок не найден" description="Возможно, он был удалён." />
       ) : (
         <ScrollView
-          contentContainerStyle={[styles.content, { paddingBottom: 96 + tabBarHeight + spacing[4] }]}
+          // Reserve room for the floating tab bar AND the sticky CTA, which
+          // itself sits a full tabBarHeight above the bar.
+          contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + STICKY_CTA_BAND + tabBarHeight + spacing[4] }]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
@@ -255,13 +263,14 @@ export default function KnowledgeLessonScreen() {
         </ScrollView>
       )}
 
-      {/* Sticky CTA */}
+      {/* Sticky CTA — floats a full tabBarHeight above the bar so the floating
+          Liquid-Glass tab bar never overlaps it (visible gap). */}
       {lesson ? (
         <View
           style={[
             styles.stickyWrap,
             {
-              paddingBottom: Math.max(insets.bottom, spacing[3]),
+              paddingBottom: tabBarHeight,
               backgroundColor: palette.bg.elevated,
               borderTopColor: palette.border.subtle,
             },

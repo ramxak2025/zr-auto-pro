@@ -43,6 +43,14 @@ import type { KnowledgeArticle, KnowledgeAcksResponse, ArticleFeedbackResult } f
 
 type ParamList = { KnowledgeArticle: { id: string; title?: string } };
 
+/**
+ * Height of the sticky ack CTA band ABOVE the floating tab bar:
+ * button minHeight (52) + stickyWrap paddingTop (spacing[3] = 12) + a little
+ * breathing room. The scroll content reserves this on top of tabBarHeight so
+ * the last article content never hides under the CTA.
+ */
+const STICKY_CTA_BAND = 52 + spacing[3] + spacing[3];
+
 /** Per-article AsyncStorage key holding the regulation version this user acked. */
 const ackedVersionKey = (id: string) => `kb:ackedVersion:${id}`;
 
@@ -211,7 +219,9 @@ export default function KnowledgeArticleScreen() {
         <ScrollView
           contentContainerStyle={[
             styles.content,
-            { paddingBottom: (showStickyAck ? 96 : 0) + tabBarHeight + spacing[6] },
+            // Reserve room for the floating tab bar AND, when shown, the sticky
+            // ack CTA which itself sits a full tabBarHeight above the bar.
+            { paddingBottom: (showStickyAck ? tabBarHeight + STICKY_CTA_BAND : 0) + tabBarHeight + spacing[6] },
           ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -422,12 +432,13 @@ export default function KnowledgeArticleScreen() {
         </ScrollView>
       ) : null}
 
-      {/* Sticky «Ознакомлен» CTA */}
+      {/* Sticky «Ознакомлен» CTA — floats a full tabBarHeight above the bar so
+          the floating Liquid-Glass tab bar never overlaps it (visible gap). */}
       {showStickyAck ? (
         <View
           style={[
             styles.stickyWrap,
-            { paddingBottom: Math.max(insets.bottom, spacing[3]), backgroundColor: palette.bg.elevated, borderTopColor: palette.border.subtle },
+            { paddingBottom: tabBarHeight, backgroundColor: palette.bg.elevated, borderTopColor: palette.border.subtle },
           ]}
         >
           <Pressable
