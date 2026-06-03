@@ -23,6 +23,7 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
@@ -38,9 +39,12 @@ import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
 import { formatDateShort } from '../../../shared/utils/formatters';
 import { UserRole } from '../../../shared/types';
-import type { KnowledgeArticle, KnowledgeAcksResponse } from '../../../shared/types';
+import type { KnowledgeArticle, KnowledgeAcksResponse, ArticleFeedbackResult } from '../../../shared/types';
 
 type ParamList = { KnowledgeArticle: { id: string; title?: string } };
+
+/** Per-article AsyncStorage key holding the regulation version this user acked. */
+const ackedVersionKey = (id: string) => `kb:ackedVersion:${id}`;
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes <= 0) return '';
@@ -61,6 +65,9 @@ export default function KnowledgeArticleScreen() {
 
   const id = route.params?.id;
   const [acksOpen, setAcksOpen] = React.useState(false);
+  // The regulation version this user previously acknowledged (from AsyncStorage).
+  // `undefined` = not yet read; `null` = never acked locally.
+  const [ackedVersion, setAckedVersion] = React.useState<number | null | undefined>(undefined);
 
   const { data: article, isLoading, isError, refetch } = useQuery<KnowledgeArticle>({
     queryKey: ['knowledge-article', id],
@@ -71,10 +78,29 @@ export default function KnowledgeArticleScreen() {
 
   const isRegulation = article?.type === 'regulation';
 
+  // Read the locally-remembered acked version once we know the id.
+  React.useEffect(() => {
+    let alive = true;
+    AsyncStorage.getItem(ackedVersionKey(id))
+      .then((raw) => {
+        if (!alive) return;
+        const parsed = raw != null ? Number(raw) : NaN;
+        setAckedVersion(Number.isFinite(parsed) ? parsed : null);
+      })
+      .catch(() => alive && setAckedVersion(null));
+    return () => {
+      alive = false;
+    };
+  }, [id]);
+
   const ackMutation = useMutation({
     mutationFn: async () => (await knowledgeApi.acknowledge(id)).data,
-    onSuccess: () => {
+    onSuccess: (res) => {
       haptic('success');
+      // Remember which version we just acked, so a later version bump is detected.
+      const acked = res?.version ?? article?.version ?? 1;
+      setAckedVersion(acked);
+      AsyncStorage.setItem(ackedVersionKey(id), String(acked)).catch(() => {});
       // Optimistically flip the local cache to acknowledged.
       queryClient.setQueryData<KnowledgeArticle>(['knowledge-article', id], (prev) =>
         prev ? { ...prev, acknowledged: true } : prev,
@@ -84,6 +110,45 @@ export default function KnowledgeArticleScreen() {
       queryClient.invalidateQueries({ queryKey: ['knowledge-article-acks', id] });
     },
   });
+
+  // ── Feedback («Было полезно?») ──────────────────────────────────────────
+  // Local mirror of the helpful/not-helpful counts + this user's vote, seeded
+  // from the article and updated optimistically on tap.
+  const [feedback, setFeedback] = React.useState<{
+    helpfulCount: number;
+    notHelpfulCount: number;
+    myFeedback?: boolean;
+  } | null>(null);
+
+  React.useEffect(() => {
+    if (article) {
+      setFeedback({
+        helpfulCount: article.helpfulCount ?? 0,
+        notHelpfulCount: article.notHelpfulCount ?? 0,
+        myFeedback: article.myFeedback,
+      });
+    }
+  }, [article?.id, article?.helpfulCount, article?.notHelpfulCount, article?.myFeedback]);
+
+  const feedbackMutation = useMutation({
+    mutationFn: async (helpful: boolean) => (await knowledgeApi.articleFeedback(id, helpful)).data,
+    onSuccess: (res: ArticleFeedbackResult) => {
+      haptic('select');
+      setFeedback({ helpfulCount: res.helpfulCount, notHelpfulCount: res.notHelpfulCount, myFeedback: res.myFeedback });
+    },
+    onError: () => haptic('error'),
+  });
+
+  // Regulation re-acknowledgment: the backend already returns acknowledged=false
+  // when the current version is newer than what the user acked. If we also have
+  // a locally-remembered older acked version, we know it's specifically an
+  // *update* (vs. a first-time ack) and can say so.
+  const currentVersion = article?.version ?? 1;
+  const regulationUpdated =
+    isRegulation &&
+    article?.acknowledged === false &&
+    ackedVersion != null &&
+    ackedVersion < currentVersion;
 
   // Acks list (manager, regulation only) — lazy: only fetched when modal opens.
   const { data: acks } = useQuery<KnowledgeAcksResponse>({
@@ -174,6 +239,22 @@ export default function KnowledgeArticleScreen() {
                 </Text>
               </View>
             ) : null}
+            {article.mandatory ? (
+              <View style={[styles.typeChip, { backgroundColor: colors.red[50] }]}>
+                <Ionicons name="alert-circle" size={12} color={colors.red[600]} />
+                <Text variant="caption" style={{ color: colors.red[700], fontWeight: '700' }}>
+                  Обязательно
+                </Text>
+              </View>
+            ) : null}
+            {article.dueDate ? (
+              <View style={[styles.typeChip, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="time-outline" size={12} color={palette.text.secondary} />
+                <Text variant="caption" style={{ color: palette.text.secondary, fontWeight: '700' }}>
+                  Срок: {formatDateShort(article.dueDate)}
+                </Text>
+              </View>
+            ) : null}
             {article.categoryName ? (
               <Text variant="footnote" style={{ color: palette.text.secondary }}>
                 {article.categoryName}
@@ -182,7 +263,25 @@ export default function KnowledgeArticleScreen() {
             <Text variant="footnote" style={{ color: palette.text.tertiary }}>
               Обновлено {formatDateShort(article.updatedAt)}
             </Text>
+            {typeof article.viewCount === 'number' && article.viewCount > 0 ? (
+              <View style={styles.viewCount}>
+                <Ionicons name="eye-outline" size={13} color={palette.text.tertiary} />
+                <Text variant="caption" style={{ color: palette.text.tertiary }}>
+                  {article.viewCount}
+                </Text>
+              </View>
+            ) : null}
           </View>
+
+          {/* Regulation updated — re-acknowledge */}
+          {regulationUpdated ? (
+            <View style={[styles.updatedBanner, { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }]}>
+              <Ionicons name="refresh-circle" size={18} color={colors.amber[600]} />
+              <Text variant="footnote" style={{ flex: 1, color: colors.amber[800], fontWeight: '600' }}>
+                Регламент обновлён — ознакомьтесь заново.
+              </Text>
+            </View>
+          ) : null}
 
           {/* Already-acknowledged confirmation (regulation) */}
           {isRegulation && article.acknowledged ? (
@@ -203,6 +302,61 @@ export default function KnowledgeArticleScreen() {
                 Содержимое не добавлено.
               </Text>
             )}
+          </View>
+
+          {/* Было полезно? */}
+          <View style={[styles.feedbackCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <Text variant="bodyEmph" style={{ color: palette.text.primary }}>
+              Было полезно?
+            </Text>
+            <View style={styles.feedbackBtns}>
+              <Pressable
+                onPress={() => feedbackMutation.mutate(true)}
+                disabled={feedbackMutation.isPending}
+                style={[
+                  styles.feedbackBtn,
+                  {
+                    backgroundColor: feedback?.myFeedback === true ? colors.green[50] : palette.bg.muted,
+                    borderColor: feedback?.myFeedback === true ? colors.green[300] : 'transparent',
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={feedback?.myFeedback === true ? 'thumbs-up' : 'thumbs-up-outline'}
+                  size={18}
+                  color={feedback?.myFeedback === true ? colors.green[600] : palette.text.secondary}
+                />
+                <Text
+                  variant="footnote"
+                  style={{ color: feedback?.myFeedback === true ? colors.green[700] : palette.text.secondary, fontWeight: '600' }}
+                >
+                  {feedback?.helpfulCount ?? 0}
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => feedbackMutation.mutate(false)}
+                disabled={feedbackMutation.isPending}
+                style={[
+                  styles.feedbackBtn,
+                  {
+                    backgroundColor: feedback?.myFeedback === false ? colors.red[50] : palette.bg.muted,
+                    borderColor: feedback?.myFeedback === false ? colors.red[200] : 'transparent',
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={feedback?.myFeedback === false ? 'thumbs-down' : 'thumbs-down-outline'}
+                  size={18}
+                  color={feedback?.myFeedback === false ? colors.red[600] : palette.text.secondary}
+                />
+                <Text
+                  variant="footnote"
+                  style={{ color: feedback?.myFeedback === false ? colors.red[700] : palette.text.secondary, fontWeight: '600' }}
+                >
+                  {feedback?.notHelpfulCount ?? 0}
+                </Text>
+              </Pressable>
+            </View>
           </View>
 
           {/* Attachments */}
@@ -286,7 +440,7 @@ export default function KnowledgeArticleScreen() {
           >
             <Ionicons name="checkmark-circle" size={20} color={colors.white} />
             <Text variant="callout" color={colors.white}>
-              {ackMutation.isPending ? 'Подтверждаем…' : 'Ознакомлен'}
+              {ackMutation.isPending ? 'Подтверждаем…' : regulationUpdated ? 'Ознакомиться заново' : 'Ознакомлен'}
             </Text>
           </Pressable>
         </View>
@@ -373,6 +527,8 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
 
+  viewCount: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+
   ackDone: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -382,6 +538,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[3],
     marginBottom: spacing[3],
+  },
+
+  updatedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    marginBottom: spacing[3],
+  },
+
+  feedbackCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3.5],
+    marginTop: spacing[5],
+  },
+  feedbackBtns: { flexDirection: 'row', gap: spacing[2] },
+  feedbackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    minWidth: 56,
+    justifyContent: 'center',
   },
 
   bodyWrap: { marginTop: spacing[1] },

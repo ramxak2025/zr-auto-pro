@@ -36,7 +36,7 @@ import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
-import type { KnowledgeArticle, KnowledgeCategory } from '../../../shared/types';
+import type { KnowledgeArticle, KnowledgeCategory, KnowledgeCourse } from '../../../shared/types';
 
 const STALE = 60_000;
 
@@ -57,6 +57,20 @@ export default function KnowledgeBaseScreen() {
     queryFn: async () => (await knowledgeApi.listCategories()).data,
     staleTime: 5 * 60_000,
   });
+
+  // ── Courses (for the «Учебный центр» entry's overall progress) ──────────
+  const { data: courses } = useQuery<KnowledgeCourse[]>({
+    queryKey: ['knowledge-courses'],
+    queryFn: async () => (await knowledgeApi.listCourses()).data,
+    staleTime: STALE,
+  });
+  const courseProgress = React.useMemo(() => {
+    if (!courses || courses.length === 0) return null;
+    const totalLessons = courses.reduce((sum, c) => sum + c.lessonCount, 0);
+    const doneLessons = courses.reduce((sum, c) => sum + c.completedLessons, 0);
+    if (doneLessons === 0) return null;
+    return totalLessons > 0 ? Math.round((doneLessons / totalLessons) * 100) : 0;
+  }, [courses]);
 
   // ── Pending regulations badge ───────────────────────────────────────────
   const { data: pending } = useQuery<{ count: number }>({
@@ -106,6 +120,16 @@ export default function KnowledgeBaseScreen() {
   const openRegulations = React.useCallback(() => {
     haptic('tap');
     navigation.navigate('KnowledgeCategory', { type: 'regulation', name: 'Регламенты' });
+  }, [navigation]);
+
+  const openCourses = React.useCallback(() => {
+    haptic('tap');
+    navigation.navigate('KnowledgeCourseList');
+  }, [navigation]);
+
+  const openTroubleshooting = React.useCallback(() => {
+    haptic('tap');
+    navigation.navigate('KnowledgeTroubleshooting');
   }, [navigation]);
 
   const headerTrailing = isManager ? (
@@ -184,6 +208,51 @@ export default function KnowledgeBaseScreen() {
                 <Ionicons name="chevron-forward" size={18} color={colors.amber[600]} />
               </Pressable>
             ) : null}
+
+            {/* ── Учебный центр + Справочник неисправностей ────────────── */}
+            <View style={styles.featureRow}>
+              <Pressable
+                onPress={openCourses}
+                style={({ pressed }) => [
+                  styles.feature,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, opacity: pressed ? 0.8 : 1 },
+                ]}
+              >
+                <View style={[styles.featureIcon, { backgroundColor: palette.accent.primarySoft }]}>
+                  <Ionicons name="school" size={22} color={palette.accent.primary} />
+                </View>
+                <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
+                  Учебный центр
+                </Text>
+                {courseProgress !== null ? (
+                  <Text variant="caption" style={{ color: palette.accent.primary, fontWeight: '600' }}>
+                    Пройдено {courseProgress}%
+                  </Text>
+                ) : (
+                  <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
+                    Курсы и аттестация
+                  </Text>
+                )}
+              </Pressable>
+
+              <Pressable
+                onPress={openTroubleshooting}
+                style={({ pressed }) => [
+                  styles.feature,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, opacity: pressed ? 0.8 : 1 },
+                ]}
+              >
+                <View style={[styles.featureIcon, { backgroundColor: colors.amber[50] }]}>
+                  <Ionicons name="construct" size={22} color={colors.amber[600]} />
+                </View>
+                <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
+                  Неисправности
+                </Text>
+                <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
+                  Симптом → решение
+                </Text>
+              </Pressable>
+            </View>
 
             {/* ── Закреплённые ─────────────────────────────────────────── */}
             {pinned && pinned.length > 0 ? (
@@ -297,6 +366,25 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  featureRow: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[5] },
+  feature: {
+    flex: 1,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3.5],
+    gap: spacing[2],
+    minHeight: 112,
+  },
+  featureIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[1],
   },
 
   tileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },

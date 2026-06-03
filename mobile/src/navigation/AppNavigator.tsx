@@ -28,6 +28,13 @@ import KnowledgeBaseScreen from '../screens/KnowledgeBaseScreen';
 import KnowledgeCategoryScreen from '../screens/KnowledgeCategoryScreen';
 import KnowledgeArticleScreen from '../screens/KnowledgeArticleScreen';
 import KnowledgeEditorScreen from '../screens/KnowledgeEditorScreen';
+import KnowledgeCourseListScreen from '../screens/KnowledgeCourseListScreen';
+import KnowledgeCourseDetailScreen from '../screens/KnowledgeCourseDetailScreen';
+import KnowledgeLessonScreen from '../screens/KnowledgeLessonScreen';
+import KnowledgeCourseEditorScreen from '../screens/KnowledgeCourseEditorScreen';
+import KnowledgeTroubleshootingScreen from '../screens/KnowledgeTroubleshootingScreen';
+import KnowledgeTroubleshootingDetailScreen from '../screens/KnowledgeTroubleshootingDetailScreen';
+import KnowledgeTroubleshootingEditorScreen from '../screens/KnowledgeTroubleshootingEditorScreen';
 import MarketingScreen from '../screens/MarketingScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
@@ -208,6 +215,13 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="KnowledgeCategory" component={KnowledgeCategoryScreen} />
       <MoreStack.Screen name="KnowledgeArticle" component={KnowledgeArticleScreen} />
       <MoreStack.Screen name="KnowledgeEditor" component={KnowledgeEditorScreen} />
+      <MoreStack.Screen name="KnowledgeCourseList" component={KnowledgeCourseListScreen} />
+      <MoreStack.Screen name="KnowledgeCourseDetail" component={KnowledgeCourseDetailScreen} />
+      <MoreStack.Screen name="KnowledgeLesson" component={KnowledgeLessonScreen} />
+      <MoreStack.Screen name="KnowledgeCourseEditor" component={KnowledgeCourseEditorScreen} />
+      <MoreStack.Screen name="KnowledgeTroubleshooting" component={KnowledgeTroubleshootingScreen} />
+      <MoreStack.Screen name="KnowledgeTroubleshootingDetail" component={KnowledgeTroubleshootingDetailScreen} />
+      <MoreStack.Screen name="KnowledgeTroubleshootingEditor" component={KnowledgeTroubleshootingEditorScreen} />
       <MoreStack.Screen name="Cars" component={gated('clients_view', CarsScreen)} />
       <MoreStack.Screen name="Services" component={gated('services_view', ServicesScreen)} />
       <MoreStack.Screen name="Suppliers" component={gated('suppliers_view', SuppliersScreen)} />

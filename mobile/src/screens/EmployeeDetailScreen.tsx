@@ -53,7 +53,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   RouteProp,
   useFocusEffect,
@@ -74,8 +74,10 @@ import { haptic } from '../platform/haptics';
 import { Text } from '../platform/Typography';
 import type {
   Check,
+  CourseProgress,
   EmployeeFullProfile,
   EmployeeAchievement,
+  KnowledgeCourse,
   RegulationUserSummary,
   TodayEmployeeStatus,
   User,
@@ -513,6 +515,14 @@ export default function EmployeeDetailScreen() {
           <Card palette={palette}>
             <CardHeader icon="shield-checkmark-outline" title="Регламенты" palette={palette} />
             <RegulationsSummary employeeId={id} accent={rankInfo.accent} palette={palette} />
+          </Card>
+        ) : null}
+
+        {/* ── ЕГО ОБУЧЕНИЕ (manager-only, lazy) ───────────────────────── */}
+        {isOwnerLike ? (
+          <Card palette={palette}>
+            <CardHeader icon="school-outline" title="Обучение" palette={palette} />
+            <LearningSummary employeeId={id} accent={rankInfo.accent} palette={palette} />
           </Card>
         ) : null}
 
@@ -1158,6 +1168,92 @@ function RegulationsSummary({
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+//  ЕГО ОБУЧЕНИЕ — lazy. How many courses this employee completed + a per-course
+//  progress line. Manager view only (gated by the caller). Minimal: we read the
+//  course list (cached) then one progress query per course.
+// ──────────────────────────────────────────────────────────────────────────
+
+function LearningSummary({
+  employeeId,
+  accent,
+  palette,
+}: {
+  employeeId: string;
+  accent: string;
+  palette: Palette;
+}) {
+  const { data: courses, isLoading } = useQuery<KnowledgeCourse[]>({
+    queryKey: ['knowledge-courses'],
+    queryFn: async () => (await knowledgeApi.listCourses()).data,
+    staleTime: 60_000,
+  });
+
+  const progressQueries = useQueries({
+    queries: (courses ?? []).map((c) => ({
+      queryKey: ['knowledge-course-progress', c.id, employeeId],
+      queryFn: async () => (await knowledgeApi.courseProgress(c.id, employeeId)).data,
+      staleTime: 60_000,
+    })),
+  });
+
+  if (isLoading && !courses) {
+    return <Skeleton height={40} radius={borderRadius.lg} />;
+  }
+
+  if (!courses || courses.length === 0) {
+    return <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>Курсов пока нет.</Text>;
+  }
+
+  const rows = courses.map((c, i) => {
+    const p = progressQueries[i]?.data as CourseProgress | undefined;
+    return { course: c, percent: p?.percent ?? 0, completed: !!p?.completedAt };
+  });
+  const completedCount = rows.filter((r) => r.completed).length;
+
+  return (
+    <View style={{ gap: spacing[2.5] }}>
+      <View style={styles.regSummaryRow}>
+        <Text style={[styles.regSummaryValue, { color: palette.text.primary }]}>
+          {completedCount}/{courses.length}
+        </Text>
+        <Text
+          style={[
+            styles.regSummaryLabel,
+            { color: completedCount >= courses.length ? colors.green[600] : palette.text.secondary },
+          ]}
+        >
+          {completedCount === courses.length ? 'все курсы пройдены' : 'курсов пройдено'}
+        </Text>
+      </View>
+      <View style={{ gap: spacing[2] }}>
+        {rows.slice(0, 4).map((r) => {
+          const ratio = Math.max(0, Math.min(1, r.percent / 100));
+          const barColor = r.completed ? colors.green[500] : accent;
+          return (
+            <View key={r.course.id} style={{ gap: 4 }}>
+              <View style={styles.learnRowTop}>
+                <Text style={[styles.learnCourseTitle, { color: palette.text.secondary }]} numberOfLines={1}>
+                  {r.course.title}
+                </Text>
+                <Text style={[styles.learnPercent, { color: r.completed ? colors.green[600] : palette.text.tertiary }]}>
+                  {r.completed ? 'пройден' : `${r.percent}%`}
+                </Text>
+              </View>
+              <View style={[styles.regSummaryTrack, { backgroundColor: palette.bg.muted }]}>
+                <View style={[styles.regSummaryFill, { width: `${ratio * 100}%`, backgroundColor: barColor }]} />
+              </View>
+            </View>
+          );
+        })}
+        {rows.length > 4 ? (
+          <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>и ещё {rows.length - 4}…</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 //  Achievements Modal
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -1457,6 +1553,9 @@ const styles = StyleSheet.create({
   regSummaryLabel: { fontSize: 13, fontWeight: '500' },
   regSummaryTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
   regSummaryFill: { height: 6, borderRadius: 3 },
+  learnRowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[2] },
+  learnCourseTitle: { flex: 1, fontSize: 13, fontWeight: '500' },
+  learnPercent: { fontSize: 12, fontWeight: '600' },
 
   // ── Stat tiles (показатели) ──────────────────────────────────────────
   statsGrid: {
