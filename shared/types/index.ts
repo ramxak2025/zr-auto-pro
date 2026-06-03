@@ -1013,3 +1013,78 @@ export interface JournalDoc {
   badgeColor: string;
   payeeName?: string;
 }
+
+// ───────────────────────────────────────────────────────────────────────
+//  Knowledge Base / «База знаний» (063_knowledge_base)
+//  Searchable KB (categories + articles + attachments) + regulations with
+//  per-user acknowledgment ("Ознакомлен"). All tenant-scoped.
+// ───────────────────────────────────────────────────────────────────────
+
+export interface KnowledgeCategory {
+  id: string;
+  name: string;
+  /** Ionicons name for the UI (e.g. 'document-text-outline'). */
+  icon?: string;
+  sortOrder: number;
+}
+
+export interface KnowledgeAttachment {
+  url: string;
+  name: string;
+  size?: number;
+}
+
+/** 'article' = free-form KB article; 'regulation' = requires acknowledgment. */
+export type KnowledgeArticleType = 'article' | 'regulation';
+
+/**
+ * Full article shape. The slim list endpoint (`listArticles`) returns a subset:
+ * id, title, type, categoryId, pinned, coverImage, updatedAt, excerpt — the
+ * heavy fields (body, attachments, acknowledged) are populated only by
+ * `getArticle`. Both are typed as Partial-friendly via optional fields here.
+ */
+export interface KnowledgeArticle {
+  id: string;
+  categoryId?: string;
+  /** Present on the full article (getArticle), omitted from the slim list. */
+  categoryName?: string;
+  type: KnowledgeArticleType;
+  title: string;
+  /** Markdown. Empty string on the slim list; full text on getArticle. */
+  body: string;
+  /** Short plain-text preview derived from the body (present on both list + detail). */
+  excerpt?: string;
+  coverImage?: string;
+  /** Empty array on the slim list; populated on getArticle. */
+  attachments: KnowledgeAttachment[];
+  pinned: boolean;
+  published: boolean;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  /** For type='regulation' on getArticle: whether THIS user has acked it. */
+  acknowledged?: boolean;
+}
+
+export interface KnowledgeAck {
+  userId: string;
+  userName: string;
+  acknowledgedAt: string;
+}
+
+/** Response of GET /knowledge/articles/:id/acks (manager). */
+export interface KnowledgeAcksResponse {
+  /** Users who acknowledged, newest first. */
+  acknowledged: KnowledgeAck[];
+  /** Active tenant employees who have NOT acknowledged yet. */
+  pending: { userId: string; userName: string }[];
+  acknowledgedCount: number;
+  /** acknowledged + pending — drives "8/10 ознакомлены". */
+  totalAudience: number;
+}
+
+/** Response of GET /knowledge/regulations/summary-for-user/:userId (manager). */
+export interface RegulationUserSummary {
+  total: number;
+  acknowledged: number;
+}

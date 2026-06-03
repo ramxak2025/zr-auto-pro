@@ -2,7 +2,7 @@
 //  Shared API Request/Response types
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import type { User } from '../types';
+import type { User, KnowledgeArticleType, KnowledgeAttachment } from '../types';
 
 export interface LoginRequest {
   phone: string;
@@ -481,4 +481,37 @@ export interface ImportConfirmResponse {
   reusedClientIds: string[];
   /** Rows that were skipped despite confirmation (e.g. plate stolen between preview and confirm). */
   skipped: Array<{ sourceRow: number; reason: ImportIssueKind; message: string }>;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Knowledge Base requests (063_knowledge_base)
+// ───────────────────────────────────────────────────────────────────────
+
+export interface KnowledgeCategoryInput {
+  name: string;
+  /** Ionicons name for the UI. */
+  icon?: string | null;
+  sortOrder?: number;
+}
+
+export interface KnowledgeArticleInput {
+  title: string;
+  /** Markdown body. */
+  body?: string;
+  type?: KnowledgeArticleType;
+  /** Pass null to clear the category on update. */
+  categoryId?: string | null;
+  coverImage?: string | null;
+  attachments?: KnowledgeAttachment[];
+  pinned?: boolean;
+  published?: boolean;
+}
+
+export interface ListArticlesParams {
+  categoryId?: string;
+  type?: KnowledgeArticleType;
+  /** Free-text — matched against title + body via pg_trgm. */
+  search?: string;
+  /** Send 'true' to return only pinned articles. */
+  pinned?: 'true' | 'false';
 }

@@ -30,6 +30,7 @@ import type {
   WarehouseSummary, VelocityRow, ReorderItem, CategoryMargin, TopProduct,
   ActiveWarranty, WarrantyActive, ClientSources, PerCarChecks, SalaryPremium, SalaryPenalty,
   ExpenseCategory, JournalDoc,
+  KnowledgeCategory, KnowledgeArticle, KnowledgeAcksResponse, RegulationUserSummary,
 } from '../types';
 import type {
   LoginRequest, LoginResponse, RegisterRequest, PaginationParams, ChecksParams, CarsQuery,
@@ -41,6 +42,7 @@ import type {
   CreateWorkModeRequest, UpdateWorkModeRequest, CreateTenantRequest, UpdateTenantRequest,
   CreatePlanRequest, UpdatePlanRequest,
   ImportPreviewRequest, ImportPreviewResponse, ImportConfirmRequest, ImportConfirmResponse,
+  KnowledgeCategoryInput, KnowledgeArticleInput, ListArticlesParams,
 } from './types';
 
 export function createAuthApi(api: HttpClient) {
@@ -796,5 +798,43 @@ export function createImportsApi(api: HttpClient) {
     /** Commits the import in a transaction. Re-runs validation server-side. */
     confirmClientsCars: (data: ImportConfirmRequest) =>
       api.post<ImportConfirmResponse>('/imports/clients-cars/confirm', data, longTimeout),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Knowledge Base / «База знаний» (063_knowledge_base)
+//  READ: any authenticated user. WRITE + acks listing: manager roles only.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createKnowledgeApi(api: HttpClient) {
+  return {
+    // Categories
+    listCategories: () => api.get<KnowledgeCategory[]>('/knowledge/categories'),
+    createCategory: (data: KnowledgeCategoryInput) =>
+      api.post<KnowledgeCategory>('/knowledge/categories', data),
+    updateCategory: (id: string, data: Partial<KnowledgeCategoryInput>) =>
+      api.patch<KnowledgeCategory>(`/knowledge/categories/${id}`, data),
+    deleteCategory: (id: string) => api.delete<{ message: string }>(`/knowledge/categories/${id}`),
+
+    // Articles — list is slim (no body/attachments), getArticle is full.
+    listArticles: (params?: ListArticlesParams) =>
+      api.get<KnowledgeArticle[]>('/knowledge/articles', { params }),
+    getArticle: (id: string) => api.get<KnowledgeArticle>(`/knowledge/articles/${id}`),
+    createArticle: (data: KnowledgeArticleInput) =>
+      api.post<KnowledgeArticle>('/knowledge/articles', data),
+    updateArticle: (id: string, data: KnowledgeArticleInput) =>
+      api.patch<KnowledgeArticle>(`/knowledge/articles/${id}`, data),
+    deleteArticle: (id: string) => api.delete<{ message: string }>(`/knowledge/articles/${id}`),
+
+    // Acknowledgments
+    acknowledge: (id: string) =>
+      api.post<{ acknowledgedAt: string | null }>(`/knowledge/articles/${id}/ack`),
+    listAcks: (id: string) => api.get<KnowledgeAcksResponse>(`/knowledge/articles/${id}/acks`),
+
+    // Regulation badge counters
+    regulationsPendingCount: () =>
+      api.get<{ count: number }>('/knowledge/regulations/pending-count'),
+    regulationSummaryForUser: (userId: string) =>
+      api.get<RegulationUserSummary>(`/knowledge/regulations/summary-for-user/${userId}`),
   };
 }
