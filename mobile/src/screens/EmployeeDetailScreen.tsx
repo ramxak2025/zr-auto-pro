@@ -71,6 +71,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
+import { PressableScale } from '../platform/PressableScale';
 import { Text } from '../platform/Typography';
 import type {
   Check,
@@ -311,6 +312,28 @@ export default function EmployeeDetailScreen() {
   }
 
   const { profile, stats, lifetime, yearHeatmap, achievements } = full;
+
+  // ── Dismissed / purged read-only guard ───────────────────────────────
+  // The row still resolves so historical чеки / смены keep the name, and a
+  // deep link or stale reference can land here even though active lists
+  // exclude dismissed users server-side. When that happens we DON'T render
+  // the full editable card — instead a read-only «Уволен» state with no
+  // edit / award / actions. (`dismissedAt` / `purgedAt` live on the User
+  // record, not the profile payload.)
+  if (userRecord && (userRecord.dismissedAt || userRecord.purgedAt)) {
+    return (
+      <DismissedReadOnly
+        navigation={navigation}
+        palette={palette}
+        fullName={profile.fullName || userRecord.fullName}
+        roleLabel={roleLabels[profile.role] || profile.role}
+        photoUrl={profile.photoUrl ?? null}
+        dismissedAt={userRecord.dismissedAt ?? null}
+        purged={!!userRecord.purgedAt}
+        canManage={isOwnerLike}
+      />
+    );
+  }
 
   // ── Rank derivation ──────────────────────────────────────────────────
   const rankInfo = rankFromLifetime(lifetime.totalRevenue, lifetime.totalChecks);
@@ -610,6 +633,103 @@ export default function EmployeeDetailScreen() {
         }}
         palette={palette}
       />
+    </View>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+//  Dismissed / purged read-only state
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * DismissedReadOnly — shown when the loaded user is dismissed (in «Уволенные»)
+ * or purged. Recognisable (avatar + name + role) but NON-editable: no rank
+ * hero, no stats / salary / inventory cards, no edit / award menu, no
+ * quick-actions. Managers get a hint that the employee can be restored from
+ * «Уволенные» (dismissed-but-not-purged only).
+ */
+function DismissedReadOnly({
+  navigation,
+  palette,
+  fullName,
+  roleLabel,
+  photoUrl,
+  dismissedAt,
+  purged,
+  canManage,
+}: {
+  navigation: any;
+  palette: ReturnType<typeof useColors>;
+  fullName: string;
+  roleLabel: string;
+  photoUrl: string | null;
+  dismissedAt: string | null;
+  purged: boolean;
+  canManage: boolean;
+}) {
+  const dateStr = dismissedAt
+    ? new Date(dismissedAt).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' })
+    : null;
+
+  return (
+    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+      <IosScreenHeader title="Сотрудник" onBack={() => navigation.goBack()} />
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View style={styles.dismissedHeadRow}>
+            <View style={styles.dismissedAvatarWrap}>
+              {photoUrl ? (
+                <PhotoCircle url={photoUrl} size={64} />
+              ) : (
+                <View style={[styles.dismissedAvatar, { backgroundColor: palette.bg.muted }]}>
+                  <Text style={[styles.dismissedInitials, { color: palette.text.secondary }]}>
+                    {getInitials(fullName)}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.dismissedName, { color: palette.text.primary }]} numberOfLines={2}>
+                {fullName || '—'}
+              </Text>
+              <Text style={[styles.dismissedRole, { color: palette.text.secondary }]} numberOfLines={1}>
+                {roleLabel}
+              </Text>
+              <View style={[styles.dismissedPill, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="person-remove-outline" size={12} color={colors.orange[600]} />
+                <Text style={[styles.dismissedPillText, { color: colors.orange[600] }]}>
+                  {purged ? 'Удалён' : 'Уволен'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={[styles.dismissedDivider, { backgroundColor: palette.border.subtle }]} />
+
+          <Text style={[styles.dismissedBody, { color: palette.text.secondary }]}>
+            {purged
+              ? 'Этот сотрудник удалён без возможности восстановления. Его история (чеки, смены, зарплаты) сохранена, но учётку вернуть нельзя.'
+              : `Этот сотрудник в разделе «Уволенные»${dateStr ? ` с ${dateStr}` : ''}. Он скрыт из списков, графика и Кассы.${
+                  canManage ? ' Восстановить его можно из «Уволенных».' : ''
+                }`}
+          </Text>
+
+          {canManage && !purged ? (
+            <PressableScale
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('DismissedEmployees');
+              }}
+              scaleTo={0.97}
+              hapticIntent="tap"
+              style={styles.dismissedCta}
+            >
+              <Ionicons name="arrow-undo-outline" size={18} color={colors.white} />
+              <Text style={styles.dismissedCtaText}>Открыть «Уволенные»</Text>
+            </PressableScale>
+          ) : null}
+        </View>
+      </ScrollView>
     </View>
   );
 }
@@ -1429,6 +1549,44 @@ function formatHmDuration(ms: number): string {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
   scroll: { padding: spacing[4], gap: spacing[4] },
+
+  // ── Dismissed / purged read-only state ──
+  dismissedHeadRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  dismissedAvatarWrap: { width: 64, height: 64, borderRadius: 32, overflow: 'hidden' },
+  dismissedAvatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dismissedInitials: { fontSize: 22, fontWeight: '800', letterSpacing: -0.5 },
+  dismissedName: { fontSize: 19, fontWeight: '700', letterSpacing: -0.4 },
+  dismissedRole: { fontSize: 14, fontWeight: '500', marginTop: 2 },
+  dismissedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+    marginTop: spacing[2],
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  dismissedPillText: { fontSize: 12, fontWeight: '700', letterSpacing: -0.1 },
+  dismissedDivider: { height: StyleSheet.hairlineWidth, marginVertical: spacing[3.5] },
+  dismissedBody: { fontSize: 14, lineHeight: 20, letterSpacing: -0.1 },
+  dismissedCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    marginTop: spacing[4],
+    paddingVertical: spacing[3],
+    borderRadius: 14,
+    backgroundColor: colors.primary[600],
+  },
+  dismissedCtaText: { color: colors.white, fontSize: 15, fontWeight: '600', letterSpacing: -0.2 },
 
   headerBtn: {
     width: 36,

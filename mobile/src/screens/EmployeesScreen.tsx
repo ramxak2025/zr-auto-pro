@@ -38,6 +38,7 @@ import EmptyState from '../components/EmptyState';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { Text } from '../platform/Typography';
 import { PressableScale } from '../platform/PressableScale';
+import { haptic } from '../platform/haptics';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
@@ -255,6 +256,24 @@ export default function EmployeesScreen() {
     placeholderData: (prev) => prev,
   });
 
+  // «Уволенные» recycle-bin count for the footer affordance. Manager roles
+  // only (director / admin / superadmin manage dismissals) — a master never
+  // sees the entry point and we don't fire the request for them.
+  const canManageDismissed =
+    me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin';
+
+  const { data: dismissed } = useQuery<User[]>({
+    queryKey: ['users-dismissed'],
+    queryFn: async () => {
+      const res = await usersApi.listDismissed();
+      return res.data;
+    },
+    enabled: canManageDismissed,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+  const dismissedCount = (dismissed ?? []).filter((u) => !!u.dismissedAt && !u.purgedAt).length;
+
   const todayMap = useMemo(() => {
     const map = new Map<string, TodayEmployeeStatus>();
     (today ?? []).forEach((s) => map.set(s.userId, s));
@@ -270,7 +289,9 @@ export default function EmployeesScreen() {
   const sortedUsers = useMemo(() => {
     return (users ?? [])
       // #5 — fully hidden employees (e.g. the owner) never appear.
-      .filter((u) => u.isActive && !u.hiddenEverywhere)
+      // Defensive: a dismissed / purged user must never surface among the
+      // active staff even from a stale cache (the API already excludes them).
+      .filter((u) => u.isActive && !u.hiddenEverywhere && !u.dismissedAt && !u.purgedAt)
       .sort((a, b) => {
         // На смене → опоздавшие → остальные → выходной/нет данных
         const sa = todayMap.get(a.id);
@@ -301,6 +322,13 @@ export default function EmployeesScreen() {
   };
 
   const onOpen = useCallback((id: string) => navigation.navigate('EmployeeDetail', { id }), [navigation]);
+
+  // Navigate to the «Уволенные» recycle bin (lives in the MoreStack, so the
+  // back-nav stays within the Сотрудники section).
+  const onOpenDismissed = useCallback(() => {
+    haptic('tap');
+    navigation.navigate('DismissedEmployees');
+  }, [navigation]);
 
   // Prefetch-on-tap — fires on `onPressIn` so the canonical
   // `['employee-full-profile', id]` query is already resolving by the
@@ -380,6 +408,11 @@ export default function EmployeesScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           ItemSeparatorComponent={Spacer}
+          ListFooterComponent={
+            canManageDismissed ? (
+              <DismissedFooter count={dismissedCount} palette={palette} onPress={onOpenDismissed} />
+            ) : null
+          }
           contentContainerStyle={[
             styles.list,
             Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
@@ -400,6 +433,40 @@ export default function EmployeesScreen() {
 // (which would offset the FlashList recycler's measurement).
 function Spacer() {
   return <View style={{ height: spacing[1.5] }} />;
+}
+
+// Footer affordance into the «Уволенные» recycle bin. Manager-only; rendered
+// below the active staff list, shows the dismissed count on the right.
+function DismissedFooter({
+  count,
+  palette,
+  onPress,
+}: {
+  count: number;
+  palette: SemanticPalette;
+  onPress: () => void;
+}) {
+  return (
+    <PressableScale
+      onPress={onPress}
+      scaleTo={0.98}
+      hapticIntent="tap"
+      style={[styles.dismissedRow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={[styles.dismissedIcon, { backgroundColor: palette.bg.muted }]}>
+        <Ionicons name="person-remove-outline" size={18} color={palette.text.secondary} />
+      </View>
+      <Text style={[styles.dismissedLabel, { color: palette.text.primary }]} numberOfLines={1}>
+        Уволенные сотрудники
+      </Text>
+      {count > 0 ? (
+        <View style={[styles.dismissedBadge, { backgroundColor: palette.bg.muted }]}>
+          <Text style={[styles.dismissedBadgeText, { color: palette.text.secondary }]}>{count}</Text>
+        </View>
+      ) : null}
+      <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+    </PressableScale>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -475,4 +542,33 @@ const styles = StyleSheet.create({
     maxWidth: 116,
   },
   statusPillLabel: { fontSize: 11, fontWeight: '700', letterSpacing: -0.1 },
+
+  // ── «Уволенные» footer affordance ──
+  dismissedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    marginTop: spacing[3],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3],
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  dismissedIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dismissedLabel: { flex: 1, fontSize: 15, fontWeight: '600', letterSpacing: -0.2 },
+  dismissedBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dismissedBadgeText: { fontSize: 13, fontWeight: '700' },
 });

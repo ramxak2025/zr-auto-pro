@@ -320,13 +320,18 @@ export default function UsersScreen() {
     onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка обновления'),
   });
 
+  // remove() no longer hard-deletes — it SOFT-DISMISSES (moves the employee
+  // to «Уволенные», restorable within a year). Invalidate the dismissed-list
+  // count too so the Сотрудники entry point stays in sync.
   const deleteMutation = useMutation({
     mutationFn: (id: string) => usersApi.remove(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      Alert.alert('Готово', 'Сотрудник удалён');
+      queryClient.invalidateQueries({ queryKey: ['users-all'] });
+      queryClient.invalidateQueries({ queryKey: ['users-dismissed'] });
+      Alert.alert('Готово', 'Сотрудник перемещён в «Уволенные»');
     },
-    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка удаления'),
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка увольнения'),
   });
 
   const saveCommissionsMutation = useMutation({
@@ -976,9 +981,9 @@ export default function UsersScreen() {
           if (deleteId) deleteMutation.mutate(deleteId);
           setDeleteId(null);
         }}
-        title="Удалить сотрудника"
-        message="Вы уверены? Это действие нельзя отменить."
-        confirmText="Удалить"
+        title="Уволить сотрудника?"
+        message="Сотрудник переместится в «Уволенные» и пропадёт из списков, графика и Кассы. В течение года его можно вернуть."
+        confirmText="Уволить"
         variant="danger"
       />
     </View>

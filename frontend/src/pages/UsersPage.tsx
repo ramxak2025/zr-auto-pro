@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Users, Loader2, Package, X, Search, Gift } from 'lucide-react';
+import { Plus, Pencil, Trash2, Users, Loader2, Package, X, Search, Gift, Archive, RotateCcw, UserX } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { usersApi, productsApi } from '../api/services';
@@ -13,6 +13,41 @@ import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { roleLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
+
+const roleBadgeMapDismissed: Record<string, string> = {
+  director: 'badge-blue',
+  admin: 'badge-green',
+  master: 'badge-yellow',
+};
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** Russian day-noun pluralization: 1 день, 2 дня, 5 дней. */
+function pluralizeDays(n: number): string {
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod100 >= 11 && mod100 <= 14) return 'дней';
+  if (mod10 === 1) return 'день';
+  if (mod10 >= 2 && mod10 <= 4) return 'дня';
+  return 'дней';
+}
+
+/**
+ * Restore window: 1 year from dismissedAt. Returns whole days left (clamped to
+ * ≥ 0). Used to tell the manager «можно восстановить ещё N дней».
+ */
+function restoreDaysLeft(dismissedAt: string): number {
+  const dismissed = new Date(dismissedAt).getTime();
+  if (Number.isNaN(dismissed)) return 0;
+  const deadline = dismissed + 365 * MS_PER_DAY;
+  return Math.max(0, Math.ceil((deadline - Date.now()) / MS_PER_DAY));
+}
+
+function formatDismissedDate(dismissedAt: string): string {
+  const d = new Date(dismissedAt);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+}
 
 const roleBadgeMap: Record<string, string> = {
   director: 'badge-blue',
@@ -88,6 +123,7 @@ export default function UsersPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
+  const [dismissedOpen, setDismissedOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ['users'],
@@ -95,7 +131,9 @@ export default function UsersPage() {
     select: (res) => res.data as User[],
   });
 
-  const users = data ?? [];
+  // Defensive: the backend already excludes dismissed/purged employees from the
+  // active list, but if a stale persisted cache ever serves one, never show it.
+  const users = (data ?? []).filter((u) => !u.dismissedAt && !u.purgedAt);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => usersApi.create(data),
@@ -125,10 +163,11 @@ export default function UsersPage() {
     mutationFn: (id: string) => usersApi.remove(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      toast.success('Сотрудник удалён');
+      queryClient.invalidateQueries({ queryKey: ['users-dismissed'] });
+      toast.success('Сотрудник уволен');
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка удаления');
+      toast.error(err?.response?.data?.message || 'Ошибка увольнения');
     },
   });
 
@@ -222,10 +261,16 @@ export default function UsersPage() {
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Сотрудники</h1>
-        <button onClick={openCreate} className="btn-primary">
-          <Plus className="w-4 h-4" />
-          Новый сотрудник
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setDismissedOpen(true)} className="btn-secondary">
+            <Archive className="w-4 h-4" />
+            Уволенные
+          </button>
+          <button onClick={openCreate} className="btn-primary">
+            <Plus className="w-4 h-4" />
+            Новый сотрудник
+          </button>
+        </div>
       </div>
 
       {/* Table */}
@@ -325,7 +370,7 @@ export default function UsersPage() {
                           <button
                             onClick={() => setDeleteId(user.id)}
                             className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                            title="Удалить"
+                            title="Уволить"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -509,7 +554,7 @@ export default function UsersPage() {
         </form>
       </Modal>
 
-      {/* Delete Confirmation */}
+      {/* Dismiss Confirmation */}
       <ConfirmDialog
         isOpen={!!deleteId}
         onClose={() => setDeleteId(null)}
@@ -517,9 +562,9 @@ export default function UsersPage() {
           if (deleteId) deleteMutation.mutate(deleteId);
           setDeleteId(null);
         }}
-        title="Удалить сотрудника"
-        message="Вы уверены, что хотите удалить этого сотрудника? Это действие нельзя отменить."
-        confirmText="Удалить"
+        title="Уволить сотрудника"
+        message="Уволить сотрудника? Он переместится в Уволенные, восстановить можно в течение года."
+        confirmText="Уволить"
         variant="danger"
       />
 
@@ -532,7 +577,171 @@ export default function UsersPage() {
           userName={users.find(u => u.id === commissionUserId)?.fullName || ''}
         />
       )}
+
+      {/* «Уволенные» (dismissed employees) Modal */}
+      <DismissedModal isOpen={dismissedOpen} onClose={() => setDismissedOpen(false)} />
     </div>
+  );
+}
+
+// ─── «Уволенные» (dismissed employees recycle bin) ──────────────────
+
+function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [restoreUser, setRestoreUser] = useState<User | null>(null);
+  const [purgeUser, setPurgeUser] = useState<User | null>(null);
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['users-dismissed'],
+    queryFn: () => usersApi.listDismissed(),
+    // Backend already excludes purged rows; filter defensively in case a stale
+    // cache snapshot ever carries one.
+    select: (res) => (res.data as User[]).filter((u) => !u.purgedAt),
+    enabled: isOpen,
+  });
+
+  const dismissed = data ?? [];
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['users'] });
+    queryClient.invalidateQueries({ queryKey: ['users-dismissed'] });
+  };
+
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => usersApi.restore(id),
+    onSuccess: () => {
+      invalidate();
+      toast.success('Сотрудник восстановлен');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Ошибка восстановления');
+    },
+  });
+
+  const purgeMutation = useMutation({
+    mutationFn: (id: string) => usersApi.purge(id),
+    onSuccess: () => {
+      invalidate();
+      toast.success('Сотрудник удалён полностью');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Ошибка удаления');
+    },
+  });
+
+  const busy = restoreMutation.isPending || purgeMutation.isPending;
+
+  return (
+    <>
+      <Modal isOpen={isOpen} onClose={onClose} title="Уволенные сотрудники" size="lg">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="w-6 h-6 animate-spin text-primary-500" />
+          </div>
+        ) : dismissed.length === 0 ? (
+          <div className="text-center py-10 text-gray-400">
+            <UserX className="w-10 h-10 mx-auto mb-3 opacity-40" />
+            <p className="text-sm font-medium text-gray-500">Нет уволенных сотрудников</p>
+            <p className="text-xs mt-1">Уволенные сотрудники появятся здесь и могут быть восстановлены в течение года</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {dismissed.map((user) => {
+              const daysLeft = user.dismissedAt ? restoreDaysLeft(user.dismissedAt) : 0;
+              const canRestore = daysLeft > 0;
+              return (
+                <div
+                  key={user.id}
+                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gray-50 rounded-xl border border-gray-100 px-4 py-3"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-gray-900 text-sm truncate">{user.fullName}</span>
+                      <span className={`flex-shrink-0 ${roleBadgeMapDismissed[user.role] || 'badge-gray'}`}>
+                        {roleLabels[user.role] || user.role}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {user.dismissedAt ? (
+                        <>
+                          Уволен {formatDismissedDate(user.dismissedAt)}
+                          {' · '}
+                          {canRestore ? (
+                            <span className="text-gray-500">
+                              можно восстановить ещё {daysLeft} {pluralizeDays(daysLeft)}
+                            </span>
+                          ) : (
+                            <span className="text-red-500">срок восстановления истёк</span>
+                          )}
+                        </>
+                      ) : (
+                        'Уволен'
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      onClick={() => setRestoreUser(user)}
+                      disabled={busy || !canRestore}
+                      className="inline-flex items-center gap-1.5 text-sm font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg transition-colors"
+                      title={canRestore ? 'Восстановить' : 'Срок восстановления истёк'}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Восстановить
+                    </button>
+                    <button
+                      onClick={() => setPurgeUser(user)}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1.5 text-sm font-medium text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1.5 rounded-lg transition-colors"
+                      title="Удалить полностью"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Удалить полностью
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
+
+      {/* Restore confirmation */}
+      <ConfirmDialog
+        isOpen={!!restoreUser}
+        onClose={() => setRestoreUser(null)}
+        onConfirm={() => {
+          if (restoreUser) restoreMutation.mutate(restoreUser.id);
+          setRestoreUser(null);
+        }}
+        title="Восстановить сотрудника"
+        message={
+          restoreUser
+            ? `Восстановить сотрудника «${restoreUser.fullName}»? Он снова станет активным и появится во всех списках.`
+            : ''
+        }
+        confirmText="Восстановить"
+        variant="primary"
+      />
+
+      {/* Purge (delete completely) confirmation */}
+      <ConfirmDialog
+        isOpen={!!purgeUser}
+        onClose={() => setPurgeUser(null)}
+        onConfirm={() => {
+          if (purgeUser) purgeMutation.mutate(purgeUser.id);
+          setPurgeUser(null);
+        }}
+        title="Удалить полностью"
+        message={
+          purgeUser
+            ? `Удалить сотрудника «${purgeUser.fullName}» полностью? История заказ-нарядов и смен сохранится, но восстановить сотрудника будет уже невозможно. Это действие необратимо.`
+            : ''
+        }
+        confirmText="Удалить полностью"
+        variant="danger"
+      />
+    </>
   );
 }
 

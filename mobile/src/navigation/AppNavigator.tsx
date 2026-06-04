@@ -44,6 +44,7 @@ import CallsScreen from '../screens/CallsScreen';
 import EquipmentScreen, { EquipmentEmployeeScreen } from '../screens/EquipmentScreen';
 import EmployeesScreen from '../screens/EmployeesScreen';
 import EmployeeDetailScreen from '../screens/EmployeeDetailScreen';
+import DismissedEmployeesScreen from '../screens/DismissedEmployeesScreen';
 import TrashScreen from '../screens/TrashScreen';
 import MailingsScreen from '../screens/MailingsScreen';
 import IntegrationsScreen from '../screens/IntegrationsScreen';
@@ -207,6 +208,9 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="CheckDetail" component={CheckDetailScreen} />
       <MoreStack.Screen name="Employees" component={EmployeesScreen} />
       <MoreStack.Screen name="EmployeeDetail" component={EmployeeDetailScreen} />
+      {/* «Уволенные» recycle bin — lives in MoreStack so back-nav stays in
+          the Сотрудники section (Employees → DismissedEmployees → back). */}
+      <MoreStack.Screen name="DismissedEmployees" component={DismissedEmployeesScreen} />
       <MoreStack.Screen name="Trash" component={TrashScreen} />
       <MoreStack.Screen name="Subscription" component={SubscriptionScreen} />
       <MoreStack.Screen name="Schedule" component={gated('schedule_view', ScheduleScreen)} />

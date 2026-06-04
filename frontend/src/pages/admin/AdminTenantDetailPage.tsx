@@ -116,7 +116,9 @@ export default function AdminTenantDetailPage() {
     enabled: !!id,
   });
 
-  const tenantUsers = tenant?.users ?? [];
+  // Defensive: hide dismissed/purged employees from the active tenant list even
+  // if a stale cache snapshot carries them (backend already excludes them).
+  const tenantUsers = (tenant?.users ?? []).filter((u) => !u.dismissedAt && !u.purgedAt);
 
   // Mutations
   const updateTenantMutation = useMutation({
@@ -162,10 +164,11 @@ export default function AdminTenantDetailPage() {
     mutationFn: (userId: string) => usersApi.remove(userId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenant', id] });
-      toast.success('Пользователь удалён');
+      queryClient.invalidateQueries({ queryKey: ['users-dismissed'] });
+      toast.success('Сотрудник уволен');
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка удаления');
+      toast.error(err?.response?.data?.message || 'Ошибка увольнения');
     },
   });
 
@@ -428,7 +431,7 @@ export default function AdminTenantDetailPage() {
                       <button
                         onClick={() => setDeleteUserId(user.id)}
                         className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                        title="Удалить"
+                        title="Уволить"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -690,7 +693,7 @@ export default function AdminTenantDetailPage() {
         </form>
       </Modal>
 
-      {/* Delete User Confirmation */}
+      {/* Dismiss User Confirmation */}
       <ConfirmDialog
         isOpen={!!deleteUserId}
         onClose={() => setDeleteUserId(null)}
@@ -698,9 +701,9 @@ export default function AdminTenantDetailPage() {
           if (deleteUserId) deleteUserMutation.mutate(deleteUserId);
           setDeleteUserId(null);
         }}
-        title="Удалить пользователя"
-        message="Вы уверены, что хотите удалить этого пользователя?"
-        confirmText="Удалить"
+        title="Уволить сотрудника"
+        message="Уволить сотрудника? Он переместится в Уволенные, восстановить можно в течение года."
+        confirmText="Уволить"
         variant="danger"
       />
     </div>
