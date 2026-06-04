@@ -34,7 +34,6 @@ import {
   checkTemplatesApi,
   checkPhotosApi,
   subscriptionApi,
-  knowledgeApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -61,7 +60,6 @@ import type {
   CheckTemplate,
   CheckPhoto,
   SubscriptionInfo,
-  KnowledgeForCar,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
@@ -336,133 +334,6 @@ const paymentOptions: {
     bg: colors.amber[50],
   },
 ];
-
-/** Parse the car make (first token) from a free-text "make model" string,
- *  e.g. "Lada Priora" → "Lada", "BMW X5" → "BMW". Empty when there's no
- *  usable text — the caller gates the KB query on a non-empty result. */
-export function parseCarMake(makeModel?: string | null): string {
-  if (!makeModel) return '';
-  return makeModel.trim().split(/\s+/)[0] || '';
-}
-
-/**
- * KnowledgeForCarChip — a subtle, additive entry point that surfaces the
- * contextual Knowledge Base for a given car make. Renders NOTHING until
- * the `forCar` query has at least one article or troubleshooting entry —
- * no empty band, no layout shift on a make with no content. Tapping a
- * row deep-navigates into the KB reader via the `MoreTab` nested route
- * (the only crash-safe path from the касса stacks, mirroring
- * `entityLinks.openEmployee`). Lazy + cheap: gated on `make`, never
- * blocks the касса open.
- */
-function KnowledgeForCarChip({
-  makeModel,
-  navigation,
-  palette,
-}: {
-  makeModel?: string | null;
-  navigation: any;
-  palette: ReturnType<typeof useColors>;
-}) {
-  const [open, setOpen] = useState(false);
-  const make = useMemo(() => parseCarMake(makeModel), [makeModel]);
-
-  const { data } = useQuery<KnowledgeForCar>({
-    queryKey: ['knowledge-for-car', make],
-    queryFn: async () => (await knowledgeApi.forCar({ make })).data,
-    enabled: !!make,
-    staleTime: 10 * 60_000,
-    placeholderData: (prev) => prev,
-  });
-
-  const articles = data?.articles ?? [];
-  const troubleshooting = data?.troubleshooting ?? [];
-  const hasContent = articles.length > 0 || troubleshooting.length > 0;
-
-  // Crash-safe deep-nav: KB screens live in MoreStack; navigate through
-  // the MoreTab nested route so it resolves from ANY stack (root
-  // CheckCreate, ChecksStack, MoreStack). No troubleshooting-detail route
-  // exists yet, so troubleshooting taps fall back to the KB home.
-  const openArticle = (id: string) => {
-    setOpen(false);
-    navigation.navigate('MoreTab', { screen: 'KnowledgeArticle', params: { id } });
-  };
-  const openTrouble = (id: string) => {
-    setOpen(false);
-    navigation.navigate('MoreTab', { screen: 'KnowledgeTroubleshootingDetail', params: { id } });
-  };
-
-  if (!make || !hasContent) return null;
-
-  return (
-    <>
-      <TouchableOpacity
-        onPress={() => setOpen(true)}
-        activeOpacity={0.7}
-        style={[styles.kbChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        accessibilityLabel={`Регламенты и типовые работы для ${make}`}
-      >
-        <Ionicons name="book-outline" size={15} color={colors.indigo[600]} />
-        <Text style={[styles.kbChipText, { color: palette.text.secondary }]} numberOfLines={1}>
-          Регламенты и типовые работы для {make}
-        </Text>
-        <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-      </TouchableOpacity>
-
-      <Modal visible={open} onClose={() => setOpen(false)} title={`База знаний · ${make}`}>
-        {articles.length > 0 && (
-          <View style={styles.kbSheetGroup}>
-            <Text style={[styles.kbSheetGroupLabel, { color: palette.text.tertiary }]}>РЕГЛАМЕНТЫ И СТАТЬИ</Text>
-            {articles.map((a) => (
-              <TouchableOpacity
-                key={a.id}
-                onPress={() => openArticle(a.id)}
-                activeOpacity={0.7}
-                style={[styles.kbSheetRow, { borderBottomColor: palette.border.subtle }]}
-              >
-                <Ionicons
-                  name={a.type === 'regulation' ? 'shield-checkmark-outline' : 'document-text-outline'}
-                  size={16}
-                  color={colors.indigo[600]}
-                />
-                <Text style={[styles.kbSheetRowText, { color: palette.text.primary }]} numberOfLines={2}>
-                  {a.title}
-                </Text>
-                <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-        {troubleshooting.length > 0 && (
-          <View style={styles.kbSheetGroup}>
-            <Text style={[styles.kbSheetGroupLabel, { color: palette.text.tertiary }]}>ТИПОВЫЕ НЕИСПРАВНОСТИ</Text>
-            {troubleshooting.map((t) => (
-              <TouchableOpacity
-                key={t.id}
-                onPress={() => openTrouble(t.id)}
-                activeOpacity={0.7}
-                style={[styles.kbSheetRow, { borderBottomColor: palette.border.subtle }]}
-              >
-                <Ionicons name="construct-outline" size={16} color={colors.orange[500]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.kbSheetRowText, { color: palette.text.primary }]} numberOfLines={2}>
-                    {t.title}
-                  </Text>
-                  {!!t.system && (
-                    <Text style={[styles.kbSheetRowSub, { color: palette.text.tertiary }]} numberOfLines={1}>
-                      {t.system}
-                    </Text>
-                  )}
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-      </Modal>
-    </>
-  );
-}
 
 export default function CheckCreateScreen() {
   const navigation = useNavigation<any>();
@@ -1520,8 +1391,7 @@ export default function CheckCreateScreen() {
                 {selectedCar && (
                   /* — Compact plate (48pt, proportional ГОСТ preset)
                        centered + label row "Автомобиль: <make/model>"
-                       under. The contextual Knowledge-Base chip lives here
-                       because it's CAR-scoped (keyed by make/model). */
+                       under. */
                   <View style={[styles.selectedCarStack, { borderTopColor: palette.border.subtle }]}>
                     <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="compact" />
                     <Text style={[styles.selectedCarLabel, { color: palette.text.primary }]} numberOfLines={1}>
@@ -1533,16 +1403,6 @@ export default function CheckCreateScreen() {
                         {selectedCar.comment}
                       </Text>
                     )}
-                    {/* Contextual Knowledge Base — regulations + typical
-                        works for this make. Self-hides when there's no
-                        relevant content. */}
-                    <View style={styles.selectedCarMetaFull}>
-                      <KnowledgeForCarChip
-                        makeModel={selectedCar.makeModel}
-                        navigation={navigation}
-                        palette={palette}
-                      />
-                    </View>
                   </View>
                 )}
 
@@ -2705,58 +2565,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.gray[500],
     textAlign: 'center' as const,
-  },
-  // Full-width meta block under the plate/label. The parent stack centers
-  // its children, but the last-visit line and warranty chips need the full
-  // card width — stretch + reset the parent gap's top margin so they sit
-  // flush under the car label.
-  selectedCarMetaFull: {
-    alignSelf: 'stretch' as const,
-    marginTop: -spacing[1],
-  },
-  // ── Contextual Knowledge-Base chip + sheet ──────────────────────────────
-  kbChip: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: spacing[2],
-    paddingVertical: spacing[2],
-    paddingHorizontal: spacing[3],
-    borderRadius: borderRadius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    marginTop: spacing[2],
-  },
-  kbChipText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600' as const,
-    letterSpacing: -0.1,
-  },
-  kbSheetGroup: {
-    marginBottom: spacing[2],
-  },
-  kbSheetGroupLabel: {
-    fontSize: 11,
-    fontWeight: '700' as const,
-    letterSpacing: 1,
-    textTransform: 'uppercase' as const,
-    marginBottom: spacing[1],
-  },
-  kbSheetRow: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: spacing[2.5],
-    paddingVertical: spacing[3],
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  kbSheetRowText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '500' as const,
-    letterSpacing: -0.1,
-  },
-  kbSheetRowSub: {
-    fontSize: 12,
-    marginTop: 2,
   },
   sectionSubLabel: {
     fontSize: 11,

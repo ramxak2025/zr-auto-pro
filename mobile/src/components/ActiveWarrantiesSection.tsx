@@ -10,8 +10,9 @@
  *   │ 📦 Редуктор Нордик        └ 3 мес 5 дней ┘   │
  *   └─────────────────────────────────────────────┘
  *
- *   • Shield header + count of active warranties.
- *   • Per-item row: tool/cube icon, item name, remaining-time chip.
+ *   • Filled-shield header tile + count of active warranties.
+ *   • Per-item row: construct/cube blue squircle tile (same family as the
+ *     header), item name, remaining-time chip.
  *   • Chip colour reflects urgency by days-left:
  *       ≥ 14 days → green   (healthy)
  *       1-13 days → amber   (ending soon)
@@ -110,19 +111,47 @@ function urgencyTones(daysLeft: number, isDark: boolean) {
   // Green for healthy warranties (≥ 14 days left).
   if (daysLeft >= 14) {
     return isDark
-      ? { bg: 'rgba(34, 197, 94, 0.16)', border: 'rgba(34, 197, 94, 0.3)', text: '#86efac' }
+      ? { bg: 'rgba(34, 197, 94, 0.12)', border: 'rgba(34, 197, 94, 0.24)', text: '#86efac' }
       : { bg: '#ecfdf5', border: '#a7f3d0', text: '#047857' };
   }
   // Amber for the "ending soon" band (1-13 days).
   if (daysLeft >= 1) {
     return isDark
-      ? { bg: 'rgba(245, 158, 11, 0.16)', border: 'rgba(245, 158, 11, 0.32)', text: '#fcd34d' }
+      ? { bg: 'rgba(245, 158, 11, 0.12)', border: 'rgba(245, 158, 11, 0.26)', text: '#fcd34d' }
       : { bg: '#fffbeb', border: '#fde68a', text: '#b45309' };
   }
   // Red for the danger zone (defensive — backend should filter expired).
   return isDark
-    ? { bg: 'rgba(239, 68, 68, 0.18)', border: 'rgba(239, 68, 68, 0.34)', text: '#fca5a5' }
+    ? { bg: 'rgba(239, 68, 68, 0.14)', border: 'rgba(239, 68, 68, 0.28)', text: '#fca5a5' }
     : { bg: '#fef2f2', border: '#fecaca', text: '#b91c1c' };
+}
+
+/**
+ * WarrantyIconTile — the single, shared blue squircle that makes the
+ * header shield, the service glyph and the product glyph read as ONE
+ * family. Geometry is identical for every tile (28×28, radius 9, glyph
+ * 15) — the header is marked as the calm anchor ONLY by a filled glyph
+ * at the full `accent.primary` tint, never by extra size or chrome. The
+ * blue tint (`accent.primarySoft` fill + `accent.primaryText`/`primary`
+ * glyph) deliberately descends from the parent selected-client card
+ * avatar (CheckCreateScreen `styles.selectedCardAvatar`: primary[50]
+ * fill + primary[100] border + primary[700] glyph), so the block reads
+ * as a native child of that card and is dark-correct automatically.
+ */
+function WarrantyIconTile({
+  name,
+  palette,
+  filled,
+}: {
+  name: keyof typeof Ionicons.glyphMap;
+  palette: SemanticPalette;
+  filled?: boolean;
+}) {
+  return (
+    <View style={[styles.iconTile, { backgroundColor: palette.accent.primarySoft }]}>
+      <Ionicons name={name} size={15} color={filled ? palette.accent.primary : palette.accent.primaryText} />
+    </View>
+  );
 }
 
 export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarrantiesSectionProps) {
@@ -174,9 +203,7 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
       style={[styles.box, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
     >
       <View style={styles.headerRow}>
-        <View style={[styles.shieldWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <Ionicons name="shield-checkmark-outline" size={12} color={palette.text.secondary} />
-        </View>
+        <WarrantyIconTile name="shield-checkmark" palette={palette} filled />
         <Text style={[styles.headerTitle, { color: palette.text.primary }]}>На гарантии</Text>
         <View style={{ flex: 1 }} />
         <Text style={[styles.headerCount, { color: palette.text.tertiary }]}>
@@ -188,14 +215,10 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
         {items.map((w, i) => {
           const daysLeft = resolveDaysLeft(w);
           const tone = urgencyTones(daysLeft, isDark);
-          const iconName = w.kind === 'product' ? 'cube-outline' : 'build-outline';
+          const iconName = w.kind === 'product' ? 'cube-outline' : 'construct-outline';
           return (
             <View key={`${w.kind}:${w.name}:${w.expiresAt}:${i}`} style={styles.row}>
-              <View
-                style={[styles.iconWrap, { backgroundColor: palette.bg.canvas, borderColor: palette.border.subtle }]}
-              >
-                <Ionicons name={iconName} size={14} color={palette.text.secondary} />
-              </View>
+              <WarrantyIconTile name={iconName} palette={palette} />
               <Text style={[styles.itemName, { color: palette.text.primary }]} numberOfLines={1}>
                 {w.name}
               </Text>
@@ -289,13 +312,15 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1.5],
+    gap: spacing[2],
   },
-  shieldWrap: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: StyleSheet.hairlineWidth,
+  // One shared squircle for the header shield AND every row glyph — the
+  // family is proven by reuse. NO larger header tile, NO per-tile border;
+  // the only header cue is the filled glyph (see WarrantyIconTile).
+  iconTile: {
+    width: 28,
+    height: 28,
+    borderRadius: 9,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -312,20 +337,12 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
   },
   list: {
-    gap: spacing[1.5],
+    gap: spacing[2.5],
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[2],
-  },
-  iconWrap: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: 'center',
-    justifyContent: 'center',
+    gap: spacing[2.5],
   },
   itemName: {
     flex: 1,
