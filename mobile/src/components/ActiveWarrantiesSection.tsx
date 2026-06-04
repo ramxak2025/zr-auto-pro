@@ -35,22 +35,29 @@
  *   - Query key `['warranty-active-client', clientId]`, gated by
  *     `enabled: !!clientId`, `staleTime: 60s` — cheap, never blocks the
  *     Касса open.
- *   - Renders NOTHING (no empty band, no loading flicker) when there is
- *     no client, no data yet, or zero active warranties — the form is dense
- *     enough without a placeholder.
+ *   - On the FIRST load for a freshly-selected client (no cached answer
+ *     yet) renders a single, calm «Собираю информацию по клиенту…» row with
+ *     a small spinner — so the block reserves itself instead of popping the
+ *     badges in late ("через раз"). The global `placeholderData: prev=>prev`
+ *     SWR + persistent cache mean a previously-seen client skips the loader
+ *     and shows the real badges instantly.
+ *   - Renders NOTHING (no empty band) when there is no client, or once the
+ *     load resolves to zero active warranties — the form is dense enough
+ *     without a placeholder, and the loader never lingers.
  *   - Dark-mode aware via `useColors()`.
  *
  * Why a dedicated component:
  *   The cash screen file is already ~2.9k lines; isolating the query +
  *   urgency styling here keeps it readable and reusable.
  */
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, AccessibilityInfo } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import { warrantyApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { fontSize, fontWeight, spacing, borderRadius } from '../theme';
+import type { SemanticPalette } from '../theme/palette';
 import { formatDaysLeft } from '../utils/warrantyFormat';
 import type { ActiveWarranty } from '../../../shared/types';
 
@@ -128,7 +135,7 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
   // never fire a useless request that can only come back empty.
   const hasScope = !!clientId || !!carId;
 
-  const { data } = useQuery<ActiveWarranty[]>({
+  const { data, isLoading } = useQuery<ActiveWarranty[]>({
     // Key on both scope ids — the default cash-screen usage passes only
     // `clientId` (whole-client view); a future car-scoped caller can pass
     // `carId`. Including both in the key keeps the cache correct either way.
@@ -145,6 +152,20 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
   });
 
   if (!hasScope) return null;
+
+  // First load (no cached answer yet) for a freshly-selected client →
+  // surface a single, calm "gathering info" row instead of popping the
+  // real badges in late. `isLoading` is true ONLY on the very first fetch
+  // with no data; thanks to the global `placeholderData: prev => prev`
+  // SWR + persistent cache, re-selecting a previously-seen client skips
+  // this entirely (data is already there), so there is no "через раз"
+  // flash. Once resolved we either render the warranties (data.length > 0)
+  // or nothing (empty) — the loader never lingers and never shows when
+  // there simply is no warranty.
+  if (isLoading && !data) {
+    return <ClientMetaLoading palette={palette} />;
+  }
+
   const items = data || [];
   if (items.length === 0) return null;
 
@@ -153,8 +174,8 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
       style={[styles.box, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
     >
       <View style={styles.headerRow}>
-        <View style={[styles.shieldWrap, { backgroundColor: palette.bg.canvas, borderColor: palette.border.subtle }]}>
-          <Ionicons name="shield-checkmark" size={13} color={colors_shield(isDark)} />
+        <View style={[styles.shieldWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Ionicons name="shield-checkmark-outline" size={12} color={palette.text.secondary} />
         </View>
         <Text style={[styles.headerTitle, { color: palette.text.primary }]}>На гарантии</Text>
         <View style={{ flex: 1 }} />
@@ -192,9 +213,48 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
   );
 }
 
-/** Shield tint — green-leaning, slightly brighter in dark mode. */
-function colors_shield(isDark: boolean): string {
-  return isDark ? '#6ee7b7' : '#059669';
+/**
+ * ClientMetaLoading — calm, premium "gathering info" row shown while the
+ * freshly-selected client's warranty (and, conceptually, their visit) data
+ * is still loading for the FIRST time. A single muted line + a small
+ * spinner — never a big block. Honours Reduce Motion: when enabled, the
+ * spinner is swapped for a static hourglass glyph so nothing animates.
+ */
+function ClientMetaLoading({ palette }: { palette: SemanticPalette }) {
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((v) => {
+        if (alive) setReduceMotion(v);
+      })
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (v) => {
+      setReduceMotion(v);
+    });
+    return () => {
+      alive = false;
+      sub.remove();
+    };
+  }, []);
+
+  return (
+    <View
+      style={[
+        styles.loadingRow,
+        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+      ]}
+    >
+      {reduceMotion ? (
+        <Ionicons name="hourglass-outline" size={13} color={palette.text.tertiary} />
+      ) : (
+        <ActivityIndicator size="small" color={palette.text.tertiary} />
+      )}
+      <Text style={[styles.loadingText, { color: palette.text.secondary }]} numberOfLines={1}>
+        Собираю информацию по клиенту…
+      </Text>
+    </View>
+  );
 }
 
 // Exported so future consumers (client detail, dashboard alerts) can reuse
@@ -209,6 +269,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2.5],
     gap: spacing[2],
+  },
+  loadingRow: {
+    marginTop: spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+  },
+  loadingText: {
+    flex: 1,
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.medium,
+    letterSpacing: -0.1,
   },
   headerRow: {
     flexDirection: 'row',

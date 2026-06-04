@@ -23,7 +23,16 @@ import { productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { ListSkeleton } from './Skeleton';
+import { haptic } from '../platform/haptics';
 import type { Product } from '../../../shared/types';
+
+// Rapid double-tap window. A second press on the SAME product row within
+// this window is treated as an accidental double-tap and ignored, so an
+// itchy finger adds the item once instead of twice. A deliberate re-add is
+// still possible after the window elapses (or via the qty stepper in the
+// cart). 500 ms comfortably covers an accidental double-bounce without
+// feeling sticky for an intentional second tap.
+const ROW_TAP_DEBOUNCE_MS = 500;
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 const FOLDER_COLS = 3;
@@ -232,6 +241,10 @@ export default function ProductPickerModal({
   const [localSearch, setLocalSearch] = useState('');
   const [productSearch, setProductSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-product last-accepted-tap timestamps for the double-tap guard.
+  // Declared up here (not next to `handleSelect`) so `handleClose`, which
+  // clears it, can reference it without a temporal-dead-zone ordering snag.
+  const lastTapRef = useRef<Map<string, number>>(new Map());
 
   // ── Barcode scanner (expo-camera CameraView with barcode hint) ────────────
   const [showScanner, setShowScanner] = useState(false);
@@ -269,23 +282,28 @@ export default function ProductPickerModal({
   }, []);
 
   // Same query key as `CheckCreateScreen` and `AuthContext.prefetchAfterLogin`
-  // so opening the picker is a cache hit on the first try, then revalidates
-  // in the background. `placeholderData: prev => prev` is also redundantly
-  // set on the global QueryClient — kept here too as defence in depth.
+  // (`['all-products-check']`) so opening the picker is a CACHE HIT on the
+  // first try — the login-time prefetch + the persistent-cache whitelist
+  // (`'all-products-check'` ∈ PERSISTED_KEYS) keep this slot warm even on a
+  // cold start, and the standalone Warehouse screen has already pre-warmed it
+  // too. We then revalidate in the background (stale-while-revalidate).
   //
   // When `warehouseId` is supplied the key gains a second segment so each
   // warehouse (main / brak / used) has its own cache slot. Without the
   // warehouse filter we keep the legacy `['all-products-check']` key so the
   // login-time prefetch remains a hit.
-  // CRITICAL screen — the product picker MUST show fresh stock, not the
-  // cached snapshot. Picking products with stale `stock` numbers leads to
-  // the worst possible UX: ringing up an order with what the warehouse
-  // doesn't have. So we:
-  //   • disable `placeholderData` here (override the global SWR default);
-  //   • force `refetchOnMount: 'always'` so every picker open re-fetches.
-  // The login-time prefetch still warms the cache so the first frame
-  // shows something instead of an empty list, but the fresh data lands
-  // within ~150 ms and replaces it. See HYBRID-perf plan, part 3.
+  //
+  // Cache-FIRST, not fresh-only. The previous version disabled
+  // `placeholderData` and forced `refetchOnMount: 'always'` + `staleTime: 0`
+  // "to never show stale stock" — but that produced the exact bug the owner
+  // reported: opening «Добавить товар» flashed an EMPTY list (or a long
+  // spinner) while the always-on cold fetch ran, even though a perfectly
+  // good cached list was sitting in the QueryClient. We now mirror
+  // ProductsScreen: render the cached list INSTANTLY, then let SWR refresh
+  // the stock numbers in the background within ~150 ms. Stock is still
+  // re-validated on every open (a short `staleTime` means the background
+  // refetch fires), and the order is only committed on submit — so the
+  // numbers the user commits to are fresh, without ever blanking the sheet.
   const { data: allProducts, isLoading } = useQuery<Product[]>({
     queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
     queryFn: async () => {
@@ -295,11 +313,14 @@ export default function ProductPickerModal({
       return (res.data?.data || res.data) as Product[];
     },
     enabled: visible,
-    // No `placeholderData` — we want the user to see fresh stock numbers,
-    // not a stale snapshot, in the picker.
-    placeholderData: undefined,
-    refetchOnMount: 'always',
-    staleTime: 0,
+    // Keep the previous list visible across mounts/refetches so the picker
+    // never blanks — same stale-while-revalidate idiom as ProductsScreen
+    // and the global QueryClient default. Explicit here as defence in depth.
+    placeholderData: (prev) => prev,
+    // Short staleTime → opening the picker still triggers a background
+    // refetch (fresh stock lands in ~150 ms) WITHOUT throwing away the
+    // cached list we show on the first frame.
+    staleTime: 30_000,
   });
 
   const { sortedProductFolders, visibleProducts } = useMemo(() => {
@@ -413,12 +434,30 @@ export default function ProductPickerModal({
     setLocalSearch('');
     setProductSearch('');
     setProductPath([]);
+    // Drop any per-product double-tap locks so the next open starts clean.
+    lastTapRef.current.clear();
     if (debounceRef.current) clearTimeout(debounceRef.current);
     onClose();
   }, [onClose]);
 
+  // Double-tap guard. We DON'T disable the row in React state (that would
+  // force a re-render of the whole virtualised list on every tap and fight
+  // FlashList recycling); instead we gate on the cheap imperative
+  // `lastTapRef` map declared above. An accidental rapid double-tap on the
+  // same product fires `onSelectProduct` only ONCE; a deliberate re-add
+  // after `ROW_TAP_DEBOUNCE_MS` (or the qty stepper in the cart) still works.
   const handleSelect = useCallback(
     (product: Product) => {
+      const now = Date.now();
+      const last = lastTapRef.current.get(product.id) ?? 0;
+      if (now - last < ROW_TAP_DEBOUNCE_MS) {
+        // Accidental double-tap — swallow it. No haptic, no second add.
+        return;
+      }
+      lastTapRef.current.set(product.id, now);
+      // Light tactile + the row's cart-qty badge bump (via getCartQty) give
+      // the user immediate "it registered" feedback, so they don't tap again.
+      haptic('tap');
       onSelectProduct(product);
     },
     [onSelectProduct],

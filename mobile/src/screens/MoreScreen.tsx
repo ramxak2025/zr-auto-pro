@@ -266,15 +266,10 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
-        // No `roles` filter — every user manages their own notifications.
-        label: 'Уведомления',
-        description: 'Какие уведомления вы получаете',
-        screen: 'NotificationSettings',
-        icon: 'notifications-outline',
-        iconBg: colors.amber[50],
-        iconColor: colors.amber[600],
-      },
-      {
+        // Notifications moved to the bell button in the profile header
+        // (top-right of MoreScreen) — every user manages their own
+        // notifications, so it's a primary header action rather than a
+        // buried menu row. Route stays registered in MoreStack.
         label: 'Настройки компании',
         description: 'Реквизиты и данные для чеков',
         screen: 'CompanySettings',
@@ -495,6 +490,17 @@ export default function MoreScreen() {
                 <Text style={[styles.roleText, { color: badgeColor.text }]}>{roleLabel}</Text>
               </View>
             </View>
+            {/* Notifications — every user picks their own categories. */}
+            <TouchableOpacity
+              style={[styles.bellBtn, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+              onPress={() => navigation.navigate('NotificationSettings')}
+              activeOpacity={0.6}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Настройки уведомлений"
+            >
+              <Ionicons name="notifications-outline" size={20} color={palette.text.secondary} />
+            </TouchableOpacity>
           </View>
         </Animated.View>
 
@@ -595,6 +601,16 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   roleText: { fontSize: 11, fontWeight: fontWeight.semibold },
+
+  // Notifications bell — premium iOS header action (≥44pt tappable).
+  bellBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Section
   section: { gap: spacing[1.5] },
