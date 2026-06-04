@@ -233,7 +233,7 @@ export default function KnowledgeLessonScreen() {
                           ]}
                         >
                           <Ionicons
-                            name={selected ? 'radio-button-on' : 'radio-button-off'}
+                            name={selected ? 'checkmark-circle' : 'ellipse-outline'}
                             size={20}
                             color={selected ? palette.accent.primary : palette.text.tertiary}
                           />

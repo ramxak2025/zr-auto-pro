@@ -1503,10 +1503,8 @@ export default function CheckCreateScreen() {
                 {selectedCar && (
                   /* — Compact plate (48pt, proportional ГОСТ preset)
                        centered + label row "Автомобиль: <make/model>"
-                       under. Below it, structurally tied to THIS car:
-                       the last-visit line and the active-warranty chips —
-                       so they read as "this car was last here on … and
-                       these items are still under warranty". */
+                       under. The contextual Knowledge-Base chip lives here
+                       because it's CAR-scoped (keyed by make/model). */
                   <View style={[styles.selectedCarStack, { borderTopColor: palette.border.subtle }]}>
                     <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="compact" />
                     <Text style={[styles.selectedCarLabel, { color: palette.text.primary }]} numberOfLines={1}>
@@ -1518,19 +1516,10 @@ export default function CheckCreateScreen() {
                         {selectedCar.comment}
                       </Text>
                     )}
-                    {/* Per-client meta block: last visit (WHEN only, no
-                        details) + active warranties ACROSS ALL the client's
-                        cars. Both are scoped to the client (not the single
-                        default-selected car) so a warranty / visit on another
-                        of the client's cars still surfaces. Both hide
-                        themselves when empty, so this stays clean for
-                        first-time / out-of-warranty clients. */}
+                    {/* Contextual Knowledge Base — regulations + typical
+                        works for this make. Self-hides when there's no
+                        relevant content. */}
                     <View style={styles.selectedCarMetaFull}>
-                      <LastVisitBadge clientId={selectedClient.id} />
-                      <ActiveWarrantiesSection clientId={selectedClient.id} />
-                      {/* Contextual Knowledge Base — regulations + typical
-                          works for this make. Self-hides when there's no
-                          relevant content. */}
                       <KnowledgeForCarChip
                         makeModel={selectedCar.makeModel}
                         navigation={navigation}
@@ -1539,6 +1528,22 @@ export default function CheckCreateScreen() {
                     </View>
                   </View>
                 )}
+
+                {/* ═══ CLIENT-scoped meta — last visit + active warranties ═══
+                    Rendered for ANY selected client, regardless of whether a
+                    car is selected. Warranties are keyed by CLIENT (across all
+                    the client's cars), not by the single default-selected car,
+                    so they must surface even when the client has no car on
+                    file or the car list is still loading — which is exactly
+                    why they used to stay hidden (they were trapped inside the
+                    `selectedCar &&` block above).
+
+                    Both components self-hide when empty (`return null`), and
+                    the parent `selectedCard` uses flex `gap` — which adds no
+                    space for null children — so this never leaves an empty
+                    band for first-time / out-of-warranty clients. */}
+                <LastVisitBadge clientId={selectedClient.id} />
+                <ActiveWarrantiesSection clientId={selectedClient.id} />
               </View>
             ) : (
               <>

@@ -2146,12 +2146,11 @@ export default function ProductsScreen() {
                   styles.writeoffRadioCircle,
                   {
                     borderColor: writeoffMode === 'expense' ? palette.accent.primary : palette.border.strong,
+                    backgroundColor: writeoffMode === 'expense' ? palette.accent.primary : 'transparent',
                   },
                 ]}
               >
-                {writeoffMode === 'expense' && (
-                  <View style={[styles.writeoffRadioDot, { backgroundColor: palette.accent.primary }]} />
-                )}
+                {writeoffMode === 'expense' && <Ionicons name="checkmark" size={14} color={colors.white} />}
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.writeoffRadioTitle, { color: palette.text.primary }]}>
@@ -2179,12 +2178,11 @@ export default function ProductsScreen() {
                   styles.writeoffRadioCircle,
                   {
                     borderColor: writeoffMode === 'simple' ? palette.accent.primary : palette.border.strong,
+                    backgroundColor: writeoffMode === 'simple' ? palette.accent.primary : 'transparent',
                   },
                 ]}
               >
-                {writeoffMode === 'simple' && (
-                  <View style={[styles.writeoffRadioDot, { backgroundColor: palette.accent.primary }]} />
-                )}
+                {writeoffMode === 'simple' && <Ionicons name="checkmark" size={14} color={colors.white} />}
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.writeoffRadioTitle, { color: palette.text.primary }]}>
@@ -2699,11 +2697,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  writeoffRadioDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
   },
   writeoffRadioTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   writeoffRadioDesc: { fontSize: fontSize.xs, marginTop: 2 },
