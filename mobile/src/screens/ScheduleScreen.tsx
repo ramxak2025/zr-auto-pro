@@ -349,7 +349,13 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
 function TodayPill({ day }: { day: number; reduceMotion?: boolean }) {
   return (
     <View style={styles.gridTodayCircle}>
-      <Text style={styles.gridTodayLabel} allowFontScaling={false}>
+      <Text
+        style={styles.gridTodayLabel}
+        allowFontScaling={false}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
         СЕГОДНЯ
       </Text>
       <Text style={styles.gridTodayNum} allowFontScaling={false}>
@@ -3182,12 +3188,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   gridTodayLabel: {
+    // Pinned to the pill's content width (minWidth 38 − 2×paddingHorizontal 4
+    // = 30pt) so `adjustsFontSizeToFit` has a bounded box to shrink the word
+    // against. Without this the centered Text sizes to its content and wraps
+    // "СЕГОДНЯ" letter-by-letter on the narrow 44pt day column.
+    width: 30,
     fontSize: 7,
     fontWeight: fontWeight.bold,
     color: colors.white,
-    letterSpacing: 0.4,
+    letterSpacing: 0.2,
     lineHeight: 8,
     marginBottom: 1,
+    textAlign: 'center',
   },
   gridTodayNum: {
     fontSize: 12,

@@ -7,8 +7,9 @@
  * Each row:
  *   • leading avatar (photo OR stable hash-gradient initials) — 44pt;
  *   • name (headline) + role (subhead) stacked;
- *   • today status pill (на смене / опоздал / выходной / больничный / не
- *     пришёл / нет данных) — inline trailing, tinted;
+ *   • trailing chevron только. Посещаемость («на смене» / опоздал / …) в
+ *     списке сотрудников НЕ показываем — это раздел «Расписание»; здесь она
+ *     лишний шум (owner). Сводка «На смене: X из Y» остаётся в подзаголовке.
  *   • for masters AND viewers with financial access — a compact "чеков ·
  *     выручка" line under the name (`showFinancials`).
  *
@@ -87,45 +88,8 @@ function formatMoneyCompact(v: number): string {
   return String(Math.round(v));
 }
 
-interface StatusInfo {
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  /** Foreground text/icon colour. */
-  fg: string;
-  /** Faint chip background. */
-  bg: string;
-}
-function statusInfo(s?: TodayEmployeeStatus): StatusInfo {
-  if (!s) return { label: 'Нет данных', icon: 'help-circle', fg: colors.gray[500], bg: colors.gray[100] };
-  const note = (s.note || '').toLowerCase();
-  if (note.includes('больнич')) return { label: 'Больничный', icon: 'medkit', fg: colors.rose[600], bg: colors.rose[50] };
-  if (s.isDayOff) return { label: 'Выходной', icon: 'moon', fg: colors.gray[500], bg: colors.gray[100] };
-  if (s.lateStatus === 'late_major')
-    return { label: `Опозд. ${s.lateMinutes}м`, icon: 'time', fg: colors.orange[600], bg: colors.orange[50] };
-  if (s.lateStatus === 'late_minor')
-    return { label: `Опозд. ${s.lateMinutes}м`, icon: 'time', fg: colors.amber[600], bg: colors.amber[50] };
-  if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time')
-    return { label: 'На смене', icon: 'checkmark-circle', fg: colors.green[600], bg: colors.green[50] };
-  if (note.includes('прогул')) return { label: 'Прогул', icon: 'alert-circle', fg: colors.red[600], bg: colors.red[50] };
-  if (s.hasSchedule) return { label: 'Не пришёл', icon: 'alert-circle', fg: colors.red[600], bg: colors.red[50] };
-  return { label: '—', icon: 'remove', fg: colors.gray[400], bg: colors.gray[100] };
-}
-
-// ── Status pill — inline trailing chip ─────────────────────────────────────
-function StatusPill({ info }: { info: StatusInfo }) {
-  return (
-    <View style={[styles.statusPill, { backgroundColor: info.bg }]}>
-      <Ionicons name={info.icon} size={11} color={info.fg} />
-      <Text style={[styles.statusPillLabel, { color: info.fg }]} numberOfLines={1}>
-        {info.label}
-      </Text>
-    </View>
-  );
-}
-
 interface EmployeeRowProps {
   user: User;
-  status?: TodayEmployeeStatus;
   todayRevenue?: number;
   todayChecks?: number;
   showFinancials: boolean;
@@ -136,7 +100,6 @@ interface EmployeeRowProps {
 }
 const EmployeeRow = React.memo(function EmployeeRow({
   user,
-  status,
   todayRevenue,
   todayChecks,
   showFinancials,
@@ -145,7 +108,6 @@ const EmployeeRow = React.memo(function EmployeeRow({
   onPressIn,
 }: EmployeeRowProps) {
   const avatarColors = getAvatarColors(user.fullName);
-  const info = statusInfo(status);
   const roleIcon = (ROLE_META[user.role] || ROLE_META.master).icon;
   const isMaster = user.role === 'master';
   const showMetrics = isMaster && showFinancials && (todayChecks !== undefined || todayRevenue !== undefined);
@@ -190,11 +152,9 @@ const EmployeeRow = React.memo(function EmployeeRow({
         </View>
       </View>
 
-      {/* Status + chevron */}
-      <View style={styles.rowTrailing}>
-        <StatusPill info={info} />
-        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-      </View>
+      {/* Chevron — открывает карточку сотрудника. Без статус-пилюли:
+          посещаемость / «на смене» живёт в разделе «Расписание». */}
+      <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
     </PressableScale>
   );
 });
@@ -369,7 +329,6 @@ export default function EmployeesScreen() {
       return (
         <EmployeeRow
           user={item}
-          status={todayMap.get(item.id)}
           todayChecks={r?.checkCount}
           todayRevenue={r?.revenue}
           showFinancials={showFinancials}
@@ -379,7 +338,7 @@ export default function EmployeesScreen() {
         />
       );
     },
-    [rankingMap, todayMap, showFinancials, palette, onOpen, onPressInRow],
+    [rankingMap, showFinancials, palette, onOpen, onPressInRow],
   );
 
   return (
@@ -530,18 +489,6 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
     flexShrink: 1,
   },
-
-  rowTrailing: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    maxWidth: 116,
-  },
-  statusPillLabel: { fontSize: 11, fontWeight: '700', letterSpacing: -0.1 },
 
   // ── «Уволенные» footer affordance ──
   dismissedRow: {

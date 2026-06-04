@@ -44,12 +44,17 @@ import type { KnowledgeArticle, KnowledgeAcksResponse, ArticleFeedbackResult } f
 type ParamList = { KnowledgeArticle: { id: string; title?: string } };
 
 /**
- * Height of the sticky ack CTA band ABOVE the floating tab bar:
- * button minHeight (52) + stickyWrap paddingTop (spacing[3] = 12) + a little
- * breathing room. The scroll content reserves this on top of tabBarHeight so
- * the last article content never hides under the CTA.
+ * Visible height of the sticky ack CTA band — the action bar floats just
+ * ABOVE the tab bar (anchored at `bottom: tabBarHeight`), so its own height
+ * is only button minHeight (52) + comfortable vertical padding, NOT a second
+ * full tab-bar inset. The scroll content reserves this band so the last
+ * article content never hides under the CTA.
+ *   button (52) + paddingTop (spacing[3] = 12) + paddingBottom (spacing[3] = 12)
  */
-const STICKY_CTA_BAND = 52 + spacing[3] + spacing[3];
+const ACK_BAR_HEIGHT = 52 + spacing[3] + spacing[3];
+
+/** Small visible gap between the floating action bar and the tab bar below it. */
+const ACK_BAR_GAP = spacing[2];
 
 /** Per-article AsyncStorage key holding the regulation version this user acked. */
 const ackedVersionKey = (id: string) => `kb:ackedVersion:${id}`;
@@ -219,9 +224,13 @@ export default function KnowledgeArticleScreen() {
         <ScrollView
           contentContainerStyle={[
             styles.content,
-            // Reserve room for the floating tab bar AND, when shown, the sticky
-            // ack CTA which itself sits a full tabBarHeight above the bar.
-            { paddingBottom: (showStickyAck ? tabBarHeight + STICKY_CTA_BAND : 0) + tabBarHeight + spacing[6] },
+            // Reserve room for the floating tab bar, plus — when the ack CTA is
+            // shown — exactly the action-bar band (which floats just above the
+            // tab bar). No double tab-bar inset, so no oversized dead zone.
+            {
+              paddingBottom:
+                tabBarHeight + (showStickyAck ? ACK_BAR_GAP + ACK_BAR_HEIGHT : 0) + spacing[6],
+            },
           ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
@@ -432,13 +441,19 @@ export default function KnowledgeArticleScreen() {
         </ScrollView>
       ) : null}
 
-      {/* Sticky «Ознакомлен» CTA — floats a full tabBarHeight above the bar so
-          the floating Liquid-Glass tab bar never overlaps it (visible gap). */}
+      {/* Sticky «Ознакомлен» CTA — a compact bar that floats just above the
+          floating Liquid-Glass tab bar. Anchored at `bottom: tabBarHeight +
+          gap` so the home-indicator safe area (already inside tabBarHeight) is
+          respected exactly once — no doubled inset, no oversized chin. */}
       {showStickyAck ? (
         <View
           style={[
             styles.stickyWrap,
-            { paddingBottom: tabBarHeight, backgroundColor: palette.bg.elevated, borderTopColor: palette.border.subtle },
+            {
+              bottom: tabBarHeight + ACK_BAR_GAP,
+              backgroundColor: palette.bg.elevated,
+              borderTopColor: palette.border.subtle,
+            },
           ]}
         >
           <Pressable
@@ -449,7 +464,7 @@ export default function KnowledgeArticleScreen() {
               { backgroundColor: palette.accent.primary, opacity: pressed || ackMutation.isPending ? 0.85 : 1 },
             ]}
           >
-            <Ionicons name="checkmark-circle" size={20} color={colors.white} />
+            <Ionicons name="checkmark" size={20} color={colors.white} />
             <Text variant="callout" color={colors.white}>
               {ackMutation.isPending ? 'Подтверждаем…' : regulationUpdated ? 'Ознакомиться заново' : 'Ознакомлен'}
             </Text>
@@ -621,9 +636,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
+    // `bottom` is set inline = tabBarHeight + gap, so the bar floats just
+    // above the tab bar. Compact padding only — no extra safe-area inset here.
     paddingHorizontal: spacing[4],
     paddingTop: spacing[3],
+    paddingBottom: spacing[3],
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   ackBtn: {
