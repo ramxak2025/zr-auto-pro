@@ -264,6 +264,14 @@ export class WarrantyService {
 
       if (!warrantyDays || warrantyDays <= 0) continue;
 
+      // expires_at = started_at + warranty_days. We pass warranty_days TWICE
+      // (as $9 for the integer column AND as $11 for the interval) on purpose:
+      // reusing a single placeholder both as an int column value and inside an
+      // interval expression makes Postgres deduce two different types for it
+      // ("inconsistent types deduced for parameter $9") and the INSERT fails —
+      // which silently broke EVERY warranty-bearing check (500) and meant no
+      // warranty_claims row was ever created. make_interval(days => $11) keeps
+      // $11 unambiguously integer, $9 unambiguously the int column value.
       await client.query(
         `INSERT INTO warranty_claims (
            tenant_id, check_id, client_id, car_id, kind,
@@ -272,7 +280,7 @@ export class WarrantyService {
          ) VALUES (
            $1, $2, $3, $4, $5,
            $6, $7, $8, $9,
-           $10::timestamptz, ($10::timestamptz + ($9 || ' days')::interval)
+           $10::timestamptz, ($10::timestamptz + make_interval(days => $11))
          )`,
         [
           tenantID,
@@ -285,6 +293,7 @@ export class WarrantyService {
           line.itemName ?? null,
           warrantyDays,
           checkDate,
+          warrantyDays,
         ],
       );
     }

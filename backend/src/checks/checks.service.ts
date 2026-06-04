@@ -679,18 +679,10 @@ export class ChecksService {
     } catch (err) {
       await client.query('ROLLBACK');
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      // Log the full reason server-side (pino + Sentry) for diagnosis; return a
+      // generic message to the client so raw SQL/internals are never exposed.
       this.logger.error(`Check create error: ${err}`);
-      // TEMP DIAGNOSTIC (owner debugging a 500 on Пробить): surface the real
-      // Postgres/runtime reason to the authenticated client so we can see it
-      // without server-log access. Remove once the root cause is fixed.
-      const e = err as { message?: string; code?: string; detail?: string; column?: string; table?: string };
-      throw new InternalServerErrorException({
-        message: `Ошибка сервера: ${e?.message ?? 'unknown'}`,
-        pgCode: e?.code,
-        pgDetail: e?.detail,
-        pgColumn: e?.column,
-        pgTable: e?.table,
-      });
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
       client.release();
     }
