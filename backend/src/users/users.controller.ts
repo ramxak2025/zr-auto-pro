@@ -28,6 +28,28 @@ export class UsersController {
     return this.usersService.getMasters(user.tenantID);
   }
 
+  // ─── «Уволенные» (dismissed recycle bin) ────────────────────────────
+  // Declared BEFORE the `:id` route so "dismissed" isn't captured as an id.
+
+  @Roles(...MANAGER_ROLES)
+  @Get('dismissed')
+  getDismissed(@CurrentUser() user: JwtPayload) {
+    return this.usersService.listDismissed(user.tenantID);
+  }
+
+  @Roles(...MANAGER_ROLES)
+  @Post(':id/restore')
+  restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.restore(id, user.tenantID);
+  }
+
+  // "Delete completely" — keeps the row (FK/history) but hides it forever.
+  @Roles(...MANAGER_ROLES)
+  @Post(':id/purge')
+  purge(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.purge(id, user.tenantID, user.userID);
+  }
+
   @Roles(...MANAGER_ROLES)
   @Post('order')
   updateOrder(@CurrentUser() user: JwtPayload, @Body() dto: { orderedIds: string[] }) {

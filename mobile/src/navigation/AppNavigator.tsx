@@ -1,7 +1,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { StackActions } from '@react-navigation/native';
+import { StackActions, CommonActions } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import PlatformTabBar from './TabBar';
 
@@ -291,6 +291,20 @@ function EquipmentStackNavigator() {
   );
 }
 
+/**
+ * readMoreStackState — reads the nested MoreStack navigation state out of
+ * the outer tab navigator's state. Returns `{ key, index, routes }` or
+ * `null` if the inner stack hasn't initialised yet (cold tab). Used by the
+ * MoreTab listeners below to reason about where the user is INSIDE the
+ * «Ещё» section without holding a ref to the inner navigator.
+ */
+function readMoreStackState(navigation: any): { key: string; index: number; routes: any[] } | null {
+  const moreTabRoute = navigation.getState().routes.find((r: any) => r.name === 'MoreTab');
+  const innerState = moreTabRoute?.state;
+  if (!innerState?.key || !Array.isArray(innerState.routes)) return null;
+  return { key: innerState.key, index: innerState.index ?? innerState.routes.length - 1, routes: innerState.routes };
+}
+
 function TabNavigator() {
   return (
     <Tab.Navigator
@@ -317,31 +331,69 @@ function TabNavigator() {
       <Tab.Screen name="NewCheck" component={CheckCreateScreen} />
       <Tab.Screen name="Checks" component={ChecksStackNavigator} />
       {/*
-        MoreTab — pops the nested MoreStack back to root (`MoreHome`)
-        whenever the tab loses focus, WITHOUT pulling the user back to
-        the MoreTab. The previous implementation used
-        `navigation.navigate('MoreTab', { screen: 'MoreHome' })` which
-        *re-focused* MoreTab — so any tap on another tab silently
-        landed back on Ещё. Owner-reported regression.
+        MoreTab — three coordinated listeners keep the «Ещё» back-stack
+        and tab behaviour native:
 
-        The right primitive is `StackActions.popToTop({ target: <innerKey> })` —
-        it resets the inner stack by addressing the nested navigator's
-        key directly, so the outer tab navigator's focus is left
-        untouched. The user goes wherever they actually tapped.
+        1. `state` (Bug B fix) — guarantees MoreHome ALWAYS sits at the
+           bottom of the MoreStack history. Dashboard shortcuts and other
+           deep links enter a section via
+           `navigate('Main', { screen: 'MoreTab', params: { screen: '<Section>' } })`.
+           React Navigation resolves that nested navigate against a
+           freshly-focused, empty MoreStack and makes the section the
+           ONLY route → `[Section]`. Back then has nothing to pop inside
+           MoreStack and falls through to the previous tab (Главная).
+           Here we detect `routes[0].name !== 'MoreHome'` and reset the
+           inner stack to `[MoreHome, ...routes]`, preserving the focused
+           index. Net back path becomes
+           detail → section list → Ещё menu, regardless of entry point.
+           (Entry from the Ещё menu itself already pushes onto MoreHome,
+           so routes[0] is MoreHome and this is a no-op.)
+
+        2. `tabPress` (Bug C fix) — a single tap on «Ещё» always lands on
+           the Ещё menu. If MoreTab is already focused and the inner stack
+           isn't at MoreHome, prevent the default (which would otherwise
+           do nothing) and popToTop the inner stack. A first tap from
+           another tab is left untouched → it just switches to MoreTab,
+           which the `state` listener / blur-reset already pin to MoreHome.
+
+        3. `blur` — pops the nested MoreStack back to MoreHome when the tab
+           loses focus, WITHOUT re-focusing MoreTab (addresses the inner
+           stack by key so the outer tab focus is left where the user
+           actually tapped).
       */}
       <Tab.Screen
         name="MoreTab"
         component={MoreStackNavigator}
         listeners={({ navigation }) => ({
+          state: () => {
+            const inner = readMoreStackState(navigation);
+            if (!inner) return;
+            // MoreHome already at the bottom → nothing to fix.
+            if (inner.routes[0]?.name === 'MoreHome') return;
+            const moreHomeRoute = { name: 'MoreHome' };
+            navigation.dispatch({
+              ...CommonActions.reset({
+                index: inner.index + 1,
+                routes: [moreHomeRoute, ...inner.routes],
+              }),
+              target: inner.key,
+            });
+          },
+          tabPress: (e) => {
+            // Only intercept when «Ещё» is the already-active tab. If the
+            // user is arriving from another tab, let the default switch
+            // happen (blur on the previous tab already reset MoreStack).
+            if (navigation.getState().routes[navigation.getState().index]?.name !== 'MoreTab') return;
+            const inner = readMoreStackState(navigation);
+            if (inner && inner.index > 0) {
+              e.preventDefault();
+              navigation.dispatch({ ...StackActions.popToTop(), target: inner.key });
+            }
+          },
           blur: () => {
-            const state = navigation.getState();
-            const moreTabRoute = state.routes.find((r) => r.name === 'MoreTab');
-            const innerState = (moreTabRoute as any)?.state;
-            if (innerState?.key && (innerState?.index ?? 0) > 0) {
-              navigation.dispatch({
-                ...StackActions.popToTop(),
-                target: innerState.key,
-              });
+            const inner = readMoreStackState(navigation);
+            if (inner && inner.index > 0) {
+              navigation.dispatch({ ...StackActions.popToTop(), target: inner.key });
             }
           },
         })}

@@ -63,12 +63,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT is_active, COALESCE(tenant_id::text, '') as tenant_id, role FROM users WHERE id=$1`,
+      `SELECT is_active, COALESCE(tenant_id::text, '') as tenant_id, role, dismissed_at, purged_at FROM users WHERE id=$1`,
       [userID],
     );
 
     if (rows.length === 0) {
       throw new UnauthorizedException({ message: 'Пользователь не найден' });
+    }
+
+    // 065_users_dismissed — a dismissed («Уволенные») or purged user must not be
+    // able to authenticate. The row is kept only so historical checks/shifts
+    // resolve their name; the person can no longer use the app.
+    if (rows[0].dismissed_at || rows[0].purged_at) {
+      throw new UnauthorizedException({ message: 'Аккаунт уволен' });
     }
 
     if (!rows[0].is_active) {

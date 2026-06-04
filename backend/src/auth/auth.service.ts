@@ -22,7 +22,7 @@ const USER_WITH_TENANT_COLUMNS = `
   u.id, u.phone, u.full_name, u.avatar, u.role,
   COALESCE(u.salary_percent, 0) as salary_percent,
   COALESCE(u.permissions, '{}') as permissions,
-  u.is_active, u.tenant_id, u.created_at,
+  u.is_active, u.dismissed_at, u.purged_at, u.tenant_id, u.created_at,
   CASE WHEN t.id IS NOT NULL THEN
     json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
       'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
@@ -155,6 +155,14 @@ export class AuthService {
     }
 
     const row = rows[0];
+
+    // 065_users_dismissed — a dismissed («Уволенные») or purged employee can no
+    // longer log in. Their row is retained only so historical checks/shifts keep
+    // resolving the name; the person has no access to the app.
+    if (row.dismissed_at || row.purged_at) {
+      this.logger.warn(`Login FAILED: phone=${phone} — dismissed`);
+      throw new UnauthorizedException({ message: 'Аккаунт уволен' });
+    }
 
     if (!row.is_active) {
       this.logger.warn(`Login FAILED: phone=${phone} — account deactivated`);

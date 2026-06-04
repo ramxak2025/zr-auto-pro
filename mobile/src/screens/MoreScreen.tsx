@@ -159,6 +159,20 @@ const menuSections: MenuSection[] = [
     title: 'Склад',
     items: [
       {
+        // Re-added after the menu regroup dropped it (#bugD). The route
+        // `Services` stays registered & gated in AppNavigator; here we
+        // restore its catalog-adjacent entry so it's reachable again on
+        // iOS + Android. Keeps its `services_view` feature gate, matching
+        // the route's `gated('services_view', ServicesScreen)`.
+        label: 'Услуги',
+        description: 'Каталог услуг и цены',
+        screen: 'Services',
+        featureKey: 'services_view',
+        icon: 'pricetags-outline',
+        iconBg: colors.orange[50],
+        iconColor: colors.orange[600],
+      },
+      {
         label: 'Поставщики',
         description: 'Поставки и расчёты',
         screen: 'Suppliers',

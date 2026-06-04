@@ -81,6 +81,19 @@ export interface User {
   hiddenFromSchedule?: boolean;
   /** 055 — hide everywhere: lists + cannot be selected as master on a new check. */
   hiddenEverywhere?: boolean;
+  /**
+   * 065 — «Уволенные» recycle bin. NULL on an active employee. When set, the
+   * user is dismissed (fired): hidden from every active list, restorable within
+   * the year. The row is kept so historical checks/shifts still resolve the
+   * name — the client should render such a user as «Уволен» read-only.
+   */
+  dismissedAt?: string | null;
+  /**
+   * 065 — set on "delete completely" (purge). The row is STILL kept so FKs and
+   * historical names resolve, but the user is hidden everywhere (including the
+   * Уволенные list) and can no longer be restored.
+   */
+  purgedAt?: string | null;
   tenantId?: string;
   tenant?: Tenant;
   createdAt: string;

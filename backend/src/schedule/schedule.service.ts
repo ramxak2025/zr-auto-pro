@@ -206,6 +206,7 @@ export class ScheduleService {
              AND s.tenant_id = $1
              AND s.closed_at IS NULL
        WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
+         AND u.dismissed_at IS NULL AND u.purged_at IS NULL
        ORDER BY u.id, u.full_name`,
       [tenantID],
     );
@@ -451,7 +452,7 @@ export class ScheduleService {
       }));
     } else {
       const { rows: uRows } = await this.pool.query(
-        `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('master', 'admin')`,
+        `SELECT id, COALESCE(days_off, '[]') as days_off FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('master', 'admin') AND dismissed_at IS NULL AND purged_at IS NULL`,
         [tenantID],
       );
       userRows = uRows.map((r) => ({

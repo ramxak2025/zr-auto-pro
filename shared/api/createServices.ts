@@ -158,7 +158,13 @@ export function createUsersApi(api: HttpClient) {
     getById: (id: string) => api.get<User>(`/users/${id}`),
     create: (data: CreateUserRequest) => api.post<User>('/users', data),
     update: (id: string, data: UpdateUserRequest) => api.patch<User>(`/users/${id}`, data),
+    // remove() no longer hard-deletes — it SOFT-DISMISSES (moves the employee to
+    // «Уволенные»). The row is kept so historical checks/shifts resolve the name.
     remove: (id: string) => api.delete(`/users/${id}`),
+    // «Уволенные» recycle bin: list dismissed-not-purged, restore, or purge.
+    listDismissed: () => api.get<User[]>('/users/dismissed'),
+    restore: (id: string) => api.post<User>(`/users/${id}/restore`),
+    purge: (id: string) => api.post(`/users/${id}/purge`),
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
     setProductCommissions: (
       id: string,

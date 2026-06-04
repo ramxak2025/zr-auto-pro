@@ -72,6 +72,11 @@ export class UsersService {
       // 055_user_visibility_flags — FE filters by context, server never hides.
       hiddenFromSchedule: !!row.hidden_from_schedule,
       hiddenEverywhere: !!row.hidden_everywhere,
+      // 065_users_dismissed — «Уволенные» recycle bin. NULL on every active
+      // employee. dismissed_at set → in the bin (restorable). purged_at set →
+      // "deleted completely" but row kept so FKs / historical names resolve.
+      dismissedAt: row.dismissed_at ?? null,
+      purgedAt: row.purged_at ?? null,
       tenantId: row.tenant_id,
       createdAt: row.created_at,
     };
@@ -90,8 +95,11 @@ export class UsersService {
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
+              dismissed_at, purged_at,
               tenant_id, created_at
-       FROM users WHERE tenant_id = $1 ORDER BY sort_order, created_at`,
+       FROM users
+       WHERE tenant_id = $1 AND dismissed_at IS NULL AND purged_at IS NULL
+       ORDER BY sort_order, created_at`,
       [tenantID],
     );
     return rows.map(this.mapUser);
@@ -121,9 +129,11 @@ export class UsersService {
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
+              dismissed_at, purged_at,
               tenant_id, created_at
        FROM users
        WHERE tenant_id = $1 AND is_active = true AND role IN ('master','admin')
+         AND dismissed_at IS NULL AND purged_at IS NULL
        ORDER BY full_name`,
       [tenantID],
     );
@@ -142,10 +152,15 @@ export class UsersService {
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
+              dismissed_at, purged_at,
               tenant_id, created_at
        FROM users WHERE id = $1 AND tenant_id = $2`,
       [id, tenantID],
     );
+    // NOTE: intentionally NOT filtered by dismissed_at / purged_at. A dismissed
+    // (or purged) user is still referenced by historical checks/shifts, so this
+    // must resolve their name. The mapped `dismissedAt` / `purgedAt` tell the
+    // client to render «Уволен» read-only and block navigation/editing.
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
     return this.mapUser(rows[0]);
   }
@@ -181,7 +196,7 @@ export class UsersService {
       const { rows } = await this.pool.query(
         `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, true, $7)
-         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, tenant_id, created_at`,
+         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, tenant_id, created_at`,
         [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, perms, tenantID],
       );
       return this.mapUser(rows[0]);
@@ -312,7 +327,7 @@ export class UsersService {
 
     const { rows } = await this.pool.query(
       `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, tenant_id, created_at`,
+       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, tenant_id, created_at`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
@@ -350,23 +365,138 @@ export class UsersService {
     return this.mapUser(rows[0]);
   }
 
-  async remove(id: string, tenantID: string, currentUserID: string, currentRole: string) {
+  /**
+   * SOFT-DISMISS — the "delete" action from the FE. We NEVER hard-delete a
+   * users row: historical checks / shifts / salary / equipment reference it by
+   * FK, and old order-narjads must keep resolving the master's name. Instead we
+   * stamp `dismissed_at`, which moves the user into «Уволенные» (recycle bin):
+   * hidden from every active list, restorable within the year, but the row —
+   * and every relation that points at it — stays intact.
+   *
+   * `is_active` is a SEPARATE concern (the active/inactive toggle); dismissal
+   * does not touch it so a restored user keeps their previous active flag.
+   */
+  async remove(id: string, tenantID: string, currentUserID: string, _currentRole: string) {
     if (id === currentUserID) {
       throw new BadRequestException({ message: 'Нельзя удалить себя' });
     }
 
-    const { rows } = await this.pool.query('SELECT role FROM users WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+    const { rows } = await this.pool.query(
+      'SELECT role, dismissed_at, purged_at FROM users WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
 
     if (rows[0].role === 'superadmin' || rows[0].role === 'director') {
       throw new ForbiddenException({ message: 'Нельзя удалить директора или суперадмина' });
     }
 
-    await this.pool.query('DELETE FROM users WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
-    // Purge the deleted user's cached JWT validations so any still-signed token
-    // is rejected (user-not-found) on the next request instead of cache-served.
+    if (rows[0].dismissed_at || rows[0].purged_at) {
+      // Already in / past the recycle bin — nothing to do, keep it idempotent.
+      return { message: 'Сотрудник уже уволен' };
+    }
+
+    await this.pool.query(
+      `UPDATE users SET dismissed_at = now(), updated_at = now() WHERE id=$1 AND tenant_id=$2`,
+      [id, tenantID],
+    );
+    // Drop the dismissed user's cached JWT validations so their token starts
+    // being re-checked against the DB on the next request.
     invalidateAuthUser(id);
-    return { message: 'Удалено' };
+    return { message: 'Сотрудник перемещён в «Уволенные»' };
+  }
+
+  /**
+   * List the «Уволенные» — dismissed but not yet purged, tenant-scoped, newest
+   * dismissal first. Returns the full mapped User (with `dismissedAt`) so the
+   * UI can render name, role, avatar and the dismissal date.
+   */
+  async listDismissed(tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT id, phone, full_name, username, avatar, role,
+              COALESCE(salary_percent, 0) as salary_percent,
+              COALESCE(product_salary_percent, 0) as product_salary_percent,
+              COALESCE(permissions, '{}') as permissions,
+              COALESCE(days_off, '[]') as days_off,
+              COALESCE(sort_order, 0) as sort_order,
+              is_active, team,
+              COALESCE(can_add_expenses, false) as can_add_expenses,
+              daily_expense_limit,
+              COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
+              COALESCE(hidden_everywhere, false) as hidden_everywhere,
+              dismissed_at, purged_at,
+              tenant_id, created_at
+       FROM users
+       WHERE tenant_id = $1 AND dismissed_at IS NOT NULL AND purged_at IS NULL
+       ORDER BY dismissed_at DESC`,
+      [tenantID],
+    );
+    return rows.map(this.mapUser);
+  }
+
+  /**
+   * Restore a dismissed user back to active — clears `dismissed_at`. Only valid
+   * while the user is currently dismissed and NOT purged (a purged user is
+   * permanently retired for history and cannot return).
+   */
+  async restore(id: string, tenantID: string) {
+    const { rows } = await this.pool.query(
+      'SELECT dismissed_at, purged_at FROM users WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    if (rows[0].purged_at) {
+      throw new BadRequestException({ message: 'Сотрудник удалён навсегда и не может быть восстановлен' });
+    }
+    if (!rows[0].dismissed_at) {
+      throw new BadRequestException({ message: 'Сотрудник не находится в «Уволенных»' });
+    }
+
+    await this.pool.query(`UPDATE users SET dismissed_at = NULL, updated_at = now() WHERE id=$1 AND tenant_id=$2`, [
+      id,
+      tenantID,
+    ]);
+    // Role / active flag may matter again immediately — flush the auth cache.
+    invalidateAuthUser(id);
+    return this.getById(id, tenantID);
+  }
+
+  /**
+   * "Delete completely" (purge) — stamps `purged_at` but KEEPS THE ROW so every
+   * FK (checks, shifts, salary, equipment) stays resolvable and old documents
+   * still show the name. The user vanishes from «Уволенные» too and can no
+   * longer be restored. This is the closest thing to a hard delete we allow.
+   * Only a dismissed user can be purged (you delete-completely from the bin).
+   */
+  async purge(id: string, tenantID: string, currentUserID: string) {
+    if (id === currentUserID) {
+      throw new BadRequestException({ message: 'Нельзя удалить себя' });
+    }
+
+    const { rows } = await this.pool.query(
+      'SELECT role, dismissed_at, purged_at FROM users WHERE id=$1 AND tenant_id=$2',
+      [id, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    if (rows[0].role === 'superadmin' || rows[0].role === 'director') {
+      throw new ForbiddenException({ message: 'Нельзя удалить директора или суперадмина' });
+    }
+    if (rows[0].purged_at) {
+      // Already purged — idempotent no-op.
+      return { message: 'Сотрудник уже удалён' };
+    }
+    if (!rows[0].dismissed_at) {
+      throw new BadRequestException({ message: 'Сначала переместите сотрудника в «Уволенные»' });
+    }
+
+    await this.pool.query(`UPDATE users SET purged_at = now(), updated_at = now() WHERE id=$1 AND tenant_id=$2`, [
+      id,
+      tenantID,
+    ]);
+    // The user can never authenticate again — drop any cached validations.
+    invalidateAuthUser(id);
+    return { message: 'Сотрудник удалён навсегда' };
   }
 
   // ─── Product Commissions ────────────────────────────────────────────

@@ -122,20 +122,29 @@ export default function ActiveWarrantiesSection({ clientId, carId }: ActiveWarra
   const palette = useColors();
   const isDark = palette.mode === 'dark';
 
+  // We can show warranties scoped to a client (all their cars) OR to a
+  // single car — at least one filter must be present, otherwise the backend
+  // (correctly) returns an empty list. `enabled` follows the same rule so we
+  // never fire a useless request that can only come back empty.
+  const hasScope = !!clientId || !!carId;
+
   const { data } = useQuery<ActiveWarranty[]>({
-    // Key on clientId only — the section always shows the whole client's
-    // active warranties. `carId` (when passed) only narrows the request
-    // params; including it in the key as a tail keeps the cache correct.
+    // Key on both scope ids — the default cash-screen usage passes only
+    // `clientId` (whole-client view); a future car-scoped caller can pass
+    // `carId`. Including both in the key keeps the cache correct either way.
     queryKey: ['warranty-active-client', clientId, carId],
     queryFn: async () => {
       const res = await warrantyApi.active({ clientId, carId });
-      return res.data || [];
+      // Be defensive about the payload: `res.data` is the ActiveWarranty[]
+      // array, but guard against a non-array (e.g. an error envelope) so a
+      // malformed response degrades to "nothing to show", never a crash.
+      return Array.isArray(res.data) ? res.data : [];
     },
-    enabled: !!clientId,
+    enabled: hasScope,
     staleTime: 60_000,
   });
 
-  if (!clientId) return null;
+  if (!hasScope) return null;
   const items = data || [];
   if (items.length === 0) return null;
 
