@@ -1,10 +1,26 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Building2, Users, ArrowRight, Activity, CreditCard } from 'lucide-react';
+import {
+  Building2,
+  Users,
+  ArrowRight,
+  Activity,
+  CreditCard,
+  TrendingUp,
+  BadgeRussianRuble,
+  CalendarClock,
+  UserPlus,
+  Megaphone,
+  ScrollText,
+} from 'lucide-react';
 
 import { tenantsApi } from '../../api/services';
 import { PlatformStats } from '../../types';
 import LoadingSpinner from '../../components/LoadingSpinner';
+
+function formatRub(value: number | undefined): string {
+  return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
+}
 
 export default function AdminDashboardPage() {
   const { data: stats, isLoading } = useQuery({
@@ -49,6 +65,54 @@ export default function AdminDashboardPage() {
 
         <div className="stat-card">
           <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-red-50 rounded-xl">
+              <CalendarClock className="w-5 h-5 text-red-600" />
+            </div>
+            <div>
+              <p className="stat-label">Истёкших</p>
+              <p className="stat-value">{stats?.expiredTenants ?? 0}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-emerald-50 rounded-xl">
+              <BadgeRussianRuble className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div>
+              <p className="stat-label">MRR (мес. выручка)</p>
+              <p className="stat-value">{formatRub(stats?.mrr)}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-teal-50 rounded-xl">
+              <TrendingUp className="w-5 h-5 text-teal-600" />
+            </div>
+            <div>
+              <p className="stat-label">ARPU (на клиента)</p>
+              <p className="stat-value">{formatRub(stats?.arpu)}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-indigo-50 rounded-xl">
+              <UserPlus className="w-5 h-5 text-indigo-600" />
+            </div>
+            <div>
+              <p className="stat-label">Новых в этом месяце</p>
+              <p className="stat-value">{stats?.newTenantsThisMonth ?? 0}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="stat-card">
+          <div className="flex items-center gap-3">
             <div className="p-2.5 bg-purple-50 rounded-xl">
               <Users className="w-5 h-5 text-purple-600" />
             </div>
@@ -74,9 +138,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="font-medium text-gray-900">Управление клиентами</p>
-              <p className="text-sm text-gray-500">
-                Просмотр, создание и редактирование автосервисов
-              </p>
+              <p className="text-sm text-gray-500">Просмотр, создание и редактирование автосервисов</p>
             </div>
           </div>
           <ArrowRight className="w-5 h-5 text-gray-400" />
@@ -92,9 +154,39 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="font-medium text-gray-900">Управление тарифами</p>
-              <p className="text-sm text-gray-500">
-                Настройка тарифных планов и цен
-              </p>
+              <p className="text-sm text-gray-500">Настройка тарифных планов и цен</p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-gray-400" />
+        </Link>
+
+        <Link
+          to="/admin/broadcast"
+          className="card card-body flex items-center justify-between hover:shadow-md transition-shadow"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-violet-50 rounded-lg">
+              <Megaphone className="w-5 h-5 text-violet-600" />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Рассылка владельцам</p>
+              <p className="text-sm text-gray-500">Объявление со ссылкой и кнопками — всем директорам</p>
+            </div>
+          </div>
+          <ArrowRight className="w-5 h-5 text-gray-400" />
+        </Link>
+
+        <Link
+          to="/admin/audit-log"
+          className="card card-body flex items-center justify-between hover:shadow-md transition-shadow"
+        >
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-amber-50 rounded-lg">
+              <ScrollText className="w-5 h-5 text-amber-600" />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900">Журнал действий</p>
+              <p className="text-sm text-gray-500">История операций администраторов платформы</p>
             </div>
           </div>
           <ArrowRight className="w-5 h-5 text-gray-400" />

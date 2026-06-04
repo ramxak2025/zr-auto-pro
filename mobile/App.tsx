@@ -10,6 +10,7 @@ import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { AuthProvider } from './src/contexts/AuthContext';
 import { ThemeProvider, useThemeMode } from './src/contexts/ThemeContext';
 import { SalaryNotificationProvider } from './src/contexts/SalaryNotificationContext';
+import { BroadcastNotificationProvider } from './src/contexts/BroadcastNotificationContext';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
@@ -132,6 +133,14 @@ export default function App() {
       if (data?.checkId) {
         console.log('[Push] Notification tapped with checkId:', data.checkId);
       }
+      // Tapped superadmin broadcast while backgrounded: there's no nav ref
+      // here to push a screen, but the BroadcastNotificationProvider re-fetches
+      // unseen broadcasts whenever the app returns to the foreground (AppState
+      // → 'active'). Bringing the app forward via the tap therefore surfaces
+      // the modal on its own — no extra handling needed at this level.
+      if (data?.type === 'superadmin_broadcast') {
+        console.log('[Push] Broadcast tapped — provider will surface it on foreground');
+      }
     });
     return () => sub.remove();
   }, []);
@@ -207,34 +216,40 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
               has an unconfirmed salary payment. Must live INSIDE
               AuthProvider so it can read `useAuth()`, and inside
               QueryClientProvider so it can use the shared queryClient. */}
+          {/* BroadcastNotificationProvider mounts the global superadmin
+              broadcast modal — a center-screen blur-behind card that pops
+              when «поддержка» sends an announcement. Lives alongside the
+              salary modal provider (same AuthProvider + QueryClient scope). */}
           <SalaryNotificationProvider>
-            <NavigationContainer
-              theme={{
-                dark: mode === 'dark',
-                colors: {
-                  primary: palette.accent.primary,
-                  background: palette.bg.canvas,
-                  card: 'transparent',
-                  text: palette.text.primary,
-                  border: palette.border.subtle,
-                  notification: palette.accent.primary,
-                },
-                fonts: {
-                  regular: { fontFamily: 'System', fontWeight: '400' },
-                  medium: { fontFamily: 'System', fontWeight: '500' },
-                  bold: { fontFamily: 'System', fontWeight: '700' },
-                  heavy: { fontFamily: 'System', fontWeight: '900' },
-                },
-              }}
-            >
-              <StatusBar
-                barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
-                backgroundColor="transparent"
-                translucent
-              />
-              {fontsReady && <AppNavigator />}
-              {showSplash && <SplashOverlay />}
-            </NavigationContainer>
+            <BroadcastNotificationProvider>
+              <NavigationContainer
+                theme={{
+                  dark: mode === 'dark',
+                  colors: {
+                    primary: palette.accent.primary,
+                    background: palette.bg.canvas,
+                    card: 'transparent',
+                    text: palette.text.primary,
+                    border: palette.border.subtle,
+                    notification: palette.accent.primary,
+                  },
+                  fonts: {
+                    regular: { fontFamily: 'System', fontWeight: '400' },
+                    medium: { fontFamily: 'System', fontWeight: '500' },
+                    bold: { fontFamily: 'System', fontWeight: '700' },
+                    heavy: { fontFamily: 'System', fontWeight: '900' },
+                  },
+                }}
+              >
+                <StatusBar
+                  barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
+                  backgroundColor="transparent"
+                  translucent
+                />
+                {fontsReady && <AppNavigator />}
+                {showSplash && <SplashOverlay />}
+              </NavigationContainer>
+            </BroadcastNotificationProvider>
           </SalaryNotificationProvider>
         </AuthProvider>
       </QueryClientProvider>

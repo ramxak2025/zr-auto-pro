@@ -266,6 +266,15 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
+        // No `roles` filter — every user manages their own notifications.
+        label: 'Уведомления',
+        description: 'Какие уведомления вы получаете',
+        screen: 'NotificationSettings',
+        icon: 'notifications-outline',
+        iconBg: colors.amber[50],
+        iconColor: colors.amber[600],
+      },
+      {
         label: 'Настройки компании',
         description: 'Реквизиты и данные для чеков',
         screen: 'CompanySettings',
@@ -285,20 +294,10 @@ const menuSections: MenuSection[] = [
       },
     ],
   },
-  {
-    title: 'Админ',
-    items: [
-      {
-        label: 'Админ-панель',
-        description: 'Управление тенантами и планами',
-        screen: 'Admin',
-        roles: ['superadmin'],
-        icon: 'shield-checkmark-outline',
-        iconBg: colors.red[50],
-        iconColor: colors.red[600],
-      },
-    ],
-  },
+  // The «Админ» group was removed: superadmins now run a dedicated
+  // platform-operator shell (AdminShellNavigator) and never reach the
+  // car-service «Ещё» menu. Directors / masters never had the superadmin role,
+  // so this entry was unreachable for them. See AppNavigator → MainShell.
 ];
 
 interface MenuRowProps {

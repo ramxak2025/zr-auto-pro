@@ -3,6 +3,7 @@ import {
   createAuthApi,
   createUsersApi,
   createTenantsApi,
+  createAdminApi,
   createMyCompanyApi,
   createPlansApi,
   createSubscriptionApi,
@@ -35,11 +36,15 @@ import {
   createClientSourcesApi,
   createJournalApi,
   createKnowledgeApi,
+  createNotificationsApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
 export const usersApi = createUsersApi(api);
 export const tenantsApi = createTenantsApi(api);
+// Superadmin platform-operator endpoints not tied to a single tenant
+// (audit log). Mirrors the createNotificationsApi factory wiring above.
+export const adminApi = createAdminApi(api);
 export const myCompanyApi = createMyCompanyApi(api);
 export const plansApi = createPlansApi(api);
 export const subscriptionApi = createSubscriptionApi(api);
@@ -73,6 +78,7 @@ export const warehouseAnalyticsApi = createWarehouseAnalyticsApi(api);
 export const clientSourcesApi = createClientSourcesApi(api);
 export const journalApi = createJournalApi(api);
 export const knowledgeApi = createKnowledgeApi(api);
+export const notificationsApi = createNotificationsApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

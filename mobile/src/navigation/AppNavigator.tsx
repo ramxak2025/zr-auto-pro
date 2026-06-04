@@ -38,8 +38,8 @@ import KnowledgeTroubleshootingEditorScreen from '../screens/KnowledgeTroublesho
 import MarketingScreen from '../screens/MarketingScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
+import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import SubscriptionScreen from '../screens/SubscriptionScreen';
-import AdminScreen from '../screens/AdminScreen';
 import CallsScreen from '../screens/CallsScreen';
 import EquipmentScreen, { EquipmentEmployeeScreen } from '../screens/EquipmentScreen';
 import EmployeesScreen from '../screens/EmployeesScreen';
@@ -51,6 +51,10 @@ import IntegrationsScreen from '../screens/IntegrationsScreen';
 import WarehouseAnalyticsScreen from '../screens/WarehouseAnalyticsScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import FeatureGate from '../components/FeatureGate';
+import AdminShellNavigator from './AdminShellNavigator';
+import ImpersonationBanner from '../components/ImpersonationBanner';
+import { View } from 'react-native';
+import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 
 // Feature descriptions for lock screens
 const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
@@ -241,7 +245,8 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Equipment" component={EquipmentStackNavigator} />
       <MoreStack.Screen name="Users" component={gated('users_manage', UsersScreen)} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
-      <MoreStack.Screen name="Admin" component={AdminScreen} />
+      {/* UNGATED — every role manages their own notification preferences. */}
+      <MoreStack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     </MoreStack.Navigator>
   );
 }
@@ -406,6 +411,52 @@ function TabNavigator() {
   );
 }
 
+/**
+ * MainShell — the authenticated root. Branches the navigator by role:
+ *
+ *   • A real superadmin (role 'superadmin', NOT impersonating) gets the
+ *     dedicated platform-operator AdminShellNavigator with its «особое нижнее
+ *     меню». No car-service tabs, no Касса FAB.
+ *   • Everyone else — directors, masters, AND a superadmin currently
+ *     impersonating a tenant owner (role becomes 'director') — gets the normal
+ *     car-service TabNavigator, 100% untouched.
+ *
+ * During impersonation a persistent ImpersonationBanner is pushed above the
+ * navigator (and the navigator subtree gets a zeroed top inset so headers
+ * don't double-pad). A normal session renders the navigator straight — zero
+ * extra wrapping.
+ */
+function MainShell() {
+  const { user, isImpersonating } = useAuth();
+  const isPlatformOperator = user?.role === 'superadmin' && !isImpersonating;
+
+  const navigator = isPlatformOperator ? <AdminShellNavigator /> : <TabNavigator />;
+
+  // Fast path — no impersonation banner. Render the navigator straight, so a
+  // normal session has ZERO extra wrapping and the top inset stays untouched.
+  if (!isImpersonating) {
+    return navigator;
+  }
+
+  // Impersonating: the banner sits ABOVE the navigator and PUSHES the
+  // car-service tree down (instead of overlapping the screen header). The
+  // banner itself consumes the real top inset; we then hand the navigator
+  // subtree a ZEROED top inset so screen headers don't double-pad below the
+  // already-drawn status-bar strip.
+  return (
+    <View style={{ flex: 1 }}>
+      <ImpersonationBanner />
+      <SafeAreaInsetsContext.Consumer>
+        {(insets) => (
+          <SafeAreaInsetsContext.Provider value={{ ...(insets ?? { top: 0, bottom: 0, left: 0, right: 0 }), top: 0 }}>
+            <View style={{ flex: 1 }}>{navigator}</View>
+          </SafeAreaInsetsContext.Provider>
+        )}
+      </SafeAreaInsetsContext.Consumer>
+    </View>
+  );
+}
+
 export default function AppNavigator() {
   const { user, loading } = useAuth();
 
@@ -419,7 +470,7 @@ export default function AppNavigator() {
         <Stack.Screen name="Login" component={LoginScreen} />
       ) : (
         <>
-          <Stack.Screen name="Main" component={TabNavigator} />
+          <Stack.Screen name="Main" component={MainShell} />
           <Stack.Screen name="CheckCreate" component={CheckCreateScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />

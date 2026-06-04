@@ -37,11 +37,9 @@ export default function GatedScreen({ featureKey, title, description, benefits, 
   // If subscription info hasn't loaded, show optimistically
   if (!sub) return <>{children}</>;
 
-  // Find current plan's features
-  const currentPlan = sub.plans?.find((p) => p.name === sub.planName);
-  const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
-
-  if (planFeatures.includes(featureKey)) {
+  // Gate on the server-resolved feature list (authoritative, by planId) — no
+  // fragile match by plan NAME.
+  if (Array.isArray(sub.features) && sub.features.includes(featureKey)) {
     return <>{children}</>;
   }
 

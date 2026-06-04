@@ -76,12 +76,15 @@ const CallsPage = lazyWithRetry(() => import('./pages/CallsPage'));
 const EquipmentPage = lazyWithRetry(() => import('./pages/EquipmentPage'));
 const KnowledgeBasePage = lazyWithRetry(() => import('./pages/KnowledgeBasePage'));
 const ReviewPublicPage = lazyWithRetry(() => import('./pages/ReviewPublicPage'));
+const NotificationSettingsPage = lazyWithRetry(() => import('./pages/NotificationSettingsPage'));
 
 // Admin pages
 const AdminDashboardPage = lazyWithRetry(() => import('./pages/admin/AdminDashboardPage'));
 const AdminTenantsPage = lazyWithRetry(() => import('./pages/admin/AdminTenantsPage'));
 const AdminTenantDetailPage = lazyWithRetry(() => import('./pages/admin/AdminTenantDetailPage'));
 const AdminPlansPage = lazyWithRetry(() => import('./pages/admin/AdminPlansPage'));
+const AdminBroadcastPage = lazyWithRetry(() => import('./pages/admin/AdminBroadcastPage'));
+const AdminAuditLogPage = lazyWithRetry(() => import('./pages/admin/AdminAuditLogPage'));
 
 // ─── Feature gate definitions (same keys as mobile) ─────────────────────────
 const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
@@ -210,6 +213,7 @@ export default function App() {
                   <Route path="/employees/:id" element={<EmployeeDetailPage />} />
                   <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
                   <Route path="/more" element={<MorePage />} />
+                  <Route path="/notifications" element={<NotificationSettingsPage />} />
                   <Route path="/tariff" element={<TariffPage />} />
                   <Route path="/marketing" element={<MarketingPage />} />
                   <Route path="/calls" element={<CallsPage />} />
@@ -226,6 +230,8 @@ export default function App() {
                     <Route path="/admin/tenants" element={<AdminTenantsPage />} />
                     <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
                     <Route path="/admin/plans" element={<AdminPlansPage />} />
+                    <Route path="/admin/broadcast" element={<AdminBroadcastPage />} />
+                    <Route path="/admin/audit-log" element={<AdminAuditLogPage />} />
                   </Route>
                 )}
 

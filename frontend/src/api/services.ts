@@ -27,20 +27,49 @@ import {
   createWarrantyApi,
   createStockMovementsApi,
   createKnowledgeApi,
+  createNotificationsApi,
+  createAdminApi,
 } from '../../../shared/api/createServices';
 
 // Re-export all API request types for any file that imports them from here
 export type {
-  LoginRequest, LoginResponse, RegisterRequest, PaginationParams,
-  ChecksParams, DateRangeParams, CreateUserRequest, UpdateUserRequest,
-  CreateClientRequest, UpdateClientRequest, CreateCarRequest, UpdateCarRequest,
-  CreateProductRequest, UpdateProductRequest, StockUpdateRequest,
-  CreateServiceRequest, UpdateServiceRequest, CreateCheckRequest, UpdateCheckRequest,
-  CreateSupplierRequest, UpdateSupplierRequest, CreateDeliveryRequest,
-  CreatePaymentRequest, CreateScheduleRequest, UpdateScheduleRequest,
-  CreateWorkModeRequest, UpdateWorkModeRequest, CreateTenantRequest,
-  UpdateTenantRequest, CreatePlanRequest, UpdatePlanRequest,
-  KnowledgeCategoryInput, KnowledgeArticleInput, ListArticlesParams,
+  LoginRequest,
+  LoginResponse,
+  RegisterRequest,
+  PaginationParams,
+  ChecksParams,
+  DateRangeParams,
+  CreateUserRequest,
+  UpdateUserRequest,
+  CreateClientRequest,
+  UpdateClientRequest,
+  CreateCarRequest,
+  UpdateCarRequest,
+  CreateProductRequest,
+  UpdateProductRequest,
+  StockUpdateRequest,
+  CreateServiceRequest,
+  UpdateServiceRequest,
+  CreateCheckRequest,
+  UpdateCheckRequest,
+  CreateSupplierRequest,
+  UpdateSupplierRequest,
+  CreateDeliveryRequest,
+  CreatePaymentRequest,
+  CreateScheduleRequest,
+  UpdateScheduleRequest,
+  CreateWorkModeRequest,
+  UpdateWorkModeRequest,
+  CreateTenantRequest,
+  UpdateTenantRequest,
+  CreatePlanRequest,
+  UpdatePlanRequest,
+  KnowledgeCategoryInput,
+  KnowledgeArticleInput,
+  ListArticlesParams,
+  CreateBroadcastRequest,
+  ExtendSubscriptionRequest,
+  AssignPlanRequest,
 } from '../../../shared/api/types';
 
 // --- Instantiate all API modules with the platform-specific axios instance ---
@@ -72,6 +101,8 @@ export const warehousesApi = createWarehousesApi(api);
 export const warrantyApi = createWarrantyApi(api);
 export const stockMovementsApi = createStockMovementsApi(api);
 export const knowledgeApi = createKnowledgeApi(api);
+export const notificationsApi = createNotificationsApi(api);
+export const adminApi = createAdminApi(api);
 
 // --- Platform-specific: Image compression + Upload (uses Canvas API) ---
 
@@ -89,18 +120,27 @@ async function compressImage(file: File, maxWidth = 1200, quality = 0.82): Promi
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d');
-      if (!ctx) { resolve(file); return; }
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
       ctx.drawImage(img, 0, 0, w, h);
       canvas.toBlob(
         (blob) => {
-          if (!blob || blob.size >= file.size) { resolve(file); return; }
+          if (!blob || blob.size >= file.size) {
+            resolve(file);
+            return;
+          }
           resolve(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' }));
         },
         'image/jpeg',
         quality,
       );
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(file);
+    };
     img.src = url;
   });
 }
@@ -110,8 +150,12 @@ export const uploadsApi = {
     const compressed = await compressImage(file);
     const fd = new FormData();
     fd.append('file', compressed);
-    return api.post<{ url: string; thumbnail: string; filename: string; originalname: string; size: number }>('/uploads', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
+    return api.post<{ url: string; thumbnail: string; filename: string; originalname: string; size: number }>(
+      '/uploads',
+      fd,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      },
+    );
   },
 };

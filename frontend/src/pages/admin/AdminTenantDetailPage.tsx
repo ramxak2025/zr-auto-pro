@@ -13,18 +13,33 @@ import {
   Phone,
   Mail,
   MapPin,
+  CalendarPlus,
+  CreditCard,
+  LogIn,
+  Banknote,
+  Package,
+  Activity,
+  Clock,
+  ClipboardList,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, parseISO, isPast } from 'date-fns';
+import { format, parseISO, isPast, formatDistanceToNow } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
-import { tenantsApi, usersApi } from '../../api/services';
-import { Tenant, User, UserRole, UserPermissions } from '../../types';
+import { tenantsApi, usersApi, plansApi } from '../../api/services';
+import { useAuth } from '../../contexts/AuthContext';
+import { Tenant, User, UserRole, UserPermissions, TenantMetrics, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
 import { roleLabels } from '../../../../shared/utils/formatters';
+
+const EXTEND_PRESETS = [30, 90] as const;
+
+function formatRub(value: number | undefined | null): string {
+  return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
+}
 
 const roleBadgeMap: Record<string, string> = {
   director: 'badge-blue',
@@ -87,6 +102,14 @@ export default function AdminTenantDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { refreshUser } = useAuth();
+
+  // Subscription management modals
+  const [extendModalOpen, setExtendModalOpen] = useState(false);
+  const [customDays, setCustomDays] = useState('');
+  const [planModalOpen, setPlanModalOpen] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState('');
+  const [impersonateConfirm, setImpersonateConfirm] = useState(false);
 
   // Tenant edit modal
   const [tenantModalOpen, setTenantModalOpen] = useState(false);
@@ -116,6 +139,22 @@ export default function AdminTenantDetailPage() {
     enabled: !!id,
   });
 
+  // Per-tenant activity metrics (superadmin health card).
+  const { data: metrics } = useQuery({
+    queryKey: ['tenant-metrics', id],
+    queryFn: () => tenantsApi.getMetrics(id!),
+    select: (res) => res.data as TenantMetrics,
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+
+  // Active plans for the assign-plan picker.
+  const { data: plans } = useQuery({
+    queryKey: ['plans'],
+    queryFn: () => plansApi.getAll(),
+    select: (res) => (res.data as Plan[]).filter((p) => p.isActive),
+  });
+
   // Defensive: hide dismissed/purged employees from the active tenant list even
   // if a stale cache snapshot carries them (backend already excludes them).
   const tenantUsers = (tenant?.users ?? []).filter((u) => !u.dismissedAt && !u.purgedAt);
@@ -135,6 +174,59 @@ export default function AdminTenantDetailPage() {
     },
   });
 
+  // ── Subscription management ──
+  const invalidateTenant = () => {
+    queryClient.invalidateQueries({ queryKey: ['tenant', id] });
+    queryClient.invalidateQueries({ queryKey: ['tenant-metrics', id] });
+    queryClient.invalidateQueries({ queryKey: ['tenants'] });
+    queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+  };
+
+  const extendMutation = useMutation({
+    mutationFn: (days: number) => tenantsApi.extend(id!, days),
+    onSuccess: (_res, days) => {
+      invalidateTenant();
+      toast.success(`Подписка продлена на ${days} дн.`);
+      setExtendModalOpen(false);
+      setCustomDays('');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось продлить подписку');
+    },
+  });
+
+  const assignPlanMutation = useMutation({
+    mutationFn: (planId: string) => tenantsApi.assignPlan(id!, planId),
+    onSuccess: () => {
+      invalidateTenant();
+      toast.success('Тариф назначен');
+      setPlanModalOpen(false);
+      setSelectedPlanId('');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось назначить тариф');
+    },
+  });
+
+  const impersonateMutation = useMutation({
+    mutationFn: () => tenantsApi.impersonate(id!),
+    onSuccess: async (res) => {
+      const { token } = res.data;
+      // Swap the session to the tenant owner: clear superadmin cache so none of
+      // the platform-level data bleeds into the impersonated session, then write
+      // the short-lived director token and reload into the tenant's app.
+      await queryClient.cancelQueries().catch(() => {});
+      queryClient.clear();
+      localStorage.setItem('token', token);
+      await refreshUser();
+      toast.success('Вход выполнен от имени владельца');
+      window.location.href = '/dashboard';
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось войти как владелец');
+    },
+  });
+
   const createUserMutation = useMutation({
     mutationFn: (data: any) => usersApi.create(data),
     onSuccess: () => {
@@ -148,8 +240,7 @@ export default function AdminTenantDetailPage() {
   });
 
   const updateUserMutation = useMutation({
-    mutationFn: ({ userId, data }: { userId: string; data: any }) =>
-      usersApi.update(userId, data),
+    mutationFn: ({ userId, data }: { userId: string; data: any }) => usersApi.update(userId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenant', id] });
       toast.success('Пользователь обновлён');
@@ -183,12 +274,24 @@ export default function AdminTenantDetailPage() {
       description: tenant.description || '',
       maxUsers: tenant.maxUsers,
       isActive: tenant.isActive,
-      subscriptionEnd: tenant.subscriptionEnd
-        ? tenant.subscriptionEnd.slice(0, 10)
-        : '',
+      subscriptionEnd: tenant.subscriptionEnd ? tenant.subscriptionEnd.slice(0, 10) : '',
       subscriptionNote: tenant.subscriptionNote || '',
     });
     setTenantModalOpen(true);
+  };
+
+  const openPlanModal = () => {
+    setSelectedPlanId(tenant?.planId || '');
+    setPlanModalOpen(true);
+  };
+
+  const handleCustomExtend = () => {
+    const days = Number(customDays);
+    if (!Number.isFinite(days) || days <= 0) {
+      toast.error('Введите количество дней (больше 0)');
+      return;
+    }
+    extendMutation.mutate(Math.round(days));
   };
 
   const handleTenantSubmit = (e: React.FormEvent) => {
@@ -276,9 +379,7 @@ export default function AdminTenantDetailPage() {
     );
   }
 
-  const subscriptionEnd = tenant.subscriptionEnd
-    ? parseISO(tenant.subscriptionEnd)
-    : null;
+  const subscriptionEnd = tenant.subscriptionEnd ? parseISO(tenant.subscriptionEnd) : null;
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
   return (
@@ -292,12 +393,26 @@ export default function AdminTenantDetailPage() {
           <ArrowLeft className="w-4 h-4" />
           Назад к автосервисам
         </button>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="page-title">{tenant.name}</h1>
-          <button onClick={openTenantEdit} className="btn-secondary">
-            <Pencil className="w-4 h-4" />
-            Редактировать
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button onClick={() => setExtendModalOpen(true)} className="btn-secondary btn-sm">
+              <CalendarPlus className="w-4 h-4" />
+              Продлить
+            </button>
+            <button onClick={openPlanModal} className="btn-secondary btn-sm">
+              <CreditCard className="w-4 h-4" />
+              Тариф
+            </button>
+            <button onClick={() => setImpersonateConfirm(true)} className="btn-secondary btn-sm">
+              <LogIn className="w-4 h-4" />
+              Войти как владелец
+            </button>
+            <button onClick={openTenantEdit} className="btn-secondary btn-sm">
+              <Pencil className="w-4 h-4" />
+              Редактировать
+            </button>
+          </div>
         </div>
       </div>
 
@@ -353,9 +468,7 @@ export default function AdminTenantDetailPage() {
               )}
             </div>
             {tenant.subscriptionNote && (
-              <div className="text-sm text-gray-500">
-                Примечание: {tenant.subscriptionNote}
-              </div>
+              <div className="text-sm text-gray-500">Примечание: {tenant.subscriptionNote}</div>
             )}
             {tenant.slug && (
               <div className="text-sm text-gray-500">
@@ -371,6 +484,65 @@ export default function AdminTenantDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Activity metrics (показатели клиента) */}
+      {metrics && (
+        <div className="mb-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-3">Показатели клиента</h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="card card-body">
+              <div className="flex items-center gap-2 text-gray-500 mb-1">
+                <ClipboardList className="w-4 h-4" />
+                <span className="text-xs">Заказ-наряды</span>
+              </div>
+              <p className="text-xl font-bold text-gray-900">{metrics.checksTotal}</p>
+              <p className="text-xs text-gray-500">за 30 дней: {metrics.checksLast30d}</p>
+            </div>
+
+            <div className="card card-body">
+              <div className="flex items-center gap-2 text-gray-500 mb-1">
+                <Banknote className="w-4 h-4" />
+                <span className="text-xs">Выручка</span>
+              </div>
+              <p className="text-xl font-bold text-gray-900">{formatRub(metrics.revenueTotal)}</p>
+              <p className="text-xs text-gray-500">за 30 дней: {formatRub(metrics.revenueLast30d)}</p>
+            </div>
+
+            <div className="card card-body">
+              <div className="flex items-center gap-2 text-gray-500 mb-1">
+                <Users className="w-4 h-4" />
+                <span className="text-xs">Сотрудники</span>
+              </div>
+              <p className="text-xl font-bold text-gray-900">{metrics.usersCount}</p>
+              <p className="text-xs text-gray-500">активных: {metrics.activeUsersCount}</p>
+            </div>
+
+            <div className="card card-body">
+              <div className="flex items-center gap-2 text-gray-500 mb-1">
+                <Package className="w-4 h-4" />
+                <span className="text-xs">Товары / активность</span>
+              </div>
+              <p className="text-xl font-bold text-gray-900">{metrics.productsCount}</p>
+              <p className="text-xs text-gray-500 flex items-center gap-1">
+                {metrics.lastActivityAt ? (
+                  <>
+                    <Clock className="w-3 h-3" />
+                    {formatDistanceToNow(parseISO(metrics.lastActivityAt), {
+                      addSuffix: true,
+                      locale: ru,
+                    })}
+                  </>
+                ) : (
+                  <>
+                    <Activity className="w-3 h-3" />
+                    нет активности
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Users Section */}
       <div className="flex items-center justify-between mb-4">
@@ -495,9 +667,7 @@ export default function AdminTenantDetailPage() {
               className="input"
               rows={2}
               value={tenantForm.description}
-              onChange={(e) =>
-                setTenantForm({ ...tenantForm, description: e.target.value })
-              }
+              onChange={(e) => setTenantForm({ ...tenantForm, description: e.target.value })}
             />
           </div>
           <div>
@@ -506,9 +676,7 @@ export default function AdminTenantDetailPage() {
               type="number"
               className="input"
               value={tenantForm.maxUsers}
-              onChange={(e) =>
-                setTenantForm({ ...tenantForm, maxUsers: Number(e.target.value) })
-              }
+              onChange={(e) => setTenantForm({ ...tenantForm, maxUsers: Number(e.target.value) })}
               min={1}
             />
           </div>
@@ -518,15 +686,11 @@ export default function AdminTenantDetailPage() {
                 type="checkbox"
                 className="sr-only peer"
                 checked={tenantForm.isActive}
-                onChange={(e) =>
-                  setTenantForm({ ...tenantForm, isActive: e.target.checked })
-                }
+                onChange={(e) => setTenantForm({ ...tenantForm, isActive: e.target.checked })}
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
             </label>
-            <span className="text-sm font-medium text-gray-700">
-              {tenantForm.isActive ? 'Активна' : 'Неактивна'}
-            </span>
+            <span className="text-sm font-medium text-gray-700">{tenantForm.isActive ? 'Активна' : 'Неактивна'}</span>
           </div>
           <div>
             <label className="label">Подписка до</label>
@@ -534,9 +698,7 @@ export default function AdminTenantDetailPage() {
               type="date"
               className="input"
               value={tenantForm.subscriptionEnd}
-              onChange={(e) =>
-                setTenantForm({ ...tenantForm, subscriptionEnd: e.target.value })
-              }
+              onChange={(e) => setTenantForm({ ...tenantForm, subscriptionEnd: e.target.value })}
             />
           </div>
           <div>
@@ -545,24 +707,14 @@ export default function AdminTenantDetailPage() {
               type="text"
               className="input"
               value={tenantForm.subscriptionNote}
-              onChange={(e) =>
-                setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })
-              }
+              onChange={(e) => setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })}
             />
           </div>
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => setTenantModalOpen(false)}
-              className="btn-secondary"
-            >
+            <button type="button" onClick={() => setTenantModalOpen(false)} className="btn-secondary">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={updateTenantMutation.isPending}
-              className="btn-primary"
-            >
+            <button type="submit" disabled={updateTenantMutation.isPending} className="btn-primary">
               {updateTenantMutation.isPending ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -635,9 +787,7 @@ export default function AdminTenantDetailPage() {
             <select
               className="input"
               value={userForm.role}
-              onChange={(e) =>
-                setUserForm({ ...userForm, role: e.target.value as UserRole })
-              }
+              onChange={(e) => setUserForm({ ...userForm, role: e.target.value as UserRole })}
             >
               <option value={UserRole.DIRECTOR}>Директор</option>
               <option value={UserRole.ADMIN}>Админ</option>
@@ -650,9 +800,7 @@ export default function AdminTenantDetailPage() {
               type="number"
               className="input"
               value={userForm.salaryPercent}
-              onChange={(e) =>
-                setUserForm({ ...userForm, salaryPercent: Number(e.target.value) })
-              }
+              onChange={(e) => setUserForm({ ...userForm, salaryPercent: Number(e.target.value) })}
               min={0}
               max={100}
             />
@@ -663,15 +811,11 @@ export default function AdminTenantDetailPage() {
                 type="checkbox"
                 className="sr-only peer"
                 checked={userForm.isActive}
-                onChange={(e) =>
-                  setUserForm({ ...userForm, isActive: e.target.checked })
-                }
+                onChange={(e) => setUserForm({ ...userForm, isActive: e.target.checked })}
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
             </label>
-            <span className="text-sm font-medium text-gray-700">
-              {userForm.isActive ? 'Активен' : 'Неактивен'}
-            </span>
+            <span className="text-sm font-medium text-gray-700">{userForm.isActive ? 'Активен' : 'Неактивен'}</span>
           </div>
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
             <button type="button" onClick={closeUserModal} className="btn-secondary">
@@ -705,6 +849,108 @@ export default function AdminTenantDetailPage() {
         message="Уволить сотрудника? Он переместится в Уволенные, восстановить можно в течение года."
         confirmText="Уволить"
         variant="danger"
+      />
+
+      {/* Extend Subscription Modal */}
+      <Modal isOpen={extendModalOpen} onClose={() => setExtendModalOpen(false)} title="Продлить подписку" size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Подписка до:{' '}
+            <span className="font-medium text-gray-700">
+              {subscriptionEnd ? format(subscriptionEnd, 'd MMMM yyyy', { locale: ru }) : 'не указано'}
+            </span>
+          </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            {EXTEND_PRESETS.map((days) => (
+              <button
+                key={days}
+                onClick={() => extendMutation.mutate(days)}
+                disabled={extendMutation.isPending}
+                className="btn-secondary justify-center"
+              >
+                +{days} дней
+              </button>
+            ))}
+          </div>
+
+          <div>
+            <label className="label">Своё количество дней</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                className="input"
+                value={customDays}
+                onChange={(e) => setCustomDays(e.target.value)}
+                placeholder="например, 14"
+                min={1}
+              />
+              <button
+                onClick={handleCustomExtend}
+                disabled={extendMutation.isPending}
+                className="btn-primary whitespace-nowrap"
+              >
+                {extendMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Продлить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Assign Plan Modal */}
+      <Modal isOpen={planModalOpen} onClose={() => setPlanModalOpen(false)} title="Назначить тариф" size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Назначение тарифа синхронизирует цену и лимит сотрудников автосервиса.
+          </p>
+
+          <div>
+            <label className="label">Тариф</label>
+            <select className="input" value={selectedPlanId} onChange={(e) => setSelectedPlanId(e.target.value)}>
+              <option value="">— Выберите тариф —</option>
+              {(plans ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} — {formatRub(p.monthlyPrice)}/мес · до {p.maxUsers} сотр.
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
+            <button type="button" onClick={() => setPlanModalOpen(false)} className="btn-secondary">
+              Отмена
+            </button>
+            <button
+              type="button"
+              disabled={!selectedPlanId || assignPlanMutation.isPending}
+              onClick={() => selectedPlanId && assignPlanMutation.mutate(selectedPlanId)}
+              className="btn-primary"
+            >
+              {assignPlanMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Назначение...
+                </>
+              ) : (
+                'Назначить'
+              )}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Impersonate Confirmation */}
+      <ConfirmDialog
+        isOpen={impersonateConfirm}
+        onClose={() => setImpersonateConfirm(false)}
+        onConfirm={() => {
+          setImpersonateConfirm(false);
+          impersonateMutation.mutate();
+        }}
+        title="Войти как владелец"
+        message={`Вы войдёте в аккаунт владельца «${tenant.name}» под временной сессией (30 минут). Текущая сессия суперадмина будет заменена — потребуется повторный вход. Продолжить?`}
+        confirmText="Войти"
+        variant="primary"
       />
     </div>
   );

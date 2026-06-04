@@ -33,6 +33,25 @@ interface AuthContextType {
   refreshUser: () => Promise<void>;
   hasPermission: (perm: keyof UserPermissions) => boolean;
   isRole: (...roles: UserRole[]) => boolean;
+  /**
+   * True while the superadmin is impersonating a tenant owner (a 30-min
+   * director token is installed instead of the superadmin's own). Drives the
+   * persistent «Вы вошли как …» banner.
+   */
+  isImpersonating: boolean;
+  /**
+   * Swap the stored auth token for the short-lived director token returned by
+   * `tenantsApi.impersonate(id)` and set the session to that owner. The app
+   * re-renders into the tenant's car-service tree because the role becomes
+   * 'director'. Reuses the exact cross-tenant isolation flow `login()` uses.
+   */
+  beginImpersonation: (token: string, user: User) => Promise<void>;
+  /**
+   * End impersonation. The short-lived token has no superadmin credentials to
+   * restore, so this is a hard logout back to the login screen — the
+   * superadmin signs in again (stated in the confirm dialog before starting).
+   */
+  endImpersonation: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -43,6 +62,12 @@ const AuthContext = createContext<AuthContextType | null>(null);
 // — user B must never see user A's cached identity). The axios 401 handler
 // already removes this key too; AuthContext keeps it in sync on its own paths.
 const STORAGE_USER_KEY = 'user';
+
+// AsyncStorage flag set while a superadmin is impersonating a tenant owner.
+// Persisted so the «Вы вошли как …» banner survives a cold restart for the
+// (short) life of the director token. Cleared on logout / end-impersonation /
+// 401 alongside the token + user slots.
+const STORAGE_IMPERSONATING_KEY = 'impersonating';
 
 /** Persist the authenticated user object for optimistic cold-start restore. */
 async function persistUser(u: User): Promise<void> {
@@ -367,6 +392,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isImpersonating, setIsImpersonating] = useState(false);
 
   // Load token + cached user on mount (optimistic restore + status-aware
   // background revalidation).
@@ -386,15 +412,23 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     (async () => {
       // Read token AND the cached user together so we can restore the whole
       // session optimistically before the first /me round-trip.
-      const [stored, cachedUser] = await Promise.all([
+      const [stored, cachedUser, impersonatingFlag] = await Promise.all([
         AsyncStorage.getItem('token').catch(() => null),
         readCachedUser(),
+        AsyncStorage.getItem(STORAGE_IMPERSONATING_KEY).catch(() => null),
       ]);
       if (cancelled) return;
+      // Restore the impersonation banner state for the (short) life of the
+      // director token. If the token has already expired, the /me below 401s
+      // and the whole session — flag included — is wiped.
+      if (impersonatingFlag === '1') setIsImpersonating(true);
 
       if (!stored) {
-        // No token → logged out. Drop any stray cached user (tenant safety).
+        // No token → logged out. Drop any stray cached user (tenant safety)
+        // and the impersonation flag (it must never outlive its token).
         AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
+        AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
+        setIsImpersonating(false);
         finish();
         return;
       }
@@ -426,12 +460,16 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         if (cancelled) return;
         if (isAuthExpiry(err)) {
           // Genuine expiry (401) — clear token + cached user and fall back to
-          // Login. A valid token is only ever wiped on a REAL 401.
+          // Login. A valid token is only ever wiped on a REAL 401. This also
+          // covers an expired impersonation (30-min director) token: the
+          // banner flag is cleared and the superadmin lands on Login.
           setAuthToken(null);
           AsyncStorage.removeItem('token').catch(() => {});
           AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
+          AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
           setToken(null);
           setUser(null);
+          setIsImpersonating(false);
         }
         // Non-401 (network / timeout / 5xx, or `!err.response`): DO NOTHING.
         // Keep the optimistically-restored cached session — a transient
@@ -465,10 +503,12 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setAuthToken(null);
       setToken(null);
       setUser(null);
+      setIsImpersonating(false);
       // Wipe the cached user identity too — tenant safety. (The axios 401
       // handler already removes it, but this listener also covers the
       // coalesced/secondary paths; idempotent and cheap.)
       AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
+      AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
       // Clear persistent cache so the next login starts fresh
       clearPersistentCache().catch(() => {});
       queryClient?.clear();
@@ -539,11 +579,54 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     // Wipe the cached user identity — tenant safety: user B logging in on the
     // same device must never restore user A optimistically.
     await AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
+    await AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
     await clearPersistentCache().catch(() => {});
     queryClient?.clear();
     setToken(null);
     setUser(null);
+    setIsImpersonating(false);
   }, [queryClient]);
+
+  /**
+   * beginImpersonation — install the short-lived (30-min) director token
+   * returned by `tenantsApi.impersonate(id)` and become that tenant's owner.
+   *
+   * Mirrors `login()`'s cross-tenant isolation EXACTLY (cancel + clear
+   * QueryClient, clear persistent cache, reset the bearer + ETag map, persist
+   * the new token + user) so none of the superadmin's cached data bleeds into
+   * the impersonated tenant's session. The only departure: we receive the
+   * token + user directly (no /auth/login round-trip) and set the
+   * impersonation flag so the persistent banner renders. When `user.role`
+   * flips to 'director' the root navigator re-renders into the normal
+   * car-service tree — no special-casing needed there.
+   */
+  const beginImpersonation = useCallback(
+    async (t: string, u: User) => {
+      queryClient?.cancelQueries().catch(() => {});
+      queryClient?.clear();
+      await clearPersistentCache().catch(() => {});
+      setAuthToken(null);
+      await AsyncStorage.setItem('token', t);
+      await persistUser(u);
+      await AsyncStorage.setItem(STORAGE_IMPERSONATING_KEY, '1').catch(() => {});
+      setAuthToken(t);
+      setToken(t);
+      setUser(u);
+      setIsImpersonating(true);
+      if (queryClient) prefetchAfterLogin(queryClient);
+    },
+    [queryClient],
+  );
+
+  /**
+   * endImpersonation — leave the impersonated session. The director token is
+   * short-lived and carries no superadmin credentials to restore, so the only
+   * safe exit is a full logout back to Login (the superadmin signs in again).
+   * The confirm dialog before impersonating states this explicitly.
+   */
+  const endImpersonation = useCallback(() => {
+    logout();
+  }, [logout]);
 
   const hasPermission = useCallback(
     (perm: keyof UserPermissions): boolean => {
@@ -567,8 +650,32 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // `loading` flips). With the memo, consumers see a stable value as
   // long as user/token/loading don't actually change.
   const value = useMemo<AuthContextType>(
-    () => ({ user, token, loading, login, logout, refreshUser, hasPermission, isRole }),
-    [user, token, loading, login, logout, refreshUser, hasPermission, isRole],
+    () => ({
+      user,
+      token,
+      loading,
+      login,
+      logout,
+      refreshUser,
+      hasPermission,
+      isRole,
+      isImpersonating,
+      beginImpersonation,
+      endImpersonation,
+    }),
+    [
+      user,
+      token,
+      loading,
+      login,
+      logout,
+      refreshUser,
+      hasPermission,
+      isRole,
+      isImpersonating,
+      beginImpersonation,
+      endImpersonation,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

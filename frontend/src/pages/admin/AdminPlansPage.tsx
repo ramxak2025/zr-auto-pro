@@ -9,27 +9,9 @@ import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
-
-// Feature keys and their human-readable labels
-const ALL_FEATURES: { key: string; label: string }[] = [
-  { key: 'checks_view', label: 'Заказ-наряды' },
-  { key: 'clients_view', label: 'Клиенты и авто' },
-  { key: 'warehouse_view', label: 'Склад' },
-  { key: 'services_view', label: 'Услуги' },
-  { key: 'suppliers_view', label: 'Поставщики' },
-  { key: 'cashflow_view', label: 'Движение денег' },
-  { key: 'salary_view', label: 'Зарплата' },
-  { key: 'schedule_view', label: 'Расписание' },
-  { key: 'reports_view', label: 'Отчёты' },
-  { key: 'users_manage', label: 'Управление пользователями' },
-  { key: 'export_data', label: 'Экспорт данных' },
-];
-
-// Helper to get label by feature key
-function getFeatureLabel(key: string): string {
-  const found = ALL_FEATURES.find((f) => f.key === key);
-  return found ? found.label : key;
-}
+// Single source of truth for feature keys/labels — shared by web + mobile so the
+// plan editor can never drift (and `check_photos` is now toggleable).
+import { ALL_FEATURES } from '../../../../shared/constants/features';
 
 interface PlanFormData {
   name: string;
@@ -128,9 +110,7 @@ export default function AdminPlansPage() {
       const has = prev.features.includes(key);
       return {
         ...prev,
-        features: has
-          ? prev.features.filter((f) => f !== key)
-          : [...prev.features, key],
+        features: has ? prev.features.filter((f) => f !== key) : [...prev.features, key],
       };
     });
   };
@@ -205,19 +185,13 @@ export default function AdminPlansPage() {
                 </div>
 
                 <div>
-                  <span className="text-2xl font-bold text-gray-900">
-                    {plan.monthlyPrice.toLocaleString('ru-RU')}
-                  </span>
+                  <span className="text-2xl font-bold text-gray-900">{plan.monthlyPrice.toLocaleString('ru-RU')}</span>
                   <span className="text-gray-500 ml-1">₽/мес</span>
                 </div>
 
-                {plan.description && (
-                  <p className="text-sm text-gray-500">{plan.description}</p>
-                )}
+                {plan.description && <p className="text-sm text-gray-500">{plan.description}</p>}
 
-                <div className="text-sm text-gray-600">
-                  До {plan.maxUsers} сотрудников
-                </div>
+                <div className="text-sm text-gray-600">До {plan.maxUsers} сотрудников</div>
 
                 {/* Feature availability list */}
                 <ul className="text-sm space-y-1">
@@ -230,9 +204,7 @@ export default function AdminPlansPage() {
                         ) : (
                           <X className="w-4 h-4 text-red-400 flex-shrink-0" />
                         )}
-                        <span className={included ? 'text-gray-700' : 'text-gray-400'}>
-                          {feat.label}
-                        </span>
+                        <span className={included ? 'text-gray-700' : 'text-gray-400'}>{feat.label}</span>
                       </li>
                     );
                   })}
@@ -347,9 +319,7 @@ export default function AdminPlansPage() {
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
             </label>
-            <span className="text-sm font-medium text-gray-700">
-              {form.isActive ? 'Активен' : 'Неактивен'}
-            </span>
+            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'Неактивен'}</span>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">

@@ -6,27 +6,10 @@ import { ru } from 'date-fns/locale';
 import { subscriptionApi } from '../api/services';
 import { SubscriptionInfo } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
+// Single source of truth for feature keys/labels — shared by web + mobile.
+import { ALL_FEATURES } from '../../../shared/constants/features';
 
 const WHATSAPP_PHONE = '79884444436';
-
-const ALL_FEATURES: { key: string; label: string }[] = [
-  { key: 'checks_view', label: 'Заказ-наряды' },
-  { key: 'clients_view', label: 'Клиенты и авто' },
-  { key: 'warehouse_view', label: 'Склад' },
-  { key: 'services_view', label: 'Услуги' },
-  { key: 'suppliers_view', label: 'Поставщики' },
-  { key: 'cashflow_view', label: 'Движение денег' },
-  { key: 'salary_view', label: 'Зарплата' },
-  { key: 'schedule_view', label: 'Расписание' },
-  { key: 'reports_view', label: 'Отчёты' },
-  { key: 'users_manage', label: 'Управление пользователями' },
-  { key: 'export_data', label: 'Экспорт данных' },
-];
-
-function getFeatureLabel(key: string): string {
-  const found = ALL_FEATURES.find((f) => f.key === key);
-  return found ? found.label : key;
-}
 
 export default function TariffPage() {
   const { data: sub, isLoading } = useQuery({
@@ -37,9 +20,7 @@ export default function TariffPage() {
 
   if (isLoading) return <LoadingSpinner />;
 
-  const subscriptionEnd = sub?.subscriptionEnd
-    ? parseISO(sub.subscriptionEnd)
-    : null;
+  const subscriptionEnd = sub?.subscriptionEnd ? parseISO(sub.subscriptionEnd) : null;
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
   const whatsappUrl = `https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent('Здравствуйте! Хочу оплатить подписку.')}`;
@@ -59,9 +40,7 @@ export default function TariffPage() {
                 <CreditCard className="w-7 h-7 text-primary-600" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">
-                  {sub?.tenantName || 'Ваша организация'}
-                </h2>
+                <h2 className="text-lg font-semibold text-gray-900">{sub?.tenantName || 'Ваша организация'}</h2>
                 <p className="text-sm text-gray-500">
                   {sub?.planName ? `Тариф: ${sub.planName}` : 'Тариф не назначен'}
                 </p>
@@ -77,9 +56,7 @@ export default function TariffPage() {
                   {subscriptionEnd ? (
                     <p className={`text-lg font-semibold mt-0.5 ${isExpired ? 'text-red-600' : 'text-gray-900'}`}>
                       {format(subscriptionEnd, 'd MMMM yyyy', { locale: ru })}
-                      {isExpired && (
-                        <span className="badge-red ml-2">Истекла</span>
-                      )}
+                      {isExpired && <span className="badge-red ml-2">Истекла</span>}
                     </p>
                   ) : (
                     <p className="text-lg font-semibold text-gray-400 mt-0.5">Не указано</p>
@@ -148,21 +125,15 @@ export default function TariffPage() {
                 return (
                   <div
                     key={plan.id}
-                    className={`card relative overflow-hidden ${
-                      isCurrent ? 'ring-2 ring-primary-500' : ''
-                    }`}
+                    className={`card relative overflow-hidden ${isCurrent ? 'ring-2 ring-primary-500' : ''}`}
                   >
                     {isCurrent && (
-                      <div className="bg-primary-500 text-white text-xs font-medium text-center py-1">
-                        Ваш тариф
-                      </div>
+                      <div className="bg-primary-500 text-white text-xs font-medium text-center py-1">Ваш тариф</div>
                     )}
                     <div className="card-body space-y-4">
                       <div>
                         <h3 className="text-lg font-bold text-gray-900">{plan.name}</h3>
-                        {plan.description && (
-                          <p className="text-sm text-gray-500 mt-1">{plan.description}</p>
-                        )}
+                        {plan.description && <p className="text-sm text-gray-500 mt-1">{plan.description}</p>}
                       </div>
 
                       <div>
@@ -174,9 +145,7 @@ export default function TariffPage() {
 
                       <div className="flex items-center gap-2 p-3 bg-primary-50 rounded-lg">
                         <Users className="w-5 h-5 text-primary-600 flex-shrink-0" />
-                        <span className="text-sm font-semibold text-primary-700">
-                          До {plan.maxUsers} сотрудников
-                        </span>
+                        <span className="text-sm font-semibold text-primary-700">До {plan.maxUsers} сотрудников</span>
                       </div>
 
                       <ul className="space-y-1.5">
