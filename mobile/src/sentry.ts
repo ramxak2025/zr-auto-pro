@@ -16,9 +16,15 @@ import { onAuthExpired } from './api/axios';
  * `app.json` → `extra.sentryDsn` and rebuilding; no other code change needed.
  */
 
+// Sentry DSN (a PUBLIC client key — only allows SENDING events, safe to embed).
+// Kept here as a fallback so it's baked into the JS bundle and picked up on any
+// Release rebuild without needing a prebuild to re-embed `app.json` → extra.
+const DSN_FALLBACK = 'https://d248fd476c55b8b4854145c66cd9c115@o4511507149291520.ingest.us.sentry.io/4511507152502784';
+
 function getDsn(): string | undefined {
-  const dsn = Constants.expoConfig?.extra?.sentryDsn;
-  return typeof dsn === 'string' && dsn.length > 0 ? dsn : undefined;
+  const fromExtra = Constants.expoConfig?.extra?.sentryDsn;
+  const dsn = typeof fromExtra === 'string' && fromExtra.length > 0 ? fromExtra : DSN_FALLBACK;
+  return dsn && dsn.length > 0 ? dsn : undefined;
 }
 
 // `enabled` is the source of truth for every guarded call below. It is only

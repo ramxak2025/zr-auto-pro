@@ -68,7 +68,10 @@ function entryInfoScore(e: RawScheduleEntry): number {
  */
 export function dedupeEntriesByDay<E extends RawScheduleEntry>(entries: E[]): E[] {
   const best = new Map<string, E>();
-  for (const e of entries) {
+  // Defensive: a malformed cache value (undefined / null / non-array) must
+  // never make `for…of` throw "undefined is not iterable". Shared by web +
+  // mobile, so this single guard hardens both clients.
+  for (const e of Array.isArray(entries) ? entries : []) {
     if (!e || !e.userId || !e.date) continue;
     const key = `${e.userId}|${String(e.date).slice(0, 10)}`;
     const prev = best.get(key);

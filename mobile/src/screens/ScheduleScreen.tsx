@@ -218,7 +218,15 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
   // — an invalid string — so `new Date(invalid) < new Date()` returned
   // NaN<Date which is `false`, and the "missed shift" branch (#7)
   // silently never fired for those rows.
-  const dateOnly = entry.date.slice(0, 10);
+  //
+  // Defensive: a malformed / orphaned entry (e.g. left over after an
+  // employee was deleted, or a legacy row written before the date column
+  // was non-null) may carry a missing `date`. `undefined.slice` throws
+  // "undefined is not a function" — which crashed the whole grid on
+  // mount. Coerce to string first so a bad row degrades to an empty cell
+  // instead of taking the screen down.
+  const dateOnly = String(entry.date ?? '').slice(0, 10);
+  if (!dateOnly) return EMPTY_CELL;
   const isPast = new Date(`${dateOnly}T23:59:59`) < new Date();
   const isToday = dateOnly === new Date().toISOString().slice(0, 10);
 
@@ -286,7 +294,7 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
   //    merely-planned green outline cell (case #8 below). Time is shown
   //    only when it differs from the default start.
   if (entry.shiftStart && (entry.actualArrival || entry.lateStatus === 'on_time')) {
-    const startHHMM = entry.shiftStart.slice(0, 5);
+    const startHHMM = String(entry.shiftStart).slice(0, 5);
     return {
       key: 'worked',
       hasEntry: true,
@@ -758,12 +766,18 @@ function GridTab() {
   const entryMap = useMemo(() => {
     const map = new Map<string, ScheduleEntry>();
     (entries ?? []).forEach((e) => {
-      const d = e.date?.split('T')[0] || '';
+      // Skip orphaned / malformed rows: an entry with no userId or no
+      // usable date can't be keyed and would otherwise poison lookups.
+      if (!e || !e.userId) return;
+      const d = String(e.date ?? '').split('T')[0] || '';
+      if (!d) return;
       map.set(`${e.userId}-${d}`, e);
     });
     // Overlay pending changes
     Object.values(pendingChanges).forEach((c) => {
-      const d = c.date.slice(0, 10);
+      if (!c || !c.userId) return;
+      const d = String(c.date ?? '').slice(0, 10);
+      if (!d) return;
       const key = `${c.userId}-${d}`;
       const existing = map.get(key);
       map.set(key, {
@@ -822,7 +836,9 @@ function GridTab() {
           { id: `t-${Date.now()}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry,
         ];
       }
-      return arr.map((e) => (e.userId === userId && e.date.slice(0, 10) === date ? { ...e, ...payload } : e));
+      return arr.map((e) =>
+        e.userId === userId && String(e.date ?? '').slice(0, 10) === date ? { ...e, ...payload } : e,
+      );
     });
   };
 
@@ -1491,7 +1507,10 @@ function TodayTab() {
     setRefreshing(false);
   };
 
-  const statuses = todayData ?? [];
+  // Defensive: `todayData` may be undefined (no body) or contain holes;
+  // drop anything without a userId so downstream `.note`/`.fullName`
+  // access can never hit `undefined`.
+  const statuses = (todayData ?? []).filter((s): s is TodayEmployeeStatus => !!s && !!s.userId);
   const working = statuses.filter((s) => s.isWorking && !(s.note || '').toLowerCase().includes('больнич'));
   const notWorking = statuses.filter((s) => !s.isWorking || (s.note || '').toLowerCase().includes('больнич'));
 
@@ -1841,21 +1860,27 @@ function RatingTab() {
 
   const { data: monthEntries = [] } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', monthStart, monthEnd],
-    queryFn: async () => (await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd })).data,
+    // `?? []` — a 204 / empty body must not become `undefined`, otherwise
+    // calculateAttendanceStats() iterates `undefined` and throws.
+    queryFn: async () => (await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd })).data ?? [],
   });
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
-    queryFn: async () => (await usersApi.getAll()).data,
+    queryFn: async () => (await usersApi.getAll()).data ?? [],
   });
 
   const users = useMemo(
-    () => (usersData || []).filter((u) => u.isActive && !u.hiddenFromSchedule && !u.hiddenEverywhere),
+    () =>
+      (usersData || []).filter(
+        (u) => u && u.id && u.isActive && !u.hiddenFromSchedule && !u.hiddenEverywhere,
+      ),
     [usersData],
   );
 
-  // SHARED attendance utility — same logic everywhere (web + mobile)
-  const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
+  // SHARED attendance utility — same logic everywhere (web + mobile).
+  // `?? []` guards against a malformed cache value reaching the iterator.
+  const stats = useMemo(() => calculateAttendanceStats((monthEntries ?? []) as any), [monthEntries]);
 
   const ranked = useMemo(
     () =>
@@ -1925,8 +1950,9 @@ function RatingTab() {
         const scoreBg = u.score >= 90 ? colors.green[50] : u.score >= 70 ? colors.yellow[50] : colors.red[50];
         const isExpanded = expandedUserId === u.id;
         const fmtDate = (d: string) => {
-          const p = d.split('-');
-          return `${parseInt(p[2])}.${p[1]}`;
+          const p = String(d ?? '').split('-');
+          if (p.length < 3) return String(d ?? '');
+          return `${parseInt(p[2], 10)}.${p[1]}`;
         };
 
         return (
@@ -2210,12 +2236,18 @@ function SettingsTab() {
     },
   });
 
-  const activeUsers = useMemo(() => (usersData || []).filter((u) => u.isActive), [usersData]);
+  // Defensive: drop null/orphaned rows (a malformed users payload after a
+  // deletion could contain holes) so the settings sub-tabs never call a
+  // method on `undefined`.
+  const activeUsers = useMemo(
+    () => (usersData || []).filter((u) => u && u.id && u.isActive),
+    [usersData],
+  );
 
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
     const user = activeUsers.find((u) => u.id === userId);
     if (!user) return;
-    const current: number[] = (user as any).daysOff || [];
+    const current: number[] = Array.isArray((user as any).daysOff) ? (user as any).daysOff : [];
     const newDaysOff = current.includes(dayOfWeek) ? current.filter((d) => d !== dayOfWeek) : [...current, dayOfWeek];
     try {
       await usersApi.update(userId, { daysOff: newDaysOff } as any);
@@ -2438,7 +2470,7 @@ function SettingsTab() {
       ) : settingsTab === 'daysoff' ? (
         <View style={{ gap: spacing[3] }}>
           {activeUsers.map((u, idx) => {
-            const daysOff: number[] = (u as any).daysOff || [];
+            const daysOff: number[] = Array.isArray((u as any).daysOff) ? (u as any).daysOff : [];
             const avatarColors = getAvatarColors(u.fullName);
             return (
               <AnimatedCard key={u.id} index={idx}>
@@ -2660,8 +2692,12 @@ export default function ScheduleScreen() {
   // and ShiftsTab via context, manipulated from the header trailing slot.
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
   const monthCtxValue = useMemo(() => ({ currentMonth, setCurrentMonth }), [currentMonth]);
-  const monthYear = currentMonth.getFullYear();
-  const monthIndex = currentMonth.getMonth();
+  // Defensive: never let an out-of-shape Date make getMonth() return NaN —
+  // MONTH_NAMES[NaN] is undefined and `.slice` on it would crash the
+  // whole screen header before any tab even mounts.
+  const safeMonth = currentMonth instanceof Date && !isNaN(currentMonth.getTime()) ? currentMonth : new Date();
+  const monthYear = safeMonth.getFullYear();
+  const monthIndex = safeMonth.getMonth();
 
   const tabConfig: {
     key: TabType;
@@ -2712,7 +2748,7 @@ export default function ScheduleScreen() {
         }}
         activeOpacity={0.7}
       >
-        <Text style={styles.headerMonthText}>{MONTH_NAMES[monthIndex].slice(0, 3)}</Text>
+        <Text style={styles.headerMonthText}>{(MONTH_NAMES[monthIndex] ?? '').slice(0, 3)}</Text>
       </TouchableOpacity>
       <TouchableOpacity
         onPress={() => {
