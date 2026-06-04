@@ -26,6 +26,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import CachedImage from './CachedImage';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
+import { getImageUrl } from '../api/axios';
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -111,7 +112,10 @@ export default function BroadcastModal({ broadcast, onDismiss }: BroadcastModalP
             >
               {broadcast.imageUrl ? (
                 <CachedImage
-                  source={{ uri: broadcast.imageUrl }}
+                  // Server may return a RELATIVE image_url — resolve to an
+                  // absolute URL so the image actually loads on receiving
+                  // devices (the `imageUrl ?` guard above keeps this truthy).
+                  source={{ uri: getImageUrl(broadcast.imageUrl) }}
                   style={styles.image}
                   resizeMode="cover"
                   accessibilityIgnoresInvertColors

@@ -170,7 +170,29 @@ export class PushService {
     }
   }
 
+  /**
+   * POST a chunk of Expo push messages and READ the response so per-ticket
+   * failures stop being invisible. Expo returns one ticket per message in the
+   * SAME ORDER sent: `{ data: [{ status: 'ok'|'error', id?, message?, details? }] }`,
+   * or on a top-level failure `{ errors: [...] }`.
+   *
+   * For every `status: 'error'` ticket we log message + details.error. When the
+   * error is `DeviceNotRegistered` we self-heal: correlate ticket index → the
+   * token we POSTed (`messages[i].to`) and prune it from `push_tokens`.
+   *
+   * STRICTLY non-fatal: the returned Promise always resolves, never rejects.
+   * Network errors, non-2xx status, unparseable bodies and prune failures are
+   * logged and swallowed — push is never the source of truth for any caller.
+   */
   private postToExpo(messages: unknown[]): Promise<void> {
+    // Extract the token we sent for each message so we can correlate Expo's
+    // ordered tickets back to a row in push_tokens. Each message is built with
+    // `to: r.token` at every call site.
+    const tokens: (string | undefined)[] = messages.map((m) => {
+      const to = (m as { to?: unknown }).to;
+      return typeof to === 'string' ? to : undefined;
+    });
+
     return new Promise((resolve) => {
       const payload = JSON.stringify(messages);
       const options: https.RequestOptions = {
@@ -186,12 +208,17 @@ export class PushService {
       };
 
       const req = https.request(options, (res) => {
-        res.on('data', () => {
-          /* consume */
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => {
+          chunks.push(chunk);
         });
         res.on('end', () => {
-          this.logger.log(`Expo push response status: ${res.statusCode}`);
-          resolve();
+          const status = res.statusCode ?? 0;
+          const rawBody = Buffer.concat(chunks).toString('utf8');
+
+          // Always resolve at the very end; handle the body best-effort so a
+          // parse/prune problem can never throw out of this Promise.
+          void this.handleExpoResponse(status, rawBody, tokens).finally(() => resolve());
         });
       });
 
@@ -203,5 +230,90 @@ export class PushService {
       req.write(payload);
       req.end();
     });
+  }
+
+  /**
+   * Inspect a single Expo response: log status/body on non-2xx, log every error
+   * ticket, and prune tokens whose ticket error is `DeviceNotRegistered`.
+   * Best-effort — every branch is guarded so it never throws.
+   */
+  private async handleExpoResponse(
+    status: number,
+    rawBody: string,
+    tokens: (string | undefined)[],
+  ): Promise<void> {
+    try {
+      const ok2xx = status >= 200 && status < 300;
+      if (!ok2xx) {
+        // Surface the failure into pino/Sentry with the raw body for triage.
+        this.logger.error(`Expo push non-2xx status=${status} body=${rawBody.slice(0, 2000)}`);
+      } else {
+        this.logger.log(`Expo push response status: ${status}`);
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = rawBody ? JSON.parse(rawBody) : undefined;
+      } catch (parseErr) {
+        this.logger.warn(`Expo push response not JSON (status=${status}): ${String(parseErr)}`);
+        return;
+      }
+
+      const root = parsed as
+        | {
+            data?: { status?: string; id?: string; message?: string; details?: { error?: string } }[];
+            errors?: unknown[];
+          }
+        | undefined;
+
+      // Top-level failure shape: { errors: [...] }
+      if (root?.errors && Array.isArray(root.errors) && root.errors.length > 0) {
+        this.logger.error(`Expo push top-level errors: ${JSON.stringify(root.errors).slice(0, 2000)}`);
+      }
+
+      const data = root?.data;
+      if (!Array.isArray(data)) return;
+
+      const deadTokens: string[] = [];
+      for (let i = 0; i < data.length; i++) {
+        const ticket = data[i];
+        if (!ticket || ticket.status !== 'error') continue;
+
+        const errorCode = ticket.details?.error;
+        const token = tokens[i];
+        this.logger.warn(
+          `Expo push ticket error: ${ticket.message ?? 'unknown'}` +
+            (errorCode ? ` (${errorCode})` : '') +
+            (token ? ` token=${token}` : ''),
+        );
+
+        // Only DeviceNotRegistered means the token is permanently dead. Other
+        // errors (InvalidCredentials, MessageTooBig, MismatchSenderId, …) are
+        // NOT token-ownership problems, so we log them but keep the token.
+        if (errorCode === 'DeviceNotRegistered' && token) {
+          deadTokens.push(token);
+        }
+      }
+
+      if (deadTokens.length > 0) {
+        await this.pruneDeadTokens(deadTokens);
+      }
+    } catch (err) {
+      // Absolute backstop: response handling must never propagate.
+      this.logger.error(`Expo push response handling failed: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Delete dead (DeviceNotRegistered) tokens from push_tokens. Best-effort:
+   * wrapped in its own try/catch so a prune failure breaks nothing.
+   */
+  private async pruneDeadTokens(tokens: string[]): Promise<void> {
+    try {
+      await this.pool.query(`DELETE FROM push_tokens WHERE token = ANY($1::text[])`, [tokens]);
+      this.logger.log(`Pruned ${tokens.length} dead push token(s) (DeviceNotRegistered)`);
+    } catch (err) {
+      this.logger.error(`Failed to prune dead push tokens: ${String(err)}`);
+    }
   }
 }

@@ -42,6 +42,24 @@ interface DraftButton {
 
 const MAX_BUTTONS = 3;
 
+/**
+ * Pull a legible reason out of an axios error. class-validator returns
+ * `message` either as a string or an array of strings (e.g. a rejected
+ * `imageUrl` → ["imageUrl must be a URL address"]). Falls back to the Russian
+ * generic so the alert is never empty.
+ */
+function extractServerMessage(error: unknown): string {
+  const data = (error as { response?: { data?: { message?: unknown } } })?.response?.data;
+  const message = data?.message;
+  if (Array.isArray(message)) {
+    const joined = message.filter((m): m is string => typeof m === 'string').join('\n');
+    if (joined) return joined;
+  } else if (typeof message === 'string' && message.trim()) {
+    return message;
+  }
+  return 'Не удалось отправить объявление';
+}
+
 export default function AdminBroadcastScreen() {
   const palette = useColors();
   const surface = useIosSurface();
@@ -54,6 +72,10 @@ export default function AdminBroadcastScreen() {
   const [uploading, setUploading] = React.useState(false);
   const [previewOpen, setPreviewOpen] = React.useState(false);
   const [toast, setToast] = React.useState<string | null>(null);
+  // Self-preview: the actual broadcast returned by the server, shown to the
+  // superadmin right after sending (the fan-out targets directors, not the
+  // sender, so without this the superadmin sees «ничего не пришло»).
+  const [sentBroadcast, setSentBroadcast] = React.useState<Broadcast | null>(null);
 
   // Sanitise draft → the exact shape createBroadcast / BroadcastModal expect.
   const cleanButtons = React.useMemo<BroadcastButton[]>(
@@ -84,14 +106,18 @@ export default function AdminBroadcastScreen() {
 
   const sendMutation = useMutation({
     mutationFn: async () => {
-      await notificationsApi.createBroadcast({
+      const res = await notificationsApi.createBroadcast({
         title: title.trim(),
         body: body.trim(),
-        imageUrl: imageUrl.trim() || undefined,
+        // `imageUrl` is stored ABSOLUTE (the uploader saves the resolved URL),
+        // so it passes the backend `@IsUrl` check. A manually typed relative
+        // path is resolved here too as a safety net.
+        imageUrl: imageUrl.trim() ? getImageUrl(imageUrl.trim()) ?? imageUrl.trim() : undefined,
         buttons: cleanButtons.length > 0 ? cleanButtons : undefined,
       });
+      return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       haptic('success');
       setTitle('');
       setBody('');
@@ -99,10 +125,12 @@ export default function AdminBroadcastScreen() {
       setButtons([]);
       setToast('Объявление отправлено всем владельцам');
       setTimeout(() => setToast(null), 2800);
+      // Show the superadmin the EXACT card owners will receive (confirmation).
+      setSentBroadcast(created);
     },
-    onError: () => {
+    onError: (error: unknown) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось отправить объявление');
+      Alert.alert('Ошибка', extractServerMessage(error));
     },
   });
 
@@ -118,7 +146,9 @@ export default function AdminBroadcastScreen() {
       const asset = res.assets[0];
       setUploading(true);
       const up = await uploadsApi.upload(asset.uri, asset.fileName || 'broadcast.jpg');
-      setImageUrl(up.data.url);
+      // The uploader returns a RELATIVE path (/api/uploads/…); store the
+      // ABSOLUTE URL so the POSTed value passes the backend `@IsUrl` check.
+      setImageUrl(getImageUrl(up.data.url) ?? up.data.url);
     } catch {
       Alert.alert('Ошибка', 'Не удалось загрузить изображение.');
     } finally {
@@ -322,6 +352,10 @@ export default function AdminBroadcastScreen() {
 
       {/* Live preview — the ACTUAL BroadcastModal owners will see. */}
       <BroadcastModal broadcast={previewOpen ? previewBroadcast : null} onDismiss={() => setPreviewOpen(false)} />
+
+      {/* Self-preview after sending — the real broadcast the server created,
+          so the superadmin always sees the result of a successful send. */}
+      <BroadcastModal broadcast={sentBroadcast} onDismiss={() => setSentBroadcast(null)} />
 
       {/* Toast */}
       {toast && (

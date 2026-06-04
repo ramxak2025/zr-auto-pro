@@ -21,6 +21,7 @@ import {
   pushApi,
 } from '../api/services';
 import { onAuthExpired, setAuthToken } from '../api/axios';
+import { captureException } from '../sentry';
 import { clearPersistentCache } from '../utils/persistentCache';
 import type { User, UserPermissions, UserRole } from '../../../shared/types';
 
@@ -383,8 +384,13 @@ async function registerPushToken(): Promise<void> {
     });
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
     await pushApi.register(tokenData.data, platform);
-  } catch {
-    // Silent fail — push registration is best-effort.
+  } catch (err) {
+    // Push registration is best-effort and must never block login, but a
+    // SILENT failure (missing APNs entitlement, denied permission, projectId
+    // mismatch) leaves NO push_tokens row and makes "push never arrived"
+    // impossible to diagnose. Surface it: console warning + Sentry breadcrumb.
+    console.warn('[push] token registration failed', err);
+    captureException(err, { context: 'registerPushToken' });
   }
 }
 
