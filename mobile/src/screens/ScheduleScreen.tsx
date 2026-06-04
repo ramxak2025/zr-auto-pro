@@ -611,6 +611,10 @@ function GridTab() {
   const [pendingChanges, setPendingChanges] = useState<
     Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>
   >({});
+  // In-flight guard for «Применить» — without it a double-tap fires the
+  // batch twice and creates duplicate shifts on the same date (P1).
+  const [applying, setApplying] = useState(false);
+  const applyingRef = useRef(false);
 
   // Synced vertical scroll refs.
   //
@@ -955,21 +959,32 @@ function GridTab() {
   };
 
   const applyPending = async () => {
+    // Synchronous re-entrancy guard: setState is async, so a second tap
+    // in the same frame would slip past an `applying`-only check. The ref
+    // blocks it immediately and prevents duplicate shift creation.
+    if (applyingRef.current) return;
     const items = Object.values(pendingChanges);
     if (items.length === 0) return;
+    applyingRef.current = true;
+    setApplying(true);
     let failed = 0;
-    for (const c of items) {
-      try {
-        if (c.existingEntryId) await scheduleApi.update(c.existingEntryId, c.payload);
-        else await scheduleApi.create(c.payload);
-      } catch {
-        failed++;
+    try {
+      for (const c of items) {
+        try {
+          if (c.existingEntryId) await scheduleApi.update(c.existingEntryId, c.payload);
+          else await scheduleApi.create(c.payload);
+        } catch {
+          failed++;
+        }
       }
+      setPendingChanges({});
+      queryClient.invalidateQueries({ queryKey: ['schedule'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      if (failed > 0) Alert.alert('Ошибка', `Не применено: ${failed}`);
+    } finally {
+      applyingRef.current = false;
+      setApplying(false);
     }
-    setPendingChanges({});
-    queryClient.invalidateQueries({ queryKey: ['schedule'] });
-    queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-    if (failed > 0) Alert.alert('Ошибка', `Не применено: ${failed}`);
   };
 
   const discardPending = () => setPendingChanges({});
@@ -1079,14 +1094,31 @@ function GridTab() {
             </Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 6 }}>
-            <TouchableOpacity onPress={discardPending} style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
+            <TouchableOpacity
+              onPress={discardPending}
+              disabled={applying}
+              style={{ paddingHorizontal: 10, paddingVertical: 6, opacity: applying ? 0.4 : 1 }}
+            >
               <Text style={{ fontSize: 11, fontWeight: '600', color: '#6b7280' }}>Отмена</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={applyPending}
-              style={{ backgroundColor: '#d97706', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}
+              disabled={applying}
+              style={{
+                backgroundColor: '#d97706',
+                borderRadius: 8,
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                opacity: applying ? 0.6 : 1,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+              }}
             >
-              <Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>Применить</Text>
+              {applying && <ActivityIndicator size="small" color="#fff" />}
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>
+                {applying ? 'Применяем…' : 'Применить'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1346,6 +1378,14 @@ function GridTab() {
                   key={idx}
                   onPress={() => {
                     if (!isCurrent) {
+                      // `idx` is the FINAL 0-based position the master should
+                      // occupy. We remove the master first, then splice it
+                      // back in at `idx`: because the moved id is already
+                      // gone from `filtered`, inserting at `idx` lands it at
+                      // visual position `idx + 1` exactly — for upward AND
+                      // downward moves alike (no off-by-one). Do not add a
+                      // removal-shift correction here; that would re-introduce
+                      // the classic off-by-one on downward moves.
                       const ids = activeUsers.map((u) => u.id);
                       const filtered = ids.filter((id) => id !== reorderUser.userId);
                       filtered.splice(idx, 0, reorderUser.userId);

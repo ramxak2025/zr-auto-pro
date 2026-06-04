@@ -255,6 +255,19 @@ export default function ProductsScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const palette = useColors();
+  // Theme-aware override for the shared `styles.formInput` so warehouse
+  // form sheets render correctly in dark mode (muted fill, hairline
+  // border, primary text). In light mode these tokens resolve to the
+  // exact same values the static style used (gray[50]/gray[300]/gray[900]
+  // → bg.muted/border.subtle/text.primary), so light mode is unchanged.
+  const formInputThemed = React.useMemo(
+    () => ({
+      backgroundColor: palette.bg.muted,
+      borderColor: palette.border.subtle,
+      color: palette.text.primary,
+    }),
+    [palette],
+  );
   const { hasPermission, user } = useAuth();
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
   const canManageWarehouse = hasPermission('warehouse_access');
@@ -1607,7 +1620,10 @@ export default function ProductsScreen() {
       >
         {/* Photo section */}
         <View style={styles.photoSection}>
-          <TouchableOpacity style={styles.photoPickerWrap} onPress={pickImage}>
+          <TouchableOpacity
+            style={[styles.photoPickerWrap, { borderColor: palette.border.subtle }]}
+            onPress={pickImage}
+          >
             {photoUri ? (
               <CachedImage
                 source={{ uri: getDisplayPhotoUri(photoUri) }}
@@ -1615,9 +1631,9 @@ export default function ProductsScreen() {
                 resizeMode="cover"
               />
             ) : (
-              <View style={styles.photoPickerPlaceholder}>
-                <Ionicons name="camera-outline" size={28} color={colors.gray[400]} />
-                <Text style={styles.photoPickerText}>
+              <View style={[styles.photoPickerPlaceholder, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
+                <Text style={[styles.photoPickerText, { color: palette.text.tertiary }]}>
                   {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0444\u043E\u0442\u043E'}
                 </Text>
               </View>
@@ -1647,27 +1663,29 @@ export default function ProductsScreen() {
         </View>
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435'}</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+            {'\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435'}
+          </Text>
           <TextInput
             value={name}
             onChangeText={setName}
-            style={styles.formInput}
+            style={[styles.formInput, formInputThemed]}
             placeholder={'\u041C\u0430\u0441\u043B\u043E \u043C\u043E\u0442\u043E\u0440\u043D\u043E\u0435...'}
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
             {'\u041A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u044F (\u043F\u0430\u043F\u043A\u0430)'}
           </Text>
           <TextInput
             value={category}
             onChangeText={setCategory}
-            style={styles.formInput}
+            style={[styles.formInput, formInputThemed]}
             placeholder={'\u041C\u0430\u0441\u043B\u0430/\u041C\u043E\u0442\u043E\u0440\u043D\u044B\u0435'}
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
-          <Text style={styles.formHint}>
+          <Text style={[styles.formHint, { color: palette.text.tertiary }]}>
             {
               '\u0418\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 / \u0434\u043B\u044F \u0432\u043B\u043E\u0436\u0435\u043D\u043D\u043E\u0441\u0442\u0438'
             }
@@ -1675,59 +1693,62 @@ export default function ProductsScreen() {
         </View>
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
               {'\u0421\u0435\u0431\u0435\u0441\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C'}
             </Text>
             <TextInput
               value={costPrice}
               onChangeText={setCostPrice}
-              style={styles.formInput}
+              style={[styles.formInput, formInputThemed]}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
               {'\u0426\u0435\u043D\u0430 \u043F\u0440\u043E\u0434\u0430\u0436\u0438'}
             </Text>
             <TextInput
               value={sellPrice}
               onChangeText={setSellPrice}
-              style={styles.formInput}
+              style={[styles.formInput, formInputThemed]}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
         </View>
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>{'\u041E\u0441\u0442\u0430\u0442\u043E\u043A'}</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'\u041E\u0441\u0442\u0430\u0442\u043E\u043A'}</Text>
             <TextInput
               value={stock}
               onChangeText={setStock}
-              style={styles.formInput}
+              style={[styles.formInput, formInputThemed]}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>{'\u041C\u0438\u043D. \u043E\u0441\u0442\u0430\u0442\u043E\u043A'}</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'\u041C\u0438\u043D. \u043E\u0441\u0442\u0430\u0442\u043E\u043A'}</Text>
             <TextInput
               value={minStock}
               onChangeText={setMinStock}
-              style={styles.formInput}
+              style={[styles.formInput, formInputThemed]}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
         </View>
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={closeModal}>
-            <Text style={styles.cancelBtnText}>{'\u041E\u0442\u043C\u0435\u043D\u0430'}</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+            onPress={closeModal}
+          >
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>{'\u041E\u0442\u043C\u0435\u043D\u0430'}</Text>
           </TouchableOpacity>
           {editingProduct && (
             <TouchableOpacity
@@ -1773,30 +1794,30 @@ export default function ProductsScreen() {
             <Ionicons name="clipboard-outline" size={22} color={colors.blue[600]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.opsItemTitle}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>
               {'\u0418\u043D\u0432\u0435\u043D\u0442\u0430\u0440\u0438\u0437\u0430\u0446\u0438\u044F'}
             </Text>
-            <Text style={styles.opsItemDesc}>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
               {
                 '\u041F\u0435\u0440\u0435\u0441\u0447\u0451\u0442 \u043E\u0441\u0442\u0430\u0442\u043A\u043E\u0432 \u043D\u0430 \u0441\u043A\u043B\u0430\u0434\u0435'
               }
             </Text>
           </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
         <TouchableOpacity style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]} onPress={openWriteoff}>
           <View style={[styles.opsIcon, { backgroundColor: colors.red[50] }]}>
             <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.opsItemTitle}>{'\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435'}</Text>
-            <Text style={styles.opsItemDesc}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
               {
                 '\u0421\u043F\u0438\u0441\u0430\u0442\u044C \u0431\u0440\u0430\u043A, \u043F\u043E\u0442\u0435\u0440\u0438, \u043F\u0440\u043E\u0441\u0440\u043E\u0447\u043A\u0443'
               }
             </Text>
           </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
@@ -1806,10 +1827,10 @@ export default function ProductsScreen() {
             <Ionicons name="create-outline" size={22} color={colors.purple[600]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.opsItemTitle}>{'Корректировка'}</Text>
-            <Text style={styles.opsItemDesc}>{'Точечная корректировка остатков'}</Text>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Корректировка'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>{'Точечная корректировка остатков'}</Text>
           </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
 
         {/* Корзина склада — soft-deleted products. Lives here (not in
@@ -1826,10 +1847,10 @@ export default function ProductsScreen() {
               <Ionicons name="trash-bin-outline" size={22} color={colors.rose[600]} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.opsItemTitle}>{'Корзина'}</Text>
-              <Text style={styles.opsItemDesc}>{'Восстановление удалённых товаров'}</Text>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Корзина'}</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>{'Восстановление удалённых товаров'}</Text>
             </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
           </TouchableOpacity>
         )}
       </BottomSheet>
@@ -2233,7 +2254,7 @@ export default function ProductsScreen() {
           />
         </View>
 
-        <View style={styles.formActions}>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
           <TouchableOpacity
             style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
             onPress={() => setShowWriteoffModal(false)}
@@ -2269,11 +2290,11 @@ export default function ProductsScreen() {
         title={'Корректировка остатка'}
         heightRatio={0.66}
       >
-        <View style={styles.writeoffSelectedProduct}>
+        <View style={[styles.writeoffSelectedProduct, { backgroundColor: palette.accent.primarySoft }]}>
           <Ionicons name="cube-outline" size={20} color={colors.purple[600]} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.writeoffSelectedName}>{correctionProductName}</Text>
-            <Text style={styles.writeoffSelectedStock}>
+            <Text style={[styles.writeoffSelectedName, { color: palette.text.primary }]}>{correctionProductName}</Text>
+            <Text style={[styles.writeoffSelectedStock, { color: palette.text.secondary }]}>
               {'На складе: '}
               {correctionProductStock} {'шт'}
             </Text>
@@ -2289,23 +2310,29 @@ export default function ProductsScreen() {
         </View>
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'Текущий остаток'}</Text>
-          <View style={[styles.formInput, { backgroundColor: colors.gray[100], justifyContent: 'center' }]}>
-            <Text style={{ fontSize: fontSize.sm, color: colors.gray[500] }}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Текущий остаток'}</Text>
+          <View
+            style={[
+              styles.formInput,
+              formInputThemed,
+              { backgroundColor: palette.bg.muted, justifyContent: 'center' },
+            ]}
+          >
+            <Text style={{ fontSize: fontSize.sm, color: palette.text.secondary }}>
               {correctionProductStock} {'шт'}
             </Text>
           </View>
         </View>
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'Новый остаток'}</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Новый остаток'}</Text>
           <TextInput
             value={correctionNewStock}
             onChangeText={setCorrectionNewStock}
-            style={styles.formInput}
+            style={[styles.formInput, formInputThemed]}
             keyboardType="numeric"
             placeholder="0"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             autoFocus
           />
           {correctionNewStock !== '' && Number(correctionNewStock) !== correctionProductStock && (
@@ -2328,20 +2355,23 @@ export default function ProductsScreen() {
         </View>
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>{'Причина корректировки *'}</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Причина корректировки *'}</Text>
           <TextInput
             value={correctionReason}
             onChangeText={setCorrectionReason}
-            style={[styles.formInput, { minHeight: 56, textAlignVertical: 'top' }]}
+            style={[styles.formInput, formInputThemed, { minHeight: 56, textAlignVertical: 'top' }]}
             multiline
             placeholder={'Пересчёт, ошибка при приёмке...'}
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
 
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowCorrectionModal(false)}>
-            <Text style={styles.cancelBtnText}>{'Отмена'}</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+            onPress={() => setShowCorrectionModal(false)}
+          >
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>{'Отмена'}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.submitBtn, { backgroundColor: colors.purple[600] }]}
@@ -2554,7 +2584,7 @@ export default function ProductsScreen() {
               />
             </View>
 
-            <View style={styles.formActions}>
+            <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
               <TouchableOpacity
                 style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
                 onPress={closeTransferDialog}
@@ -2607,7 +2637,7 @@ export default function ProductsScreen() {
                 Себестоимость: {formatMoney(sellPriceProduct.costPrice || 0)}
               </Text>
             </View>
-            <View style={styles.formActions}>
+            <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
               <TouchableOpacity
                 style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
                 onPress={closeSellPriceEditor}

@@ -45,6 +45,8 @@ import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitch
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
+import { haptic } from '../platform/haptics';
+import { PressableScale } from '../platform/PressableScale';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type {
   Client,
@@ -816,6 +818,15 @@ export default function CheckCreateScreen() {
         setComment(c.comment || '');
         setDiscount(c.discount ? String(c.discount) : '');
         setPaymentMethod(c.paymentMethod);
+        // Restore the cash portion of a SPLIT (cash_card) payment so editing
+        // an existing мешанный чек doesn't silently zero out наличные and push
+        // the whole sum to card on save (financial corruption of the cash
+        // ledger). For non-split checks the field is irrelevant; older checks
+        // may have null/absent cashAmount → fall back to '' (unchanged
+        // behaviour for cash/card/warranty checks).
+        if (c.paymentMethod === ('cash_card' as PaymentMethod) && c.cashAmount != null) {
+          setCashAmount(String(c.cashAmount));
+        }
         setIsDeferred(c.isDeferred || false);
         setServiceLines(c.services || []);
         setProductLines(c.products || []);
@@ -1085,6 +1096,10 @@ export default function CheckCreateScreen() {
     },
     onSuccess: async (res: any) => {
       submittingRef.current = false;
+      // Premium confirmation: success haptic fires only once the check is
+      // actually persisted (mutation resolved) — a failed submit must never
+      // feel successful. Android variant is softened inside the helper.
+      haptic('success');
       // After creating / editing a check we have to bust every cache
       // entry that the new revenue / inventory delta touches. The legacy
       // `['dashboard']` invalidation was a no-op (no such key exists);
@@ -1281,6 +1296,7 @@ export default function CheckCreateScreen() {
 
     const shouldDefer = deferred !== undefined ? deferred : isDeferred;
     if (!shouldDefer && serviceLines.length === 0 && productLines.length === 0) {
+      haptic('warning');
       Alert.alert('Ошибка', 'Добавьте хотя бы одну услугу или товар');
       return;
     }
@@ -1300,6 +1316,7 @@ export default function CheckCreateScreen() {
         console.warn('[CheckCreate] defaultMasterId empty, falling back to first master', fallback);
         resolvedMasterId = fallback;
       } else {
+        haptic('warning');
         Alert.alert(
           'Не выбран мастер',
           'Не удалось определить мастера для чека. Откройте экран «Сотрудники» и убедитесь, что есть хотя бы один активный мастер.',
@@ -2233,12 +2250,17 @@ export default function CheckCreateScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Submit */}
-          <TouchableOpacity
+          {/* Submit — PressableScale gives the iOS scale-press (Android ripple),
+              matching the app's CTA convention (see platform/PressableScale).
+              hapticIntent is null on purpose: the meaningful feedback is the
+              'success' haptic fired in createMutation.onSuccess (only when the
+              check is actually saved) and the 'warning' haptic on a validation
+              early-return — a bare tap should not feel like a confirmation. */}
+          <PressableScale
             style={[styles.submitBtn, createMutation.isPending && { opacity: 0.5 }]}
             onPress={() => handleSubmit()}
             disabled={createMutation.isPending}
-            activeOpacity={0.8}
+            hapticIntent={null}
           >
             {createMutation.isPending ? (
               <ActivityIndicator color={colors.white} />
@@ -2259,7 +2281,7 @@ export default function CheckCreateScreen() {
                 </Text>
               </LinearGradient>
             )}
-          </TouchableOpacity>
+          </PressableScale>
         </ScrollView>
       </KeyboardAvoidingView>
 

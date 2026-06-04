@@ -60,7 +60,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
   },
   sheet: {
-    backgroundColor: colors.white,
+    // backgroundColor comes from palette.bg.elevated (theme-aware) inline.
     // M3 Alert Dialog uses a 28pt extra-large container corner — wider
     // than the iOS 2xl (≈16-20pt) so the bottom corners read as more
     // "rounded surface" than "squircle". Branch so each platform feels
@@ -78,7 +78,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.gray[200],
+    // backgroundColor from palette.border.subtle (theme-aware) inline.
     alignSelf: 'center',
     marginTop: spacing[3],
     marginBottom: spacing[1],
@@ -90,18 +90,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[5],
     paddingVertical: spacing[3],
     borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
+    // borderBottomColor from palette.border.subtle (theme-aware) inline.
   },
   title: {
     fontSize: fontSize.lg,
     fontWeight: fontWeight.bold,
-    color: colors.gray[900],
+    // color from palette.text.primary (theme-aware) inline.
   },
   closeBtn: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: colors.gray[50],
+    // backgroundColor from palette.bg.muted (theme-aware) inline.
     alignItems: 'center',
     justifyContent: 'center',
   },

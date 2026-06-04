@@ -538,20 +538,26 @@ export default function ClientDetailScreen() {
   // car. On confirm we move the plate to THIS car. Check history on both cars
   // is keyed to car_id, so nothing is lost — only the plate moves.
   //
-  // Order matters for crash-safety: we assign the plate HERE first, THEN strip
-  // it off the other car. There is no DB unique constraint on plate_number, so
-  // if the strip step fails after the assign succeeded we're left with a
+  // No atomic reassign endpoint exists (carsApi only has create/update), so
+  // this is necessarily a TWO-step write. Ordering is chosen for crash-safety:
+  // we assign the plate HERE first, THEN strip it off the other car. There is
+  // NO DB unique constraint on plate_number (only a non-unique idx_cars_plate),
+  // so if the strip step fails after the assign succeeded we are left with a
   // harmless DUPLICATE (both cars hold the plate) rather than an ORPHAN (the
-  // plate lost from both). A duplicate is recoverable on the next edit; an
-  // orphan silently destroys data.
+  // plate lost from both). The reverse ordering (clear-old-first) would, on a
+  // step-2 failure, free the plate from the old car but never land it on the
+  // new one → the plate vanishes from BOTH cars and search-by-plate returns
+  // nothing. A duplicate is fully recoverable (just retry — both writes are
+  // idempotent and converge to the correct single-owner state); an orphan
+  // silently destroys the link. So: assign-here → clear-other.
   const handleReassignPlate = async () => {
     if (!duplicateCar) return;
-    // Snapshot before clearing state so the post-await branches read stable
-    // values regardless of re-renders — including the other car's PRIOR plate
-    // so a partial failure leaves the DB self-consistent.
+    // Snapshot stable values for the post-await branches. We deliberately do
+    // NOT clear `duplicateCar` up front: on a partial failure the dialog must
+    // stay open so the user can immediately retry and converge to the correct
+    // state. `busy` (carSubmitting) disables the buttons during the in-flight op.
     const otherCarId = duplicateCar.id;
     const otherOwnerId = duplicateCar.clientId;
-    setDuplicateCar(null);
     setCarSubmitting(true);
     try {
       // 1) Assign the plate HERE first (create or update). If this fails, the
@@ -563,8 +569,11 @@ export default function ClientDetailScreen() {
         await carsApi.create(payload);
       }
       // 2) Now free the plate on the other car. If THIS fails, we have a
-      //    harmless duplicate (no unique constraint), not an orphan.
+      //    harmless duplicate (no unique constraint), not an orphan — and the
+      //    dialog stays open below so the user can retry to finish the move.
       await carsApi.update(otherCarId, { plateNumber: '', noPlate: true });
+      // Both steps committed — only THIS car holds the plate now. Safe to close.
+      setDuplicateCar(null);
       haptic('success');
       await queryClient.invalidateQueries({ queryKey: ['client', id] });
       await queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
@@ -576,15 +585,18 @@ export default function ClientDetailScreen() {
       closeCarModal();
     } catch {
       // Partial failure: the DB may be in either intermediate state (only
-      // step 1 applied = duplicate, or nothing applied). Invalidate the same
-      // keys as the success path so the UI re-reads the real DB state instead
-      // of showing a stale optimistic view.
+      // step 1 applied = recoverable duplicate, or nothing applied). Invalidate
+      // the same keys as the success path so the UI re-reads the real DB state
+      // instead of a stale optimistic view, and KEEP the reassign dialog open
+      // (`duplicateCar` untouched) so «Переназначить» retries the whole flow —
+      // both writes are idempotent and converge to a single plate owner.
+      haptic('error');
       await queryClient.invalidateQueries({ queryKey: ['client', id] });
       if (otherOwnerId && otherOwnerId !== id) {
         queryClient.invalidateQueries({ queryKey: ['client', otherOwnerId] });
       }
       queryClient.invalidateQueries({ queryKey: ['cars'] });
-      Alert.alert('Ошибка', 'Не удалось переназначить госномер');
+      Alert.alert('Ошибка', 'Не удалось завершить переназначение — попробуйте снова');
     } finally {
       setCarSubmitting(false);
     }

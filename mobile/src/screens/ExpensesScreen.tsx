@@ -362,15 +362,16 @@ const ExpenseRow = React.memo(function ExpenseRow({
             )}
           </View>
 
-          {/* Approval CTAs — only when pending and owner */}
+          {/* Approval CTAs — only when pending and owner.
+              Haptics НЕ вызываем здесь: успех/ошибка отзывается только
+              после ответа сервера (см. approveMutation/rejectMutation),
+              иначе провалившийся запрос ощущается успешным. Отклонение
+              необратимо — проходит через ConfirmDialog (см. onReject). */}
           {pending && canApprove && (
             <View style={styles.approvalRow}>
               <TouchableOpacity
                 style={[styles.approveBtn, { backgroundColor: colors.green[500] }]}
-                onPress={() => {
-                  haptic('success');
-                  onApprove(item.id);
-                }}
+                onPress={() => onApprove(item.id)}
                 activeOpacity={0.85}
               >
                 <Ionicons name="checkmark" size={16} color={colors.white} />
@@ -378,10 +379,7 @@ const ExpenseRow = React.memo(function ExpenseRow({
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.rejectBtn, { borderColor: colors.rose[500], backgroundColor: colors.rose[50] }]}
-                onPress={() => {
-                  haptic('error');
-                  onReject(item.id);
-                }}
+                onPress={() => onReject(item.id)}
                 activeOpacity={0.85}
               >
                 <Ionicons name="close" size={16} color={colors.rose[600]} />
@@ -497,6 +495,10 @@ export default function ExpensesScreen() {
   const [modalOpen, setModalOpen] = useState(false);
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  // Подтверждение необратимого отклонения расхода (FIX 3).
+  const [rejectId, setRejectId] = useState<string | null>(null);
+  // Подтверждение удаления категории расходов (FIX 2).
+  const [deleteCatId, setDeleteCatId] = useState<string | null>(null);
   const [newCatName, setNewCatName] = useState('');
 
   // Form
@@ -591,16 +593,23 @@ export default function ExpensesScreen() {
   });
 
   // ── Mutations ────────────────────────────────────────────────────────
+
+  // Inval-набор, который меняется при любой правке суммы расхода: сам
+  // список + owner-метрики (дашборд, кешфлоу) пересчитываются в фоне.
+  const invalidateExpenseDerived = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['expenses'] });
+    // A new/changed expense changes the owner's daily P&L and cashflow.
+    // The user perceives the dashboard as "fresh" only when these
+    // refresh in the background.
+    queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+    queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+  }, [queryClient]);
+
   const createMutation = useMutation({
     mutationFn: (d: any) => expensesApi.create(d),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
-      // A new expense changes the owner's daily P&L and cashflow.
-      // The user perceives the dashboard as "fresh" only when these
-      // refresh in the background.
-      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      invalidateExpenseDerived();
       setModalOpen(false);
       resetForm();
       haptic('success');
@@ -608,13 +617,32 @@ export default function ExpensesScreen() {
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании расхода'),
   });
 
+  // Бэкенд не отдаёт PATCH /expenses/:id (см. expenses.controller — есть
+  // только approve/reject/delete/create). Поэтому "редактирование" — это
+  // честный replace: атомарно удаляем исходную строку (DELETE … RETURNING),
+  // и только при успехе создаём новую с обновлёнными полями. Так сумма в
+  // отчётах и кешфлоу никогда не задваивается: либо обе операции прошли и
+  // строка одна, либо удаление не прошло — и старая строка осталась
+  // нетронутой. Pending-строки редактировать нельзя (см. handleEditExpense),
+  // иначе replace сбросил бы статус одобрения.
+  const editMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: { categoryId?: string; amount: number; description?: string; date?: string } }) => {
+      await expensesApi.remove(id);
+      await expensesApi.create(data);
+    },
+    onSuccess: () => {
+      invalidateExpenseDerived();
+      setModalOpen(false);
+      resetForm();
+      haptic('success');
+    },
+    onError: () => Alert.alert('Ошибка', 'Не удалось сохранить изменения'),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => expensesApi.remove(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      invalidateExpenseDerived();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении'),
   });
@@ -622,25 +650,31 @@ export default function ExpensesScreen() {
   const approveMutation = useMutation({
     mutationFn: (id: string) => expensesApi.approve(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
       // Approval flips the row into the "approved" bucket — dashboard
       // reflects the delta only after these refetch.
-      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      invalidateExpenseDerived();
+      // Honest haptic: success fires only once the server confirmed the
+      // approval — not at tap time, when the request could still fail.
+      haptic('success');
     },
-    onError: () => Alert.alert('Ошибка', 'Не удалось одобрить расход'),
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось одобрить расход');
+    },
   });
 
   const rejectMutation = useMutation({
     mutationFn: (id: string) => expensesApi.reject(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      invalidateExpenseDerived();
+      // Same honesty contract as approve — the tactile only confirms a
+      // network-confirmed rejection.
+      haptic('success');
     },
-    onError: () => Alert.alert('Ошибка', 'Не удалось отклонить расход'),
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось отклонить расход');
+    },
   });
 
   const createCatMutation = useMutation({
@@ -797,6 +831,10 @@ export default function ExpensesScreen() {
   const handleEditExpense = useCallback(
     (item: ExpenseItem) => {
       if (!isOwnerRole && item.createdBy !== user?.id) return;
+      // Редактирование = delete-then-create (PATCH-эндпоинта нет). Строку
+      // «на одобрении» так редактировать нельзя — replace сбросил бы
+      // approval_status. Тап по pending-строке просто ничего не открывает.
+      if (item.approvalStatus === 'pending') return;
       setEditingId(item.id);
       setAmount(String(item.amount));
       setDescription(item.description || '');
@@ -831,19 +869,21 @@ export default function ExpensesScreen() {
       Alert.alert('Ошибка', 'Укажите сумму');
       return;
     }
-    // Edit-режим пока сводится к удалению + созданию — отдельного
-    // PATCH-эндпоинта в backend нет (см. expenses.controller). Когда
-    // он появится, заменим на честный update. До тех пор: если редактируем
-    // pending — нельзя; иначе removeMutation + createMutation
-    // последовательно. Чтобы избежать дёргающегося UI, для MVP — просто
-    // создаём новый расход в editingId-режиме (старый остаётся). Owner
-    // удалит вручную, если нужно.
-    createMutation.mutate({
+    const payload = {
       categoryId: selectedCategoryId || undefined,
       amount: parseFloat(amount.replace(',', '.')),
       description: description || undefined,
       date: toDateStr(expenseDate),
-    });
+    };
+    if (editingId) {
+      // Backend не отдаёт PATCH /expenses/:id — честно делаем replace:
+      // атомарный DELETE исходной строки, затем create новой. Так сумма
+      // в отчётах и кешфлоу не задваивается (раньше create всегда создавал
+      // новую строку, оставляя старую → двойной учёт суммы — P0).
+      editMutation.mutate({ id: editingId, data: payload });
+    } else {
+      createMutation.mutate(payload);
+    }
   };
 
   const onRefresh = async () => {
@@ -854,7 +894,8 @@ export default function ExpensesScreen() {
 
   const handleDeleteExpense = useCallback((id: string) => setDeleteId(id), []);
   const handleApproveExpense = useCallback((id: string) => approveMutation.mutate(id), [approveMutation]);
-  const handleRejectExpense = useCallback((id: string) => rejectMutation.mutate(id), [rejectMutation]);
+  // Отклонение необратимо — сначала спрашиваем подтверждение (FIX 3).
+  const handleRejectExpense = useCallback((id: string) => setRejectId(id), []);
 
   const renderExpense = useCallback(
     ({ item, index }: { item: ExpenseItem; index: number }) => {
@@ -1487,9 +1528,9 @@ export default function ExpensesScreen() {
             style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
             onPress={handleSubmit}
             activeOpacity={0.85}
-            disabled={createMutation.isPending}
+            disabled={createMutation.isPending || editMutation.isPending}
           >
-            {createMutation.isPending ? (
+            {createMutation.isPending || editMutation.isPending ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
               <Text style={styles.submitBtnText}>{editingId ? 'Сохранить' : 'Добавить'}</Text>
@@ -1554,7 +1595,7 @@ export default function ExpensesScreen() {
                   </Text>
                 </View>
                 <TouchableOpacity
-                  onPress={() => deleteCatMutation.mutate(c.id)}
+                  onPress={() => setDeleteCatId(c.id)}
                   style={styles.catListDeleteBtn}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
@@ -1697,6 +1738,35 @@ export default function ExpensesScreen() {
         }}
         title="Удалить расход"
         message="Вы уверены, что хотите удалить этот расход?"
+        confirmText="Удалить"
+        variant="danger"
+      />
+
+      {/* FIX 3 — отклонение расхода необратимо, спрашиваем подтверждение. */}
+      <ConfirmDialog
+        visible={!!rejectId}
+        onClose={() => setRejectId(null)}
+        onConfirm={() => {
+          if (rejectId) rejectMutation.mutate(rejectId);
+          setRejectId(null);
+        }}
+        title="Отклонить расход?"
+        message="Это действие нельзя отменить."
+        confirmText="Отклонить"
+        variant="danger"
+      />
+
+      {/* FIX 2 — удаление категории необратимо; FK ON DELETE SET NULL —
+          расходы остаются, но без категории. */}
+      <ConfirmDialog
+        visible={!!deleteCatId}
+        onClose={() => setDeleteCatId(null)}
+        onConfirm={() => {
+          if (deleteCatId) deleteCatMutation.mutate(deleteCatId);
+          setDeleteCatId(null);
+        }}
+        title="Удалить категорию?"
+        message="Расходы в этой категории останутся без категории."
         confirmText="Удалить"
         variant="danger"
       />

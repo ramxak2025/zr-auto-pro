@@ -44,8 +44,16 @@ export default function PlateReassignDialog({
   busy,
 }: Props) {
   const palette = useColors();
+  // Единый обработчик закрытия для крестика, тапа по фону И аппаратной/жестовой
+  // кнопки «Назад» на Android (Modal пробрасывает её в onClose → onRequestClose).
+  // Пока идёт перенос номера (busy) — игнорируем закрытие, чтобы не прервать
+  // двухшаговую запись и не потерять возможность повторить при сбое.
+  const handleDismiss = () => {
+    if (busy) return;
+    onClose();
+  };
   return (
-    <Modal visible={visible} onClose={onClose} title="Госномер уже занят">
+    <Modal visible={visible} onClose={handleDismiss} title="Госномер уже занят">
       <View style={styles.row}>
         <View style={styles.iconBox}>
           <Ionicons name="swap-horizontal" size={20} color="#D97706" />
@@ -82,7 +90,7 @@ export default function PlateReassignDialog({
       <View style={styles.actions}>
         <TouchableOpacity
           style={[styles.cancelBtn, { backgroundColor: palette.bg.muted }]}
-          onPress={onClose}
+          onPress={handleDismiss}
           disabled={busy}
         >
           <Text variant="body" color={palette.text.secondary} style={styles.btnText}>

@@ -34,7 +34,7 @@ import { Icon } from '../platform/Icon';
 import { PressableScale } from '../platform/PressableScale';
 import { SPRING_TIGHT, TIMING_STANDARD, preferSpring } from '../platform/motion';
 import { Text } from '../platform/Typography';
-import { colors } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
 
 export interface BottomSheetProps {
@@ -48,6 +48,7 @@ export interface BottomSheetProps {
 
 export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, children }: BottomSheetProps) {
   const insets = useSafeAreaInsets();
+  const palette = useColors();
   const translateY = useSharedValue(1000); // off-screen by default
   const lastOffset = useSharedValue(0);
   const sheetHeight = useSharedValue(0);
@@ -117,6 +118,7 @@ export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, childr
           style={[
             styles.sheet,
             {
+              backgroundColor: palette.bg.elevated,
               maxHeight: `${heightRatio * 100}%` as `${number}%`,
               paddingBottom: Math.max(insets.bottom, 12),
             },
@@ -125,18 +127,22 @@ export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, childr
         >
           <GestureDetector gesture={pan}>
             <View style={styles.headerArea}>
-              <View style={styles.handle} />
+              <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
               {(title || true) && (
                 <View style={styles.header}>
                   {title ? (
-                    <Text variant="title3" style={{ flex: 1 }}>
+                    <Text variant="title3" style={{ flex: 1, color: palette.text.primary }}>
                       {title}
                     </Text>
                   ) : (
                     <View style={{ flex: 1 }} />
                   )}
-                  <PressableScale onPress={close} style={styles.closeBtn} hapticIntent={null}>
-                    <Icon name="close" size={18} color={colors.gray[500]} />
+                  <PressableScale
+                    onPress={close}
+                    style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
+                    hapticIntent={null}
+                  >
+                    <Icon name="close" size={18} color={palette.text.tertiary} />
                   </PressableScale>
                 </View>
               )}
@@ -175,7 +181,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.12)',
   },
   sheet: {
-    backgroundColor: colors.white,
+    // backgroundColor from palette.bg.elevated (theme-aware) inline.
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 8,
@@ -190,7 +196,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.gray[300],
+    // backgroundColor from palette.border.strong (theme-aware) inline.
     marginBottom: 10,
   },
   header: {
@@ -205,7 +211,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 16,
-    backgroundColor: colors.gray[100],
+    // backgroundColor from palette.bg.muted (theme-aware) inline.
   },
   // Flex wrapper for the KeyboardAvoidingView + ScrollView. flexShrink lets
   // the sheet collapse to its content when short, while maxHeight on the sheet

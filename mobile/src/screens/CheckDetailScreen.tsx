@@ -42,6 +42,19 @@ function formatMoney(v: number) {
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD'
   );
 }
+
+// \u042D\u043A\u0440\u0430\u043D\u0438\u0440\u0443\u0435\u043C \u043B\u044E\u0431\u043E\u0435 \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u043E\u0435 \u0442\u0435\u043A\u0441\u0442\u043E\u0432\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435 \u043F\u0435\u0440\u0435\u0434 \u0432\u0441\u0442\u0430\u0432\u043A\u043E\u0439 \u0432 HTML \u0447\u0435\u043A\u0430/PDF.
+// \u0418\u043C\u0435\u043D\u0430 \u043A\u043B\u0438\u0435\u043D\u0442\u0430/\u043A\u043E\u043C\u043F\u0430\u043D\u0438\u0438/\u0430\u0432\u0442\u043E \u0441 \u0441\u0438\u043C\u0432\u043E\u043B\u0430\u043C\u0438 < > & " ' \u0438\u043D\u0430\u0447\u0435 \u043B\u043E\u043C\u0430\u044E\u0442 \u0440\u0430\u0437\u043C\u0435\u0442\u043A\u0443
+// \u0438\u043B\u0438 \u00AB\u0441\u044A\u0435\u0434\u0430\u044E\u0442\u00BB \u0442\u0435\u043A\u0441\u0442 \u0432 \u0441\u0433\u0435\u043D\u0435\u0440\u0438\u0440\u043E\u0432\u0430\u043D\u043D\u043E\u043C PDF. \u041F\u0440\u0438\u043C\u0435\u043D\u044F\u0442\u044C \u043A\u043E \u0412\u0421\u0415\u041C \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F\u043C \u0438\u0437
+// \u0434\u0430\u043D\u043D\u044B\u0445; \u0447\u0438\u0441\u043B\u0430/\u0434\u0430\u0442\u044B, \u043A\u043E\u0442\u043E\u0440\u044B\u0435 \u043C\u044B \u0444\u043E\u0440\u043C\u0430\u0442\u0438\u0440\u0443\u0435\u043C \u0441\u0430\u043C\u0438, \u044D\u043A\u0440\u0430\u043D\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u043D\u0435 \u043D\u0443\u0436\u043D\u043E.
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
 }
@@ -364,24 +377,27 @@ export default function CheckDetailScreen() {
   const generatePdf = async () => {
     if (!check) return;
     const c = company;
-    const companyName = c?.legalName || c?.name || '\u0410\u0432\u0442\u043E\u0441\u0435\u0440\u0432\u0438\u0441';
-    const inn = c?.inn ? `\u0418\u041D\u041D ${c.inn}` : '';
-    const addr = c?.address || '';
-    const phone = c?.phone || '';
-    const footer = c?.receiptFooter || '';
+    // \u0412\u0441\u0435 \u0441\u0442\u0440\u043E\u043A\u043E\u0432\u044B\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F \u043D\u0438\u0436\u0435 \u2014 \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442 \u0438\u0437 \u0434\u0430\u043D\u043D\u044B\u0445; \u044D\u043A\u0440\u0430\u043D\u0438\u0440\u0443\u0435\u043C \u0438\u0445
+    // \u0447\u0435\u0440\u0435\u0437 escapeHtml \u043F\u0435\u0440\u0435\u0434 \u0432\u0441\u0442\u0430\u0432\u043A\u043E\u0439 \u0432 HTML, \u0438\u043D\u0430\u0447\u0435 \u0441\u0438\u043C\u0432\u043E\u043B\u044B < > & " ' \u043B\u043E\u043C\u0430\u044E\u0442
+    // \u0432\u0435\u0440\u0441\u0442\u043A\u0443 \u0447\u0435\u043A\u0430/PDF. \u0427\u0438\u0441\u043B\u0430 \u0438 \u0434\u0430\u0442\u044B \u0444\u043E\u0440\u043C\u0430\u0442\u0438\u0440\u0443\u0435\u043C \u0441\u0430\u043C\u0438 \u2014 \u0438\u0445 \u043D\u0435 \u044D\u043A\u0440\u0430\u043D\u0438\u0440\u0443\u0435\u043C.
+    const companyName = escapeHtml(c?.legalName || c?.name || '\u0410\u0432\u0442\u043E\u0441\u0435\u0440\u0432\u0438\u0441');
+    const inn = c?.inn ? `\u0418\u041D\u041D ${escapeHtml(c.inn)}` : '';
+    const addr = escapeHtml(c?.address || '');
+    const phone = escapeHtml(c?.phone || '');
+    const footer = escapeHtml(c?.receiptFooter || '');
     const date = formatShortDate(check.date) + ' ' + formatTime(check.date);
     const safeServices = check.services ?? [];
     const safeProducts = check.products ?? [];
     const servicesHtml = safeServices
       .map(
         (s) =>
-          `<tr><td>${s.name}</td><td style="text-align:right">${s.quantity}</td><td style="text-align:right">${formatMoney(s.total)}</td></tr>`,
+          `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:right">${s.quantity}</td><td style="text-align:right">${formatMoney(s.total)}</td></tr>`,
       )
       .join('');
     const productsHtml = safeProducts
       .map(
         (p) =>
-          `<tr><td>${p.name}</td><td style="text-align:right">${p.quantity}</td><td style="text-align:right">${formatMoney(p.totalSell)}</td></tr>`,
+          `<tr><td>${escapeHtml(p.name)}</td><td style="text-align:right">${p.quantity}</td><td style="text-align:right">${formatMoney(p.totalSell)}</td></tr>`,
       )
       .join('');
     const html = `
@@ -400,9 +416,9 @@ export default function CheckDetailScreen() {
         <div class="meta">${[inn, addr, phone].filter(Boolean).join(' | ')}</div>
         <hr/>
         <div><strong>\u0427\u0435\u043A #${check.number}</strong> \u043E\u0442 ${date}</div>
-        ${check.client ? `<div>\u041A\u043B\u0438\u0435\u043D\u0442: ${check.client.fullName}</div>` : '<div>\u041A\u043B\u0438\u0435\u043D\u0442: \u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C</div>'}
-        ${check.car ? `<div>\u0410\u0432\u0442\u043E: ${check.car.makeModel} ${check.car.plateNumber || ''}</div>` : ''}
-        ${check.master ? `<div>\u041C\u0430\u0441\u0442\u0435\u0440: ${check.master.fullName}</div>` : ''}
+        ${check.client ? `<div>\u041A\u043B\u0438\u0435\u043D\u0442: ${escapeHtml(check.client.fullName)}</div>` : '<div>\u041A\u043B\u0438\u0435\u043D\u0442: \u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C</div>'}
+        ${check.car ? `<div>\u0410\u0432\u0442\u043E: ${escapeHtml(check.car.makeModel)} ${escapeHtml(check.car.plateNumber || '')}</div>` : ''}
+        ${check.master ? `<div>\u041C\u0430\u0441\u0442\u0435\u0440: ${escapeHtml(check.master.fullName)}</div>` : ''}
         ${
           safeServices.length > 0
             ? `
@@ -424,7 +440,7 @@ export default function CheckDetailScreen() {
         <hr/>
         ${(check.discount ?? 0) > 0 ? `<div>\u0421\u043A\u0438\u0434\u043A\u0430: -${formatMoney(check.discount ?? 0)}</div>` : ''}
         <div class="total">\u0418\u0422\u041E\u0413\u041E: ${formatMoney(check.totalRevenue)}</div>
-        <div style="font-size:11px;color:#666;text-align:right">${paymentLabels[check.paymentMethod] || check.paymentMethod}</div>
+        <div style="font-size:11px;color:#666;text-align:right">${escapeHtml(paymentLabels[check.paymentMethod] || check.paymentMethod)}</div>
         ${footer ? `<div class="footer">${footer}</div>` : ''}
       </body></html>
     `;
