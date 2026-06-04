@@ -1,14 +1,28 @@
-import { Injectable, Inject, NotFoundException, InternalServerErrorException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  NotFoundException,
+  BadRequestException,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { Pool } from 'pg';
+import { randomUUID } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
+import { AuditService, AuditActor } from './audit.service';
 
 @Injectable()
 export class TenantsService {
   private readonly logger = new Logger('TenantsService');
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private jwtService: JwtService,
+    private audit: AuditService,
+  ) {}
 
   private mapTenant(row: any) {
     return {
@@ -62,17 +76,81 @@ export class TenantsService {
   }
 
   async getStats() {
+    // Single round-trip. `monthly_price` is denormalized on `tenants`, so MRR is
+    // the sum over tenants that are BOTH active and not past their subscription
+    // window (subscription_end NULL = "no expiry", treated as in-window). ARPU
+    // divides that MRR over the active-tenant count, guarded by NULLIF so a zero
+    // active count yields NULL → coalesced to 0 (never a divide-by-zero).
     const { rows } = await this.pool.query(
       `SELECT
-         (SELECT COUNT(*) FROM tenants) as total_tenants,
-         (SELECT COUNT(*) FROM tenants WHERE is_active=true) as active_tenants,
-         (SELECT COUNT(*) FROM users) as total_users`,
+         (SELECT COUNT(*) FROM tenants) AS total_tenants,
+         (SELECT COUNT(*) FROM tenants WHERE is_active = true) AS active_tenants,
+         (SELECT COUNT(*) FROM users) AS total_users,
+         (SELECT COUNT(*) FROM tenants
+            WHERE subscription_end IS NOT NULL AND subscription_end < now()) AS expired_tenants,
+         (SELECT COALESCE(SUM(monthly_price), 0) FROM tenants
+            WHERE is_active = true
+              AND (subscription_end IS NULL OR subscription_end >= now())) AS mrr,
+         (SELECT COUNT(*) FROM tenants
+            WHERE created_at >= date_trunc('month', now())) AS new_tenants_this_month`,
     );
     const r = rows[0];
+    const activeTenants = parseInt(r.active_tenants, 10);
+    const mrr = Math.round(parseFloat(r.mrr) || 0);
     return {
-      totalTenants: parseInt(r.total_tenants),
-      activeTenants: parseInt(r.active_tenants),
-      totalUsers: parseInt(r.total_users),
+      totalTenants: parseInt(r.total_tenants, 10),
+      activeTenants,
+      totalUsers: parseInt(r.total_users, 10),
+      expiredTenants: parseInt(r.expired_tenants, 10),
+      mrr,
+      arpu: activeTenants > 0 ? Math.round(mrr / activeTenants) : 0,
+      newTenantsThisMonth: parseInt(r.new_tenants_this_month, 10),
+    };
+  }
+
+  /**
+   * Per-tenant activity metrics for the owner's "показатели клиента" card.
+   *
+   * NOTE ON "usage": Autexa has NO per-feature usage tracking. These metrics are
+   * ACTIVITY SIGNALS (checks volume, revenue, last-activity, user/product
+   * counts) which are the meaningful proxy for how alive a tenant is. They are
+   * derived from existing tables filtered by tenant_id; every aggregate is
+   * COALESCE-guarded so a brand-new tenant returns zeros, never null.
+   */
+  async getMetrics(id: string) {
+    const { rows: exists } = await this.pool.query(`SELECT created_at FROM tenants WHERE id = $1`, [id]);
+    if (exists.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+    const tenantCreatedAt: string = exists[0].created_at;
+
+    const { rows } = await this.pool.query(
+      `SELECT
+         (SELECT COUNT(*) FROM users WHERE tenant_id = $1) AS users_count,
+         (SELECT COUNT(*) FROM users
+            WHERE tenant_id = $1 AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL)
+            AS active_users_count,
+         (SELECT COUNT(*) FROM checks WHERE tenant_id = $1) AS checks_total,
+         (SELECT COUNT(*) FROM checks
+            WHERE tenant_id = $1 AND created_at >= now() - interval '30 days') AS checks_last_30d,
+         (SELECT COALESCE(SUM(total_revenue), 0) FROM checks WHERE tenant_id = $1) AS revenue_total,
+         (SELECT COALESCE(SUM(total_revenue), 0) FROM checks
+            WHERE tenant_id = $1 AND created_at >= now() - interval '30 days') AS revenue_last_30d,
+         (SELECT MAX(created_at) FROM checks WHERE tenant_id = $1) AS last_activity_at,
+         (SELECT COUNT(*) FROM products WHERE tenant_id = $1) AS products_count`,
+      [id],
+    );
+    const r = rows[0];
+
+    return {
+      usersCount: parseInt(r.users_count, 10) || 0,
+      activeUsersCount: parseInt(r.active_users_count, 10) || 0,
+      checksTotal: parseInt(r.checks_total, 10) || 0,
+      checksLast30d: parseInt(r.checks_last_30d, 10) || 0,
+      revenueTotal: parseFloat(r.revenue_total) || 0,
+      revenueLast30d: parseFloat(r.revenue_last_30d) || 0,
+      // Fall back to the tenant's own creation time when it has zero checks so
+      // the card always has a date to show.
+      lastActivityAt: (r.last_activity_at ?? tenantCreatedAt) || null,
+      productsCount: parseInt(r.products_count, 10) || 0,
     };
   }
 
@@ -129,6 +207,141 @@ export class TenantsService {
     }
 
     return tenant;
+  }
+
+  /**
+   * Extend a tenant's subscription by `days`. Anchors on the LATER of the
+   * current end and now() so extending an already-expired subscription starts
+   * the new window from today (not retroactively from the lapsed date).
+   */
+  async extend(id: string, days: number, actor?: AuditActor) {
+    if (!Number.isFinite(days) || days <= 0) {
+      throw new BadRequestException({ message: 'Количество дней должно быть положительным' });
+    }
+    const { rows } = await this.pool.query(
+      `UPDATE tenants
+          SET subscription_end = GREATEST(COALESCE(subscription_end, now()), now()) + ($2 * interval '1 day'),
+              updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [id, days],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+
+    if (actor) {
+      await this.audit.log(actor, 'tenant_extend', {
+        targetType: 'tenant',
+        targetId: id,
+        targetName: rows[0].name,
+        detail: { days, subscriptionEnd: rows[0].subscription_end },
+      });
+    }
+
+    return this.mapTenant(rows[0]);
+  }
+
+  /**
+   * Assign a plan to a tenant and SYNC the denormalized monthly_price + max_users
+   * from the chosen plan row (so the tenant card and MRR math stay coherent).
+   */
+  async assignPlan(id: string, planId: string, actor?: AuditActor) {
+    const { rows: planRows } = await this.pool.query(
+      `SELECT id, name, monthly_price, max_users FROM plans WHERE id = $1`,
+      [planId],
+    );
+    if (planRows.length === 0) throw new NotFoundException({ message: 'Тариф не найден' });
+    const plan = planRows[0];
+
+    const { rows } = await this.pool.query(
+      `UPDATE tenants
+          SET plan_id = $2,
+              monthly_price = $3,
+              max_users = $4,
+              updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [id, plan.id, plan.monthly_price, plan.max_users],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+
+    if (actor) {
+      await this.audit.log(actor, 'tenant_change_plan', {
+        targetType: 'tenant',
+        targetId: id,
+        targetName: rows[0].name,
+        detail: { planId: plan.id, planName: plan.name },
+      });
+    }
+
+    return this.mapTenant(rows[0]);
+  }
+
+  /**
+   * Impersonation ("войти как владелец"). Mints a SHORT-LIVED (30 min) JWT for
+   * the tenant's owner-director so a superadmin can enter their cabinet.
+   *
+   * The token payload EXACTLY matches what AuthService.generateToken produces
+   * ({ sub, tenantId, jti }) so JwtStrategy.validate accepts it as a normal
+   * director token — plus an extra `impersonatedBy` claim that the strategy
+   * ignores. Signed with the SAME injected JwtService / JWT_SECRET as auth; the
+   * 30m expiry is an explicit per-sign override of the module's 7d default.
+   */
+  async impersonate(id: string, actor?: AuditActor) {
+    // Tenant must exist (and be findable) — surfaces a clean 404.
+    const { rows: tenantRows } = await this.pool.query(`SELECT id FROM tenants WHERE id = $1`, [id]);
+    if (tenantRows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+
+    // Owner = active, non-dismissed, non-purged director; oldest wins if several.
+    const { rows } = await this.pool.query(
+      `SELECT id, phone, full_name, username, avatar, role,
+              COALESCE(salary_percent, 0) AS salary_percent,
+              COALESCE(permissions, '{}') AS permissions,
+              is_active, tenant_id, created_at
+         FROM users
+        WHERE tenant_id = $1
+          AND role = 'director'
+          AND is_active = true
+          AND dismissed_at IS NULL
+          AND purged_at IS NULL
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [id],
+    );
+    if (rows.length === 0) {
+      throw new NotFoundException({ message: 'У тенанта нет активного владельца' });
+    }
+    const u = rows[0];
+
+    const jti = randomUUID();
+    const token = this.jwtService.sign(
+      { sub: u.id, tenantId: u.tenant_id, jti, impersonatedBy: actor?.userId },
+      { expiresIn: '30m' },
+    );
+
+    if (actor) {
+      await this.audit.log(actor, 'impersonate', {
+        targetType: 'user',
+        targetId: u.id,
+        targetName: u.full_name,
+        detail: { tenantId: id, impersonatedUserId: u.id },
+      });
+    }
+
+    const user = {
+      id: u.id,
+      phone: u.phone,
+      fullName: u.full_name,
+      username: u.username,
+      avatar: u.avatar,
+      role: u.role,
+      salaryPercent: parseFloat(u.salary_percent) || 0,
+      permissions: typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions,
+      isActive: u.is_active,
+      tenantId: u.tenant_id,
+      createdAt: u.created_at,
+    };
+
+    return { token, user, expiresIn: 1800 };
   }
 
   async create(dto: any) {
@@ -207,7 +420,15 @@ export class TenantsService {
     }
   }
 
-  async update(id: string, dto: any) {
+  async update(id: string, dto: any, actor?: AuditActor) {
+    // Snapshot the BEFORE state of the fields we audit so we only log on an
+    // actual change (PATCH is partial — an unchanged field must not emit noise).
+    let before: { is_active: boolean; plan_id: string | null; name: string } | null = null;
+    if (actor && (dto.isActive !== undefined || dto.planId !== undefined)) {
+      const { rows } = await this.pool.query(`SELECT is_active, plan_id, name FROM tenants WHERE id = $1`, [id]);
+      before = rows[0] ?? null;
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -287,10 +508,48 @@ export class TenantsService {
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
-    return this.mapTenant(rows[0]);
+    const updated = this.mapTenant(rows[0]);
+
+    // Best-effort audit: only on a real change of a tracked field.
+    if (actor && before) {
+      if (dto.isActive !== undefined && dto.isActive !== before.is_active) {
+        await this.audit.log(actor, 'tenant_toggle_active', {
+          targetType: 'tenant',
+          targetId: id,
+          targetName: before.name,
+          detail: { from: before.is_active, to: dto.isActive },
+        });
+      }
+      if (dto.planId !== undefined && dto.planId !== before.plan_id) {
+        await this.audit.log(actor, 'tenant_change_plan', {
+          targetType: 'tenant',
+          targetId: id,
+          targetName: before.name,
+          detail: { from: before.plan_id, to: dto.planId },
+        });
+      }
+    }
+
+    return updated;
   }
 
-  async remove(id: string) {
+  async remove(id: string, actor?: AuditActor) {
+    // Capture the tenant name for the audit row BEFORE the cascade wipes it.
+    if (actor) {
+      const { rows } = await this.pool.query(`SELECT name FROM tenants WHERE id = $1`, [id]);
+      if (rows.length > 0) {
+        await this.audit.log(actor, 'tenant_delete', {
+          targetType: 'tenant',
+          targetId: id,
+          targetName: rows[0].name,
+          detail: {},
+        });
+      }
+    }
+    return this.removeInternal(id);
+  }
+
+  private async removeInternal(id: string) {
     // Full cascade delete — manually remove child records in correct order
     // to avoid FK constraint violations (some FKs lack ON DELETE CASCADE)
     const client = await this.pool.connect();
@@ -433,10 +692,18 @@ export class TenantsService {
 
     const r = rows[0];
 
-    let planName = null;
+    // Resolve the CURRENT plan by the tenant's plan_id (the authoritative link),
+    // not by name. Expose its feature keys directly as `features` so clients
+    // gate on `sub.features.includes(key)` instead of the fragile name match.
+    // `planName` stays for backward-compat with shipped clients.
+    let planName: string | null = null;
+    let features: string[] = [];
     if (r.plan_id) {
-      const { rows: planRows } = await this.pool.query('SELECT name FROM plans WHERE id=$1', [r.plan_id]);
-      if (planRows.length > 0) planName = planRows[0].name;
+      const { rows: planRows } = await this.pool.query('SELECT name, features FROM plans WHERE id=$1', [r.plan_id]);
+      if (planRows.length > 0) {
+        planName = planRows[0].name;
+        features = Array.isArray(planRows[0].features) ? planRows[0].features : [];
+      }
     }
 
     const { rows: plans } = await this.pool.query(
@@ -445,7 +712,9 @@ export class TenantsService {
 
     return {
       tenantName: r.name,
+      planId: r.plan_id ?? null,
       planName,
+      features,
       monthlyPrice: parseFloat(r.monthly_price) || 0,
       subscriptionEnd: r.subscription_end,
       subscriptionNote: r.subscription_note,

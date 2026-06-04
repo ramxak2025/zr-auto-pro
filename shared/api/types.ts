@@ -8,7 +8,24 @@ import type {
   KnowledgeAttachment,
   KnowledgeQuizQuestion,
   TroubleshootingSeverity,
+  BroadcastButton,
+  NotificationCategory,
 } from '../types';
+
+// ─── Notifications ─────────────────────────────────────────────────────────────
+
+/** PUT /notifications/preferences body — full set of MUTED categories. */
+export interface UpdateNotificationPreferencesRequest {
+  muted: NotificationCategory[];
+}
+
+/** POST /admin/broadcast body — superadmin only. */
+export interface CreateBroadcastRequest {
+  title: string;
+  body: string;
+  imageUrl?: string;
+  buttons?: BroadcastButton[];
+}
 
 export interface LoginRequest {
   phone: string;
@@ -338,6 +355,16 @@ export interface UpdateTenantRequest {
   monthlyPrice?: number;
   subscriptionEnd?: string;
   subscriptionNote?: string;
+}
+
+/** POST /tenants/:id/extend — extend the tenant's subscription by N days. */
+export interface ExtendSubscriptionRequest {
+  days: number;
+}
+
+/** POST /tenants/:id/assign-plan — switch the tenant to a plan (syncs price + max users). */
+export interface AssignPlanRequest {
+  planId: string;
 }
 
 export interface CreatePlanRequest {

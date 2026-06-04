@@ -44,6 +44,88 @@ export class PushService {
   }
 
   /**
+   * Category-gated variant of {@link sendToUser}. Identical delivery, but a
+   * device only receives the push when the user has NOT muted `category`
+   * (notification_mutes, migration 066 — opt-out model: absence of a row ==
+   * subscribed). Use this for every USER-FACING alert tied to a toggle in
+   * «Уведомления»: salary / penalty / check_assigned / check_closed / knowledge.
+   *
+   * NOT for silent cache-invalidation pushes (those stay on sendDataToTenant)
+   * and NOT for superadmin broadcasts (those must always deliver — see
+   * sendBroadcastToUser).
+   *
+   * Best-effort: any failure is swallowed (push is never the source of truth).
+   */
+  async sendToUserCategory(
+    userId: string,
+    category: string,
+    title: string,
+    body: string,
+    data?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT pt.token
+           FROM push_tokens pt
+          WHERE pt.user_id = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM notification_mutes m
+               WHERE m.user_id = $1 AND m.category = $2
+            )`,
+        [userId, category],
+      );
+      if (rows.length === 0) return;
+
+      const messages = rows.map((r: { token: string }) => ({
+        to: r.token,
+        sound: 'default',
+        title,
+        body,
+        data: { ...(data || {}), category },
+      }));
+
+      await this.postToExpo(messages);
+    } catch (err) {
+      this.logger.error(`sendToUserCategory failed for userId=${userId} category=${category}: ${err}`);
+    }
+  }
+
+  /**
+   * Deliver a single visible push to ONE user, ALWAYS (never category-gated).
+   * Used for superadmin → director broadcasts, which must reach every owner
+   * regardless of their «Уведомления» toggles. Callers fan this out across the
+   * recipient list (see NotificationsService.broadcast), chunking the Expo send
+   * at 100 messages per request — same chunk loop as sendDataToTenant.
+   *
+   * Best-effort: failure is swallowed and logged.
+   */
+  async sendBroadcastToUser(
+    userId: string,
+    title: string,
+    body: string,
+    data?: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const { rows } = await this.pool.query(`SELECT token FROM push_tokens WHERE user_id=$1`, [userId]);
+      if (rows.length === 0) return;
+
+      const messages = rows.map((r: { token: string }) => ({
+        to: r.token,
+        sound: 'default',
+        title,
+        body,
+        data: data || {},
+      }));
+
+      for (let i = 0; i < messages.length; i += 100) {
+        await this.postToExpo(messages.slice(i, i + 100));
+      }
+    } catch (err) {
+      this.logger.error(`sendBroadcastToUser failed for userId=${userId}: ${err}`);
+    }
+  }
+
+  /**
    * Fan out a SILENT, DATA-ONLY push to every device of every OTHER user in a
    * tenant (the actor is excluded). Used for live cross-device cache
    * invalidation — e.g. `{ type: 'cash-changed', tenantId }` so other open

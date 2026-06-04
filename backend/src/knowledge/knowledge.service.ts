@@ -728,7 +728,7 @@ export class KnowledgeService {
       const body = `Ознакомьтесь: «${title}»${due}`;
       await Promise.all(
         rows.map((r: { id: string }) =>
-          this.push.sendToUser(r.id, 'Новый обязательный регламент', body, {
+          this.push.sendToUserCategory(r.id, 'knowledge', 'Новый обязательный регламент', body, {
             type: 'knowledge-mandatory-regulation',
             tenantId: tenantID,
           }),

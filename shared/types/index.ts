@@ -43,7 +43,19 @@ export interface Tenant {
 
 export interface SubscriptionInfo {
   tenantName: string;
+  /**
+   * The tenant's current plan id (authoritative link to `plans`). Prefer this
+   * over `planName` when resolving the active plan.
+   */
+  planId?: string | null;
+  /** Kept for backward-compat. New code should gate on `features` instead. */
   planName?: string | null;
+  /**
+   * Resolved feature keys of the tenant's CURRENT plan (by planId, server-side).
+   * Clients gate features with `sub.features.includes(key)` — no fragile match
+   * by plan name. See shared/constants/features.ts for the canonical key list.
+   */
+  features: string[];
   monthlyPrice: number;
   subscriptionEnd?: string | null;
   subscriptionNote?: string | null;
@@ -52,10 +64,100 @@ export interface SubscriptionInfo {
   plans: Plan[];
 }
 
+// ─── Notifications (066_notification_preferences + 067_notification_broadcasts) ─
+
+/**
+ * User-facing, mutable notification categories. Each maps to a push trigger
+ * gated by NOT EXISTS in notification_mutes (opt-out: muted == has a row).
+ * Silent cache-invalidation pushes and superadmin broadcasts are intentionally
+ * excluded — they are not user-mutable.
+ */
+export type NotificationCategory = 'salary' | 'penalty' | 'check_assigned' | 'check_closed' | 'knowledge';
+
+/** GET /notifications/preferences — `muted` is the set the user opted OUT of. */
+export interface NotificationPreferences {
+  muted: NotificationCategory[];
+}
+
+export interface BroadcastButton {
+  label: string;
+  action: 'dismiss' | 'link';
+  url?: string;
+}
+
+/** A persisted superadmin → director broadcast (GET /notifications/broadcasts/unseen). */
+export interface Broadcast {
+  id: string;
+  title: string;
+  body: string;
+  imageUrl?: string;
+  buttons: BroadcastButton[];
+  createdAt: string;
+}
+
+/** Data payload carried by the broadcast push (data.type === 'superadmin_broadcast'). */
+export interface BroadcastPayload {
+  type: 'superadmin_broadcast';
+  broadcastId: string;
+  title: string;
+  body: string;
+  imageUrl?: string;
+  buttons?: BroadcastButton[];
+}
+
 export interface PlatformStats {
   totalTenants: number;
   activeTenants: number;
   totalUsers: number;
+  /** Tenants whose subscription_end is in the past (lapsed). */
+  expiredTenants: number;
+  /** Monthly recurring revenue: Σ monthly_price over active, in-window tenants (rubles, rounded). */
+  mrr: number;
+  /** Average revenue per active tenant = mrr / activeTenants (rounded; 0 when no active tenants). */
+  arpu: number;
+  /** Tenants created since the start of the current month. */
+  newTenantsThisMonth: number;
+}
+
+/**
+ * Per-tenant activity metrics for the SUPERADMIN PLATFORM "показатели клиента"
+ * card (GET /tenants/:id/metrics). These are ACTIVITY SIGNALS — Autexa has no
+ * per-feature usage tracking, so check volume / revenue / last-activity are the
+ * meaningful proxy for tenant health. All aggregates are server-side
+ * COALESCE-guarded, never null (except `lastActivityAt`, which is null only if
+ * the tenant has no checks AND no creation date).
+ */
+export interface TenantMetrics {
+  usersCount: number;
+  activeUsersCount: number;
+  checksTotal: number;
+  checksLast30d: number;
+  revenueTotal: number;
+  revenueLast30d: number;
+  lastActivityAt: string | null;
+  productsCount: number;
+}
+
+/**
+ * POST /tenants/:id/impersonate response. `token` is a short-lived (30 min)
+ * normal director JWT for the tenant's owner; `expiresIn` is in seconds (1800).
+ */
+export interface ImpersonateResponse {
+  token: string;
+  user: User;
+  expiresIn: number;
+}
+
+/** One row of the superadmin platform audit trail (GET /admin/audit-log). */
+export interface AuditLogEntry {
+  id: string;
+  actorName: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  targetName: string | null;
+  detail: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface User {

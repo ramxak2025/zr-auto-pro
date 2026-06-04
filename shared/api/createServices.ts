@@ -91,6 +91,12 @@ import type {
   CourseProgress,
   Troubleshooting,
   KnowledgeForCar,
+  NotificationPreferences,
+  NotificationCategory,
+  Broadcast,
+  TenantMetrics,
+  ImpersonateResponse,
+  AuditLogEntry,
 } from '../types';
 import type {
   LoginRequest,
@@ -124,6 +130,8 @@ import type {
   UpdateWorkModeRequest,
   CreateTenantRequest,
   UpdateTenantRequest,
+  ExtendSubscriptionRequest,
+  AssignPlanRequest,
   CreatePlanRequest,
   UpdatePlanRequest,
   ImportPreviewRequest,
@@ -139,6 +147,7 @@ import type {
   TroubleshootingInput,
   ListTroubleshootingParams,
   ForCarParams,
+  CreateBroadcastRequest,
 } from './types';
 
 export function createAuthApi(api: HttpClient) {
@@ -179,9 +188,23 @@ export function createTenantsApi(api: HttpClient) {
     getAll: () => api.get<Tenant[]>('/tenants'),
     getStats: () => api.get<PlatformStats>('/tenants/stats'),
     getById: (id: string) => api.get<Tenant>(`/tenants/${id}`),
+    getMetrics: (id: string) => api.get<TenantMetrics>(`/tenants/${id}/metrics`),
     create: (data: CreateTenantRequest) => api.post<Tenant>('/tenants', data),
     update: (id: string, data: UpdateTenantRequest) => api.patch<Tenant>(`/tenants/${id}`, data),
     remove: (id: string) => api.delete(`/tenants/${id}`),
+    // ── Subscription management (superadmin, from the tenant card) ──
+    extend: (id: string, days: number) =>
+      api.post<Tenant>(`/tenants/${id}/extend`, { days } satisfies ExtendSubscriptionRequest),
+    assignPlan: (id: string, planId: string) =>
+      api.post<Tenant>(`/tenants/${id}/assign-plan`, { planId } satisfies AssignPlanRequest),
+    impersonate: (id: string) => api.post<ImpersonateResponse>(`/tenants/${id}/impersonate`),
+  };
+}
+
+/** Superadmin platform-operator endpoints not tied to a single tenant. */
+export function createAdminApi(api: HttpClient) {
+  return {
+    listAuditLog: () => api.get<AuditLogEntry[]>('/admin/audit-log'),
   };
 }
 
@@ -1001,5 +1024,28 @@ export function createKnowledgeApi(api: HttpClient) {
     // ─── Contextual KB ─────────────────────────────────────────────────────
     forCar: (params: ForCarParams) => api.get<KnowledgeForCar>('/knowledge/for-car', { params }),
     listChecklists: () => api.get<KnowledgeArticle[]>('/knowledge/checklists'),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Notifications (066_notification_preferences + 067_notification_broadcasts)
+//  preferences: any authenticated user manages their own mute list.
+//  broadcasts:  read/seen for any user; createBroadcast is superadmin-only
+//               (enforced server-side via @Roles('superadmin')).
+// ───────────────────────────────────────────────────────────────────────
+
+export function createNotificationsApi(api: HttpClient) {
+  return {
+    // Preferences (opt-out: `muted` is the set the user turned OFF).
+    getPreferences: () => api.get<NotificationPreferences>('/notifications/preferences'),
+    updatePreferences: (muted: NotificationCategory[]) =>
+      api.put<NotificationPreferences>('/notifications/preferences', { muted }),
+
+    // Persisted broadcasts — re-fetchable on app open if the push was missed.
+    listUnseenBroadcasts: () => api.get<Broadcast[]>('/notifications/broadcasts/unseen'),
+    markBroadcastSeen: (id: string) => api.post<{ ok: true }>(`/notifications/broadcasts/${id}/seen`),
+
+    // Superadmin → director broadcast authoring.
+    createBroadcast: (payload: CreateBroadcastRequest) => api.post<Broadcast>('/admin/broadcast', payload),
   };
 }

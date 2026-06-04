@@ -664,7 +664,12 @@ export class ChecksService {
       if (this.pushService && dto.masterId && dto.masterId !== userID) {
         const checkNumber = (savedCheck as any).number;
         this.pushService
-          .sendToUser(dto.masterId, 'Новый заказ-наряд', `Назначен заказ-наряд #${checkNumber}`)
+          .sendToUserCategory(
+            dto.masterId,
+            'check_assigned',
+            'Новый заказ-наряд',
+            `Назначен заказ-наряд #${checkNumber}`,
+          )
           .catch(() => {
             /* non-fatal */
           });
@@ -755,9 +760,11 @@ export class ChecksService {
         [tenantID],
       );
       for (const mgr of managers) {
-        this.pushService.sendToUser(mgr.id, 'Чек закрыт', `Чек #${checkNumber} закрыт — ${formatted}`).catch(() => {
-          /* non-fatal */
-        });
+        this.pushService
+          .sendToUserCategory(mgr.id, 'check_closed', 'Чек закрыт', `Чек #${checkNumber} закрыт — ${formatted}`)
+          .catch(() => {
+            /* non-fatal */
+          });
       }
     }
 

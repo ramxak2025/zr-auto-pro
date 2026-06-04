@@ -36,6 +36,7 @@ import { WarehouseAnalyticsModule } from './warehouse-analytics/warehouse-analyt
 import { ClientSourcesModule } from './client-sources/client-sources.module';
 import { JournalModule } from './journal/journal.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -75,6 +76,7 @@ import { KnowledgeModule } from './knowledge/knowledge.module';
     ClientSourcesModule,
     JournalModule,
     KnowledgeModule,
+    NotificationsModule,
   ],
   providers: [MigrationRunner],
 })

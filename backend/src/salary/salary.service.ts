@@ -299,7 +299,7 @@ export class SalaryService {
     };
     const title = titleByType[String(payment.type)] || 'Зарплата';
     const formatted = (parseFloat(payment.amount) || 0).toLocaleString('ru-RU');
-    this.push.sendToUser(payment.user_id, `${title} начислена`, `Сумма: ${formatted} ₽`, {
+    this.push.sendToUserCategory(payment.user_id, 'salary', `${title} начислена`, `Сумма: ${formatted} ₽`, {
       kind: 'salary',
       paymentId: payment.id,
       paymentType: payment.type,
@@ -367,7 +367,7 @@ export class SalaryService {
       dto.type === 'cash'
         ? `Сумма: ${(parseFloat(p.amount) || 0).toLocaleString('ru-RU')} ₽ — ${dto.reason}`
         : `Бонус к ставке: +${parseFloat(p.bonus_percent) || 0}% — ${dto.reason}`;
-    this.push.sendToUser(dto.userId, 'Премия начислена', body, { kind: 'premium', premiumId: p.id });
+    this.push.sendToUserCategory(dto.userId, 'salary', 'Премия начислена', body, { kind: 'premium', premiumId: p.id });
 
     return this.mapPremium(p);
   }
@@ -461,8 +461,9 @@ export class SalaryService {
 
     // Notify the employee so a penalty is never silent.
     const formatted = amount.toLocaleString('ru-RU');
-    this.push.sendToUser(
+    this.push.sendToUserCategory(
       dto.userId,
+      'penalty',
       'Штраф наложен',
       dto.description ? `${formatted} ₽ — ${dto.description}` : `Сумма: ${formatted} ₽`,
       { kind: 'penalty', penaltyId: p.id },
