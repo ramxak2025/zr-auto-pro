@@ -116,8 +116,7 @@
           "icon": "./assets/icon.png",
           "color": "#2563eb"
         }
-      ],
-      "./plugins/withWidgetExtension"
+      ]
     ]
   }
 }
