@@ -20,7 +20,16 @@
  *   the user always has a way to close.
  */
 import React, { useEffect } from 'react';
-import { Modal as RNModal, StyleSheet, View, ScrollView, Pressable, Linking, AccessibilityInfo } from 'react-native';
+import {
+  Modal as RNModal,
+  StyleSheet,
+  View,
+  ScrollView,
+  Pressable,
+  Linking,
+  AccessibilityInfo,
+  Dimensions,
+} from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,6 +46,16 @@ interface BroadcastModalProps {
   broadcast: Broadcast | null;
   onDismiss: () => void;
 }
+
+// Sizing derived from the actual screen so the card never exceeds the device
+// (incl. the home-indicator strip): comfortably wide, but capped for tablets,
+// and at most ~84% of screen height so a long promo scrolls inside instead of
+// pushing the pinned buttons off-screen.
+const SCREEN = Dimensions.get('window');
+const CARD_WIDTH = Math.min(Math.round(SCREEN.width * 0.9), 480);
+const CARD_MAX_HEIGHT = Math.round(SCREEN.height * 0.84);
+// 16:9 image, but never taller than this so the title is visible without scroll.
+const IMAGE_HEIGHT = Math.min(Math.round(CARD_WIDTH * (9 / 16)), 220);
 
 export default function BroadcastModal({ broadcast, onDismiss }: BroadcastModalProps) {
   const palette = useColors();
@@ -105,32 +124,40 @@ export default function BroadcastModal({ broadcast, onDismiss }: BroadcastModalP
 
         <Animated.View style={[styles.cardWrap, cardStyle]} pointerEvents="box-none">
           <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            {/* Image pinned at the very top of the card (rounded), so it never
+                scrolls away. If there is no image, the card opens straight on
+                the title (the icon ring acts as a compact branded header). */}
+            {broadcast.imageUrl ? (
+              <CachedImage
+                // Server may return a RELATIVE image_url — resolve to an
+                // absolute URL so the image actually loads on receiving
+                // devices (the `imageUrl ?` guard above keeps this truthy).
+                source={{ uri: getImageUrl(broadcast.imageUrl) }}
+                style={styles.image}
+                resizeMode="cover"
+                accessibilityIgnoresInvertColors
+              />
+            ) : (
+              <LinearGradient
+                colors={[palette.accent.primary, colors.primary[700]] as [string, string]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.iconRing}
+              >
+                <Ionicons name="megaphone" size={40} color={colors.white} />
+              </LinearGradient>
+            )}
+
+            {/* Only title + body scroll. A long promo text scrolls INSIDE the
+                card while the buttons below stay pinned. flexShrink lets this
+                area collapse to the content for short messages and grow up to
+                the card's max height for long ones. */}
             <ScrollView
+              style={styles.scrollArea}
               bounces={false}
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.cardScrollContent}
             >
-              {broadcast.imageUrl ? (
-                <CachedImage
-                  // Server may return a RELATIVE image_url — resolve to an
-                  // absolute URL so the image actually loads on receiving
-                  // devices (the `imageUrl ?` guard above keeps this truthy).
-                  source={{ uri: getImageUrl(broadcast.imageUrl) }}
-                  style={styles.image}
-                  resizeMode="cover"
-                  accessibilityIgnoresInvertColors
-                />
-              ) : (
-                <LinearGradient
-                  colors={[palette.accent.primary, colors.primary[700]] as [string, string]}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.iconRing}
-                >
-                  <Ionicons name="megaphone" size={40} color={colors.white} />
-                </LinearGradient>
-              )}
-
               <Text style={[styles.title, { color: palette.text.primary }]}>{broadcast.title}</Text>
               {broadcast.body ? (
                 <Text style={[styles.body, { color: palette.text.secondary }]}>{broadcast.body}</Text>
@@ -211,30 +238,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[5],
   },
   cardWrap: {
-    width: '100%',
-    maxWidth: 360,
+    width: CARD_WIDTH,
+    maxWidth: '100%',
   },
   card: {
     width: '100%',
     borderRadius: borderRadius['3xl'],
     borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing[6],
-    paddingVertical: spacing[6],
-    maxHeight: '82%',
+    // No outer padding: the image must reach the card's rounded top edge.
+    // Inner sections (scroll area + cta stack) carry their own padding.
+    paddingBottom: spacing[6],
+    maxHeight: CARD_MAX_HEIGHT,
+    overflow: 'hidden',
     shadowColor: colors.black,
     shadowOpacity: 0.25,
     shadowRadius: 32,
     shadowOffset: { width: 0, height: 10 },
     elevation: 22,
   },
+  // Title + body live here; flexShrink lets it collapse to content (short
+  // message) or grow to fill the remaining height (long message → scrolls).
+  scrollArea: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
   cardScrollContent: {
     alignItems: 'center',
+    paddingHorizontal: spacing[6],
+    paddingTop: spacing[6],
   },
   image: {
     width: '100%',
-    aspectRatio: 16 / 9,
-    borderRadius: borderRadius['2xl'],
-    marginBottom: spacing[4],
+    height: IMAGE_HEIGHT,
+    // Round only the top corners — the image is flush with the card's top edge.
+    borderTopLeftRadius: borderRadius['3xl'],
+    borderTopRightRadius: borderRadius['3xl'],
     backgroundColor: colors.gray[100],
   },
   iconRing: {
@@ -243,7 +281,9 @@ const styles = StyleSheet.create({
     borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing[4],
+    alignSelf: 'center',
+    marginTop: spacing[6],
+    marginBottom: -spacing[2],
     shadowColor: colors.primary[600],
     shadowOpacity: 0.4,
     shadowRadius: 22,
@@ -251,20 +291,22 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   title: {
-    fontSize: fontSize.xl,
+    fontSize: fontSize['2xl'],
     fontWeight: fontWeight.bold,
     textAlign: 'center',
-    letterSpacing: -0.4,
+    letterSpacing: -0.5,
+    lineHeight: 30,
   },
   body: {
-    marginTop: spacing[2],
+    marginTop: spacing[3],
     fontSize: fontSize.base,
-    lineHeight: 22,
+    lineHeight: 24,
     textAlign: 'center',
   },
   ctaStack: {
     width: '100%',
     marginTop: spacing[5],
+    paddingHorizontal: spacing[6],
     gap: spacing[2.5],
   },
   ctaPressable: {

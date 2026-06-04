@@ -17,7 +17,7 @@
  * persistentCache. Lists revalidate quietly in the background.
  */
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -87,19 +87,33 @@ export default function KnowledgeBaseScreen() {
     staleTime: STALE,
   });
 
-  // ── Recent (all, slim) ──────────────────────────────────────────────────
-  const { data: recent, isLoading: recentLoading } = useQuery<KnowledgeArticle[]>({
+  // ── Recent (all, slim) — this is the screen's main list ─────────────────
+  const {
+    data: recent,
+    isLoading: recentLoading,
+    isError: recentError,
+    refetch: refetchRecent,
+    isRefetching: recentRefetching,
+  } = useQuery<KnowledgeArticle[]>({
     queryKey: ['knowledge-articles', 'recent'],
     queryFn: async () => (await knowledgeApi.listArticles({})).data,
     staleTime: STALE,
+    // Surface a failed load quickly instead of retrying with long backoff.
+    retry: 1,
   });
 
   // ── Search results ──────────────────────────────────────────────────────
-  const { data: results, isFetching: searchFetching } = useQuery<KnowledgeArticle[]>({
+  const {
+    data: results,
+    isFetching: searchFetching,
+    isError: searchError,
+    refetch: refetchSearch,
+  } = useQuery<KnowledgeArticle[]>({
     queryKey: ['knowledge-articles', 'search', debouncedSearch],
     queryFn: async () => (await knowledgeApi.listArticles({ search: debouncedSearch })).data,
     enabled: isSearching,
     staleTime: 30_000,
+    retry: 1,
   });
 
   const openArticle = React.useCallback(
@@ -159,6 +173,13 @@ export default function KnowledgeBaseScreen() {
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={recentRefetching && !recentLoading}
+            onRefresh={refetchRecent}
+            tintColor={palette.text.tertiary}
+          />
+        }
       >
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск по базе знаний" />
 
@@ -167,6 +188,13 @@ export default function KnowledgeBaseScreen() {
           <View style={styles.section}>
             {searchFetching && !results ? (
               <ListSkeleton count={5} />
+            ) : searchError && !results ? (
+              <EmptyState
+                icon="warning"
+                title="Не удалось загрузить"
+                description="Проверьте соединение и попробуйте снова."
+                action={{ label: 'Повторить', onPress: () => refetchSearch() }}
+              />
             ) : results && results.length > 0 ? (
               <View style={styles.rowList}>
                 {results.map((a) => (
@@ -309,6 +337,13 @@ export default function KnowledgeBaseScreen() {
               <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Недавние</Text>
               {recentLoading && !recent ? (
                 <ListSkeleton count={5} />
+              ) : recentError && !recent ? (
+                <EmptyState
+                  icon="warning"
+                  title="Не удалось загрузить"
+                  description="Проверьте соединение и попробуйте снова."
+                  action={{ label: 'Повторить', onPress: () => refetchRecent() }}
+                />
               ) : recent && recent.length > 0 ? (
                 <View style={styles.rowList}>
                   {recent.slice(0, 12).map((a) => (

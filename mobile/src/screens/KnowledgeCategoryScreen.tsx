@@ -9,7 +9,7 @@
  * Slim rows (title + «Регламент» chip + excerpt + pinned star). Tap → reader.
  */
 import React from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -36,10 +36,12 @@ export default function KnowledgeCategoryScreen() {
   const type = route.params?.type;
   const title = route.params?.name ?? (type === 'regulation' ? 'Регламенты' : 'Категория');
 
-  const { data, isLoading } = useQuery<KnowledgeArticle[]>({
+  const { data, isLoading, isError, refetch, isRefetching } = useQuery<KnowledgeArticle[]>({
     queryKey: ['knowledge-articles', 'category', categoryId ?? null, type ?? null],
     queryFn: async () => (await knowledgeApi.listArticles({ categoryId, type })).data,
     staleTime: 60_000,
+    // Surface a failed load quickly instead of retrying with long backoff.
+    retry: 1,
   });
 
   const openArticle = React.useCallback(
@@ -58,9 +60,19 @@ export default function KnowledgeCategoryScreen() {
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={isRefetching && !isLoading} onRefresh={refetch} tintColor={palette.text.tertiary} />
+        }
       >
         {isLoading && !data ? (
           <ListSkeleton count={6} />
+        ) : isError && !data ? (
+          <EmptyState
+            icon="warning"
+            title="Не удалось загрузить"
+            description="Проверьте соединение и попробуйте снова."
+            action={{ label: 'Повторить', onPress: () => refetch() }}
+          />
         ) : data && data.length > 0 ? (
           <View style={styles.rowList}>
             {data.map((a) => (

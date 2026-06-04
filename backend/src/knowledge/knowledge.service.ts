@@ -310,11 +310,33 @@ export class KnowledgeService {
     const { rows } = await this.pool.query('SELECT 1 FROM knowledge_categories WHERE tenant_id=$1 LIMIT 1', [tenantID]);
     if (rows.length > 0) return;
 
+    // CORE seed (categories + articles, incl. «Регламенты») commits in its OWN
+    // transaction. Once it commits, the gate above stops re-running the seed, so
+    // the core content is guaranteed and never re-attempted.
+    const seededCore = await this.seedKnowledgeCore(tenantID);
+
+    // PHASE-2 sample content (troubleshooting / course / lessons) seeds in a
+    // SEPARATE, best-effort transaction. A failure here is logged + swallowed
+    // and can NOT roll back the already-committed core — so one bad sample row
+    // can never leave a tenant with an empty Knowledge Base (the old
+    // single-transaction bug: any phase-2 failure rolled back categories too,
+    // emptying the KB and forcing every read to re-run the failing seed → slow
+    // load + «пусто» + Sentry spam).
+    if (seededCore) {
+      await this.seedKnowledgePhase2(tenantID);
+    }
+  }
+
+  /**
+   * Seed the CORE knowledge base (categories + articles). Own transaction,
+   * tenant-scoped advisory lock so concurrent first-reads serialise. Returns
+   * true only if THIS call performed the insert (so the caller knows to run
+   * phase-2). Never throws — a failure is logged and surfaces again next read.
+   */
+  private async seedKnowledgeCore(tenantID: string): Promise<boolean> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      // Tenant-scoped advisory lock: hashtext keeps the lock key stable per
-      // tenant so concurrent seeders queue instead of racing. Released on COMMIT.
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`knowledge_seed:${tenantID}`]);
 
       // Re-check inside the lock — another request may have seeded while we waited.
@@ -323,7 +345,7 @@ export class KnowledgeService {
       ]);
       if (again.length > 0) {
         await client.query('COMMIT');
-        return;
+        return false; // another request already seeded the core
       }
 
       const idByKey = new Map<string, string>();
@@ -342,6 +364,39 @@ export class KnowledgeService {
            VALUES ($1, $2, $3, $4, $5, $6, true)`,
           [tenantID, idByKey.get(art.categoryKey) ?? null, art.type, art.title, art.body, art.pinned ?? false],
         );
+      }
+
+      await client.query('COMMIT');
+      this.logger.log(`Seeded knowledge core for tenant ${tenantID}`);
+      return true;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`seedKnowledgeCore failed for tenant ${tenantID}: ${err}`);
+      return false;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Seed PHASE-2 sample content (troubleshooting + onboarding course/lessons).
+   * Separate transaction, BEST-EFFORT: a failure rolls back ONLY phase-2 and is
+   * swallowed — the committed core (categories/articles/regulations) is never
+   * touched. Each troubleshooting row is individually guarded so one bad sample
+   * doesn't drop the rest. Idempotent: skips if a course already exists.
+   */
+  private async seedKnowledgePhase2(tenantID: string): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`knowledge_seed_phase2:${tenantID}`]);
+
+      const { rows: existing } = await client.query('SELECT 1 FROM knowledge_courses WHERE tenant_id=$1 LIMIT 1', [
+        tenantID,
+      ]);
+      if (existing.length > 0) {
+        await client.query('COMMIT');
+        return; // phase-2 already seeded
       }
 
       // Troubleshooting starter rows (справочник типовых неисправностей).
@@ -378,12 +433,12 @@ export class KnowledgeService {
       }
 
       await client.query('COMMIT');
-      this.logger.log(`Seeded knowledge base for tenant ${tenantID}`);
+      this.logger.log(`Seeded knowledge phase-2 for tenant ${tenantID}`);
     } catch (err) {
       await client.query('ROLLBACK');
-      this.logger.error(`ensureSeed failed for tenant ${tenantID}: ${err}`);
-      // Non-fatal: if seeding fails the tenant just sees an empty KB; surfaces
-      // again on the next read.
+      // Best-effort: the core KB is already committed and fully usable; the
+      // tenant just won't have the sample troubleshooting/course. Non-fatal.
+      this.logger.error(`seedKnowledgePhase2 (best-effort) failed for tenant ${tenantID}: ${err}`);
     } finally {
       client.release();
     }
