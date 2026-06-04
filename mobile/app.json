@@ -51,7 +51,8 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED"
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.RECORD_AUDIO"
       ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
@@ -72,7 +73,7 @@
       "backgroundColor": "#f9fafb"
     },
     "updates": {
-      "url": "https://u.expo.dev/2d08b9be-9503-4e31-9198-8ec7093e44d7",
+      "url": "https://u.expo.dev/cccdafdb-191a-4271-a61a-f95ab35cb223",
       "enabled": true,
       "fallbackToCacheTimeout": 0
     },
@@ -83,7 +84,7 @@
       "apiUrl": "https://autexa.pw/api",
       "sentryDsn": "https://d248fd476c55b8b4854145c66cd9c115@o4511507149291520.ingest.us.sentry.io/4511507152502784",
       "eas": {
-        "projectId": "2d08b9be-9503-4e31-9198-8ec7093e44d7"
+        "projectId": "cccdafdb-191a-4271-a61a-f95ab35cb223"
       }
     },
     "plugins": [
