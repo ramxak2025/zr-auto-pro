@@ -42,17 +42,20 @@ import ProductPickerModal from '../components/ProductPickerModal';
 import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import type {
   Client,
   Car,
   User,
   Service,
   Product,
+  Check,
   CheckServiceLine,
   CheckProductLine,
   PaymentMethod,
@@ -73,6 +76,19 @@ function formatMoney(v: number) {
       .toString()
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
+}
+
+/**
+ * parseMoneyInput — RU-дружественный парсер денег/количества.
+ *
+ * `Number('1499,5')` → NaN, из-за чего запятая (стандартный десятичный
+ * разделитель на русской клавиатуре / decimal-pad в RU-локали) молча
+ * обнуляла цену или количество. Меняем запятую на точку и парсим;
+ * любой мусор → 0, как и раньше.
+ */
+function parseMoneyInput(v: string): number {
+  const n = parseFloat(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? n : 0;
 }
 
 /**
@@ -433,20 +449,30 @@ export default function CheckCreateScreen() {
   // screen so it survives a picker close/reopen during the same check.
   const [pickerWarehouseId, setPickerWarehouseId] = useState<string | null>(null);
   const [showWarehouseSheet, setShowWarehouseSheet] = useState(false);
+  // M2: быстрый «Создать клиента» из состояния «Клиент не найден».
+  const [showQuickCreate, setShowQuickCreate] = useState(false);
 
   // Service search
   const [serviceSearch, setServiceSearch] = useState('');
 
   // Load data — search by normalized plate (latin→cyrillic, no spaces)
   // so latin "P332PA05" or "р332ра05" finds the same client as "Р332РА05".
+  // `normalizedSearch` follows every keystroke (controlled input + local
+  // filtering); the NETWORK query keys off a 300ms-debounced snapshot so
+  // typing "Р332РА05" fires one request, not eight (RNPERF-5).
   const normalizedSearch = useMemo(() => normalizePlateForSearch(plateSearch, plateMode), [plateSearch, plateMode]);
+  const debouncedPlate = useDebouncedValue(plateSearch, 300);
+  const debouncedNormalized = useMemo(
+    () => normalizePlateForSearch(debouncedPlate, plateMode),
+    [debouncedPlate, plateMode],
+  );
   const { data: plateClients, isFetching: isFetchingPlate } = useQuery<Client[]>({
-    queryKey: ['clients-plate', normalizedSearch, plateMode],
+    queryKey: ['clients-plate', debouncedNormalized, plateMode],
     queryFn: async () => {
-      const res = await clientsApi.getAll({ search: normalizedSearch, limit: 20 });
+      const res = await clientsApi.getAll({ search: debouncedNormalized, limit: 20 });
       return res.data.data || [];
     },
-    enabled: normalizedSearch.length >= 2,
+    enabled: debouncedNormalized.length >= 2,
     placeholderData: (prev) => prev,
   });
 
@@ -468,10 +494,7 @@ export default function CheckCreateScreen() {
     },
   });
 
-  const masters = useMemo(
-    () => (allUsers || []).filter((u) => u.isActive && !u.hiddenEverywhere),
-    [allUsers],
-  );
+  const masters = useMemo(() => (allUsers || []).filter((u) => u.isActive && !u.hiddenEverywhere), [allUsers]);
 
   const { data: allServices } = useQuery<Service[]>({
     queryKey: ['all-services'],
@@ -678,33 +701,51 @@ export default function CheckCreateScreen() {
     }
   };
 
-  // Load existing check for editing
+  // Load existing check for editing (MOB-13). useQuery instead of a bare
+  // promise: retry / error / cancellation handling for free, plus the
+  // ['check', id] entry is shared with CheckDetailScreen's cache. The
+  // previous fire-and-forget `.then()` left a silent EMPTY form (and an
+  // unhandled rejection) when the load failed — the owner would edit a
+  // blank чек and overwrite the real one on save.
+  const { data: editCheck, isError: editCheckError } = useQuery<Check>({
+    queryKey: ['check', editId],
+    queryFn: async () => {
+      const res = await checksApi.getById(editId!);
+      return res.data;
+    },
+    enabled: !!editId,
+  });
+  // Hydrate the form ONCE per editId — a background refetch of the same
+  // cache entry must never clobber the user's in-progress edits.
+  const hydratedEditIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (editId) {
-      checksApi.getById(editId).then((res: any) => {
-        const c = res.data;
-        setClientId(c.clientId || '');
-        setCarId(c.carId || '');
-        setMileage(c.mileage ? String(c.mileage) : '');
-        setComment(c.comment || '');
-        setDiscount(c.discount ? String(c.discount) : '');
-        setPaymentMethod(c.paymentMethod);
-        // Restore the cash portion of a SPLIT (cash_card) payment so editing
-        // an existing мешанный чек doesn't silently zero out наличные and push
-        // the whole sum to card on save (financial corruption of the cash
-        // ledger). For non-split checks the field is irrelevant; older checks
-        // may have null/absent cashAmount → fall back to '' (unchanged
-        // behaviour for cash/card/warranty checks).
-        if (c.paymentMethod === ('cash_card' as PaymentMethod) && c.cashAmount != null) {
-          setCashAmount(String(c.cashAmount));
-        }
-        setIsDeferred(c.isDeferred || false);
-        setServiceLines(c.services || []);
-        setProductLines(c.products || []);
-        if (c.date) setCheckDate(new Date(c.date));
-      });
+    if (!editId || !editCheck || hydratedEditIdRef.current === editId) return;
+    hydratedEditIdRef.current = editId;
+    const c = editCheck;
+    setClientId(c.clientId || '');
+    setCarId(c.carId || '');
+    setMileage(c.mileage ? String(c.mileage) : '');
+    setComment(c.comment || '');
+    setDiscount(c.discount ? String(c.discount) : '');
+    setPaymentMethod(c.paymentMethod);
+    // Restore the cash portion of a SPLIT (cash_card) payment so editing
+    // an existing мешанный чек doesn't silently zero out наличные and push
+    // the whole sum to card on save (financial corruption of the cash
+    // ledger). For non-split checks the field is irrelevant; older checks
+    // may have null/absent cashAmount → fall back to '' (unchanged
+    // behaviour for cash/card/warranty checks).
+    if (c.paymentMethod === ('cash_card' as PaymentMethod) && c.cashAmount != null) {
+      setCashAmount(String(c.cashAmount));
     }
-  }, [editId]);
+    setIsDeferred(c.isDeferred || false);
+    setServiceLines(c.services || []);
+    setProductLines(c.products || []);
+    if (c.date) setCheckDate(new Date(c.date));
+  }, [editId, editCheck]);
+  useEffect(() => {
+    if (!editCheckError) return;
+    Alert.alert('Ошибка', 'Не удалось загрузить чек', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+  }, [editCheckError, navigation]);
 
   const selectedClient = clientData || plateClients?.find((c) => c.id === clientId);
   const selectedCar = clientCars?.find((c) => c.id === carId) ?? clientCars?.[0];
@@ -725,18 +766,15 @@ export default function CheckCreateScreen() {
   const canAttachPhotos = useMemo(() => {
     if (authUser?.role === 'superadmin') return true;
     if (!subInfo) return true; // optimistic — same behaviour as FeatureGate
-    const currentPlan = subInfo.plans?.find((p) => p.name === subInfo.planName);
-    const features = Array.isArray(currentPlan?.features) ? (currentPlan!.features as string[]) : [];
-    return features.includes('check_photos');
+    // MOB-10: gate on the server-resolved `features` of the CURRENT plan —
+    // the previous match-by-plan-NAME broke whenever a plan was renamed.
+    return Array.isArray(subInfo.features) && subInfo.features.includes('check_photos');
   }, [authUser?.role, subInfo]);
 
   // ── Existing photos in edit mode ──────────────────────────────────────────
   // Cached separately from `pendingPhotos` so the edit flow doesn't fight the
   // create flow. Refetched after a successful immediate-upload (edit mode).
-  const {
-    data: editPhotos,
-    refetch: refetchEditPhotos,
-  } = useQuery<CheckPhoto[]>({
+  const { data: editPhotos, refetch: refetchEditPhotos } = useQuery<CheckPhoto[]>({
     queryKey: ['check-photos', editId],
     queryFn: async () => (await checkPhotosApi.getByCheck(editId!)).data,
     enabled: !!editId && canAttachPhotos,
@@ -753,11 +791,10 @@ export default function CheckCreateScreen() {
   // upload over LTE without stalling the form.
   const compressPhoto = async (uri: string): Promise<string> => {
     try {
-      const result = await ImageManipulator.manipulateAsync(
-        uri,
-        [{ resize: { width: 1280 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG },
-      );
+      const result = await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 1280 } }], {
+        compress: 0.7,
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
       return result.uri;
     } catch (err) {
       // If compression fails for any reason (corrupt image, exotic codec)
@@ -973,18 +1010,26 @@ export default function CheckCreateScreen() {
       haptic('success');
       // After creating / editing a check we have to bust every cache
       // entry that the new revenue / inventory delta touches. The legacy
-      // `['dashboard']` invalidation was a no-op (no such key exists);
-      // expand to the real dashboard/journal/inventory keys so the owner
-      // sees fresh numbers without manually pulling-to-refresh.
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      // `['dashboard']` invalidation was a no-op (no such key exists).
+      // RNPERF-9: only the Журнал refetches immediately — it's the screen
+      // the user lands on right after a save. Every other (heavy) key is
+      // invalidated with `refetchType: 'inactive'`: hidden-but-mounted
+      // screens are marked stale and refetch on their next visit instead
+      // of firing a 9-request storm during the save transition.
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
-      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
-      queryClient.invalidateQueries({ queryKey: ['low-stock'] });
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['warehouse-analytics'] });
+      const heavyKeys: string[][] = [
+        ['checks'],
+        ['checks-dashboard'],
+        ['dashboard-v2'],
+        ['dashboard-chart'],
+        ['cashflow'],
+        ['low-stock'],
+        ['products'],
+        ['warehouse-analytics'],
+      ];
+      for (const queryKey of heavyKeys) {
+        queryClient.invalidateQueries({ queryKey, refetchType: 'inactive' });
+      }
 
       // Upload pending local photos (create-mode only — in edit mode they
       // were already uploaded immediately on pick). Snapshot the list
@@ -1047,13 +1092,49 @@ export default function CheckCreateScreen() {
     },
   });
 
-  // Calculations
+  // Calculations (MOB-02) — mirror the backend/web formula EXACTLY:
+  // the discount applies to PRODUCTS only and the product part floors at
+  // zero, so the total can never go negative. The previous mobile-only
+  // `subtotal - discount` quietly discounted services too (and allowed a
+  // negative «К оплате»), so the on-screen sum diverged from what the
+  // server persisted — corrupting the cash ledger reconciliation.
   const serviceTotal = serviceLines.reduce((sum, l) => sum + l.price * l.quantity, 0);
   const productTotal = productLines.reduce((sum, l) => sum + l.sellPrice * l.quantity, 0);
-  const discountNum = Number(discount) || 0;
+  const discountNum = parseMoneyInput(discount);
   const subtotal = serviceTotal + productTotal;
-  const total = subtotal - discountNum;
-  const cardAmountCalc = Math.max(total - (Number(cashAmount) || 0), 0);
+  const effectiveDiscount = Math.min(discountNum, productTotal);
+  const total = serviceTotal + Math.max(productTotal - discountNum, 0);
+  const cardAmountCalc = Math.max(total - parseMoneyInput(cashAmount), 0);
+
+  // ── M4: oversell guard ─────────────────────────────────────────────
+  // Cached stock per productId from the same ['all-products-check'] cache
+  // the picker reads (prefetched on mount). Quantities are aggregated per
+  // productId before comparing — addProductLine merges lines, but a
+  // template apply can still introduce a second line for the same product.
+  // The snapshot can be STALE, so an oversell is a confirm, never a hard
+  // block — the backend remains the source of truth.
+  const stockByProductId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of allProducts || []) map.set(p.id, p.stock);
+    return map;
+  }, [allProducts]);
+
+  const oversoldByProductId = useMemo(() => {
+    const qtyById = new Map<string, { name: string; qty: number; stock: number }>();
+    for (const l of productLines) {
+      if (!l.productId) continue;
+      const stock = stockByProductId.get(l.productId);
+      if (stock === undefined) continue; // stock unknown — nothing to warn about
+      const prev = qtyById.get(l.productId);
+      if (prev) prev.qty += l.quantity;
+      else qtyById.set(l.productId, { name: l.name, qty: l.quantity, stock });
+    }
+    const oversold = new Map<string, { name: string; qty: number; stock: number }>();
+    for (const [id, entry] of qtyById) {
+      if (entry.qty > entry.stock) oversold.set(id, entry);
+    }
+    return oversold;
+  }, [productLines, stockByProductId]);
 
   // Get current user as default master (already resolved above via `authUser`)
   const currentUser = authUser;
@@ -1196,46 +1277,68 @@ export default function CheckCreateScreen() {
       }
     }
 
-    let finalCash = 0;
-    let finalCard = 0;
-    if (paymentMethod === ('cash' as PaymentMethod)) {
-      finalCash = total;
-    } else if (paymentMethod === ('card' as PaymentMethod)) {
-      finalCard = total;
-    } else if (paymentMethod === ('cash_card' as PaymentMethod)) {
-      finalCash = Number(cashAmount) || 0;
-      finalCard = Math.max(total - finalCash, 0);
+    const proceed = () => {
+      let finalCash = 0;
+      let finalCard = 0;
+      if (paymentMethod === ('cash' as PaymentMethod)) {
+        finalCash = total;
+      } else if (paymentMethod === ('card' as PaymentMethod)) {
+        finalCard = total;
+      } else if (paymentMethod === ('cash_card' as PaymentMethod)) {
+        // Clamp the cash leg to the (floored) total so a fat-fingered
+        // «наличные» can never push the ledger above «К оплате».
+        finalCash = Math.min(parseMoneyInput(cashAmount), total);
+        finalCard = Math.max(total - finalCash, 0);
+      }
+
+      const payload = {
+        clientId: clientId || undefined,
+        carId: carId || undefined,
+        masterId: resolvedMasterId,
+        date: checkDate.toISOString(),
+        mileage: mileage ? parseMoneyInput(mileage) || undefined : undefined,
+        comment: comment || undefined,
+        discount: discountNum || undefined,
+        paymentMethod,
+        cashAmount: finalCash || undefined,
+        cardAmount: finalCard || undefined,
+        isDeferred: shouldDefer,
+        services: serviceLines.map((l) => ({
+          serviceId: l.serviceId,
+          masterId: l.lineMasterId || l.masterId || resolvedMasterId,
+          name: l.name,
+          price: l.price,
+          quantity: l.quantity,
+        })),
+        products: productLines.map((l) => ({
+          productId: l.productId,
+          name: l.name,
+          sellPrice: l.sellPrice,
+          costPrice: l.costPrice,
+          quantity: l.quantity,
+        })),
+      };
+      submittingRef.current = true;
+      createMutation.mutate(payload);
+    };
+
+    // ── M4: oversell confirm ────────────────────────────────────────
+    // Confirm (never hard-block — cached stock can be stale) when any
+    // product line exceeds the cached stock. Deferred checks skip the
+    // confirm entirely: the backend only decrements stock on a live save.
+    if (!shouldDefer && oversoldByProductId.size > 0) {
+      const lines = [...oversoldByProductId.values()]
+        .map((e) => `• ${e.name}: в чеке ${e.qty}, на складе ${Math.max(e.stock, 0)}`)
+        .join('\n');
+      haptic('warning');
+      Alert.alert('Не хватает на складе', `${lines}\n\nДанные склада могли устареть. Продолжить?`, [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Продолжить', onPress: proceed },
+      ]);
+      return;
     }
 
-    const payload = {
-      clientId: clientId || undefined,
-      carId: carId || undefined,
-      masterId: resolvedMasterId,
-      date: checkDate.toISOString(),
-      mileage: mileage ? Number(mileage) : undefined,
-      comment: comment || undefined,
-      discount: discountNum || undefined,
-      paymentMethod,
-      cashAmount: finalCash || undefined,
-      cardAmount: finalCard || undefined,
-      isDeferred: shouldDefer,
-      services: serviceLines.map((l) => ({
-        serviceId: l.serviceId,
-        masterId: l.lineMasterId || l.masterId || resolvedMasterId,
-        name: l.name,
-        price: l.price,
-        quantity: l.quantity,
-      })),
-      products: productLines.map((l) => ({
-        productId: l.productId,
-        name: l.name,
-        sellPrice: l.sellPrice,
-        costPrice: l.costPrice,
-        quantity: l.quantity,
-      })),
-    };
-    submittingRef.current = true;
-    createMutation.mutate(payload);
+    proceed();
   };
 
   // Date formatting
@@ -1476,10 +1579,30 @@ export default function CheckCreateScreen() {
                     ))}
                   </View>
                 )}
-                {/* Show "not found" only after search completed (no flash on partial input) */}
-                {normalizedSearch.length >= 2 && plateResults.length === 0 && !isFetchingPlate && (
-                  <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
-                )}
+                {/* Show "not found" only after search completed — i.e. the
+                    debounced snapshot has caught up with what's typed AND the
+                    request settled. During the 300ms debounce window the
+                    state must not flash (RNPERF-5). */}
+                {normalizedSearch.length >= 2 &&
+                  plateResults.length === 0 &&
+                  debouncedNormalized === normalizedSearch &&
+                  !isFetchingPlate && (
+                    <View style={styles.notFoundBox}>
+                      <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
+                      {/* M2: не тупик — создаём клиента с этим номером прямо из кассы. */}
+                      <TouchableOpacity
+                        style={[
+                          styles.createClientBtn,
+                          { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                        ]}
+                        onPress={() => setShowQuickCreate(true)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="person-add-outline" size={15} color={colors.primary[600]} />
+                        <Text style={styles.createClientBtnText}>Создать клиента</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
 
                 <View
                   style={[
@@ -1585,9 +1708,7 @@ export default function CheckCreateScreen() {
               <View style={styles.photoBlock}>
                 <View style={styles.photoBlockHeader}>
                   <Ionicons name="camera-outline" size={14} color={colors.teal[600]} />
-                  <Text style={[styles.photoBlockTitle, { color: palette.text.secondary }]}>
-                    Фото к заказ-наряду
-                  </Text>
+                  <Text style={[styles.photoBlockTitle, { color: palette.text.secondary }]}>Фото к заказ-наряду</Text>
                   <Text style={[styles.photoBlockCount, { color: palette.text.tertiary }]}>
                     {pendingPhotos.length + existingPhotos.length}/{MAX_PHOTOS}
                   </Text>
@@ -1733,7 +1854,7 @@ export default function CheckCreateScreen() {
                       <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
                       <TextInput
                         value={String(line.price)}
-                        onChangeText={(v) => updateServiceLine(idx, 'price', Number(v) || 0)}
+                        onChangeText={(v) => updateServiceLine(idx, 'price', parseMoneyInput(v))}
                         style={[
                           styles.lineInput,
                           {
@@ -1749,7 +1870,7 @@ export default function CheckCreateScreen() {
                       <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
                       <TextInput
                         value={String(line.quantity)}
-                        onChangeText={(v) => updateServiceLine(idx, 'quantity', Number(v) || 1)}
+                        onChangeText={(v) => updateServiceLine(idx, 'quantity', parseMoneyInput(v) || 1)}
                         style={[
                           styles.lineInput,
                           {
@@ -1825,7 +1946,7 @@ export default function CheckCreateScreen() {
                       <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
                       <TextInput
                         value={String(line.sellPrice)}
-                        onChangeText={(v) => updateProductLine(idx, 'sellPrice', Number(v) || 0)}
+                        onChangeText={(v) => updateProductLine(idx, 'sellPrice', parseMoneyInput(v))}
                         style={[
                           styles.lineInput,
                           {
@@ -1841,7 +1962,7 @@ export default function CheckCreateScreen() {
                       <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
                       <TextInput
                         value={String(line.quantity)}
-                        onChangeText={(v) => updateProductLine(idx, 'quantity', Number(v) || 1)}
+                        onChangeText={(v) => updateProductLine(idx, 'quantity', parseMoneyInput(v) || 1)}
                         style={[
                           styles.lineInput,
                           {
@@ -1857,6 +1978,15 @@ export default function CheckCreateScreen() {
                       {formatMoney(line.sellPrice * line.quantity)}
                     </Text>
                   </View>
+                  {/* M4: мягкое предупреждение об оверселле — по кешу склада. */}
+                  {!!line.productId && oversoldByProductId.has(line.productId) && (
+                    <View style={styles.stockWarnRow}>
+                      <Ionicons name="alert-circle-outline" size={13} color={colors.amber[600]} />
+                      <Text style={styles.stockWarnText}>
+                        На складе только {Math.max(oversoldByProductId.get(line.productId)!.stock, 0)} шт
+                      </Text>
+                    </View>
+                  )}
                 </View>
               ))}
               {productLines.length === 0 && (
@@ -1897,6 +2027,8 @@ export default function CheckCreateScreen() {
               />
               <Text style={[styles.discountCurrency, { color: palette.text.tertiary }]}>₽</Text>
             </View>
+            {/* MOB-02: та же семантика, что на сервере и в вебе. */}
+            <Text style={[styles.discountHint, { color: palette.text.tertiary }]}>Скидка применяется к товарам</Text>
           </View>
 
           {/* ═══ SECTION 3 (was COMMENT — moved into client section above) ═══ */}
@@ -1951,7 +2083,11 @@ export default function CheckCreateScreen() {
                     <Ionicons name="pricetag-outline" size={14} color={colors.orange[500]} />
                     <Text style={[styles.summaryLabel, { color: colors.orange[600] }]}>Скидка</Text>
                   </View>
-                  <Text style={[styles.summaryValue, { color: colors.orange[600] }]}>-{formatMoney(discountNum)}</Text>
+                  {/* MOB-02: показываем ПРИМЕНЁННУЮ скидку (≤ суммы товаров),
+                      чтобы строки сходились с «К оплате» копейка в копейку. */}
+                  <Text style={[styles.summaryValue, { color: colors.orange[600] }]}>
+                    -{formatMoney(effectiveDiscount)}
+                  </Text>
                 </View>
               )}
               <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
@@ -2024,7 +2160,7 @@ export default function CheckCreateScreen() {
                     placeholderTextColor={palette.text.tertiary}
                   />
                 </View>
-                {Number(cashGiven) > total && (
+                {parseMoneyInput(cashGiven) > total && (
                   <>
                     <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
                     <View style={styles.splitRow}>
@@ -2037,7 +2173,7 @@ export default function CheckCreateScreen() {
                         </Text>
                       </View>
                       <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}>
-                        {formatMoney(Number(cashGiven) - total)}
+                        {formatMoney(parseMoneyInput(cashGiven) - total)}
                       </Text>
                     </View>
                   </>
@@ -2192,7 +2328,7 @@ export default function CheckCreateScreen() {
                     {m.fullName}
                   </Text>
                 </View>
-                {isSelected && <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />}
+                {isSelected && <Ionicons name="checkmark" size={20} color={colors.primary[600]} />}
               </TouchableOpacity>
             );
           })}
@@ -2313,6 +2449,36 @@ export default function CheckCreateScreen() {
         </ScrollView>
       </Modal>
 
+      {/* M2: быстрый клиент из «Клиент не найден». Создание (или выбор
+          найденного дубликата) сразу подставляет клиента и авто в чек —
+          без повторного поиска. */}
+      <QuickClientCreateSheet
+        visible={showQuickCreate}
+        onClose={() => setShowQuickCreate(false)}
+        initialPlate={plateSearch}
+        initialPlateMode={plateMode}
+        onCreated={(client, car) => {
+          setShowQuickCreate(false);
+          // Засеваем кеш карточки клиента, чтобы selected-card появилась
+          // мгновенно (selectedClient читает ['client-detail', clientId]).
+          queryClient.setQueryData<Client>(['client-detail', client.id], {
+            ...client,
+            cars: car ? [car] : client.cars || [],
+          });
+          animateClientToggle();
+          setClientId(client.id);
+          if (car) setCarId(car.id);
+          setPlateSearch('');
+        }}
+        onSelectExisting={(existingClientId, existingCarId) => {
+          setShowQuickCreate(false);
+          animateClientToggle();
+          setClientId(existingClientId);
+          if (existingCarId) setCarId(existingCarId);
+          setPlateSearch('');
+        }}
+      />
+
       {/* Legacy bottom-sheet kept dormant — replaced by the inline
           dropdown inside ProductPickerModal. iOS would freeze when
           presenting this RNModal on top of the picker RNModal during
@@ -2344,7 +2510,7 @@ export default function CheckCreateScreen() {
                   <Text style={styles.warehouseOptionName}>{w.name}</Text>
                   <Text style={styles.warehouseOptionSub}>{sub}</Text>
                 </View>
-                {active ? <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} /> : null}
+                {active ? <Ionicons name="checkmark" size={20} color={colors.primary[600]} /> : null}
               </TouchableOpacity>
             );
           })}
@@ -2609,6 +2775,19 @@ const styles = StyleSheet.create({
   inlineResultName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   inlineResultSub: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
   inlineNoResults: { fontSize: 12, color: colors.gray[400], textAlign: 'center' as const, paddingVertical: spacing[3] },
+  // «Клиент не найден» + CTA «Создать клиента» (M2)
+  notFoundBox: { alignItems: 'center' as const, gap: spacing[1] },
+  createClientBtn: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: spacing[1.5],
+    borderWidth: 1,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2],
+    marginBottom: spacing[1],
+  },
+  createClientBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.primary[600] },
   plateLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2729,6 +2908,14 @@ const styles = StyleSheet.create({
     minWidth: 70,
     textAlign: 'right',
   },
+  // M4: янтарное предупреждение «На складе только N шт» под строкой товара.
+  stockWarnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    marginTop: spacing[1.5],
+  },
+  stockWarnText: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.amber[600] },
   emptyAddBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2775,6 +2962,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[1],
   },
   discountCurrency: { fontSize: fontSize.sm, color: colors.gray[400] },
+  // MOB-02: подсказка о семантике скидки (товары, не услуги).
+  discountHint: {
+    fontSize: 11,
+    color: colors.gray[400],
+    paddingHorizontal: spacing[1],
+    marginTop: -spacing[1.5],
+  },
   // Comment
   commentInput: {
     fontSize: fontSize.sm,
