@@ -29,7 +29,7 @@ const DEPLOYMENT_TARGET = '17.0';
 const DEVELOPMENT_TEAM = '98SHYK65HQ';
 const SRC_DIR = path.join(__dirname, '..', 'ios-extensions', 'AuTexaWidget');
 
-function copyWidgetFiles(iosRoot) {
+function copyWidgetFiles(iosRoot, version, buildNumber) {
   const dest = path.join(iosRoot, WIDGET_TARGET);
   if (!fs.existsSync(dest)) {
     fs.mkdirSync(dest, { recursive: true });
@@ -37,6 +37,14 @@ function copyWidgetFiles(iosRoot) {
   for (const f of fs.readdirSync(SRC_DIR)) {
     fs.copyFileSync(path.join(SRC_DIR, f), path.join(dest, f));
   }
+  // ASC validation requires the extension's CFBundleShortVersionString to
+  // match the containing app's; keep CFBundleVersion in sync too so a
+  // prebuild never regresses the widget to the template's 1.0 (1).
+  const plistPath = path.join(dest, 'Info.plist');
+  let plist = fs.readFileSync(plistPath, 'utf8');
+  plist = plist.replace(/(<key>CFBundleShortVersionString<\/key>\s*<string>)[^<]*(<\/string>)/, `$1${version}$2`);
+  plist = plist.replace(/(<key>CFBundleVersion<\/key>\s*<string>)[^<]*(<\/string>)/, `$1${buildNumber}$2`);
+  fs.writeFileSync(plistPath, plist);
 }
 
 function writeWidgetEntitlements(iosRoot) {
@@ -75,7 +83,7 @@ const withWidgetTarget = (config) =>
     const projectRoot = mod.modRequest.projectRoot;
     const iosRoot = path.join(projectRoot, 'ios');
 
-    copyWidgetFiles(iosRoot);
+    copyWidgetFiles(iosRoot, mod.version || '1.0.0', (mod.ios && mod.ios.buildNumber) || '1');
     writeWidgetEntitlements(iosRoot);
 
     const proj = mod.modResults;
