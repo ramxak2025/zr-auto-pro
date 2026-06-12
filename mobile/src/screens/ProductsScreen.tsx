@@ -27,9 +27,9 @@ import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import SearchInput from '../components/SearchInput';
-import LoadingSpinner from '../components/LoadingSpinner';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
 import { BottomSheet } from '../components/BottomSheet';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -385,6 +385,8 @@ export default function ProductsScreen() {
     isFetching: whIsFetching,
     isLoading: whIsLoading,
     dataUpdatedAt: whDataUpdatedAt,
+    isError: whIsError,
+    refetch: whRefetch,
   } = useQuery<Warehouse[]>({
     queryKey: ['warehouses'],
     queryFn: async () => (await warehousesApi.list()).data,
@@ -407,7 +409,7 @@ export default function ProductsScreen() {
   const activeWarehouseId = activeWarehouse?.id;
   const isMainWarehouse = activeWarehouse?.kind === 'main';
 
-  const { data, isLoading, isFetching, dataUpdatedAt } = useQuery<PaginatedResponse<Product>>({
+  const { data, isLoading, isFetching, dataUpdatedAt, isError, refetch } = useQuery<PaginatedResponse<Product>>({
     // Include warehouseId in the key so each warehouse owns its own
     // cache slot — switching tabs is instant via `placeholderData` while
     // the new slot's fresh data arrives in the background.
@@ -429,10 +431,18 @@ export default function ProductsScreen() {
     // placeholderData = prev=>prev, but writing it here too makes the
     // intent explicit and survives any future global default change.
     placeholderData: (prev) => prev,
-    // Only run once we know which warehouse to ask for. Without this
-    // guard the initial render would fire a query without warehouseId
-    // and then immediately refetch with it — wasted network + flash.
-    enabled: !!activeWarehouseId || warehouses === undefined,
+    // ALWAYS enabled — deliberately NO `enabled` gate. The previous
+    // `enabled: !!activeWarehouseId || warehouses === undefined` stranded
+    // the screen in an ETERNAL skeleton whenever the warehouses query
+    // resolved to `[]`: data was defined, no id could be derived, the
+    // query sat disabled in pending/idle forever (data === undefined,
+    // isLoading false) and the render gate below showed a dead loader
+    // with nothing in flight. The backend falls back to the main
+    // warehouse when `warehouseId` is omitted, so firing un-scoped in
+    // that state renders real content instead. On the normal path the
+    // hydrated/prefetched ['warehouses'] cache makes `activeWarehouseId`
+    // available on the very first render → exactly one scoped fetch, no
+    // extra traffic.
   });
 
   // Per-warehouse folders (migration 032). Each warehouse owns its own
@@ -1623,10 +1633,32 @@ export default function ProductsScreen() {
         </View>
       )}
 
-      {/* Loading: show skeleton when no data yet (cold start, no cache hit). */}
-      {/* Empty state only fires when query has resolved (data !== undefined) */}
-      {/* AND the result is genuinely empty \u2014 never on a stale-undefined flash. */}
-      {isLoading || data === undefined ? (
+      {/* Render gate \u2014 EVERY branch terminates in content, EmptyState or
+          QueryErrorState. Never an eternal skeleton:
+            1. data !== undefined           \u2192 list / EmptyState (stale-while-revalidate);
+            2. data === undefined + isError \u2192 QueryErrorState with \u00ab\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c\u00bb
+               (retries products AND, if it also failed, warehouses);
+            3. data === undefined, no error \u2192 skeleton, which is always
+               transient because the query has no `enabled` gate \u2014 a fetch
+               is in flight or about to start, and its terminal states are
+               exactly branches 1 and 2. */}
+      {data === undefined && isError ? (
+        <QueryErrorState
+          title={
+            '\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u0441\u043a\u043b\u0430\u0434'
+          }
+          description={
+            '\u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435 \u0438 \u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437'
+          }
+          onRetry={() => {
+            refetch();
+            // The warehouses list feeds the switcher + the scoped query
+            // key \u2014 if it died too, heal it from the same button instead
+            // of leaving the header degraded until pull-to-refresh.
+            if (whIsError) whRefetch();
+          }}
+        />
+      ) : data === undefined ? (
         <ListSkeleton count={8} />
       ) : !search && sortedFolders.length === 0 && currentProducts.length === 0 ? (
         <EmptyState

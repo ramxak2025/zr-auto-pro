@@ -57,8 +57,13 @@ export default function WarehouseSwitcher({
   const insets = useSafeAreaInsets();
 
   // Sort by sortOrder (server already does it; defensive fallback for
-  // older clients reading from persistent cache before the migration).
-  const sorted = React.useMemo(() => [...warehouses].sort((a, b) => a.sortOrder - b.sortOrder), [warehouses]);
+  // older clients reading from persistent cache before the migration —
+  // rows hydrated from a pre-migration snapshot may lack `sortOrder`,
+  // so coerce through Number() to keep the comparator NaN-free).
+  const sorted = React.useMemo(
+    () => [...warehouses].sort((a, b) => (Number(a.sortOrder) || 0) - (Number(b.sortOrder) || 0)),
+    [warehouses],
+  );
 
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>

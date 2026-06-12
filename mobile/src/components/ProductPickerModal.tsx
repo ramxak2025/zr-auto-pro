@@ -18,11 +18,12 @@ import CachedImage from './CachedImage';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { ListSkeleton } from './Skeleton';
+import QueryErrorState from './QueryErrorState';
 import { haptic } from '../platform/haptics';
 import type { Product } from '../../../shared/types';
 
@@ -304,7 +305,20 @@ export default function ProductPickerModal({
   // re-validated on every open (a short `staleTime` means the background
   // refetch fires), and the order is only committed on submit — so the
   // numbers the user commits to are fresh, without ever blanking the sheet.
-  const { data: allProducts, isLoading } = useQuery<Product[]>({
+  const queryClient = useQueryClient();
+  // Which warehouse is "main"? Needed by the placeholder seeding below —
+  // the login-time prefetch and the CheckCreateScreen mount prefetch warm
+  // the UN-scoped ['all-products-check'] slot, and the backend serves the
+  // MAIN warehouse for that un-scoped request. So the un-scoped cache is a
+  // valid instant placeholder ONLY when the scoped key points at main.
+  const mainWarehouseId = warehouseSwitcher?.options.find((w) => w.kind === 'main')?.id ?? null;
+
+  const {
+    data: allProducts,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<Product[]>({
     queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
     queryFn: async () => {
       const params: { limit: number; warehouseId?: string } = { limit: 500 };
@@ -316,7 +330,23 @@ export default function ProductPickerModal({
     // Keep the previous list visible across mounts/refetches so the picker
     // never blanks — same stale-while-revalidate idiom as ProductsScreen
     // and the global QueryClient default. Explicit here as defence in depth.
-    placeholderData: (prev) => prev,
+    //
+    // Cold-slot seeding: the very first open after login uses the SCOPED
+    // key ['all-products-check', { warehouseId: <main> }] (the parent seeds
+    // `pickerWarehouseId` to main as soon as ['warehouses'] resolves), but
+    // both prefetches warm the legacy UN-scoped slot — a structural cache
+    // MISS that used to show a skeleton on the first-ever open. When the
+    // scoped slot is empty AND it targets the main warehouse, borrow the
+    // un-scoped data as placeholder: identical payload (server defaults to
+    // main), shown instantly, replaced by the scoped fetch in ~150 ms.
+    // Defect/used warehouses never borrow — main's products would be wrong.
+    placeholderData: (prev) => {
+      if (prev !== undefined) return prev;
+      if (warehouseId && warehouseId === mainWarehouseId) {
+        return queryClient.getQueryData<Product[]>(['all-products-check']);
+      }
+      return undefined;
+    },
     // Short staleTime → opening the picker still triggers a background
     // refetch (fresh stock lands in ~150 ms) WITHOUT throwing away the
     // cached list we show on the first frame.
@@ -491,7 +521,17 @@ export default function ProductPickerModal({
   // (`data === undefined`). When `data` is `[]` we trust the query and
   // show the genuine "Нет товаров" empty state — no flash before data
   // arrives because `placeholderData` keeps the previous list visible.
+  //
+  // Body state machine — every branch terminates in content, an empty
+  // state, or QueryErrorState with «Повторить». The error branch only
+  // fires when there is NO data to show (cold cache + both fetch attempts
+  // failed); with stale data present the list stays up and the background
+  // refetch failure is silent (stale-while-revalidate contract). Without
+  // this branch an errored cold query rendered a completely BLANK sheet
+  // forever: skeleton was off (isLoading false once status==='error') and
+  // the FlashList empty-component resolved to `null`.
   const showInitialSkeleton = visible && allProducts === undefined && isLoading;
+  const showErrorState = visible && allProducts === undefined && isError;
   const queryResolvedEmpty = visible && Array.isArray(allProducts) && allProducts.length === 0;
 
   return (
@@ -664,11 +704,18 @@ export default function ProductPickerModal({
             </View>
           ) : null}
 
-          {/* Body — skeleton on cold start, FlashList otherwise */}
+          {/* Body — skeleton on cold start, error+retry when the fetch
+              died with no cache to fall back on, FlashList otherwise */}
           {showInitialSkeleton ? (
             <View style={styles.skeletonWrap}>
               <ListSkeleton count={8} />
             </View>
+          ) : showErrorState ? (
+            <QueryErrorState
+              title={'Не удалось загрузить товары'}
+              description={'Проверьте соединение и попробуйте ещё раз'}
+              onRetry={() => refetch()}
+            />
           ) : (
             <FlashList
               data={rows}
