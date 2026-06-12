@@ -207,6 +207,14 @@ export class ChecksService {
     if (query.retail === 'true') {
       where += ` AND ch.client_id IS NULL`;
     }
+    // OPTIONAL deferred filter (additive): `?isDeferred=true` → only deferred
+    // drafts, `?isDeferred=false` → only closed checks. Absent → no filter,
+    // existing callers see byte-for-byte the same response.
+    if (query.isDeferred === 'true' || query.isDeferred === true) {
+      where += ` AND ch.is_deferred = true`;
+    } else if (query.isDeferred === 'false' || query.isDeferred === false) {
+      where += ` AND ch.is_deferred = false`;
+    }
     if (query.search) {
       where += ` AND (cl.full_name ILIKE $${idx} OR cl.phone ILIKE $${idx} OR ca.plate_number ILIKE $${idx})`;
       params.push(`%${query.search}%`);
@@ -220,8 +228,8 @@ export class ChecksService {
     const countResult = query.search
       ? await this.pool.query(
           `SELECT COUNT(*) as total FROM checks ch
-           LEFT JOIN clients cl ON cl.id = ch.client_id
-           LEFT JOIN cars ca ON ca.id = ch.car_id
+           LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+           LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
            WHERE ${where}`,
           params,
         )
@@ -246,9 +254,9 @@ export class ChecksService {
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model
          FROM checks ch
-         LEFT JOIN users m ON m.id = ch.master_id
-         LEFT JOIN clients cl ON cl.id = ch.client_id
-         LEFT JOIN cars ca ON ca.id = ch.car_id
+         LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
+         LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+         LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
          WHERE ${keysetWhere}
          ORDER BY ch.date DESC, ch.id DESC
          LIMIT $${idx}`,
@@ -263,9 +271,9 @@ export class ChecksService {
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model
          FROM checks ch
-         LEFT JOIN users m ON m.id = ch.master_id
-         LEFT JOIN clients cl ON cl.id = ch.client_id
-         LEFT JOIN cars ca ON ca.id = ch.car_id
+         LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
+         LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+         LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
          WHERE ${where}
          ORDER BY ch.date DESC, ch.created_at DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -312,9 +320,9 @@ export class ChecksService {
               cl.full_name as client_name, cl.phone as client_phone,
               ca.plate_number, ca.make_model
        FROM checks ch
-       LEFT JOIN users m ON m.id = ch.master_id
-       LEFT JOIN clients cl ON cl.id = ch.client_id
-       LEFT JOIN cars ca ON ca.id = ch.car_id
+       LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
+       LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+       LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
        WHERE ch.id=$1 AND ch.tenant_id=$2`,
       [id, tenantID],
     );
@@ -331,7 +339,7 @@ export class ChecksService {
       `SELECT sl.*, u.full_name as master_name
        FROM check_service_lines sl
        JOIN checks c ON c.id = sl.check_id AND c.tenant_id = $2
-       LEFT JOIN users u ON u.id = sl.master_id
+       LEFT JOIN users u ON u.id = sl.master_id AND u.tenant_id = c.tenant_id
        WHERE sl.check_id=$1`,
       [id, tenantID],
     );
@@ -796,6 +804,38 @@ export class ChecksService {
 
       const services = dto.services || [];
       const products = dto.products || [];
+
+      // ── Cross-tenant integrity guard (same as create()) ───────────────
+      // fullUpdate persists client-supplied master/client/car/service/product
+      // IDs — without these checks a caller could attach foreign-tenant rows
+      // and getById's JOINs would surface that tenant's data.
+      if (dto.masterId) {
+        await this.assertOwnsByTenant(client, tenantID, 'users', dto.masterId, 'Мастер');
+      }
+      if (dto.clientId) {
+        await this.assertOwnsByTenant(client, tenantID, 'clients', dto.clientId, 'Клиент');
+      }
+      if (dto.carId) {
+        await this.assertOwnsByTenant(client, tenantID, 'cars', dto.carId, 'Машина');
+      }
+      const referencedServiceIds: string[] = services
+        .map((s: any) => s.serviceId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (referencedServiceIds.length > 0) {
+        await this.assertManyOwnedByTenant(client, tenantID, 'services', referencedServiceIds, 'Услуга');
+      }
+      const referencedProductIds: string[] = products
+        .map((p: any) => p.productId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (referencedProductIds.length > 0) {
+        await this.assertManyOwnedByTenant(client, tenantID, 'products', referencedProductIds, 'Товар');
+      }
+      const lineMasterIds: string[] = services
+        .map((s: any) => s.masterId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (lineMasterIds.length > 0) {
+        await this.assertManyOwnedByTenant(client, tenantID, 'users', lineMasterIds, 'Мастер');
+      }
 
       // Calculate service totals and salary
       let serviceTotal = 0;

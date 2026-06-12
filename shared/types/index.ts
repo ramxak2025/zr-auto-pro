@@ -849,6 +849,13 @@ export interface EmployeeDocument {
   id: string;
   type: string;
   name?: string | null;
+  /**
+   * Authenticated download endpoint
+   * (`/api/employees/:id/documents/:docId/file`) — documents are PRIVATE
+   * (passports etc.) and are no longer served from the public `/api/uploads/`
+   * tier. Fetch with the JWT Authorization header; a bare <img src> without
+   * auth will 401.
+   */
   fileUrl: string;
   uploadedAt: string;
   expiresAt?: string | null;

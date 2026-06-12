@@ -207,6 +207,14 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ─── Integrations CRUD ───────────────────────────────────────────
+  /**
+   * Clients (mobile IntegrationsScreen) never receive the stored api_key
+   * back from getIntegrations(). When the user edits an integration without
+   * re-entering the key, the app sends this sentinel meaning «keep the
+   * current value». It must never be written to the database verbatim.
+   */
+  private static readonly KEEP_API_KEY_SENTINEL = '_existing_';
+
   async getIntegrations(tenantId: string) {
     const { rows } = await this.pool.query(
       `SELECT id, provider_type, sender_name, sender_phone, webhook_url, is_active, created_at
@@ -229,13 +237,26 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException({ message: 'Тип провайдера и API ключ обязательны' });
     }
     if (dto.id) {
+      let apiKey = dto.apiKey;
+      if (apiKey === MarketingService.KEEP_API_KEY_SENTINEL) {
+        // «Оставить текущий ключ» — подставляем сохранённое значение,
+        // иначе sentinel перезапишет реальный api_key.
+        const { rows } = await this.pool.query(
+          `SELECT api_key FROM messaging_integrations WHERE id=$1 AND tenant_id=$2`,
+          [dto.id, tenantId],
+        );
+        if (rows.length === 0) {
+          throw new BadRequestException({ message: 'Введите API-ключ' });
+        }
+        apiKey = rows[0].api_key;
+      }
       await this.pool.query(
         `UPDATE messaging_integrations SET provider_type=$1, api_key=$2, sender_name=$3,
          sender_phone=$4, webhook_url=$5, is_active=$6, updated_at=now()
          WHERE id=$7 AND tenant_id=$8`,
         [
           dto.providerType,
-          dto.apiKey,
+          apiKey,
           dto.senderName || null,
           dto.senderPhone || null,
           dto.webhookUrl || null,
@@ -245,6 +266,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         ],
       );
     } else {
+      if (dto.apiKey === MarketingService.KEEP_API_KEY_SENTINEL) {
+        // Sentinel без существующей записи — «сохранять» нечего.
+        throw new BadRequestException({ message: 'Введите API-ключ' });
+      }
       await this.pool.query(
         `INSERT INTO messaging_integrations (tenant_id, provider_type, api_key, sender_name, sender_phone, webhook_url)
          VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -307,8 +332,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   async updateSettings(tenantId: string, dto: any) {
     // motivation_message is optional; allow empty string to clear it.
     // We treat `undefined` as "leave unchanged" and `""` as "clear".
-    const motivation =
-      typeof dto.motivationMessage === 'string' ? dto.motivationMessage : null;
+    const motivation = typeof dto.motivationMessage === 'string' ? dto.motivationMessage : null;
     await this.pool.query(
       `INSERT INTO review_settings (tenant_id, send_time, feedback_delay_hours, auto_send_enabled, message_template, motivation_message)
        VALUES ($1, $2, $3, $4, $5, COALESCE($6, ''))
@@ -319,14 +343,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
          message_template=COALESCE($5, review_settings.message_template),
          motivation_message=COALESCE($6, review_settings.motivation_message),
          updated_at=now()`,
-      [
-        tenantId,
-        dto.sendTime,
-        dto.feedbackDelayHours,
-        dto.autoSendEnabled,
-        dto.messageTemplate,
-        motivation,
-      ],
+      [tenantId, dto.sendTime, dto.feedbackDelayHours, dto.autoSendEnabled, dto.messageTemplate, motivation],
     );
     return this.getSettings(tenantId);
   }

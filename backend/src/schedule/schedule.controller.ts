@@ -20,8 +20,8 @@ export class ScheduleController {
   }
 
   @Get('my-stats')
-  getMyStats(@CurrentUser() user: JwtPayload) {
-    return this.scheduleService.getMyStats(user.tenantID, user.userID);
+  getMyStats(@CurrentUser() user: JwtPayload, @Query('dateFrom') dateFrom?: string, @Query('dateTo') dateTo?: string) {
+    return this.scheduleService.getMyStats(user.tenantID, user.userID, dateFrom, dateTo);
   }
 
   @Get('work-modes')

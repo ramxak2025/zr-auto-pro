@@ -16,6 +16,13 @@ const WEBP_QUALITY = 80;
 // Extensions that sharp can process
 const OPTIMIZABLE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
 
+// Subtree for files that must NEVER be reachable through the public
+// `/api/uploads/*` capability-URL tier (employee documents: passports,
+// contracts…). nginx denies `/api/uploads/private/` statically and the
+// uploads controller refuses to serve it; access goes only through
+// authenticated, tenant-checked endpoints (e.g. employees documents).
+export const PRIVATE_SUBDIR = 'private';
+
 export interface StoredFile {
   storedPath: string;
   url: string;
@@ -43,6 +50,40 @@ export class LocalStorageAdapter implements IStorageAdapter {
 
   getBasePath(): string {
     return this.basePath;
+  }
+
+  /** True when a stored path points into the private (non-public) subtree. */
+  static isPrivatePath(storedPath: string): boolean {
+    const normalized = path.normalize(storedPath).replace(/\\/g, '/').replace(/^\/+/, '');
+    return normalized === PRIVATE_SUBDIR || normalized.startsWith(PRIVATE_SUBDIR + '/');
+  }
+
+  /**
+   * Save a sensitive document into the private subtree:
+   * `private/<tenantId>/<uuid><ext>`. No public URL is produced — callers
+   * persist the returned storedPath and serve the file exclusively through
+   * an authenticated endpoint. Bytes are stored as-is (documents may be
+   * PDFs; no image re-encoding).
+   */
+  async savePrivate(stream: Readable, ext: string, tenantId: string): Promise<{ storedPath: string; size: number }> {
+    const tenantDir = path.join(this.basePath, PRIVATE_SUBDIR, tenantId);
+    fs.mkdirSync(tenantDir, { recursive: true });
+
+    const fileId = uuidv4();
+    const filename = fileId + ext;
+    const fullPath = path.join(tenantDir, filename);
+
+    const writeStream = fs.createWriteStream(fullPath);
+    let size = 0;
+    const counter = new Transform({
+      transform(chunk: Buffer, _encoding: string, callback) {
+        size += chunk.length;
+        callback(null, chunk);
+      },
+    });
+    await pipeline(stream, counter, writeStream);
+
+    return { storedPath: path.join(PRIVATE_SUBDIR, tenantId, filename), size };
   }
 
   async save(stream: Readable, ext: string, tenantId: string): Promise<StoredFile> {
@@ -150,13 +191,14 @@ export class LocalStorageAdapter implements IStorageAdapter {
   }
 
   resolve(storedPath: string): string | null {
+    // SECURITY: no flat-basename fallback. The old fallback (try
+    // `<base>/<basename>` when `<base>/<tenant>/<file>` is missing) let a
+    // request for one tenant's path resolve another file by basename,
+    // weakening tenant separation. In production nginx serves
+    // `/api/uploads/<path>` 1:1 from disk and never had such a fallback,
+    // so removing it cannot break any URL that works today.
     const fullPath = path.join(this.basePath, storedPath);
     if (fs.existsSync(fullPath)) return fullPath;
-
-    // Fallback: try flat path (legacy files from Go backend)
-    const flatPath = path.join(this.basePath, path.basename(storedPath));
-    if (fs.existsSync(flatPath)) return flatPath;
-
     return null;
   }
 

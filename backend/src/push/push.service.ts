@@ -9,13 +9,34 @@ export class PushService {
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
-  async upsertToken(userId: string, token: string, platform: 'ios' | 'android') {
-    await this.pool.query(
+  async upsertToken(userId: string, tenantId: string, token: string, platform: 'ios' | 'android') {
+    // Token-hijack guard: ON CONFLICT used to blindly reassign the token to
+    // whoever posted it, letting any authenticated user capture another
+    // user's device token (their pushes then route to the victim's device).
+    // Reassignment is now allowed only when:
+    //   - the token already belongs to the caller (normal re-registration);
+    //   - the current owner is in the SAME tenant (shared workshop device,
+    //     another employee logs in on it);
+    //   - the current owner row is stale (deactivated or dismissed user).
+    // Tokens of devices that were wiped/reinstalled are pruned independently
+    // by the DeviceNotRegistered cleanup in handleExpoResponse.
+    const result = await this.pool.query(
       `INSERT INTO push_tokens (user_id, token, platform)
        VALUES ($1, $2, $3)
-       ON CONFLICT (token) DO UPDATE SET user_id=$1, platform=$3`,
-      [userId, token, platform],
+       ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform
+       WHERE push_tokens.user_id = EXCLUDED.user_id
+          OR EXISTS (
+               SELECT 1 FROM users owner
+                WHERE owner.id = push_tokens.user_id
+                  AND (owner.tenant_id = $4 OR owner.is_active = false OR owner.dismissed_at IS NOT NULL)
+             )`,
+      [userId, token, platform, tenantId],
     );
+    if (result.rowCount === 0) {
+      this.logger.warn(
+        `Push token re-registration rejected for user=${userId}: token owned by another tenant's active user`,
+      );
+    }
     return { token, platform };
   }
 
@@ -237,11 +258,7 @@ export class PushService {
    * ticket, and prune tokens whose ticket error is `DeviceNotRegistered`.
    * Best-effort — every branch is guarded so it never throws.
    */
-  private async handleExpoResponse(
-    status: number,
-    rawBody: string,
-    tokens: (string | undefined)[],
-  ): Promise<void> {
+  private async handleExpoResponse(status: number, rawBody: string, tokens: (string | undefined)[]): Promise<void> {
     try {
       const ok2xx = status >= 200 && status < 300;
       if (!ok2xx) {

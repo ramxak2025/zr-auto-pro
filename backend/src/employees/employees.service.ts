@@ -224,6 +224,18 @@ export class EmployeesService {
   }
 
   // ── Documents ───────────────────────────────────────────────────────────
+  //
+  // employee_documents.file_url holds the on-disk stored path inside the
+  // PRIVATE uploads subtree (`private/<tenant>/<uuid>.<ext>`), never a public
+  // `/api/uploads/...` capability URL — documents (passports, contracts) must
+  // only be reachable through the authenticated, tenant-checked endpoint
+  // GET /employees/:id/documents/:docId/file. The mappers below expose that
+  // endpoint as `fileUrl` so the API contract shape is unchanged.
+
+  /** Client-facing URL for a document — always the authenticated endpoint. */
+  private documentUrl(employeeId: string, docId: string): string {
+    return `/api/employees/${employeeId}/documents/${docId}/file`;
+  }
 
   async listDocuments(tenantID: string, employeeId: string) {
     const { rows } = await this.pool.query(
@@ -237,18 +249,35 @@ export class EmployeesService {
       id: r.id,
       type: r.type,
       name: r.name,
-      fileUrl: r.file_url,
+      fileUrl: this.documentUrl(employeeId, r.id),
       uploadedAt: r.uploaded_at,
       expiresAt: r.expires_at,
     }));
   }
 
+  /**
+   * Resolve a document row to its on-disk stored path (tenant-checked).
+   * Tolerates legacy rows that still carry the old `/api/uploads/...` public
+   * URL (e.g. bootstrap migration not yet run) by stripping the prefix.
+   */
+  async getDocumentStoredPath(tenantID: string, employeeId: string, docId: string): Promise<string> {
+    const { rows } = await this.pool.query(
+      `SELECT file_url FROM employee_documents WHERE id=$1 AND user_id=$2 AND tenant_id=$3 LIMIT 1`,
+      [docId, employeeId, tenantID],
+    );
+    if (rows.length === 0) {
+      throw new NotFoundException({ message: 'Документ не найден' });
+    }
+    const raw: string = rows[0].file_url || '';
+    return raw.startsWith('/api/uploads/') ? raw.slice('/api/uploads/'.length) : raw;
+  }
+
   async addDocument(
     tenantID: string,
     employeeId: string,
-    body: { type: string; name?: string; fileUrl: string; expiresAt?: string | null },
+    body: { type: string; name?: string; storedPath: string; expiresAt?: string | null },
   ) {
-    if (!body?.type || !body?.fileUrl) {
+    if (!body?.type || !body?.storedPath) {
       throw new BadRequestException({ message: 'Тип и файл обязательны' });
     }
     const { rows } = await this.pool.query(
@@ -260,7 +289,7 @@ export class EmployeesService {
         tenantID,
         String(body.type).slice(0, 60),
         body.name ? String(body.name).slice(0, 200) : null,
-        String(body.fileUrl),
+        String(body.storedPath),
         body.expiresAt || null,
       ],
     );
@@ -269,7 +298,7 @@ export class EmployeesService {
       id: r.id,
       type: r.type,
       name: r.name,
-      fileUrl: r.file_url,
+      fileUrl: this.documentUrl(employeeId, r.id),
       uploadedAt: r.uploaded_at,
       expiresAt: r.expires_at,
     };

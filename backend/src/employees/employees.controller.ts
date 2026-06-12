@@ -6,14 +6,16 @@ import {
   Get,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import * as Busboy from 'busboy';
 import * as path from 'path';
 import { EmployeesService } from './employees.service';
@@ -115,6 +117,54 @@ export class EmployeesController {
     return this.employees.listDocuments(user.tenantID, id);
   }
 
+  /**
+   * Authenticated, tenant-scoped document download. Documents live in the
+   * PRIVATE uploads subtree which nginx and the public uploads route both
+   * refuse to serve — this endpoint is the ONLY way to read them, and it
+   * checks the document belongs to the caller's tenant first.
+   */
+  @Get(':id/documents/:docId/file')
+  async serveDocument(
+    @Param('id') id: string,
+    @Param('docId') docId: string,
+    @CurrentUser() user: JwtPayload,
+    @Res() res: Response,
+  ) {
+    const storedPath = await this.employees.getDocumentStoredPath(user.tenantID, id, docId);
+
+    // Defense-in-depth: stay inside the uploads base dir.
+    const normalized = path.normalize(storedPath);
+    const fullPath = path.resolve(this.storage.getBasePath(), normalized);
+    if (!fullPath.startsWith(this.storage.getBasePath()) || normalized.includes('..')) {
+      throw new NotFoundException({ message: 'Документ не найден' });
+    }
+    if (!this.storage.exists(normalized)) {
+      throw new NotFoundException({ message: 'Документ не найден' });
+    }
+
+    const ext = path.extname(normalized).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.webp': 'image/webp',
+      '.pdf': 'application/pdf',
+      '.heic': 'image/heic',
+      '.heif': 'image/heif',
+    };
+    res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+    // Sensitive content: no shared caches, no persistence.
+    res.setHeader('Cache-Control', 'private, no-store');
+
+    const readStream = this.storage.createReadStream(normalized);
+    readStream.pipe(res);
+    readStream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(500).json({ message: 'Ошибка чтения файла' });
+      }
+    });
+  }
+
   @Roles('director', 'admin', 'superadmin')
   @Post(':id/documents')
   uploadDocument(@Param('id') id: string, @Req() req: Request, @CurrentUser() user: JwtPayload): Promise<unknown> {
@@ -156,9 +206,11 @@ export class EmployeesController {
           truncated = true;
         });
 
+        // Documents are sensitive (passports, contracts) — they go into the
+        // PRIVATE uploads subtree, never the public capability-URL tier.
         this.storage
-          .save(stream, ext, user.tenantID)
-          .then(async (stored: { url: string }) => {
+          .savePrivate(stream, ext, user.tenantID)
+          .then(async (stored: { storedPath: string }) => {
             if (truncated) {
               done(new BadRequestException({ message: 'Файл слишком большой' }));
               return;
@@ -166,7 +218,7 @@ export class EmployeesController {
             savedDoc = await this.employees.addDocument(user.tenantID, id, {
               type: fields.type || 'other',
               name: fields.name || originalname,
-              fileUrl: stored.url,
+              storedPath: stored.storedPath,
               expiresAt: fields.expiresAt || null,
             });
             done(undefined, savedDoc);

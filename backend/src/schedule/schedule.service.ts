@@ -25,10 +25,9 @@ export class ScheduleService {
    * settings query.
    */
   async getSettings(tenantID: string) {
-    const { rows } = await this.pool.query(
-      'SELECT shift_statuses FROM schedule_settings WHERE tenant_id=$1 LIMIT 1',
-      [tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT shift_statuses FROM schedule_settings WHERE tenant_id=$1 LIMIT 1', [
+      tenantID,
+    ]);
     if (rows.length === 0) {
       await this.pool.query(
         `INSERT INTO schedule_settings (tenant_id, shift_statuses)
@@ -207,6 +206,8 @@ export class ScheduleService {
              AND s.closed_at IS NULL
        WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
          AND u.dismissed_at IS NULL AND u.purged_at IS NULL
+         AND COALESCE(u.hidden_from_schedule, false) = false
+         AND COALESCE(u.hidden_everywhere, false) = false
        ORDER BY u.id, u.full_name`,
       [tenantID],
     );
@@ -227,10 +228,20 @@ export class ScheduleService {
     }));
   }
 
-  async getMyStats(tenantID: string, userID: string) {
+  /**
+   * Attendance stats for the calling user. `dateFrom` / `dateTo` (YYYY-MM-DD)
+   * are OPTIONAL and additive — when absent the range falls back to the
+   * current month, byte-for-byte the historical behaviour.
+   */
+  async getMyStats(tenantID: string, userID: string, dateFrom?: string, dateTo?: string) {
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    const isDate = (s?: string): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+    const monthStart = isDate(dateFrom)
+      ? dateFrom
+      : new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const monthEnd = isDate(dateTo)
+      ? dateTo
+      : new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
 
     const { rows } = await this.pool.query(
       `SELECT

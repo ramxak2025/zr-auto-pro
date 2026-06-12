@@ -124,6 +124,13 @@ export class UploadsController {
       return res.status(400).json({ message: 'Недопустимый путь' });
     }
 
+    // The private subtree (employee documents etc.) is NEVER served from the
+    // public capability-URL tier — only via authenticated endpoints. nginx
+    // also denies it statically; this covers direct-to-backend setups (dev).
+    if (LocalStorageAdapter.isPrivatePath(normalized)) {
+      return res.status(404).json({ message: 'Файл не найден' });
+    }
+
     if (!this.storage.exists(normalized)) {
       return res.status(404).json({ message: 'Файл не найден' });
     }

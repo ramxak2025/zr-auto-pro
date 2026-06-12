@@ -10,7 +10,7 @@ export class PushController {
 
   @Post('token')
   register(@CurrentUser() user: JwtPayload, @Body() dto: { token: string; platform: 'ios' | 'android' }) {
-    return this.pushService.upsertToken(user.userID, dto.token, dto.platform);
+    return this.pushService.upsertToken(user.userID, user.tenantID, dto.token, dto.platform);
   }
 
   @Delete('token')

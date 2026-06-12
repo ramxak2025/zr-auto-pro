@@ -349,7 +349,10 @@ export function createServicesApi(api: HttpClient) {
 
 export function createChecksApi(api: HttpClient) {
   return {
-    getAll: (params?: ChecksParams) => api.get<PaginatedResponse<Check>>('/checks', { params }),
+    // `isDeferred` is additive: true → only deferred drafts, false → only
+    // closed checks, absent → unfiltered (legacy behaviour).
+    getAll: (params?: ChecksParams & { isDeferred?: boolean }) =>
+      api.get<PaginatedResponse<Check>>('/checks', { params }),
     getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
     getDashboardChart: (period: string, offset?: number) =>
       api.get<{
@@ -609,7 +612,9 @@ export function createScheduleApi(api: HttpClient) {
     applyWorkMode: (data: { workModeId: string; userId?: string; dateFrom: string; dateTo: string }) =>
       api.post<{ created: number }>('/schedule/apply-work-mode', data),
     getToday: () => api.get<TodayEmployeeStatus[]>('/schedule/today'),
-    getMyStats: () =>
+    // `params` is additive: omit for the historical current-month stats,
+    // pass dateFrom/dateTo (YYYY-MM-DD) for an arbitrary period.
+    getMyStats: (params?: { dateFrom?: string; dateTo?: string }) =>
       api.get<{
         totalScheduled: number;
         totalWorked: number;
@@ -619,7 +624,7 @@ export function createScheduleApi(api: HttpClient) {
         totalOnTime: number;
         totalDaysOff: number;
         avgLateMinutes: number;
-      }>('/schedule/my-stats'),
+      }>('/schedule/my-stats', { params }),
   };
 }
 

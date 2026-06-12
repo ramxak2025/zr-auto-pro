@@ -58,10 +58,10 @@ export class ProductsService {
     opts: { forCreate?: boolean } = {},
   ): Promise<string | null> {
     if (warehouseId) {
-      const { rows } = await this.pool.query(
-        'SELECT id, kind FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-        [warehouseId, tenantID],
-      );
+      const { rows } = await this.pool.query('SELECT id, kind FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
+        warehouseId,
+        tenantID,
+      ]);
       if (rows.length === 0) {
         throw new BadRequestException({ message: 'Склад не найден' });
       }
@@ -644,10 +644,13 @@ export class ProductsService {
             );
             created += chunk.length;
           } catch (err) {
+            // Full driver error goes to the server log only — raw DB error
+            // text (table/column names, constraint details) must not reach
+            // clients. They get a stable row-range message instead.
             const msg = err instanceof Error ? err.message : 'unknown';
             this.logger.error(`[importCsv] batch INSERT failed at chunk ${i}-${i + chunk.length}: ${msg}`);
             skipped += chunk.length;
-            if (errors.length < 5) errors.push(`batch insert: ${msg}`);
+            if (errors.length < 5) errors.push(`Строки ${i + 1}–${i + chunk.length}: не удалось создать товары`);
           }
         }
 
@@ -662,10 +665,11 @@ export class ProductsService {
             );
             updated++;
           } catch (err) {
+            // Same rule as above: log the raw error, return a sanitized one.
             const msg = err instanceof Error ? err.message : 'unknown';
             this.logger.error(`[importCsv] UPDATE failed for "${it.name}": ${msg}`);
             skipped++;
-            if (errors.length < 5) errors.push(`"${it.name}": ${msg}`);
+            if (errors.length < 5) errors.push(`«${it.name}»: не удалось обновить товар`);
           }
         }
 
@@ -681,10 +685,12 @@ export class ProductsService {
       return { created, updated, skipped, total: created + updated, errors };
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
+      // Raw DB/driver error text stays in the server log; the client gets a
+      // generic message (no schema/constraint internals leak).
       const msg = err instanceof Error ? err.message : 'неизвестная ошибка';
       const stack = err instanceof Error ? err.stack : '';
       this.logger.error(`[importCsv] FATAL: ${msg}\n${stack}`);
-      throw new InternalServerErrorException({ message: `Ошибка импорта: ${msg}` });
+      throw new InternalServerErrorException({ message: 'Ошибка импорта, попробуйте позже' });
     }
   }
 

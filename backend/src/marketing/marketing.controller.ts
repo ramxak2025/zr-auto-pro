@@ -3,6 +3,10 @@ import { MarketingService } from './marketing.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { SubmitReviewDto } from './dto/submit-review.dto';
+import { UpsertIntegrationDto } from './dto/upsert-integration.dto';
+import { UpsertPlatformLinkDto } from './dto/upsert-platform-link.dto';
+import { UpdateReviewSettingsDto } from './dto/update-review-settings.dto';
+import { UpdateReminderSettingsDto } from './dto/update-reminder-settings.dto';
 import { ReminderService } from './reminder.service';
 
 @Controller('marketing')
@@ -48,7 +52,7 @@ export class MarketingController {
 
   @UseGuards(JwtAuthGuard)
   @Post('integrations')
-  upsertIntegration(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  upsertIntegration(@CurrentUser() user: JwtPayload, @Body() dto: UpsertIntegrationDto) {
     return this.marketingService.upsertIntegration(user.tenantID, dto);
   }
 
@@ -67,7 +71,7 @@ export class MarketingController {
 
   @UseGuards(JwtAuthGuard)
   @Post('platform-links')
-  upsertPlatformLink(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  upsertPlatformLink(@CurrentUser() user: JwtPayload, @Body() dto: UpsertPlatformLinkDto) {
     return this.marketingService.upsertPlatformLink(user.tenantID, dto);
   }
 
@@ -86,7 +90,7 @@ export class MarketingController {
 
   @UseGuards(JwtAuthGuard)
   @Patch('settings')
-  updateSettings(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  updateSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateReviewSettingsDto) {
     return this.marketingService.updateSettings(user.tenantID, dto);
   }
 
@@ -99,7 +103,7 @@ export class MarketingController {
 
   @UseGuards(JwtAuthGuard)
   @Post('reminders')
-  updateReminderSettings(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  updateReminderSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateReminderSettingsDto) {
     return this.reminderService.updateSettings(user.tenantID, dto);
   }
 
