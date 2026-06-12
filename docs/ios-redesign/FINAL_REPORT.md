@@ -738,3 +738,15 @@ docs/ios-redesign/SCHEDULE_SWIFT_REDESIGN.md
 docs/ios-redesign/WAREHOUSE_IMAGE_PREVIEW.md
 docs/ios-redesign/FINAL_REPORT.md (этот документ)
 ```
+
+---
+
+## Iteration #4 — 2026-06-12 (полный мульти-агентный аудит + 3 волны исправлений)
+
+Запрос владельца: скорость, надёжность, баги, «жирный кружок вместо галочки», «расписание открывается через раз», безопасность, логика, native-Swift где оправдано, TestFlight.
+
+Сделано: 7-агентный аудит с адверсариальной верификацией каждой серьёзной находки (26 подтверждено, 1 отклонена), затем 15 агентов в 3 волнах по непересекающимся файлам. Ключевое: P0-корень флака расписания (`gated()` пересоздавал компонент — экран ремоунтился посреди навигации), P0 push (старый projectId), P0 математика скидки в Кассе, глобальный fill-баг карты иконок (28 записей), офлайн-стратегия + глобальный mutations.onError, UTC→локальные даты в отчётах, авторизация приватных документов в uploads + tenant-guard в fullUpdate, нативный UIDatePicker, чистка Swift-модуля (мёртвая сетка удалена, тёмная кромка бара, glow Кассы, pan-cancel).
+
+Полные детали, fallback-стратегии и acceptance-чеклист: `docs/ios-redesign/FULL_AUDIT_FIX_2026_06_12.md`.
+
+Проверки: mobile tsc/eslint/jest 176/176 — зелёные; backend typecheck/lint/build — зелёные; frontend typecheck/build — зелёные; `expo prebuild --clean` + `pod install` + `xcodebuild` (Debug, iphonesimulator, compile-only) — **BUILD SUCCEEDED**. На устройстве не запускалось — владелец тестирует на физическом iPhone по чеклисту из документа выше.
