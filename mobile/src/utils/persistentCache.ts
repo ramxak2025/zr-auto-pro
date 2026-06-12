@@ -92,6 +92,16 @@ const PERSISTED_KEYS = [
   'low-stock',
   'services-list',
   'service-categories',
+  // ── Knowledge base / Учебный центр ─────────────────────────────
+  // List/content keys (NOT per-user progress) so База знаний и Учебный
+  // центр render instantly from cache on cold start like every other
+  // section, and survive a transient first-fetch failure on a flaky
+  // network instead of showing «Не удалось загрузить». Per-user-volatile
+  // keys (article acks, regulations-pending) are intentionally excluded.
+  'knowledge-courses',
+  'knowledge-articles',
+  'knowledge-categories',
+  'knowledge-troubleshooting',
   // ── Journal (Чеки) ─────────────────────────────────────────────
   // 'checks' is a paginated history; the first-page default-filter
   // snapshot is the slowest to render, so we cache the whole first

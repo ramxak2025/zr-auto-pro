@@ -30,11 +30,14 @@ export function getImageUrl(path?: string | null): string | undefined {
   return `${SERVER_URL}${path.startsWith('/') ? '' : '/'}${path}`;
 }
 
-// Fail-fast budget for ordinary JSON requests. Live-prod probes show every
-// key GET answering in ~0.4s; a request still hanging at 8s is a dead
-// connection, not a slow one — fail fast so React Query's single transient
-// retry / persistent cache take over instead of pinning a spinner on LTE.
-const DEFAULT_TIMEOUT_MS = 8_000;
+// Budget for ordinary JSON requests. The server answers in ~0.4s, but the
+// FIRST request after a cold launch also pays DNS + TLS handshake, and on a
+// flaky mobile network (or shaky DNS) that handshake alone can eat several
+// seconds. 8s was too aggressive — it turned a slow-but-fine first connection
+// into a hard error the user had to "Повторить" past. 12s tolerates the cold
+// handshake while still failing a genuinely dead connection; React Query's
+// network-error retries (App.tsx) + persistent cache cover the rest.
+const DEFAULT_TIMEOUT_MS = 12_000;
 
 // Multipart uploads (photos) stream megabytes over LTE — the 8s budget that
 // suits JSON would abort them mid-flight. Applied per-request in the request

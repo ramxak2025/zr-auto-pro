@@ -54,17 +54,21 @@ const queryClient = new QueryClient({
       // back doesn't lose the cache.
       gcTime: 30 * 60 * 1000,
       // Retry policy: NEVER retry 4xx — they are deterministic (403 master
-      // hitting an owner-only endpoint, 404 deleted entity); retrying used
-      // to double the worst-case spinner to 2×timeout for an answer that
-      // cannot change. Retry ONCE for transient failures: network errors
-      // (no err.response), timeouts and 5xx. Persistent cache +
-      // placeholderData keep the screen populated while the retry runs.
+      // hitting an owner-only endpoint, 404 deleted entity); retrying only
+      // doubles the spinner for an answer that cannot change. For TRANSIENT
+      // failures — network errors (no err.response), timeouts, 5xx — retry up
+      // to TWICE. The owner reported sections showing «Не удалось загрузить»
+      // on first open that then worked on a manual «Повторить»: a single
+      // flaky-DNS / cold-connection blip slipped past one retry and surfaced
+      // as an error card. Two quick retries (500ms, 1000ms) absorb the blip
+      // silently so the first open just works; cache + placeholderData keep
+      // paint instant meanwhile.
       retry: (failureCount: number, error: Error) => {
-        if (failureCount >= 1) return false;
         const status = (error as { response?: { status?: number } }).response?.status;
         if (status !== undefined && status >= 400 && status < 500) return false;
-        return true;
+        return failureCount < 2;
       },
+      retryDelay: (attempt: number) => Math.min(500 * 2 ** attempt, 2_000),
       refetchOnWindowFocus: false,
       // Global stale-while-revalidate: when a queryKey changes (eg. paging,
       // search, filters), keep showing the previous data until the new one
