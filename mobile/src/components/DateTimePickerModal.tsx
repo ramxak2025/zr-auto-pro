@@ -1,7 +1,29 @@
+/**
+ * DateTimePickerModal — единый пикер даты/времени для всего приложения
+ * (8 экранов: касса, журнал, расписание, отчёты, расходы и т.д.).
+ *
+ *  iOS:     нативный UIDatePicker через @react-native-community/datetimepicker —
+ *           inline-календарь для mode="date", spinner-барабаны для mode="time".
+ *           themeVariant привязан к теме приложения, locale ru-RU фиксирует
+ *           русские месяцы и 24-часовой формат независимо от языка устройства.
+ *  Android: проверенная JS-реализация (календарная сетка + часы/минуты со
+ *           стрелками). Нативный Android-диалог следует системной теме, а не
+ *           внутреннему переключателю приложения — поэтому оставляем JS,
+ *           но перекрашиваем его в семантическую палитру.
+ *
+ * Оболочка модалки theme-aware (useColors), фон — общий ModalBlurBackdrop
+ * (никаких тёмных rgba-скримов). Контракт Props не менялся.
+ */
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, Modal as RNModal, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, Modal as RNModal, StyleSheet, ScrollView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useColors } from '../contexts/ThemeContext';
+import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import type { SemanticPalette } from '../theme/palette';
+import ModalBlurBackdrop from './ModalBlurBackdrop';
 
 interface Props {
   visible: boolean;
@@ -36,8 +58,8 @@ function getFirstDayOfWeek(year: number, month: number): number {
   return d === 0 ? 6 : d - 1; // Monday = 0
 }
 
-// ── Calendar Date Picker ──
-function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) => void }) {
+// ── Calendar Date Picker (Android-фоллбек, перекрашен в палитру) ──
+function CalendarPicker({ value, onChange, p }: { value: Date; onChange: (d: Date) => void; p: SemanticPalette }) {
   const [viewYear, setViewYear] = useState(value.getFullYear());
   const [viewMonth, setViewMonth] = useState(value.getMonth());
 
@@ -81,14 +103,14 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
     <View>
       {/* Month navigation */}
       <View style={cs.monthNav}>
-        <TouchableOpacity onPress={prevMonth} style={cs.navBtn}>
-          <Ionicons name="chevron-back" size={18} color={colors.gray[600]} />
+        <TouchableOpacity onPress={prevMonth} style={[cs.navBtn, { backgroundColor: p.bg.muted }]}>
+          <Ionicons name="chevron-back" size={18} color={p.text.secondary} />
         </TouchableOpacity>
-        <Text style={cs.monthText}>
+        <Text style={[cs.monthText, { color: p.text.primary }]}>
           {MONTH_NAMES[viewMonth]} {viewYear}
         </Text>
-        <TouchableOpacity onPress={nextMonth} style={cs.navBtn}>
-          <Ionicons name="chevron-forward" size={18} color={colors.gray[600]} />
+        <TouchableOpacity onPress={nextMonth} style={[cs.navBtn, { backgroundColor: p.bg.muted }]}>
+          <Ionicons name="chevron-forward" size={18} color={p.text.secondary} />
         </TouchableOpacity>
       </View>
 
@@ -96,7 +118,7 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
       <View style={cs.weekRow}>
         {DAY_ABBR.map((d) => (
           <View key={d} style={cs.weekCell}>
-            <Text style={cs.weekText}>{d}</Text>
+            <Text style={[cs.weekText, { color: p.text.tertiary }]}>{d}</Text>
           </View>
         ))}
       </View>
@@ -111,7 +133,11 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
           return (
             <TouchableOpacity
               key={day}
-              style={[cs.dayCell, isSelected && cs.dayCellSelected, isToday && !isSelected && cs.dayCellToday]}
+              style={[
+                cs.dayCell,
+                isSelected && [cs.dayCellRounded, { backgroundColor: p.accent.primary }],
+                isToday && !isSelected && [cs.dayCellRounded, { backgroundColor: p.accent.primarySoft }],
+              ]}
               onPress={() => {
                 const newDate = new Date(value);
                 newDate.setFullYear(viewYear, viewMonth, day);
@@ -119,7 +145,14 @@ function CalendarPicker({ value, onChange }: { value: Date; onChange: (d: Date) 
               }}
               activeOpacity={0.6}
             >
-              <Text style={[cs.dayText, isSelected && cs.dayTextSelected, isToday && !isSelected && cs.dayTextToday]}>
+              <Text
+                style={[
+                  cs.dayText,
+                  { color: p.text.primary },
+                  isSelected && [cs.dayTextStrong, { color: p.text.inverse }],
+                  isToday && !isSelected && [cs.dayTextStrong, { color: p.accent.primaryText }],
+                ]}
+              >
                 {day}
               </Text>
             </TouchableOpacity>
@@ -142,33 +175,30 @@ const cs = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: colors.gray[100],
+    // backgroundColor — из палитры (theme-aware) инлайном.
     alignItems: 'center',
     justifyContent: 'center',
   },
-  monthText: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
+  monthText: { fontSize: fontSize.base, fontWeight: fontWeight.bold },
   weekRow: { flexDirection: 'row', marginBottom: spacing[1] },
   weekCell: { flex: 1, alignItems: 'center', paddingVertical: spacing[1] },
-  weekText: { fontSize: 11, fontWeight: fontWeight.semibold, color: colors.gray[400] },
+  weekText: { fontSize: 11, fontWeight: fontWeight.semibold },
   daysGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   dayCell: { width: '14.28%', alignItems: 'center', paddingVertical: spacing[1.5] },
-  dayCellSelected: { backgroundColor: colors.primary[600], borderRadius: 20 },
-  dayCellToday: { backgroundColor: colors.primary[50], borderRadius: 20 },
+  dayCellRounded: { borderRadius: 20 },
   dayText: {
     fontSize: fontSize.sm,
     fontWeight: fontWeight.medium,
-    color: colors.gray[900],
     width: 32,
     height: 32,
     lineHeight: 32,
     textAlign: 'center',
   },
-  dayTextSelected: { color: colors.white, fontWeight: fontWeight.bold },
-  dayTextToday: { color: colors.primary[600], fontWeight: fontWeight.bold },
+  dayTextStrong: { fontWeight: fontWeight.bold },
 });
 
-// ── Time Picker ──
-function TimePicker({ value, onChange }: { value: Date; onChange: (d: Date) => void }) {
+// ── Time Picker (Android-фоллбек, перекрашен в палитру) ──
+function TimePicker({ value, onChange, p }: { value: Date; onChange: (d: Date) => void; p: SemanticPalette }) {
   const hours = value.getHours();
   const minutes = value.getMinutes();
 
@@ -187,41 +217,53 @@ function TimePicker({ value, onChange }: { value: Date; onChange: (d: Date) => v
     <View style={ts.container}>
       {/* Hours */}
       <View style={ts.column}>
-        <Text style={ts.label}>Часы</Text>
+        <Text style={[ts.label, { color: p.text.tertiary }]}>Часы</Text>
         <View style={ts.controls}>
-          <TouchableOpacity style={ts.arrowBtn} onPress={() => setHours((hours + 1) % 24)}>
-            <Ionicons name="chevron-up" size={22} color={colors.gray[600]} />
+          <TouchableOpacity
+            style={[ts.arrowBtn, { backgroundColor: p.bg.muted }]}
+            onPress={() => setHours((hours + 1) % 24)}
+          >
+            <Ionicons name="chevron-up" size={22} color={p.text.secondary} />
           </TouchableOpacity>
-          <View style={ts.valueBox}>
-            <Text style={ts.valueText}>{String(hours).padStart(2, '0')}</Text>
+          <View style={[ts.valueBox, { backgroundColor: p.accent.primarySoft, borderColor: p.accent.primary }]}>
+            <Text style={[ts.valueText, { color: p.accent.primaryText }]}>{String(hours).padStart(2, '0')}</Text>
           </View>
-          <TouchableOpacity style={ts.arrowBtn} onPress={() => setHours((hours + 23) % 24)}>
-            <Ionicons name="chevron-down" size={22} color={colors.gray[600]} />
+          <TouchableOpacity
+            style={[ts.arrowBtn, { backgroundColor: p.bg.muted }]}
+            onPress={() => setHours((hours + 23) % 24)}
+          >
+            <Ionicons name="chevron-down" size={22} color={p.text.secondary} />
           </TouchableOpacity>
         </View>
       </View>
 
-      <Text style={ts.separator}>:</Text>
+      <Text style={[ts.separator, { color: p.text.tertiary }]}>:</Text>
 
       {/* Minutes */}
       <View style={ts.column}>
-        <Text style={ts.label}>Минуты</Text>
+        <Text style={[ts.label, { color: p.text.tertiary }]}>Минуты</Text>
         <View style={ts.controls}>
-          <TouchableOpacity style={ts.arrowBtn} onPress={() => setMinutes((minutes + 5) % 60)}>
-            <Ionicons name="chevron-up" size={22} color={colors.gray[600]} />
+          <TouchableOpacity
+            style={[ts.arrowBtn, { backgroundColor: p.bg.muted }]}
+            onPress={() => setMinutes((minutes + 5) % 60)}
+          >
+            <Ionicons name="chevron-up" size={22} color={p.text.secondary} />
           </TouchableOpacity>
-          <View style={ts.valueBox}>
-            <Text style={ts.valueText}>{String(minutes).padStart(2, '0')}</Text>
+          <View style={[ts.valueBox, { backgroundColor: p.accent.primarySoft, borderColor: p.accent.primary }]}>
+            <Text style={[ts.valueText, { color: p.accent.primaryText }]}>{String(minutes).padStart(2, '0')}</Text>
           </View>
-          <TouchableOpacity style={ts.arrowBtn} onPress={() => setMinutes((minutes + 55) % 60)}>
-            <Ionicons name="chevron-down" size={22} color={colors.gray[600]} />
+          <TouchableOpacity
+            style={[ts.arrowBtn, { backgroundColor: p.bg.muted }]}
+            onPress={() => setMinutes((minutes + 55) % 60)}
+          >
+            <Ionicons name="chevron-down" size={22} color={p.text.secondary} />
           </TouchableOpacity>
         </View>
       </View>
 
       {/* Quick presets */}
       <View style={ts.presetsColumn}>
-        <Text style={ts.label}>Быстро</Text>
+        <Text style={[ts.label, { color: p.text.tertiary }]}>Быстро</Text>
         <ScrollView style={{ maxHeight: 140 }} showsVerticalScrollIndicator={false}>
           {['09:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00'].map((preset) => {
             const [h, m] = preset.split(':').map(Number);
@@ -229,14 +271,22 @@ function TimePicker({ value, onChange }: { value: Date; onChange: (d: Date) => v
             return (
               <TouchableOpacity
                 key={preset}
-                style={[ts.presetBtn, isActive && ts.presetBtnActive]}
+                style={[ts.presetBtn, isActive && { backgroundColor: p.accent.primarySoft }]}
                 onPress={() => {
                   const d = new Date(value);
                   d.setHours(h, m);
                   onChange(d);
                 }}
               >
-                <Text style={[ts.presetText, isActive && ts.presetTextActive]}>{preset}</Text>
+                <Text
+                  style={[
+                    ts.presetText,
+                    { color: p.text.secondary },
+                    isActive && [ts.presetTextActive, { color: p.accent.primaryText }],
+                  ]}
+                >
+                  {preset}
+                </Text>
               </TouchableOpacity>
             );
           })}
@@ -251,7 +301,6 @@ const ts = StyleSheet.create({
   column: { alignItems: 'center' },
   label: {
     fontSize: 10,
-    color: colors.gray[400],
     fontWeight: fontWeight.semibold,
     marginBottom: spacing[2],
     letterSpacing: 0.5,
@@ -261,7 +310,6 @@ const ts = StyleSheet.create({
     width: 44,
     height: 36,
     borderRadius: borderRadius.lg,
-    backgroundColor: colors.gray[100],
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -269,14 +317,12 @@ const ts = StyleSheet.create({
     width: 60,
     height: 56,
     borderRadius: borderRadius.xl,
-    backgroundColor: colors.primary[50],
     borderWidth: 2,
-    borderColor: colors.primary[200],
     alignItems: 'center',
     justifyContent: 'center',
   },
-  valueText: { fontSize: 28, fontWeight: fontWeight.bold, color: colors.primary[700] },
-  separator: { fontSize: 28, fontWeight: fontWeight.bold, color: colors.gray[300], marginTop: 42 },
+  valueText: { fontSize: 28, fontWeight: fontWeight.bold },
+  separator: { fontSize: 28, fontWeight: fontWeight.bold, marginTop: 42 },
   presetsColumn: { alignItems: 'center', marginLeft: spacing[3] },
   presetBtn: {
     paddingHorizontal: spacing[3],
@@ -284,40 +330,73 @@ const ts = StyleSheet.create({
     borderRadius: borderRadius.md,
     marginBottom: spacing[1],
   },
-  presetBtnActive: { backgroundColor: colors.primary[50] },
-  presetText: { fontSize: fontSize.xs, color: colors.gray[500], fontWeight: fontWeight.medium },
-  presetTextActive: { color: colors.primary[700], fontWeight: fontWeight.bold },
+  presetText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
+  presetTextActive: { fontWeight: fontWeight.bold },
 });
 
 // ── Main Modal ──
 export default function DateTimePickerModal({ visible, value, mode, onConfirm, onCancel }: Props) {
+  const p = useColors();
+  const insets = useSafeAreaInsets();
   const [tempDate, setTempDate] = useState(value);
 
   useEffect(() => {
     if (visible) setTempDate(new Date(value));
   }, [visible]);
 
+  // iOS: нативный пикер репортит выбор через onChange; date undefined только
+  // при dismiss-событиях — игнорируем их, выбор фиксируется кнопкой «Готово».
+  const handleNativeChange = (_event: DateTimePickerEvent, d?: Date) => {
+    if (d) setTempDate(d);
+  };
+
+  const handleConfirm = () => {
+    haptic('tap');
+    onConfirm(tempDate);
+  };
+
   return (
     <RNModal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={styles.overlay}>
-        <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onCancel} />
-        <View style={styles.sheet}>
-          <View style={styles.header}>
+      <View
+        style={[styles.overlay, { paddingTop: insets.top + spacing[4], paddingBottom: insets.bottom + spacing[4] }]}
+      >
+        <ModalBlurBackdrop onPress={onCancel} />
+        <View style={[styles.sheet, { backgroundColor: p.bg.elevated }]}>
+          <View style={[styles.header, { borderBottomColor: p.border.subtle }]}>
             <TouchableOpacity onPress={onCancel} style={styles.headerBtn}>
-              <Text style={styles.cancelText}>Отмена</Text>
+              <Text style={[styles.cancelText, { color: p.text.secondary }]}>Отмена</Text>
             </TouchableOpacity>
-            <Text style={styles.title}>{mode === 'date' ? 'Выберите дату' : 'Выберите время'}</Text>
-            <TouchableOpacity onPress={() => onConfirm(tempDate)} style={styles.headerBtn}>
-              <Text style={styles.doneText}>Готово</Text>
+            <Text style={[styles.title, { color: p.text.primary }]}>
+              {mode === 'date' ? 'Выберите дату' : 'Выберите время'}
+            </Text>
+            <TouchableOpacity onPress={handleConfirm} style={styles.headerBtn}>
+              <Text style={[styles.doneText, { color: p.accent.primary }]}>Готово</Text>
             </TouchableOpacity>
           </View>
-          <View style={styles.body}>
-            {mode === 'date' ? (
-              <CalendarPicker value={tempDate} onChange={setTempDate} />
-            ) : (
-              <TimePicker value={tempDate} onChange={setTempDate} />
-            )}
-          </View>
+          {Platform.OS === 'ios' ? (
+            <View style={styles.iosBody}>
+              <DateTimePicker
+                value={tempDate}
+                mode={mode}
+                display={mode === 'date' ? 'inline' : 'spinner'}
+                onChange={handleNativeChange}
+                themeVariant={p.mode}
+                accentColor={p.accent.primary}
+                // Продуктовый язык — русский: фиксируем месяцы/дни недели и
+                // 24-часовые барабаны независимо от языка устройства.
+                locale="ru-RU"
+                style={styles.iosPicker}
+              />
+            </View>
+          ) : (
+            <View style={styles.body}>
+              {mode === 'date' ? (
+                <CalendarPicker value={tempDate} onChange={setTempDate} p={p} />
+              ) : (
+                <TimePicker value={tempDate} onChange={setTempDate} p={p} />
+              )}
+            </View>
+          )}
         </View>
       </View>
     </RNModal>
@@ -331,13 +410,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: spacing[4],
   },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
   sheet: {
-    backgroundColor: colors.white,
-    borderRadius: borderRadius['2xl'],
+    // backgroundColor — из палитры (bg.elevated) инлайном.
+    // M3 Alert Dialog использует 28pt corner — как в components/Modal.tsx.
+    borderRadius: Platform.OS === 'android' ? 28 : borderRadius['2xl'],
     width: '100%',
     overflow: 'hidden',
     shadowColor: colors.black,
@@ -353,7 +429,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3],
     borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
   },
   headerBtn: {
     paddingHorizontal: spacing[2],
@@ -362,19 +437,23 @@ const styles = StyleSheet.create({
   title: {
     fontSize: fontSize.base,
     fontWeight: fontWeight.bold,
-    color: colors.gray[900],
   },
   cancelText: {
     fontSize: fontSize.sm,
-    color: colors.gray[500],
     fontWeight: fontWeight.medium,
   },
   doneText: {
     fontSize: fontSize.sm,
-    color: colors.primary[600],
     fontWeight: fontWeight.bold,
   },
   body: {
     padding: spacing[4],
+  },
+  iosBody: {
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[2],
+  },
+  iosPicker: {
+    alignSelf: 'center',
   },
 });

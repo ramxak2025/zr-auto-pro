@@ -6,14 +6,6 @@ export type { AutexaLiquidGlassTabBarProps } from './AutexaLiquidGlassTabBar';
 
 export { AutexaKassaButton } from './AutexaKassaButton';
 
-export { AutexaScheduleGrid, isAutexaScheduleGridAvailable } from './AutexaScheduleGrid';
-export type {
-  AutexaScheduleUser,
-  AutexaScheduleEntry,
-  AutexaScheduleStatus,
-  AutexaScheduleGridProps,
-} from './AutexaScheduleGrid';
-
 /**
  * Write today's dashboard snapshot into the shared App Group UserDefaults so
  * the AuTexaWidget WidgetKit extension can display it on the Home Screen.

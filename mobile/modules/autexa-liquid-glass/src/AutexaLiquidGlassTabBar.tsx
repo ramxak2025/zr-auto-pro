@@ -6,7 +6,6 @@ import { BlurView } from 'expo-blur';
 export interface AutexaLiquidGlassTabBarProps {
   tabCount: number;
   activeIndex: number;
-  bottomInset?: number;
   onTabPress?: (index: number) => void;
   style?: any;
   children?: React.ReactNode;
@@ -29,7 +28,7 @@ try {
  * just a defensive runtime fallback).
  */
 export function AutexaLiquidGlassTabBar(props: AutexaLiquidGlassTabBarProps) {
-  const { tabCount, activeIndex, bottomInset = 0, onTabPress, style, children } = props;
+  const { tabCount, activeIndex, onTabPress, style, children } = props;
 
   const handleEvent = React.useCallback(
     (e: NativeSyntheticEvent<{ index: number }>) => {
@@ -40,13 +39,7 @@ export function AutexaLiquidGlassTabBar(props: AutexaLiquidGlassTabBarProps) {
 
   if (Platform.OS === 'ios' && NativeTabBar) {
     return (
-      <NativeTabBar
-        tabCount={tabCount}
-        activeIndex={activeIndex}
-        bottomInset={bottomInset}
-        onTabPress={handleEvent}
-        style={style}
-      >
+      <NativeTabBar tabCount={tabCount} activeIndex={activeIndex} onTabPress={handleEvent} style={style}>
         {children}
       </NativeTabBar>
     );

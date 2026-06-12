@@ -20,8 +20,9 @@ import UIKit
  *      Center, Apple Music mini-player, Wallet sheets all use it).
  *
  * On top of the native effect we layer two purely cosmetic touches:
- *   • a vertical white-to-translucent gradient (CAGradientLayer) that sells
- *     the "dome" feel — light enters from the top edge.
+ *   • a vertical white-to-translucent gradient (CAGradientLayer) hosted in
+ *     `effectView.contentView` so it sits ABOVE the material (and below the
+ *     RN children) — light enters from the top edge.
  *   • a 1pt white hairline at the very top — stands in for the highlight that
  *     real glass would refract off its rim.
  *
@@ -72,8 +73,11 @@ public class AutexaLiquidGlassView: ExpoView {
       effectView.trailingAnchor.constraint(equalTo: trailingAnchor),
     ])
 
-    // 2. gradient highlight (purely decorative)
-    layer.addSublayer(highlightLayer)
+    // 2. gradient highlight (purely decorative) — lives in the effect
+    //    view's contentView so it renders ABOVE the material but BELOW the
+    //    RN children React appends to `self`. (Sublayers of `self.layer`
+    //    would render UNDER the effect view — the exact bug we fixed here.)
+    effectView.contentView.layer.addSublayer(highlightLayer)
 
     // 3. top hairline
     addSubview(topRimView)
@@ -91,10 +95,7 @@ public class AutexaLiquidGlassView: ExpoView {
 
   public override func layoutSubviews() {
     super.layoutSubviews()
-    highlightLayer.frame = bounds
-    if highlightLayer.zPosition >= 0 {
-      highlightLayer.zPosition = -1
-    }
+    highlightLayer.frame = effectView.contentView.bounds
     bringSubviewToFront(topRimView)
   }
 
@@ -122,9 +123,10 @@ public class AutexaLiquidGlassView: ExpoView {
     upgradeToGlassIfAvailable()
   }
 
-  func applyIntensity(_ intensity: CGFloat) {
-    effectView.alpha = max(0.0, min(1.0, intensity))
-  }
+  // `applyIntensity` was removed: UIVisualEffectView does not support a
+  // partial `alpha` (UIKit documents it as unsupported and renders glitchy
+  // half-materials), and no JS call site ever passed `intensity` — the
+  // prop was dropped end-to-end.
 
   func setTopRim(visible: Bool) {
     topRimVisible = visible

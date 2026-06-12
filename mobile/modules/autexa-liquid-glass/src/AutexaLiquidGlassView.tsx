@@ -25,7 +25,7 @@ try {
 }
 
 export function AutexaLiquidGlassView(props: AutexaLiquidGlassViewProps) {
-  const { variant = 'thinMaterial', intensity, topRim, style, children, ...rest } = props;
+  const { variant = 'thinMaterial', topRim, style, children, ...rest } = props;
 
   if (Platform.OS !== 'ios') {
     return (
@@ -37,13 +37,7 @@ export function AutexaLiquidGlassView(props: AutexaLiquidGlassViewProps) {
 
   if (NativeView) {
     return (
-      <NativeView
-        {...rest}
-        variant={variant}
-        intensity={intensity ?? 1}
-        topRim={topRim ?? true}
-        style={style}
-      >
+      <NativeView {...rest} variant={variant} topRim={topRim ?? true} style={style}>
         {children}
       </NativeView>
     );
@@ -52,9 +46,8 @@ export function AutexaLiquidGlassView(props: AutexaLiquidGlassViewProps) {
   // Fallback — also native UIVisualEffectView via expo-blur, just less
   // configurable. Maps our variant onto expo-blur's tint.
   const tint = mapVariantToBlurTint(variant);
-  const blurIntensity = Math.round(((intensity ?? 1) * 0.96) * 100);
   return (
-    <BlurView tint={tint as any} intensity={blurIntensity} style={style}>
+    <BlurView tint={tint as any} intensity={96} style={style}>
       {children}
     </BlurView>
   );
@@ -62,11 +55,16 @@ export function AutexaLiquidGlassView(props: AutexaLiquidGlassViewProps) {
 
 function mapVariantToBlurTint(v: GlassVariant): string {
   switch (v) {
-    case 'ultraThinMaterial': return 'systemUltraThinMaterialLight';
-    case 'thickMaterial':     return 'systemThickMaterialLight';
-    case 'material':          return 'systemMaterialLight';
-    case 'chromeMaterial':    return 'systemChromeMaterialLight';
+    case 'ultraThinMaterial':
+      return 'systemUltraThinMaterialLight';
+    case 'thickMaterial':
+      return 'systemThickMaterialLight';
+    case 'material':
+      return 'systemMaterialLight';
+    case 'chromeMaterial':
+      return 'systemChromeMaterialLight';
     case 'thinMaterial':
-    default:                  return 'systemThinMaterialLight';
+    default:
+      return 'systemThinMaterialLight';
   }
 }

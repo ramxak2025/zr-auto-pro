@@ -1,11 +1,6 @@
 {
   "platforms": ["apple"],
   "apple": {
-    "modules": [
-      "AutexaLiquidGlassModule",
-      "AutexaLiquidGlassTabBarModule",
-      "AutexaKassaButtonModule",
-      "AutexaScheduleGridModule"
-    ]
+    "modules": ["AutexaLiquidGlassModule", "AutexaLiquidGlassTabBarModule", "AutexaKassaButtonModule"]
   }
 }

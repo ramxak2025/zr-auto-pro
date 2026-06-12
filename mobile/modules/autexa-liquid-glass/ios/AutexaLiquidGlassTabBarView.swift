@@ -25,10 +25,12 @@ import UIKit
  * JS contract:
  *   - prop `tabCount: Int` — how many slots
  *   - prop `activeIndex: Int` — which tab is currently selected
- *   - prop `bottomInset: Double` — safe-area bottom from JS (we read it
- *     so the tab bar lifts above the home indicator)
  *   - event `onTabPress({ index })` — fired when user taps a slot OR
  *     drags the droplet and releases on a slot
+ *
+ * Safe-area note: the JS island wrapper (TabBar.ios.tsx) already lifts the
+ * whole bar above the home indicator via its own padding, so this view's
+ * bounds ARE the icon area — no separate bottom inset is threaded through.
  *
  * The native module compiles on every Xcode SDK because the iOS 26
  * UIGlassEffect class is reached via NSClassFromString runtime lookup.
@@ -50,12 +52,14 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
   private var tabCount: Int = 5
   private var activeIndex: Int = 0
-  private var bottomInset: CGFloat = 0
 
   // MARK: - Animation state
 
   private var isPanning: Bool = false
-  private var panStartTabX: CGFloat = 0
+  /// Tab that was active when the pan began. If the SYSTEM cancels the
+  /// gesture (incoming call, app switcher, control-center swipe) we restore
+  /// this index instead of committing a switch the user never confirmed.
+  private var prePanIndex: Int = 0
 
   // MARK: - Layout constants
   //
@@ -91,7 +95,10 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     self.effectView = UIVisualEffectView(effect: seed)
 
     self.topRimView = UIView()
-    self.topRimView.backgroundColor = UIColor(white: 1.0, alpha: 0.85)
+    // Initial colour is the light-mode rim; updateDropletAppearance()
+    // (called at the end of init and on trait changes) keeps it in sync
+    // with the actual interface style.
+    self.topRimView.backgroundColor = UIColor(white: 1.0, alpha: 0.5)
     self.topRimView.isUserInteractionEnabled = false
 
     self.dropletView = UIView()
@@ -199,9 +206,10 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
 
   // MARK: - Trait collection (light / dark mode)
 
-  /// Updates the droplet gradient colors and border color to match the
-  /// current user interface style. Called from init, layoutSubviews, and
-  /// traitCollectionDidChange so the capsule always matches the system theme.
+  /// Updates the droplet gradient colors, the droplet border and the top
+  /// rim hairline to match the current user interface style. Called from
+  /// init, layoutSubviews, and traitCollectionDidChange so the capsule and
+  /// rim always match the system theme.
   private func updateDropletAppearance() {
     let isDark = traitCollection.userInterfaceStyle == .dark
     if isDark {
@@ -213,6 +221,8 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
         UIColor(red: 0.37, green: 0.55, blue: 0.98, alpha: 0.18).cgColor,
       ]
       dropletView.layer.borderColor = UIColor(white: 1.0, alpha: 0.15).cgColor
+      // Faint rim — a hard-white hairline on dark glass reads as a glitch.
+      topRimView.backgroundColor = UIColor(white: 1.0, alpha: 0.12)
     } else {
       // Bright white glass capsule — classic light-mode look.
       dropletGradient.colors = [
@@ -221,6 +231,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
         UIColor(white: 1.0, alpha: 0.85).cgColor,
       ]
       dropletView.layer.borderColor = UIColor(white: 1.0, alpha: 0.9).cgColor
+      topRimView.backgroundColor = UIColor(white: 1.0, alpha: 0.5)
     }
   }
 
@@ -240,9 +251,9 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     // wider than 52 (typical on 5-tab phones) there is intentional empty
     // space on either side of the pill, which is exactly the desired
     // look. Vertically, dropletInset = (BAR_HEIGHT - KASSA_SIZE) / 2 so
-    // the pill is centred between the bar's top and the start of the
-    // home-indicator safe-area area (bottomInset).
-    let iconAreaH = bounds.height - bottomInset
+    // the pill is centred in the bar (the JS wrapper already keeps the
+    // whole island above the home indicator).
+    let iconAreaH = bounds.height
     let slotW = bounds.width / CGFloat(tabCount)
     let centerX = slotW * (CGFloat(index) + 0.5)
     let width = dropletSize
@@ -275,7 +286,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     switch gr.state {
     case .began:
       isPanning = true
-      panStartTabX = dropletFrame(forIndex: activeIndex).midX
+      prePanIndex = activeIndex
       // 1. Press-down: subtle scale-down so the user FEELS the touch land.
       UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut, .allowUserInteraction], animations: { [weak self] in
         guard let self = self else { return }
@@ -291,7 +302,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
       // rounded island edges nor visually grows past the Kassa CTA
       // when the finger crosses the middle slot.
       let slotW = bounds.width / CGFloat(max(1, tabCount))
-      let iconAreaH = bounds.height - bottomInset
+      let iconAreaH = bounds.height
       let dropletW = dropletSize
       let dropletH = min(dropletSize, max(0, iconAreaH - dropletInset * 2))
 
@@ -324,7 +335,7 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
         activeIndex = hovered
       }
 
-    case .ended, .cancelled:
+    case .ended:
       isPanning = false
       // Reset transform from the press-down scale, spring to the slot.
       let slotW = bounds.width / CGFloat(max(1, tabCount))
@@ -334,6 +345,14 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
       animateToIndex(nearest)
       impactFeedback.impactOccurred(intensity: 0.55)
       emitPress(nearest)
+
+    case .cancelled, .failed:
+      // SYSTEM cancelled the gesture (incoming call, app switcher, etc.) —
+      // the user never confirmed a switch, so restore the pre-pan tab and
+      // spring the droplet home WITHOUT emitting onTabPress.
+      isPanning = false
+      activeIndex = prePanIndex
+      animateToIndex(prePanIndex)
 
     default:
       break
@@ -404,10 +423,6 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
       self.activeIndex = clamped
       animateToIndex(clamped)
     }
-  }
-
-  func setBottomInset(_ inset: CGFloat) {
-    self.bottomInset = inset
   }
 
   // MARK: - iOS 26 UIGlassEffect upgrade

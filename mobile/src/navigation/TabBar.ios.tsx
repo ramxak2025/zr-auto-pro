@@ -107,48 +107,61 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // ScrollView reach the screen's bottom edge; with each screen's
   // `contentInset.bottom = useTabBarHeight()`, content visibly passes
   // UNDER the glass material as the user scrolls.
+  // The island's hairline border adapts to the theme: translucent white
+  // over light glass, the palette's white-alpha hairline over dark glass —
+  // a hard-white ring on dark material reads as a rendering glitch.
+  const islandBorderColor = palette.mode === 'dark' ? palette.border.strong : 'rgba(255,255,255,0.6)';
+
   return (
     <View
       pointerEvents="box-none"
       style={[styles.wrapper, { paddingTop: TOP_LIFT, paddingBottom: safeBottom + BOTTOM_LIFT }]}
     >
-      <View style={[styles.island, { height: BAR_HEIGHT }]}>
-        {/* Native glass + droplet — fills the rounded island. */}
-        <AutexaLiquidGlassTabBar
-          tabCount={TAB_DEFINITIONS.length}
-          activeIndex={safeIndex}
-          bottomInset={0}
-          onTabPress={navigateToTab}
-          style={styles.bar}
-        />
+      {/* Unclipped frame in normal flow — exactly the island's vertical
+          box. Hosts the clipped glass island AND the Касса overlay as
+          siblings, so the button's glow can render past the island's
+          overflow:hidden bounds. */}
+      <View pointerEvents="box-none" style={{ height: BAR_HEIGHT }}>
+        <View style={[styles.island, { height: BAR_HEIGHT, borderColor: islandBorderColor }]}>
+          {/* Native glass + droplet — fills the rounded island. The native
+              view also draws the 1px top rim (theme-aware on the Swift
+              side), so JS adds no rim of its own. */}
+          <AutexaLiquidGlassTabBar
+            tabCount={TAB_DEFINITIONS.length}
+            activeIndex={safeIndex}
+            onTabPress={navigateToTab}
+            style={styles.bar}
+          />
 
-        {/* White hairline rim along the top edge — subtle premium touch. */}
-        <View style={styles.topRim} pointerEvents="none" />
+          {/* Non-Касса icons + labels on a pass-through absolute layer.
+              Fills the entire island vertically — island is now plain
+              60pt so icons get vertically centered without doing extra
+              offset math. */}
+          <View style={styles.iconsRow} pointerEvents="none">
+            {TAB_DEFINITIONS.map((tab) => {
+              const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
+              const focused = state.index === routeIndex;
 
-        {/* Non-Касса icons + labels on a pass-through absolute layer.
-            Fills the entire island vertically — island is now plain
-            60pt so icons get vertically centered without doing extra
-            offset math. */}
-        <View style={styles.iconsRow} pointerEvents="none">
-          {TAB_DEFINITIONS.map((tab) => {
-            const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
-            const focused = state.index === routeIndex;
+              if (tab.isKassa) {
+                // Empty placeholder slot — actual Касса button rendered
+                // separately above so it can receive its own touches.
+                return <View key={tab.routeName} style={styles.item} />;
+              }
 
-            if (tab.isKassa) {
-              // Empty placeholder slot — actual Касса button rendered
-              // separately above so it can receive its own touches.
-              return <View key={tab.routeName} style={styles.item} />;
-            }
-
-            return (
-              <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} palette={palette} />
-            );
-          })}
+              return (
+                <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} palette={palette} />
+              );
+            })}
+          </View>
         </View>
 
         {/* Native premium Касса button — Swift-side AutexaKassaButtonView.
-            Fills the island and is centered horizontally + vertically
-            against the icon row. */}
+            Rendered as a SIBLING of the island (inside the unclipped
+            frame) rather than inside it: the island clips its children
+            (overflow: hidden for the rounded glass), which used to
+            swallow the button's brand-glow drop shadow. Out here the
+            glow renders fully while the button stays centered exactly
+            where its in-island slot was. */}
         <View style={styles.kassaSlot} pointerEvents="box-none">
           <AutexaKassaButton
             symbolName="bag.fill"
@@ -225,12 +238,13 @@ const styles = StyleSheet.create({
   // zone" on physical iPhones; dropped to 0.06/10 — still gives depth
   // but doesn't paint a visible halo onto the screen's gray-50 bg
   // underneath.
+  // borderColor is injected inline from the theme palette (hard white on
+  // dark glass read as a glitch — see islandBorderColor in the component).
   island: {
     marginHorizontal: HORIZONTAL_MARGIN,
     borderRadius: CORNER_RADIUS,
     overflow: 'hidden',
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.6)',
     shadowColor: '#000',
     shadowOpacity: 0.06,
     shadowRadius: 10,
@@ -238,14 +252,6 @@ const styles = StyleSheet.create({
   },
   bar: {
     ...StyleSheet.absoluteFillObject,
-  },
-  topRim: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255,255,255,0.85)',
   },
   iconsRow: {
     ...StyleSheet.absoluteFillObject,
@@ -259,6 +265,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 44,
   },
+  // Fills the unclipped island frame (NOT the island itself) so the
+  // button's brand-glow shadow isn't cut off by the island's
+  // overflow:hidden. Horizontal centring is identical because the
+  // island's horizontal margins are symmetric.
   kassaSlot: {
     ...StyleSheet.absoluteFillObject,
     flexDirection: 'row',

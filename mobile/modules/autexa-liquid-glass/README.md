@@ -11,11 +11,11 @@ runtime class lookup — the module compiles on any Xcode SDK.
 
 ## Material selection
 
-| iOS version | Effect used |
-|-------------|-------------|
-| iOS 26+     | **UIGlassEffect** — real Liquid Glass (primary path) |
+| iOS version | Effect used                                                                    |
+| ----------- | ------------------------------------------------------------------------------ |
+| iOS 26+     | **UIGlassEffect** — real Liquid Glass (primary path)                           |
 | iOS 13–25   | UIVisualEffectView + UIBlurEffect.systemThinMaterial (premium native fallback) |
-| iOS < 13    | UIBlurEffect.light (legacy fallback) |
+| iOS < 13    | UIBlurEffect.light (legacy fallback)                                           |
 
 Both materials are layered with a CAGradientLayer (top-down white →
 translucent) and a 1pt white hairline at the top edge for the "glass dome"
@@ -38,6 +38,7 @@ A local Expo Module is the **canonical Expo way** to ship native code that
    they live in `node_modules` and are linked in fresh on every prebuild.
 
 This means:
+
 - `expo prebuild --clean` is fully safe.
 - No manual `ios/` modifications.
 - No additional config plugin file is needed.
@@ -49,13 +50,12 @@ This means:
 import { AutexaLiquidGlassView } from 'autexa-liquid-glass';
 
 <AutexaLiquidGlassView
-  variant="thinMaterial"      // ultraThinMaterial | thinMaterial | material | thickMaterial | chromeMaterial
-  intensity={1}                // 0..1, alpha multiplier
-  topRim={true}                // 1px white hairline at the top edge
+  variant="thinMaterial" // ultraThinMaterial | thinMaterial | material | thickMaterial | chromeMaterial
+  topRim={true} // 1px white hairline at the top edge
   style={StyleSheet.absoluteFill}
 >
   {/* Children render ON TOP of the glass material */}
-</AutexaLiquidGlassView>
+</AutexaLiquidGlassView>;
 ```
 
 ## Files
@@ -95,6 +95,7 @@ iOS-only by design.
    only minimally on the simulator — go physical for the real visual)
 
 You should see:
+
 - iOS 17/18: a thin frosted glass tab bar with subtle highlights.
 - iOS 26+ (iPhone 17 Pro on shipped iOS 26.x): subtle live refraction
   through the bar — true Liquid Glass.
