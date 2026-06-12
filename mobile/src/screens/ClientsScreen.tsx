@@ -543,13 +543,14 @@ export default function ClientsScreen() {
   const openClientDetail = useCallback((id: string) => navigation.navigate('ClientDetail', { id }), [navigation]);
 
   // ── Row renderer (client mode) ──────────────────────────────────────
-  // The row is a module-scope React.memo component (ClientListRow). The
-  // previous inline version keyed its Swipeable by `item.id`, which forced
-  // a full unmount/remount of the row subtree on every FlashList v2
-  // recycle — fresh native views mid-scroll = blank cell for a frame =
-  // the «мерцают, исчезают-появляются» flicker the owner reported. Now a
-  // recycle is a plain prop update; stale swipe state is cleared inside
-  // ClientListRow via `reset()` when the bound id changes.
+  // The row is a module-scope React.memo component (ClientListRow) whose
+  // swipe wrapper is RNGH's ReanimatedSwipeable (UI-thread shared values,
+  // setState-free reset on recycle). History of the «дёргаются/пропадают»
+  // bug: v1 keyed a legacy Swipeable by `item.id` (full remount per
+  // recycle → blank cells); v2 dropped the key and reset via ref — but
+  // the legacy class Swipeable still setState'd on every reset/onLayout
+  // and drove translateX through RN Animated, which desyncs on Fabric
+  // cell reuse. See the rationale block at the top of ClientListRow.tsx.
   const renderClient = useCallback(
     ({ item }: { item: Client; index: number }) => (
       <ClientListRow
@@ -599,6 +600,21 @@ export default function ClientsScreen() {
       </View>
     ),
     [openRetailDetail],
+  );
+
+  // Stable contentContainerStyle objects for both FlashLists. Inline
+  // object literals here would get a NEW identity on every screen
+  // re-render — and `isFetchingNextPage` flips exactly mid-scroll during
+  // pagination, which would hand the virtualiser a "changed" style prop
+  // in the middle of a fling. Memoised on the only real input
+  // (tabBarHeight) they stay referentially constant across scrolling.
+  const plateListContentStyle = useMemo(
+    () => ({ paddingHorizontal: spacing[4], paddingBottom: tabBarHeight + spacing[4] }),
+    [tabBarHeight],
+  );
+  const clientListContentStyle = useMemo(
+    () => ({ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }),
+    [tabBarHeight],
   );
 
   // Pick the freshness signal for the active mode so the badge doesn't
@@ -680,10 +696,7 @@ export default function ClientsScreen() {
                 />
               ) : null
             }
-            contentContainerStyle={{
-              paddingHorizontal: spacing[4],
-              paddingBottom: tabBarHeight + spacing[4],
-            }}
+            contentContainerStyle={plateListContentStyle}
             keyboardShouldPersistTaps="handled"
             // Same reasoning as the people-list below: disable FlashList v2's
             // default top-anchoring (it's a chat feature, not what a search
@@ -814,7 +827,7 @@ export default function ClientsScreen() {
                   )
                 ) : null
               }
-              contentContainerStyle={{ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }}
+              contentContainerStyle={clientListContentStyle}
               // FlashList v2 enables `maintainVisibleContentPosition` BY
               // DEFAULT (it's built for chat UIs that grow at the top). On a
               // contacts-style list with variable-height rows that re-anchors

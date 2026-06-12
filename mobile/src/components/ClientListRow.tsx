@@ -3,24 +3,41 @@
  *
  * Lives at module scope behind React.memo because FlashList v2 RECYCLES
  * cells: when a row scrolls off and a different client scrolls in, the SAME
- * mounted subtree receives the new item as props — a cheap re-render. The
- * previous inline row keyed its Swipeable wrapper by `item.id`, which forced
- * React to unmount + remount the entire row subtree (gesture handler,
- * avatar, texts — all fresh native views) on EVERY recycle. Creating native
- * views mid-scroll leaves the recycled cell blank for a frame, which the
- * owner saw as «мерцают, исчезают-появляются» while scrolling (bug report,
- * 2026-06-12). Plate mode renders PlateResultCard without a keyed wrapper —
- * which is exactly why it never blinked.
+ * mounted subtree receives the new item as props — a cheap re-render.
  *
- * The stale-swipe-state leak that `key` was originally guarding against (a
- * recycled holder showing the PREVIOUS client's open swipe actions) is
- * solved the UITableView way instead: snap the swipe position back to
- * closed — `reset()`, instant, no animation — whenever the bound client id
- * changes. Zero remounts, zero leaked state.
+ * ── Why ReanimatedSwipeable and not the legacy RNGH Swipeable ──────────────
+ * The first flicker fix removed `key={item.id}` from the legacy Swipeable
+ * and reset it via ref on recycle — and the owner STILL saw «дёргаются и
+ * пропадают» on device. The legacy `Swipeable` is a class component that is
+ * structurally hostile to a recycling list:
+ *   • `reset()` calls `this.setState({ rowState: 0 })` → our per-recycle
+ *     reset forced an EXTRA synchronous JS re-render of every recycled row
+ *     mid-fling (rngh/src/components/Swipeable.tsx:500-504);
+ *   • `onLayout` of the row/actions ALSO setState (`rowWidth`, `leftWidth`,
+ *     `rightOffset` — ibid:466,529,544) → recycled cells with different
+ *     heights trigger yet more renders per recycle;
+ *   • its translateX is an RN `Animated.event`/`Animated.Value` with
+ *     useNativeDriver (ibid:254-256): under Fabric + cell reuse the
+ *     native-driven transform node holds the STALE value until the JS-side
+ *     `setValue(0)` round-trips, so a recycled row can paint translated
+ *     off-screen for a few frames — exactly «пропадают».
+ * `ReanimatedSwipeable` (RNGH 2.28) keeps ALL of that state in reanimated
+ * shared values on the UI thread: `reset()` is a plain shared-value write
+ * with NO setState (rngh ReanimatedSwipeable.tsx:329-335), widths are
+ * measured in worklets, the translation is a `useAnimatedStyle` transform,
+ * and the action panel is opacity-gated to invisible while closed
+ * (ibid:389-393). A recycle is therefore exactly ONE React render (the new
+ * props) and zero animation-state bridge traffic — the same cost as the
+ * wrapper-less Журнал rows that scroll perfectly.
+ *
+ * Closed-by-default on recycle: same UITableView-style contract as before —
+ * when the bound client id changes we snap the swipe position back to closed
+ * (`reset()`, instant, no animation, no re-render). No `key` on the wrapper,
+ * no entering animations — nothing changes element identity during scroll.
  */
-import React, { useLayoutEffect, useRef } from 'react';
+import React, { useCallback, useLayoutEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { Swipeable } from 'react-native-gesture-handler';
+import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { Ionicons } from '@expo/vector-icons';
 import { formatPhone } from '../../../shared/validation/phone';
 import { colors, spacing } from '../theme';
@@ -73,18 +90,44 @@ function ClientListRowBase({
   onEdit,
   onDeleteRequest,
 }: ClientListRowProps) {
-  const swipeRef = useRef<Swipeable>(null);
+  const swipeRef = useRef<SwipeableMethods>(null);
   const boundIdRef = useRef(item.id);
-  // FlashList recycle: same mounted instance, different client. Reset the
-  // swipe position synchronously (before the next paint — useLayoutEffect)
+  // FlashList recycle: same mounted instance, different client. Snap the
+  // swipe position back to closed before the next paint (useLayoutEffect)
   // so an open action panel can never leak from the previous client into
-  // the recycled cell. `reset()` is a no-op for a closed row.
+  // the recycled cell. ReanimatedSwipeable's `reset()` only writes shared
+  // values on the UI thread — no setState, no extra render, no animation.
   useLayoutEffect(() => {
     if (boundIdRef.current !== item.id) {
       boundIdRef.current = item.id;
       swipeRef.current?.reset();
     }
   }, [item.id]);
+
+  // Trailing actions — «Изменить» / «Удалить». Memoised so the swipeable's
+  // internal action subtree only re-renders when the bound client changes
+  // (i.e. on recycle), not on every incidental parent render. The renderer
+  // intentionally ignores the (progress, translation, methods) args — the
+  // static two-button panel needs no per-frame styling.
+  const renderRightActions = useCallback(
+    () => (
+      <View style={styles.swipeActionsRow}>
+        <TouchableOpacity style={styles.swipeEditAction} onPress={() => onEdit(item)} activeOpacity={0.85}>
+          <Ionicons name="pencil" size={20} color={colors.white} />
+          <Text style={styles.swipeActionText}>Изменить</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.swipeDeleteAction}
+          onPress={() => onDeleteRequest(item.id)}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="trash-outline" size={20} color={colors.white} />
+          <Text style={styles.swipeActionText}>Удалить</Text>
+        </TouchableOpacity>
+      </View>
+    ),
+    [item, onEdit, onDeleteRequest],
+  );
 
   const initials = getInitials(item.fullName);
   const avatarBg = getAvatarColor(item.fullName);
@@ -133,31 +176,15 @@ function ClientListRowBase({
     </TouchableOpacity>
   );
 
+  // Permission gate — `canDelete` is constant for the session (role +
+  // permissions don't change while the list scrolls), so this conditional
+  // never flips element identity mid-scroll.
   if (!canDelete) return card;
 
   return (
-    <Swipeable
-      ref={swipeRef}
-      renderRightActions={() => (
-        <View style={styles.swipeActionsRow}>
-          <TouchableOpacity style={styles.swipeEditAction} onPress={() => onEdit(item)} activeOpacity={0.85}>
-            <Ionicons name="pencil" size={20} color={colors.white} />
-            <Text style={styles.swipeActionText}>Изменить</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.swipeDeleteAction}
-            onPress={() => onDeleteRequest(item.id)}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="trash-outline" size={20} color={colors.white} />
-            <Text style={styles.swipeActionText}>Удалить</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-      overshootRight={false}
-    >
+    <ReanimatedSwipeable ref={swipeRef} renderRightActions={renderRightActions} overshootRight={false}>
       {card}
-    </Swipeable>
+    </ReanimatedSwipeable>
   );
 }
 
