@@ -141,37 +141,27 @@ export default function ClientsScreen() {
   // automatically (server search is unaffected by client-side chips, but
   // keeping them in the key keeps the cache entry semantically correct and
   // avoids stale page accumulation across filters).
-  const {
-    data,
-    isLoading,
-    isFetching,
-    dataUpdatedAt,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-  } = useInfiniteQuery<PaginatedResponse<Client>>({
-    queryKey: ['clients-infinite', { search, filter, source: sourceFilter }],
-    initialPageParam: 1,
-    queryFn: async ({ pageParam = 1 }) => {
-      const res = await clientsApi.getAll({ search, page: pageParam as number, limit });
-      return res.data;
-    },
-    getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.reduce((acc, p) => acc + (p?.data?.length ?? 0), 0);
-      return loaded < (lastPage?.total ?? 0) ? allPages.length + 1 : undefined;
-    },
-    placeholderData: (prev) => prev,
-  });
+  const { data, isLoading, isFetching, dataUpdatedAt, fetchNextPage, hasNextPage, isFetchingNextPage } =
+    useInfiniteQuery<PaginatedResponse<Client>>({
+      queryKey: ['clients-infinite', { search, filter, source: sourceFilter }],
+      initialPageParam: 1,
+      queryFn: async ({ pageParam = 1 }) => {
+        const res = await clientsApi.getAll({ search, page: pageParam as number, limit });
+        return res.data;
+      },
+      getNextPageParam: (lastPage, allPages) => {
+        const loaded = allPages.reduce((acc, p) => acc + (p?.data?.length ?? 0), 0);
+        return loaded < (lastPage?.total ?? 0) ? allPages.length + 1 : undefined;
+      },
+      placeholderData: (prev) => prev,
+    });
 
   // ── Plate-search query (Касса-style, #19.3) ─────────────────────────
   // Mirrors CheckCreateScreen: search clients by the normalized plate so
   // a latin "P332PA05" finds the same client as Cyrillic "Р332РА05". The
   // server returns clients (with their cars[]), we flatten to {client,car}
   // rows below. Only fires when ≥2 chars are typed → no cold-start cost.
-  const normalizedPlate = useMemo(
-    () => normalizePlateForSearch(plateSearch, plateMode),
-    [plateSearch, plateMode],
-  );
+  const normalizedPlate = useMemo(() => normalizePlateForSearch(plateSearch, plateMode), [plateSearch, plateMode]);
   const plateQuery = useQuery<Client[]>({
     queryKey: ['clients-plate', normalizedPlate, plateMode],
     queryFn: async () => {
@@ -212,8 +202,10 @@ export default function ClientsScreen() {
       return clientRes.data;
     },
     onSuccess: () => {
-      // Refresh both the legacy `['clients']` key (persisted / plate-mode
-      // helpers) and the new people-list infinite key so the freshly
+      // Refresh the people-list infinite key (persisted as
+      // 'clients-infinite' in persistentCache) plus the legacy
+      // `['clients']` slot (defensive — no screen reads it anymore, but a
+      // stale prefetched copy must not survive a create) so the freshly
       // created client shows up without a manual pull-to-refresh.
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
@@ -226,8 +218,13 @@ export default function ClientsScreen() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { fullName: string; phone: string; comment?: string; source?: string | null } }) =>
-      clientsApi.update(id, data),
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: { fullName: string; phone: string; comment?: string; source?: string | null };
+    }) => clientsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
@@ -327,9 +324,7 @@ export default function ClientsScreen() {
       phone,
       comment: comment || undefined,
       source: formSource,
-      car: hasInlineCar
-        ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, noPlate: carNoPlate }
-        : undefined,
+      car: hasInlineCar ? { plateNumber: normalizedCarPlate, makeModel: carMakeModel, noPlate: carNoPlate } : undefined,
     });
   };
 
@@ -406,10 +401,7 @@ export default function ClientsScreen() {
   // freshest server slice; page 2+ are appended below as the user scrolls.
   // Memoised on `data.pages` so a parent re-render doesn't churn a new array
   // (which would bust FlashList's row recycling).
-  const rawClients = useMemo<Client[]>(
-    () => (data?.pages ?? []).flatMap((p) => p?.data ?? []),
-    [data?.pages],
-  );
+  const rawClients = useMemo<Client[]>(() => (data?.pages ?? []).flatMap((p) => p?.data ?? []), [data?.pages]);
 
   // The list backend already returns retail buyer first when not
   // searching (server sorts by `is_retail DESC NULLS LAST`). When the
@@ -459,10 +451,7 @@ export default function ClientsScreen() {
   // Retail buyer pin — server returns the actual row, we pluck it out
   // so we can render it as the gradient hero card above the filtered
   // regular list (without duplicating the row).
-  const retailFromServer = useMemo(
-    () => rawClients.find((c) => c.isRetail) || null,
-    [rawClients],
-  );
+  const retailFromServer = useMemo(() => rawClients.find((c) => c.isRetail) || null, [rawClients]);
 
   // Retail pin visibility — the retail-buyer hero is the gateway to
   // retail-check history. We show it on the people (client) list when
@@ -487,9 +476,7 @@ export default function ClientsScreen() {
     for (const client of list) {
       for (const car of client.cars || []) {
         if (!car.plateNumber) continue;
-        const matches =
-          q.length > 0 &&
-          normalizePlateForSearch(car.plateNumber, plateMode).includes(q);
+        const matches = q.length > 0 && normalizePlateForSearch(car.plateNumber, plateMode).includes(q);
         (matches ? hits : misses).push({ client, car });
       }
     }
@@ -722,17 +709,10 @@ export default function ClientsScreen() {
         <>
           <View style={styles.plateSearchWrap}>
             <View style={styles.plateLabelRow}>
-              <Text style={[styles.plateSearchLabel, { color: palette.text.secondary }]}>
-                ПОИСК ПО ГОСНОМЕРУ
-              </Text>
+              <Text style={[styles.plateSearchLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
               <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
             </View>
-            <RussianPlateInput
-              value={plateSearch}
-              onChangeText={setPlateSearch}
-              mode={plateMode}
-              autoFocus={false}
-            />
+            <RussianPlateInput value={plateSearch} onChangeText={setPlateSearch} mode={plateMode} autoFocus={false} />
           </View>
 
           <FlashList
@@ -746,11 +726,7 @@ export default function ClientsScreen() {
             }
             ListEmptyComponent={
               normalizedPlate.length >= 2 && !plateQuery.isFetching ? (
-                <EmptyState
-                  icon="car"
-                  title="Ничего не найдено"
-                  description={`Госномер «${plateSearch}» не найден`}
-                />
+                <EmptyState icon="car" title="Ничего не найдено" description={`Госномер «${plateSearch}» не найден`} />
               ) : normalizedPlate.length < 2 ? (
                 <EmptyState
                   icon="search"
@@ -792,11 +768,7 @@ export default function ClientsScreen() {
               Без номеров. Pinned row height so the chips hug the top
               instead of stretching+centering in the flex column (#19.1). */}
           <View style={styles.chipsBar}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chipsRow}
-            >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
               <FilterChip
                 active={filter === 'all'}
                 label="Все"
@@ -810,9 +782,7 @@ export default function ClientsScreen() {
               />
               <FilterChip
                 active={filter === 'source'}
-                label={
-                  filter === 'source' && sourceFilter ? `Источник: ${sourceFilter}` : 'По источнику'
-                }
+                label={filter === 'source' && sourceFilter ? `Источник: ${sourceFilter}` : 'По источнику'}
                 icon="pricetag-outline"
                 onPress={() => {
                   haptic('select');
@@ -979,19 +949,10 @@ export default function ClientsScreen() {
               { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
             ]}
           >
-            <Text
-              style={[
-                styles.formPickerText,
-                { color: formSource ? palette.text.primary : palette.text.tertiary },
-              ]}
-            >
+            <Text style={[styles.formPickerText, { color: formSource ? palette.text.primary : palette.text.tertiary }]}>
               {formSource ?? 'Выберите источник'}
             </Text>
-            <Ionicons
-              name={formSourceOpen ? 'chevron-up' : 'chevron-down'}
-              size={16}
-              color={palette.text.tertiary}
-            />
+            <Ionicons name={formSourceOpen ? 'chevron-up' : 'chevron-down'} size={16} color={palette.text.tertiary} />
           </TouchableOpacity>
           {/* In-flow source picker — NOT a nested RN Modal (a Modal over the
               open create-Modal won't present on iOS → the list never opened,
@@ -1167,10 +1128,7 @@ function FilterChip({ active, label, icon, onPress, palette, dismissable, onDism
     >
       <Ionicons name={icon} size={13} color={active ? palette.accent.primary : palette.text.secondary} />
       <Text
-        style={[
-          cnStyles.chipLabel,
-          { color: active ? palette.accent.primaryText : palette.text.secondary },
-        ]}
+        style={[cnStyles.chipLabel, { color: active ? palette.accent.primaryText : palette.text.secondary }]}
         numberOfLines={1}
       >
         {label}

@@ -78,16 +78,43 @@ interface EtagEntry {
 }
 const etagCache = new Map<string, EtagEntry>();
 
+// Hard cap on cached signatures. Every unique GET signature pins a full
+// response body in memory; without a bound, long sessions (per-period
+// reports, per-id detail opens) grow the map indefinitely. A Map iterates
+// in insertion order, so deleting `keys().next()` evicts the
+// least-recently-used entry as long as we re-insert on every hit.
+const ETAG_CACHE_MAX = 100;
+
+/** Store an entry, evicting the least-recently-used one when full. */
+function etagCacheSet(key: string, entry: EtagEntry): void {
+  if (etagCache.has(key)) {
+    etagCache.delete(key); // refresh insertion order → most-recently-used
+  } else if (etagCache.size >= ETAG_CACHE_MAX) {
+    const oldest = etagCache.keys().next().value;
+    if (oldest !== undefined) etagCache.delete(oldest);
+  }
+  etagCache.set(key, entry);
+}
+
+/**
+ * Search requests (`params.search` non-empty) are per-keystroke variants —
+ * each one is a unique signature that would occupy an LRU slot and pin a
+ * full page body for a response the user usually never revisits. Skip the
+ * ETag dance for them entirely; the empty-search base signature still
+ * caches normally.
+ */
+function hasNonEmptySearch(params: unknown): boolean {
+  if (!params || typeof params !== 'object') return false;
+  const s = (params as { search?: unknown }).search;
+  return typeof s === 'string' && s.length > 0;
+}
+
 /**
  * Build the cache key for a request. Method + URL + serialised params makes a
  * stable signature so `['products', {warehouseId}]`-style refetches each get
  * their own ETag slot.
  */
-function etagCacheKey(config: {
-  method?: string;
-  url?: string;
-  params?: unknown;
-}): string {
+function etagCacheKey(config: { method?: string; url?: string; params?: unknown }): string {
   const method = (config.method || 'get').toUpperCase();
   const url = config.url || '';
   let paramsPart = '{}';
@@ -122,8 +149,10 @@ api.interceptors.request.use(async (config) => {
   }
 
   // Only GETs participate in the ETag dance (the backend only ETags GETs).
+  // Typed-search variants are excluded — they're never stored (see
+  // `hasNonEmptySearch`), so sending If-None-Match for them is pointless.
   const method = (config.method || 'get').toUpperCase();
-  if (method === 'GET') {
+  if (method === 'GET' && !hasNonEmptySearch(config.params)) {
     const entry = etagCache.get(etagCacheKey(config));
     if (entry) {
       config.headers['If-None-Match'] = entry.etag;
@@ -180,6 +209,8 @@ api.interceptors.response.use(
         // `res.status` checks behave like a fresh fetch.
         const entry = etagCache.get(key);
         if (entry) {
+          // Re-insert so the LRU order reflects the actual hit.
+          etagCacheSet(key, entry);
           res.data = entry.data;
           res.status = 200;
           res.statusText = 'OK (from ETag cache)';
@@ -191,9 +222,17 @@ api.interceptors.response.use(
         return res;
       }
       // 2xx with a body + an ETag header → remember it for next time.
+      // Per-keystroke search variants are skipped — each unique search
+      // string would pin a full body in the LRU for nothing.
       const etag = (res.headers?.etag as string | undefined) || (res.headers?.ETag as string | undefined);
-      if (etag && res.status >= 200 && res.status < 300 && res.data !== undefined) {
-        etagCache.set(key, { etag, data: res.data });
+      if (
+        etag &&
+        res.status >= 200 &&
+        res.status < 300 &&
+        res.data !== undefined &&
+        !hasNonEmptySearch(res.config.params)
+      ) {
+        etagCacheSet(key, { etag, data: res.data });
       }
     }
     return res;

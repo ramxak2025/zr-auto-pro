@@ -15,6 +15,7 @@
  *   - we only persist 5 keys, full-cache persistence would be wasteful
  *   - no extra dependency
  */
+import { InteractionManager } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 
@@ -45,7 +46,14 @@ const PERSISTED_KEYS = [
   'users',
   // Suppliers / clients / cars / equipment
   'suppliers',
-  'clients',
+  // ClientsScreen people-list — useInfiniteQuery keyed
+  // ['clients-infinite', { search, filter, source }]. The base variant
+  // (search: '', filter: 'all', source: null) is what cold start needs;
+  // typed-search variants are filtered by `isSearchVolatile` and the
+  // persisted page count is bounded by MAX_PERSISTED_PAGES. The legacy
+  // ['clients', ...] useQuery key has no readers anymore (the login
+  // prefetch warms 'clients-infinite' directly), so it isn't persisted.
+  'clients-infinite',
   'cars',
   // Client source list (откуда узнал о нас) — static reference data,
   // invalidated only on edit. Persisted so the source picker is instant
@@ -125,8 +133,8 @@ const PERSISTED_KEYS = [
   // sub-variant (date params, filters, etc.). Search-volatile
   // variants are filtered by `isSearchVolatile`.
   //
-  // 'clients', 'suppliers', 'cars', 'schedule', 'equipment' (via
-  // 'eq-*'), 'marketing-dashboard', 'expenses' — already covered
+  // 'clients-infinite', 'suppliers', 'cars', 'schedule', 'equipment'
+  // (via 'eq-*'), 'marketing-dashboard', 'expenses' — already covered
   // above. Entries below close the remaining gaps.
   //
   // CallsScreen reads ['calls', dateStr] — small per-day payload.
@@ -188,6 +196,62 @@ interface StoredEntry {
  * fetch in the background via TanStack Query's stale-while-revalidate.
  */
 const MAX_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Per-first-key cap on the number of persisted VARIANTS (different
+ * sub-params → different storage slots). Without a cap, per-day calls,
+ * per-month schedule/salary, per-range cashflow and per-id detail slots
+ * accumulate in AsyncStorage forever, slowing `hydrateCache` (and the
+ * getAllKeys/multiGet it runs) on EVERY cold start. During hydration we
+ * keep the N most-recent variants per first key and GC the rest.
+ * First keys not listed here are uncapped (their param space is small).
+ */
+const VARIANT_CAPS: Partial<Record<PersistedKey, number>> = {
+  // Period-keyed screens — users flip between a few recent periods.
+  calls: 3,
+  schedule: 3,
+  salary: 3,
+  cashflow: 3,
+  expenses: 3,
+  // Id-keyed detail cards — keep the 10 most recently opened.
+  client: 10,
+  'client-checks': 10,
+  'client-checks-by-car': 10,
+  'employee-full-profile': 10,
+  user: 10,
+  // Journal infinite feed — base slot + one filtered variant.
+  'checks-infinite': 2,
+};
+
+/**
+ * Infinite queries persist their full `{ pages, pageParams }` aggregate.
+ * A long scroll session can accumulate dozens of pages — persisting all
+ * of them bloats the AsyncStorage slot and slows cold-start hydration
+ * for data the user only needs after scrolling anyway. We cap the
+ * persisted snapshot to the first pages; `getNextPageParam` re-derives
+ * the next cursor from the restored pages, so pagination resumes cleanly.
+ */
+const MAX_PERSISTED_PAGES = 2;
+
+function isInfiniteData(data: unknown): data is { pages: unknown[]; pageParams: unknown[] } {
+  return (
+    !!data &&
+    typeof data === 'object' &&
+    Array.isArray((data as { pages?: unknown }).pages) &&
+    Array.isArray((data as { pageParams?: unknown }).pageParams)
+  );
+}
+
+/** Bound an infinite-query payload to the first MAX_PERSISTED_PAGES pages
+ *  (pages + pageParams stay aligned). Non-infinite data passes through. */
+function capInfinitePages(data: unknown): unknown {
+  if (!isInfiniteData(data) || data.pages.length <= MAX_PERSISTED_PAGES) return data;
+  return {
+    ...data,
+    pages: data.pages.slice(0, MAX_PERSISTED_PAGES),
+    pageParams: data.pageParams.slice(0, MAX_PERSISTED_PAGES),
+  };
+}
 
 function firstKey(qk: QueryKey): string | null {
   if (!Array.isArray(qk) || qk.length === 0) return null;
@@ -251,21 +315,41 @@ async function readTokenOrFlush(): Promise<string | null> {
 }
 
 /**
+ * Classification of one stored pair after a hydration attempt:
+ *   - 'ok'      — valid, fresh, whitelisted → written into the QueryClient;
+ *   - 'stale'   — too old / de-whitelisted / search-volatile → safe to GC;
+ *   - 'corrupt' — unparseable or missing fields → safe to GC.
+ * 'ok' carries the first key + storedAt so the variant-cap prune in
+ * `hydrateCache` doesn't have to re-parse the payload.
+ */
+type StoredPairResult =
+  | { status: 'ok'; first: PersistedKey; storedAt: number }
+  | { status: 'stale' }
+  | { status: 'corrupt' };
+
+/**
  * Parse one stored pair and write it into the QueryClient if valid + fresh +
  * whitelisted. Shared by both the priority and background passes so the
- * validation rules (max-age, whitelist, shape) never drift.
+ * validation rules (max-age, whitelist, shape) never drift. The returned
+ * classification feeds the hydration GC (dead slots get multiRemove'd).
  */
-function applyStoredPair(qc: QueryClient, raw: string | null, now: number): void {
-  if (!raw) return;
+function applyStoredPair(qc: QueryClient, raw: string | null, now: number): StoredPairResult {
+  if (!raw) return { status: 'corrupt' };
   try {
     const parsed: StoredEntry = JSON.parse(raw);
-    if (!parsed?.queryKey || parsed.data === undefined) return;
-    if (now - (parsed.storedAt ?? 0) > MAX_STALE_MS) return;
+    if (!parsed?.queryKey || parsed.data === undefined) return { status: 'corrupt' };
+    const storedAt = parsed.storedAt ?? 0;
+    if (now - storedAt > MAX_STALE_MS) return { status: 'stale' };
     const f = firstKey(parsed.queryKey);
-    if (!isPersisted(f)) return;
+    if (!isPersisted(f)) return { status: 'stale' };
+    // Search-volatile variants written by older builds (before the
+    // positional-search guard below existed) must not be resurrected —
+    // classify as stale so the hydration GC drops the slot.
+    if (isSearchVolatile(parsed.queryKey)) return { status: 'stale' };
     qc.setQueryData(parsed.queryKey, parsed.data);
+    return { status: 'ok', first: f, storedAt };
   } catch {
-    // skip corrupted entry
+    return { status: 'corrupt' };
   }
 }
 
@@ -285,8 +369,28 @@ function storageKey(qk: QueryKey): string {
  * call. We still persist the BASE variant (`search === ''`) because
  * that's the snapshot we want on cold start.
  */
+/**
+ * Some keys carry the user-typed search as a POSITIONAL string instead of
+ * a `{ search }` object part — e.g. ['suppliers', 'мас'] and
+ * ['checks-infinite', 'мас', from, to, masterId]. The object-shape loop
+ * below can't see those, so without this index every Журнал / Поставщики
+ * keystroke persisted a full page payload. Maps first key → index of the
+ * search string inside the query key. The empty-search base slot
+ * (`qk[idx] === ''`) still persists.
+ */
+const POSITIONAL_SEARCH_IDX: Record<string, number> = {
+  'checks-infinite': 1,
+  suppliers: 1,
+};
+
 function isSearchVolatile(qk: QueryKey): boolean {
   if (!Array.isArray(qk)) return false;
+  const f = firstKey(qk);
+  const idx = f ? POSITIONAL_SEARCH_IDX[f] : undefined;
+  if (idx !== undefined) {
+    const v = qk[idx];
+    if (typeof v === 'string' && v.length > 0) return true;
+  }
   for (let i = 1; i < qk.length; i++) {
     const part = qk[i];
     if (part && typeof part === 'object' && 'search' in (part as Record<string, unknown>)) {
@@ -323,6 +427,13 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     if (ourKeys.length === 0) return;
     const pairs = await AsyncStorage.multiGet(ourKeys);
     const now = Date.now();
+    // GC bookkeeping (RNPERF: no-eviction fix). Stale / corrupt /
+    // de-whitelisted / search-volatile slots found while hydrating are
+    // batch-removed afterwards so they stop slowing every future cold
+    // start. 'ok' entries keep their storage key + first key + storedAt
+    // for the variant-cap prune below — no payload re-parse needed.
+    const deadKeys: string[] = [];
+    const alive: Array<{ storageKey: string; first: PersistedKey; storedAt: number }> = [];
     // Chunk JSON.parse + setQueryData so we don't hog the JS thread on a
     // cold start. 25+ entries × ~5 KB each can otherwise block UI for ~100ms,
     // dropping the first paint frame. setTimeout(0) yields to the event
@@ -330,12 +441,42 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     const CHUNK = 5;
     for (let i = 0; i < pairs.length; i += CHUNK) {
       const slice = pairs.slice(i, i + CHUNK);
-      for (const [, raw] of slice) {
-        applyStoredPair(qc, raw, now);
+      for (const [skey, raw] of slice) {
+        const result = applyStoredPair(qc, raw, now);
+        if (result.status === 'ok') {
+          alive.push({ storageKey: skey, first: result.first, storedAt: result.storedAt });
+        } else {
+          deadKeys.push(skey);
+        }
       }
       if (i + CHUNK < pairs.length) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
       }
+    }
+
+    // Variant-cap prune: per capped first key keep only the N most-recent
+    // variants on disk (per-day calls, per-month schedule/salary, per-id
+    // detail cards, …). Already-hydrated in-memory copies are untouched —
+    // TanStack's gcTime handles those; this only bounds AsyncStorage growth
+    // so the NEXT cold start reads a bounded key set.
+    const grouped = new Map<PersistedKey, { cap: number; entries: typeof alive }>();
+    for (const entry of alive) {
+      const cap = VARIANT_CAPS[entry.first];
+      if (cap === undefined) continue;
+      const group = grouped.get(entry.first);
+      if (group) group.entries.push(entry);
+      else grouped.set(entry.first, { cap, entries: [entry] });
+    }
+    for (const { cap, entries } of grouped.values()) {
+      if (entries.length <= cap) continue;
+      entries.sort((a, b) => b.storedAt - a.storedAt);
+      for (let i = cap; i < entries.length; i++) {
+        deadKeys.push(entries[i].storageKey);
+      }
+    }
+
+    if (deadKeys.length > 0) {
+      await AsyncStorage.multiRemove(deadKeys).catch(() => {});
     }
   } catch {
     // AsyncStorage unavailable — proceed without hydration
@@ -388,10 +529,7 @@ export async function hydratePriorityCache(qc: QueryClient): Promise<void> {
 
   // Watchdog: never block boot beyond the budget. Whichever settles first wins;
   // any priority key not yet hydrated is still covered by `hydrateCache`.
-  await Promise.race([
-    work,
-    new Promise<void>((resolve) => setTimeout(resolve, PRIORITY_HYDRATE_BUDGET_MS)),
-  ]);
+  await Promise.race([work, new Promise<void>((resolve) => setTimeout(resolve, PRIORITY_HYDRATE_BUDGET_MS))]);
 }
 
 /**
@@ -409,18 +547,49 @@ export async function hydratePriorityCache(qc: QueryClient): Promise<void> {
  *     TanStack fires the `updated` event multiple times per refetch
  *     (status transitions, dataUpdatedAt bumps); we only need to write
  *     once after the last change settles.
- *   - JSON.stringify + AsyncStorage.setItem still run, but only once
- *     per query-key per quiet period.
+ *   - DEFER serialization: the `updated` handler only records a REF to
+ *     the data (no JSON.stringify on the hot path). The single stringify
+ *     per quiet period runs inside the debounced flush, behind
+ *     `InteractionManager.runAfterInteractions`, so it never competes
+ *     with an active gesture / navigation transition for the JS thread.
+ *   - Infinite-query payloads are capped to MAX_PERSISTED_PAGES pages
+ *     before serialization (see `capInfinitePages`).
  */
 export function attachPersistence(qc: QueryClient): () => void {
-  // One pending-write timer per storage key — overwriting the timer for
-  // a given key collapses N "updated" events into a single late write.
-  const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+  // One pending write per storage key — replacing the slot for a given
+  // key collapses N "updated" events into a single late write. We keep a
+  // reference to the data (cheap), not its serialized form.
+  interface PendingWrite {
+    queryKey: QueryKey;
+    data: unknown;
+    storedAt: number;
+    timer: ReturnType<typeof setTimeout>;
+  }
+  const pendingWrites = new Map<string, PendingWrite>();
   const WRITE_DEBOUNCE_MS = 350;
 
-  const flush = (skey: string, payload: string) => {
+  const flush = (skey: string) => {
+    const pending = pendingWrites.get(skey);
     pendingWrites.delete(skey);
-    AsyncStorage.setItem(skey, payload).catch(() => {});
+    if (!pending) return;
+    // Serialize + write AFTER any running interaction (gesture, screen
+    // transition) finishes — a multi-page journal payload can take a few
+    // ms to stringify, enough to drop frames mid-swipe.
+    InteractionManager.runAfterInteractions(() => {
+      let payload: string;
+      try {
+        const entry: StoredEntry = {
+          queryKey: pending.queryKey,
+          data: capInfinitePages(pending.data),
+          storedAt: pending.storedAt,
+        };
+        payload = JSON.stringify(entry);
+      } catch {
+        // Non-serialisable data (circular ref etc.) — skip the write.
+        return;
+      }
+      AsyncStorage.setItem(skey, payload).catch(() => {});
+    });
   };
 
   const unsubscribe = qc.getQueryCache().subscribe((event) => {
@@ -430,29 +599,27 @@ export function attachPersistence(qc: QueryClient): () => void {
     const f = firstKey(query.queryKey);
     if (!isPersisted(f)) return;
     if (query.state.data === undefined) return;
-    // Search-debounced lists (e.g. ['products', { search: 'мас' }])
+    // Search-debounced lists (e.g. ['products', { search: 'мас' }] or the
+    // positional ['suppliers', 'мас'] / ['checks-infinite', 'мас', ...])
     // are NOT persisted — they're transient user input variants.
     // The empty-search variant under the same first-segment IS persisted.
     if (isSearchVolatile(query.queryKey)) return;
 
-    const entry: StoredEntry = {
+    const skey = storageKey(query.queryKey);
+    const existing = pendingWrites.get(skey);
+    if (existing) clearTimeout(existing.timer);
+    pendingWrites.set(skey, {
       queryKey: query.queryKey,
       data: query.state.data,
       storedAt: Date.now(),
-    };
-    const skey = storageKey(query.queryKey);
-    const payload = JSON.stringify(entry);
-
-    const existing = pendingWrites.get(skey);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => flush(skey, payload), WRITE_DEBOUNCE_MS);
-    pendingWrites.set(skey, timer);
+      timer: setTimeout(() => flush(skey), WRITE_DEBOUNCE_MS),
+    });
   });
 
   return () => {
     unsubscribe();
     // Cancel any debounced writes — App is unmounting (HMR / logout etc.)
-    for (const t of pendingWrites.values()) clearTimeout(t);
+    for (const pending of pendingWrites.values()) clearTimeout(pending.timer);
     pendingWrites.clear();
   };
 }

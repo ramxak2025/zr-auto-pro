@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -44,6 +44,11 @@ const paymentLabels: Record<string, string> = {
   warranty: 'Гарантия',
   cash_card: 'Нал/Карта',
 };
+
+// Incremental history rendering (RNPERF-6): the ScrollView is not
+// virtualized, so building 200 CheckRow trees on mount is pure waste —
+// render the first page and grow by another page per «Показать ещё» tap.
+const HISTORY_PAGE = 30;
 
 function formatMoney(v: number): string {
   return (
@@ -195,18 +200,17 @@ export default function ClientDetailScreen() {
   const historyY = useRef<number>(Number.POSITIVE_INFINITY);
   const viewportH = useRef<number>(0);
 
-  // Car modal state
+  // Car modal state. Only the open/close flag + which car is being edited
+  // live here (RNPERF-6) — the form FIELDS live inside <CarFormModal/> so
+  // every keystroke re-renders just the modal, not the whole screen with
+  // its hundreds of check rows. The last submitted values are mirrored
+  // into `carFormRef` (a ref — no re-render) for the duplicate-plate flow.
   const [carModalOpen, setCarModalOpen] = useState(false);
   const [editingCar, setEditingCar] = useState<Car | null>(null);
-  const [plateNumber, setPlateNumber] = useState('');
-  const [plateMode, setPlateMode] = useState<PlateMode>('ru');
-  const [noPlate, setNoPlate] = useState(false);
-  const [makeModel, setMakeModel] = useState('');
-  const [carComment, setCarComment] = useState('');
+  const carFormRef = useRef<CarFormValues | null>(null);
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
-  // Notes editor (owner-only) state — local copy until "Сохранить".
+  // Notes editor (owner-only) — draft state lives inside <NotesEditorModal/>.
   const [notesModalOpen, setNotesModalOpen] = useState(false);
-  const [notesDraft, setNotesDraft] = useState('');
   // Source picker visibility.
   const [sourceOpen, setSourceOpen] = useState(false);
   const [duplicateCar, setDuplicateCar] = useState<{
@@ -242,6 +246,10 @@ export default function ClientDetailScreen() {
   // stays true for the lifetime of the screen — the full query is then
   // the source of truth for analytics + the complete grouped list.
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  // How many history rows are actually MOUNTED (RNPERF-6). The data may
+  // hold up to FULL_LIMIT checks, but the un-virtualized ScrollView only
+  // renders the first page; each «Показать ещё» tap grows it by a page.
+  const [visibleHistoryCount, setVisibleHistoryCount] = useState(HISTORY_PAGE);
 
   // EAGER — the exact key ClientsScreen warms on row press-in. Keep this
   // key + limit in lockstep with ClientsScreen.prefetchClientDetail so a
@@ -279,7 +287,6 @@ export default function ClientDetailScreen() {
   // the «Показать всю историю» affordance spinner state.
   const fullPending = historyExpanded && !fullChecks;
 
-
   // ── Derived analytics (memoised) ──────────────────────────────────
   // Numbers we surface in the hero / analytics sections. Avoid
   // recomputing on every render so the rich detail screen feels
@@ -312,9 +319,8 @@ export default function ClientDetailScreen() {
       const span = sortedDates[sortedDates.length - 1] - sortedDates[0];
       avgIntervalDays = span / (sortedDates.length - 1) / (24 * 60 * 60 * 1000);
     }
-    const nextVisitEta = lastVisit && avgIntervalDays
-      ? new Date(lastVisit.getTime() + avgIntervalDays * 24 * 60 * 60 * 1000)
-      : null;
+    const nextVisitEta =
+      lastVisit && avgIntervalDays ? new Date(lastVisit.getTime() + avgIntervalDays * 24 * 60 * 60 * 1000) : null;
 
     // Top services — name → total revenue, top 3.
     const svcMap = new Map<string, number>();
@@ -344,8 +350,7 @@ export default function ClientDetailScreen() {
     const now = new Date();
     for (const c of list) {
       const d = new Date(c.date);
-      const monthsAgo =
-        (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
+      const monthsAgo = (now.getFullYear() - d.getFullYear()) * 12 + (now.getMonth() - d.getMonth());
       if (monthsAgo >= 0 && monthsAgo < 12) {
         months[11 - monthsAgo] += c.totalRevenue || 0;
       }
@@ -371,14 +376,22 @@ export default function ClientDetailScreen() {
     return checks.filter((c) => c.car?.id === selectedCarId);
   }, [checks, selectedCarId]);
 
-  // Group filtered checks by date for the history section. Memoised
+  // The slice of history rows we actually mount (RNPERF-6). Analytics
+  // upstream still read the FULL list — only the rendered tree is capped.
+  const visibleChecks = useMemo(
+    () => (filteredChecks.length > visibleHistoryCount ? filteredChecks.slice(0, visibleHistoryCount) : filteredChecks),
+    [filteredChecks, visibleHistoryCount],
+  );
+  const hiddenHistoryCount = filteredChecks.length - visibleChecks.length;
+
+  // Group visible checks by date for the history section. Memoised
   // (audit #8) — this used to rebuild on EVERY render (every scroll
   // frame, every state poke), allocating fresh group arrays each time.
-  // Now it only recomputes when the underlying filtered list changes.
+  // Now it only recomputes when the underlying visible list changes.
   const groupedChecks = useMemo(() => {
     const groups: { label: string; checks: Check[] }[] = [];
     let last = '';
-    for (const check of filteredChecks) {
+    for (const check of visibleChecks) {
       const group = formatDateGroup(check.date);
       if (group !== last) {
         groups.push({ label: group, checks: [check] });
@@ -388,7 +401,7 @@ export default function ClientDetailScreen() {
       }
     }
     return groups;
-  }, [filteredChecks]);
+  }, [visibleChecks]);
 
   // Per-car analytics for the «Автомобили» cards (#19.4):
   //  • lastMileage — mileage of the most-recent check for that car;
@@ -468,46 +481,40 @@ export default function ClientDetailScreen() {
 
   const openAddCar = () => {
     setEditingCar(null);
-    setPlateNumber('');
-    setPlateMode('ru');
-    setNoPlate(false);
-    setMakeModel('');
-    setCarComment('');
     setCarModalOpen(true);
   };
 
   const openEditCar = (car: Car) => {
     setEditingCar(car);
-    setPlateNumber(car.plateNumber);
-    // Prefill the mode from the stored plate so a foreign plate opens in
-    // INT mode (and stays editable as foreign instead of being re-masked).
-    setPlateMode(detectPlateMode(car.plateNumber));
-    setNoPlate(!!car.noPlate || !car.plateNumber);
-    setMakeModel(car.makeModel);
-    setCarComment(car.comment || '');
     setCarModalOpen(true);
   };
 
-  // Clean stored plate (empty when «без номеров»). CarPlateField already
-  // applies the RU mask / foreign normalisation, so no re-masking here.
-  const effectivePlate = noPlate ? '' : plateNumber.trim();
-
-  // The car payload sent to backend on both create and update. Plate is
+  // The car payload sent to backend on both create and update — built from
+  // the values the modal handed us on submit (mirrored in carFormRef so the
+  // duplicate-plate retry flow can rebuild the same payload). Plate is
   // keyed by car_id server-side, so editing make/model OR plate via
   // PATCH /cars/:id never orphans check history (#15.3).
-  const buildCarPayload = () => ({
-    plateNumber: effectivePlate,
-    makeModel,
-    comment: carComment || undefined,
-    clientId: id,
-    noPlate,
-  });
+  const buildCarPayload = () => {
+    const form = carFormRef.current;
+    // Clean stored plate (empty when «без номеров»). CarPlateField already
+    // applies the RU mask / foreign normalisation, so no re-masking here.
+    const effectivePlate = !form || form.noPlate ? '' : form.plateNumber.trim();
+    return {
+      plateNumber: effectivePlate,
+      makeModel: form?.makeModel ?? '',
+      comment: form?.carComment ? form.carComment : undefined,
+      clientId: id,
+      noPlate: form?.noPlate ?? false,
+    };
+  };
 
-  const handleCarSubmit = async () => {
+  const handleCarSubmit = async (values: CarFormValues) => {
+    carFormRef.current = values;
     const payload = buildCarPayload();
+    const effectivePlate = payload.plateNumber;
 
     // «Без номеров» or no plate at all → nothing to clash on, save directly.
-    if (noPlate || effectivePlate.length === 0) {
+    if (values.noPlate || effectivePlate.length === 0) {
       if (editingCar) updateCarMutation.mutate({ carId: editingCar.id, data: payload });
       else createCarMutation.mutate(payload);
       return;
@@ -632,13 +639,23 @@ export default function ClientDetailScreen() {
     }
   };
 
-  // Sync notes draft when the underlying client loads so opening the
-  // editor for the first time shows the saved value, not the empty
-  // string we initialised with.
+  // Stable row-open handler (RNPERF-6) — CheckRow is memoised, so the
+  // callback identity must survive re-renders or the memo is useless.
+  const openCheck = useCallback(
+    (checkId: string) => {
+      navigation.navigate('Main', {
+        screen: 'Checks',
+        params: { screen: 'CheckDetail', params: { id: checkId } },
+      });
+    },
+    [navigation],
+  );
+
+  // Switching the car filter collapses the history back to the first
+  // page — the freshly filtered list shouldn't inherit a deep expansion.
   useEffect(() => {
-    if (client?.ownerNotes) setNotesDraft(client.ownerNotes);
-    else setNotesDraft('');
-  }, [client?.ownerNotes]);
+    setVisibleHistoryCount(HISTORY_PAGE);
+  }, [selectedCarId]);
 
   // Scroll to + select the focused car when a caller passes `focusCarId`
   // (e.g. a deep link). Selecting filters the unified «История чеков» to
@@ -674,19 +691,11 @@ export default function ClientDetailScreen() {
   }, [isRetail]);
 
   // ── RETAIL BUYER VIEW (virtual) ────────────────────────────────────
+  // No car filter exists here (selectedCarId is never set), so the
+  // memoised `groupedChecks` / `stats` computed above ARE the retail
+  // data — no per-render regrouping (RNPERF-6).
   if (isRetail) {
-    const retailTotal = (checks || []).reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
-    const retailGrouped: { label: string; checks: Check[] }[] = [];
-    let retailLast = '';
-    for (const check of checks || []) {
-      const group = formatDateGroup(check.date);
-      if (group !== retailLast) {
-        retailGrouped.push({ label: group, checks: [check] });
-        retailLast = group;
-      } else {
-        retailGrouped[retailGrouped.length - 1].checks.push(check);
-      }
-    }
+    const retailTotal = stats.total;
     return (
       <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Розничный покупатель" onBack={() => navigation.goBack()} centerTitle />
@@ -742,7 +751,7 @@ export default function ClientDetailScreen() {
               <Text style={[styles.emptyChecksText, { color: palette.text.secondary }]}>Нет чеков</Text>
             </View>
           ) : (
-            retailGrouped.map((group, gi) => (
+            groupedChecks.map((group, gi) => (
               <View key={group.label + gi}>
                 <View style={styles.dateGroupHeader}>
                   <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
@@ -755,17 +764,28 @@ export default function ClientDetailScreen() {
                     check={check}
                     palette={palette}
                     canViewProfit={canViewProfit}
-                    onPress={() =>
-                      navigation.navigate('Main', {
-                        screen: 'Checks',
-                        params: { screen: 'CheckDetail', params: { id: check.id } },
-                      })
-                    }
+                    onOpen={openCheck}
                   />
                 ))}
               </View>
             ))
           )}
+
+          {hiddenHistoryCount > 0 ? (
+            <TouchableOpacity
+              style={[styles.showAllHistoryBtn, { borderColor: palette.border.subtle }]}
+              activeOpacity={0.7}
+              onPress={() => {
+                haptic('tap');
+                setVisibleHistoryCount((c) => c + HISTORY_PAGE);
+              }}
+            >
+              <Ionicons name="chevron-down" size={15} color={palette.accent.primary} />
+              <Text style={[styles.showAllHistoryText, { color: palette.accent.primary }]}>
+                Показать ещё ({hiddenHistoryCount})
+              </Text>
+            </TouchableOpacity>
+          ) : null}
         </ScrollView>
       </View>
     );
@@ -792,7 +812,9 @@ export default function ClientDetailScreen() {
           viewportH.current = e.nativeEvent.layout.height;
         }}
         onScroll={(e) => maybeExpandHistory(e.nativeEvent.contentOffset.y)}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
       >
         {/* HERO — avatar, name, phone, source badge, first-visit date. */}
         <AnimatedCard
@@ -866,9 +888,7 @@ export default function ClientDetailScreen() {
             disabled={!client.phone}
             onPress={() => {
               haptic('tap');
-              Linking.openURL(whatsappHref(client.phone)).catch(() =>
-                Alert.alert('WhatsApp не установлен'),
-              );
+              Linking.openURL(whatsappHref(client.phone)).catch(() => Alert.alert('WhatsApp не установлен'));
             }}
             palette={palette}
           />
@@ -921,7 +941,10 @@ export default function ClientDetailScreen() {
             {canEditMeta && <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />}
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.metaRow, client.comment ? { borderBottomColor: palette.border.subtle } : { borderBottomWidth: 0 }]}
+            style={[
+              styles.metaRow,
+              client.comment ? { borderBottomColor: palette.border.subtle } : { borderBottomWidth: 0 },
+            ]}
             activeOpacity={canEditMeta ? 0.7 : 1}
             disabled={!canEditMeta}
             onPress={() => setSourceOpen(true)}
@@ -973,9 +996,7 @@ export default function ClientDetailScreen() {
             <View style={[styles.emptyCarsIcon, { backgroundColor: palette.bg.muted }]}>
               <Ionicons name="car-sport-outline" size={22} color={palette.text.tertiary} />
             </View>
-            <Text style={[styles.emptyCarsText, { color: palette.text.secondary }]}>
-              У клиента ещё нет автомобилей
-            </Text>
+            <Text style={[styles.emptyCarsText, { color: palette.text.secondary }]}>У клиента ещё нет автомобилей</Text>
           </View>
         ) : (
           cars.map((car, idx) => {
@@ -1008,110 +1029,113 @@ export default function ClientDetailScreen() {
         {/* ANALYTICS — sparkline + insights */}
         {stats.count > 0 && (
           <>
-          <SectionHeader title="Аналитика" />
-          <AnimatedCard
-            style={[styles.analyticsCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            index={3}
-          >
-            <View style={styles.analyticsHeader}>
-              <Text style={[styles.cardTitle, { color: palette.text.primary }]}>Активность клиента</Text>
-              <View
-                style={[
-                  styles.riskBadge,
-                  {
-                    backgroundColor:
-                      stats.risk === 'lost'
-                        ? colors.red[50]
-                        : stats.risk === 'fade'
-                          ? colors.amber[50]
-                          : colors.green[50],
-                  },
-                ]}
-              >
-                <Ionicons
-                  name={stats.risk === 'ok' ? 'checkmark-circle' : 'alert-circle'}
-                  size={12}
-                  color={
-                    stats.risk === 'lost'
-                      ? colors.red[600]
-                      : stats.risk === 'fade'
-                        ? colors.amber[600]
-                        : colors.green[600]
-                  }
-                />
-                <Text
+            <SectionHeader title="Аналитика" />
+            <AnimatedCard
+              style={[styles.analyticsCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              index={3}
+            >
+              <View style={styles.analyticsHeader}>
+                <Text style={[styles.cardTitle, { color: palette.text.primary }]}>Активность клиента</Text>
+                <View
                   style={[
-                    styles.riskBadgeText,
+                    styles.riskBadge,
                     {
-                      color:
+                      backgroundColor:
                         stats.risk === 'lost'
-                          ? colors.red[700]
+                          ? colors.red[50]
                           : stats.risk === 'fade'
-                            ? colors.amber[700]
-                            : colors.green[700],
+                            ? colors.amber[50]
+                            : colors.green[50],
                     },
                   ]}
                 >
-                  {stats.risk === 'lost'
-                    ? 'Не был более 6 мес'
-                    : stats.risk === 'fade'
-                      ? 'Не был 4+ мес'
-                      : 'Активный'}
-                </Text>
-              </View>
-            </View>
-
-            <Text style={[styles.analyticsCaption, { color: palette.text.tertiary }]}>
-              Выручка по месяцам (12 мес)
-            </Text>
-            <MonthlySparkline months={stats.months} color={palette.accent.primary} />
-
-            <View style={styles.analyticsRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Последний визит</Text>
-                <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
-                  {stats.lastVisit ? formatDate(stats.lastVisit.toISOString()) : '—'}
-                </Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Следующий визит (≈)</Text>
-                <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
-                  {stats.nextVisitEta ? formatDate(stats.nextVisitEta.toISOString()) : '—'}
-                </Text>
-              </View>
-            </View>
-
-            {stats.topServices.length > 0 && (
-              <View style={styles.analyticsBlock}>
-                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Что заказывает чаще всего</Text>
-                {stats.topServices.map(([name, revenue]) => (
-                  <View key={name} style={[styles.serviceRow, { borderBottomColor: palette.border.subtle }]}>
-                    <Text style={[styles.serviceName, { color: palette.text.primary }]} numberOfLines={1}>
-                      {name}
-                    </Text>
-                    <Text style={[styles.serviceRevenue, { color: palette.text.secondary }]}>
-                      {formatMoney(revenue)}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {stats.favoriteMaster && (
-              <View style={styles.analyticsBlock}>
-                <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Любимый мастер</Text>
-                <View style={styles.favMasterRow}>
-                  <Ionicons name="person-circle-outline" size={18} color={palette.text.secondary} />
-                  <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
-                    {stats.favoriteMaster.name}
-                  </Text>
-                  <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>
-                    {stats.favoriteMaster.count} раз
+                  <Ionicons
+                    // ICON-05: ring + inner mark needs ≥13px to stay legible.
+                    name={stats.risk === 'ok' ? 'checkmark-circle' : 'alert-circle'}
+                    size={13}
+                    color={
+                      stats.risk === 'lost'
+                        ? colors.red[600]
+                        : stats.risk === 'fade'
+                          ? colors.amber[600]
+                          : colors.green[600]
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.riskBadgeText,
+                      {
+                        color:
+                          stats.risk === 'lost'
+                            ? colors.red[700]
+                            : stats.risk === 'fade'
+                              ? colors.amber[700]
+                              : colors.green[700],
+                      },
+                    ]}
+                  >
+                    {stats.risk === 'lost'
+                      ? 'Не был более 6 мес'
+                      : stats.risk === 'fade'
+                        ? 'Не был 4+ мес'
+                        : 'Активный'}
                   </Text>
                 </View>
               </View>
-            )}
-          </AnimatedCard>
+
+              <Text style={[styles.analyticsCaption, { color: palette.text.tertiary }]}>
+                Выручка по месяцам (12 мес)
+              </Text>
+              <MonthlySparkline months={stats.months} color={palette.accent.primary} />
+
+              <View style={styles.analyticsRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Последний визит</Text>
+                  <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
+                    {stats.lastVisit ? formatDate(stats.lastVisit.toISOString()) : '—'}
+                  </Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Следующий визит (≈)</Text>
+                  <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
+                    {stats.nextVisitEta ? formatDate(stats.nextVisitEta.toISOString()) : '—'}
+                  </Text>
+                </View>
+              </View>
+
+              {stats.topServices.length > 0 && (
+                <View style={styles.analyticsBlock}>
+                  <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>
+                    Что заказывает чаще всего
+                  </Text>
+                  {stats.topServices.map(([name, revenue]) => (
+                    <View key={name} style={[styles.serviceRow, { borderBottomColor: palette.border.subtle }]}>
+                      <Text style={[styles.serviceName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {name}
+                      </Text>
+                      <Text style={[styles.serviceRevenue, { color: palette.text.secondary }]}>
+                        {formatMoney(revenue)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {stats.favoriteMaster && (
+                <View style={styles.analyticsBlock}>
+                  <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>Любимый мастер</Text>
+                  <View style={styles.favMasterRow}>
+                    <Ionicons name="person-circle-outline" size={18} color={palette.text.secondary} />
+                    <Text style={[styles.analyticsValue, { color: palette.text.primary }]}>
+                      {stats.favoriteMaster.name}
+                    </Text>
+                    <Text style={[styles.analyticsLabel, { color: palette.text.tertiary }]}>
+                      {stats.favoriteMaster.count} раз
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </AnimatedCard>
           </>
         )}
 
@@ -1196,17 +1220,30 @@ export default function ClientDetailScreen() {
                   check={check}
                   palette={palette}
                   canViewProfit={canViewProfit}
-                  onPress={() =>
-                    navigation.navigate('Main', {
-                      screen: 'Checks',
-                      params: { screen: 'CheckDetail', params: { id: check.id } },
-                    })
-                  }
+                  onOpen={openCheck}
                 />
               ))}
             </View>
           ))
         )}
+
+        {/* «Показать ещё» (RNPERF-6) — the data may hold up to 200 checks
+            but only the first page(s) are mounted; this grows the slice. */}
+        {hiddenHistoryCount > 0 ? (
+          <TouchableOpacity
+            style={[styles.showAllHistoryBtn, { borderColor: palette.border.subtle }]}
+            activeOpacity={0.7}
+            onPress={() => {
+              haptic('tap');
+              setVisibleHistoryCount((c) => c + HISTORY_PAGE);
+            }}
+          >
+            <Ionicons name="chevron-down" size={15} color={palette.accent.primary} />
+            <Text style={[styles.showAllHistoryText, { color: palette.accent.primary }]}>
+              Показать ещё ({hiddenHistoryCount})
+            </Text>
+          </TouchableOpacity>
+        ) : null}
 
         {/* «Показать всю историю» affordance (audit #8). Until the full
             history is loaded we render only the eager recent slice; this
@@ -1224,126 +1261,31 @@ export default function ClientDetailScreen() {
             }}
           >
             <Ionicons name="time-outline" size={15} color={palette.accent.primary} />
-            <Text style={[styles.showAllHistoryText, { color: palette.accent.primary }]}>
-              Показать всю историю
-            </Text>
+            <Text style={[styles.showAllHistoryText, { color: palette.accent.primary }]}>Показать всю историю</Text>
           </TouchableOpacity>
         ) : null}
       </ScrollView>
 
-      {/* Car Modal */}
-      <Modal visible={carModalOpen} onClose={closeCarModal} title={editingCar ? 'Редактировать авто' : 'Добавить авто'}>
-        <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Гос. номер</Text>
-          <CarPlateField
-            plate={plateNumber}
-            mode={plateMode}
-            noPlate={noPlate}
-            onChangePlate={setPlateNumber}
-            onChangeMode={setPlateMode}
-            onChangeNoPlate={setNoPlate}
-          />
-        </View>
-        <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Марка и модель</Text>
-          <TextInput
-            value={makeModel}
-            onChangeText={setMakeModel}
-            style={[
-              styles.formInput,
-              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
-            ]}
-            placeholder="Toyota Camry"
-            placeholderTextColor={palette.text.tertiary}
-          />
-        </View>
-        <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
-          <TextInput
-            value={carComment}
-            onChangeText={setCarComment}
-            style={[
-              styles.formInput,
-              {
-                height: 80,
-                textAlignVertical: 'top',
-                backgroundColor: palette.bg.muted,
-                borderColor: palette.border.subtle,
-                color: palette.text.primary,
-              },
-            ]}
-            multiline
-            placeholder="Необязательно"
-            placeholderTextColor={palette.text.tertiary}
-          />
-        </View>
-        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
-          <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeCarModal}>
-            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
-            onPress={handleCarSubmit}
-            disabled={carSubmitting || createCarMutation.isPending || updateCarMutation.isPending}
-          >
-            {carSubmitting || createCarMutation.isPending || updateCarMutation.isPending ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <Text style={styles.submitBtnText}>{editingCar ? 'Сохранить' : 'Добавить'}</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </Modal>
+      {/* Car Modal — form state lives INSIDE (RNPERF-6): keystrokes
+          re-render the modal only, never the check-history tree. */}
+      <CarFormModal
+        visible={carModalOpen}
+        editingCar={editingCar}
+        palette={palette}
+        submitting={carSubmitting || createCarMutation.isPending || updateCarMutation.isPending}
+        onClose={closeCarModal}
+        onSubmit={handleCarSubmit}
+      />
 
-      {/* Notes editor — owner only. */}
-      <Modal visible={notesModalOpen} onClose={() => setNotesModalOpen(false)} title="Заметки владельца">
-        <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
-            Внутренние заметки (видны только владельцу)
-          </Text>
-          <TextInput
-            value={notesDraft}
-            onChangeText={setNotesDraft}
-            style={[
-              styles.formInput,
-              {
-                height: 140,
-                textAlignVertical: 'top',
-                backgroundColor: palette.bg.muted,
-                borderColor: palette.border.subtle,
-                color: palette.text.primary,
-              },
-            ]}
-            multiline
-            maxLength={4000}
-            placeholder="Например: предпочитает Mobil 1, обычно платит картой..."
-            placeholderTextColor={palette.text.tertiary}
-          />
-          <Text style={[styles.helperText, { color: palette.text.tertiary }]}>
-            {notesDraft.length}/4000
-          </Text>
-        </View>
-        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
-          <TouchableOpacity
-            style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
-            onPress={() => setNotesModalOpen(false)}
-            disabled={notesMutation.isPending}
-          >
-            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
-            onPress={() => notesMutation.mutate(notesDraft.trim() ? notesDraft.trim() : null)}
-            disabled={notesMutation.isPending}
-          >
-            {notesMutation.isPending ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <Text style={styles.submitBtnText}>Сохранить</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      </Modal>
+      {/* Notes editor — owner only. Draft state lives INSIDE (RNPERF-6). */}
+      <NotesEditorModal
+        visible={notesModalOpen}
+        initialValue={client.ownerNotes || ''}
+        palette={palette}
+        saving={notesMutation.isPending}
+        onClose={() => setNotesModalOpen(false)}
+        onSave={(text) => notesMutation.mutate(text.trim() ? text.trim() : null)}
+      />
 
       {/* Source picker */}
       <SourcePickerSheet
@@ -1371,10 +1313,8 @@ export default function ClientDetailScreen() {
         visible={!!duplicateCar}
         onClose={() => setDuplicateCar(null)}
         onReassign={handleReassignPlate}
-        onOpenOwner={
-          duplicateCar?.clientId && duplicateCar.clientId !== id ? handleOpenExistingCar : undefined
-        }
-        plate={duplicateCar?.plateNumber || plateNumber}
+        onOpenOwner={duplicateCar?.clientId && duplicateCar.clientId !== id ? handleOpenExistingCar : undefined}
+        plate={duplicateCar?.plateNumber || carFormRef.current?.plateNumber || ''}
         otherCarLabel={duplicateCar?.makeModel || duplicateCar?.plateNumber || 'Автомобиль'}
         otherOwnerName={duplicateCar?.client?.fullName ?? null}
         busy={carSubmitting}
@@ -1417,20 +1357,10 @@ function QuickAction({ icon, label, color, disabled, onPress, palette }: QuickAc
       activeOpacity={0.7}
       disabled={disabled}
     >
-      <View
-        style={[
-          styles.quickActionIcon,
-          { backgroundColor: disabled ? palette.bg.muted : color + '18' },
-        ]}
-      >
+      <View style={[styles.quickActionIcon, { backgroundColor: disabled ? palette.bg.muted : color + '18' }]}>
         <Ionicons name={icon} size={18} color={disabled ? palette.text.tertiary : color} />
       </View>
-      <Text
-        style={[
-          styles.quickActionLabel,
-          { color: disabled ? palette.text.tertiary : palette.text.primary },
-        ]}
-      >
+      <Text style={[styles.quickActionLabel, { color: disabled ? palette.text.tertiary : palette.text.primary }]}>
         {label}
       </Text>
     </TouchableOpacity>
@@ -1489,9 +1419,7 @@ function CarCard({ car, palette, index, spent, lastMileage, canEdit, onEdit, onD
         ) : null}
       </View>
 
-      {car.comment ? (
-        <Text style={[styles.carComment, { color: palette.text.tertiary }]}>{car.comment}</Text>
-      ) : null}
+      {car.comment ? <Text style={[styles.carComment, { color: palette.text.tertiary }]}>{car.comment}</Text> : null}
 
       {/* Stat strip: последний пробег | потрачено на это авто. */}
       <View style={[styles.carStatRow, { borderTopColor: palette.border.subtle }]}>
@@ -1523,9 +1451,14 @@ interface CheckRowProps {
   check: Check;
   palette: ReturnType<typeof useColors>;
   canViewProfit: boolean;
-  onPress: () => void;
+  /** Stable (useCallback) opener keyed by check id — keeps the memo intact. */
+  onOpen: (checkId: string) => void;
 }
-function CheckRow({ check, palette, canViewProfit, onPress }: CheckRowProps) {
+// Memoised (RNPERF-6): with up to 200 rows in an un-virtualized ScrollView,
+// any parent state poke used to re-render every row. All props are stable
+// (`palette` is memoised per theme, `onOpen` is a useCallback, `check`
+// objects keep identity inside the React-Query cache between renders).
+const CheckRow = React.memo(function CheckRow({ check, palette, canViewProfit, onOpen }: CheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = badgeColors[badgeKey];
   return (
@@ -1535,7 +1468,7 @@ function CheckRow({ check, palette, canViewProfit, onPress }: CheckRowProps) {
         { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
         check.isDeferred && styles.checkCardDeferred,
       ]}
-      onPress={onPress}
+      onPress={() => onOpen(check.id)}
       activeOpacity={0.7}
     >
       <View
@@ -1585,9 +1518,7 @@ function CheckRow({ check, palette, canViewProfit, onPress }: CheckRowProps) {
             <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
           ) : null}
           {canViewProfit && check.profit !== undefined ? (
-            <Text
-              style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}
-            >
+            <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
               {check.profit >= 0 ? '+' : ''}
               {formatMoney(check.profit)}
             </Text>
@@ -1595,6 +1526,190 @@ function CheckRow({ check, palette, canViewProfit, onPress }: CheckRowProps) {
         </View>
       </View>
     </TouchableOpacity>
+  );
+});
+
+// ── Form modals (RNPERF-6) ───────────────────────────────────────────
+// The car/notes form FIELDS live here, not on the screen root: a keystroke
+// re-renders only the modal subtree. The screen learns about the values
+// once — on submit.
+
+export interface CarFormValues {
+  plateNumber: string;
+  noPlate: boolean;
+  makeModel: string;
+  carComment: string;
+}
+
+interface CarFormModalProps {
+  visible: boolean;
+  /** Car being edited, or null when adding a new one. */
+  editingCar: Car | null;
+  palette: ReturnType<typeof useColors>;
+  submitting: boolean;
+  onClose: () => void;
+  onSubmit: (values: CarFormValues) => void;
+}
+
+function CarFormModal({ visible, editingCar, palette, submitting, onClose, onSubmit }: CarFormModalProps) {
+  const [plateNumber, setPlateNumber] = useState('');
+  const [plateMode, setPlateMode] = useState<PlateMode>('ru');
+  const [noPlate, setNoPlate] = useState(false);
+  const [makeModel, setMakeModel] = useState('');
+  const [carComment, setCarComment] = useState('');
+
+  // Re-seed the form each time the modal opens. Prefill the mode from the
+  // stored plate so a foreign plate opens in INT mode (and stays editable
+  // as foreign instead of being re-masked).
+  useEffect(() => {
+    if (!visible) return;
+    if (editingCar) {
+      setPlateNumber(editingCar.plateNumber);
+      setPlateMode(detectPlateMode(editingCar.plateNumber));
+      setNoPlate(!!editingCar.noPlate || !editingCar.plateNumber);
+      setMakeModel(editingCar.makeModel);
+      setCarComment(editingCar.comment || '');
+    } else {
+      setPlateNumber('');
+      setPlateMode('ru');
+      setNoPlate(false);
+      setMakeModel('');
+      setCarComment('');
+    }
+  }, [visible, editingCar]);
+
+  return (
+    <Modal visible={visible} onClose={onClose} title={editingCar ? 'Редактировать авто' : 'Добавить авто'}>
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Гос. номер</Text>
+        <CarPlateField
+          plate={plateNumber}
+          mode={plateMode}
+          noPlate={noPlate}
+          onChangePlate={setPlateNumber}
+          onChangeMode={setPlateMode}
+          onChangeNoPlate={setNoPlate}
+        />
+      </View>
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Марка и модель</Text>
+        <TextInput
+          value={makeModel}
+          onChangeText={setMakeModel}
+          style={[
+            styles.formInput,
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+          ]}
+          placeholder="Toyota Camry"
+          placeholderTextColor={palette.text.tertiary}
+        />
+      </View>
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
+        <TextInput
+          value={carComment}
+          onChangeText={setCarComment}
+          style={[
+            styles.formInput,
+            {
+              height: 80,
+              textAlignVertical: 'top',
+              backgroundColor: palette.bg.muted,
+              borderColor: palette.border.subtle,
+              color: palette.text.primary,
+            },
+          ]}
+          multiline
+          placeholder="Необязательно"
+          placeholderTextColor={palette.text.tertiary}
+        />
+      </View>
+      <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+        <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={onClose}>
+          <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
+          onPress={() => onSubmit({ plateNumber, noPlate, makeModel, carComment })}
+          disabled={submitting}
+        >
+          {submitting ? (
+            <ActivityIndicator color={colors.white} size="small" />
+          ) : (
+            <Text style={styles.submitBtnText}>{editingCar ? 'Сохранить' : 'Добавить'}</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+}
+
+interface NotesEditorModalProps {
+  visible: boolean;
+  /** Saved notes — seeds the draft each time the editor opens. */
+  initialValue: string;
+  palette: ReturnType<typeof useColors>;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (text: string) => void;
+}
+
+function NotesEditorModal({ visible, initialValue, palette, saving, onClose, onSave }: NotesEditorModalProps) {
+  const [draft, setDraft] = useState('');
+
+  // Re-seed from the saved value on every open so a cancelled edit
+  // doesn't leak into the next session.
+  useEffect(() => {
+    if (visible) setDraft(initialValue);
+  }, [visible, initialValue]);
+
+  return (
+    <Modal visible={visible} onClose={onClose} title="Заметки владельца">
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+          Внутренние заметки (видны только владельцу)
+        </Text>
+        <TextInput
+          value={draft}
+          onChangeText={setDraft}
+          style={[
+            styles.formInput,
+            {
+              height: 140,
+              textAlignVertical: 'top',
+              backgroundColor: palette.bg.muted,
+              borderColor: palette.border.subtle,
+              color: palette.text.primary,
+            },
+          ]}
+          multiline
+          maxLength={4000}
+          placeholder="Например: предпочитает Mobil 1, обычно платит картой..."
+          placeholderTextColor={palette.text.tertiary}
+        />
+        <Text style={[styles.helperText, { color: palette.text.tertiary }]}>{draft.length}/4000</Text>
+      </View>
+      <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+        <TouchableOpacity
+          style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+          onPress={onClose}
+          disabled={saving}
+        >
+          <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
+          onPress={() => onSave(draft)}
+          disabled={saving}
+        >
+          {saving ? (
+            <ActivityIndicator color={colors.white} size="small" />
+          ) : (
+            <Text style={styles.submitBtnText}>Сохранить</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </Modal>
   );
 }
 
@@ -1842,7 +1957,13 @@ const styles = StyleSheet.create({
   plateBadgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
   carActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[0.5] },
   iconBtn: { padding: spacing[2], borderRadius: borderRadius.md },
-  carComment: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: spacing[2.5], marginLeft: 52, lineHeight: 17 },
+  carComment: {
+    fontSize: fontSize.xs,
+    color: colors.gray[400],
+    marginTop: spacing[2.5],
+    marginLeft: 52,
+    lineHeight: 17,
+  },
 
   // Per-car stat strip — последний пробег | потрачено на это авто.
   carStatRow: {
