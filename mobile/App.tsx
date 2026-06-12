@@ -53,11 +53,18 @@ const queryClient = new QueryClient({
       // Keep query data alive for 30 min after last unmount, so a tab swipe
       // back doesn't lose the cache.
       gcTime: 30 * 60 * 1000,
-      // 1 retry (was 2): with a 10s axios timeout, 2 retries meant a failing
-      // query could hang the UI for ~30s before surfacing. One retry covers
-      // the transient blip; persistent cache + placeholderData keep the
-      // screen populated meanwhile.
-      retry: 1,
+      // Retry policy: NEVER retry 4xx — they are deterministic (403 master
+      // hitting an owner-only endpoint, 404 deleted entity); retrying used
+      // to double the worst-case spinner to 2×timeout for an answer that
+      // cannot change. Retry ONCE for transient failures: network errors
+      // (no err.response), timeouts and 5xx. Persistent cache +
+      // placeholderData keep the screen populated while the retry runs.
+      retry: (failureCount: number, error: Error) => {
+        if (failureCount >= 1) return false;
+        const status = (error as { response?: { status?: number } }).response?.status;
+        if (status !== undefined && status >= 400 && status < 500) return false;
+        return true;
+      },
       refetchOnWindowFocus: false,
       // Global stale-while-revalidate: when a queryKey changes (eg. paging,
       // search, filters), keep showing the previous data until the new one
@@ -85,6 +92,41 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// ── HOT query keys: 30s staleTime ────────────────────────────────────────────
+// The global 2min staleTime is right for reference data (services, categories,
+// users), but the screens users actually WATCH change — journal, склад,
+// dashboard, schedule, suppliers — felt stale: renavigating within 2 minutes
+// showed old numbers with no revalidation. Per-prefix defaults below drop
+// staleTime to 30s for those keys only: persistent cache + global
+// `placeholderData: prev => prev` still paint instantly from the previous
+// data, and a background refetch fires whenever the screen (re)mounts after
+// 30s. setQueryDefaults merges OVER defaultOptions and UNDER per-query
+// options, so placeholderData / retry / gcTime are untouched, and any screen
+// that sets its own staleTime keeps it.
+//
+// Interplay with foregroundRevalidation (attachForegroundRevalidation below):
+// no double-refetch storm. Foreground transitions INVALIDATE their own key
+// whitelist (one coalesced wave per 1s window) — invalidation refetches
+// active queries regardless of staleTime, and a freshly refetched query has
+// dataUpdatedAt ≈ now, so a navigation right after foregrounding is within
+// the 30s window and does NOT trigger a second fetch. The two mechanisms
+// cover disjoint triggers: AppState→active vs. screen remount.
+const HOT_QUERY_PREFIXES: readonly string[][] = [
+  ['checks-infinite'],
+  ['products'],
+  ['all-products-check'],
+  ['clients-infinite'],
+  ['dashboard-v2'],
+  ['dashboard-chart'],
+  ['schedule'],
+  ['schedule-today'],
+  ['warehouse-analytics'],
+  ['suppliers'],
+];
+for (const prefix of HOT_QUERY_PREFIXES) {
+  queryClient.setQueryDefaults(prefix, { staleTime: 30_000 });
+}
 
 // ── Push-tap navigation ──────────────────────────────────────────────────────
 // Root navigation ref lets the notification-response listener (which lives
