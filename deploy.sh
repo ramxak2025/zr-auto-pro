@@ -117,3 +117,5 @@ log "=== Deploy complete ==="
 log ""
 log "IMPORTANT: Data is safe. Backups are in: $REPO_DIR/backups/"
 log "To restore: ./restore.sh"
+
+# deploy trigger: 2026-06-13 (self-heal cycle for early-prune deploy.sh)
