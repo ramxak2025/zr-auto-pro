@@ -108,12 +108,7 @@ const journalKindVisual: Record<
 };
 
 // Outflow rows — amount shown with `-` prefix and red tint.
-const NEGATIVE_KINDS = new Set<JournalKind>([
-  'return_to_supplier',
-  'defect_transfer',
-  'writeoff',
-  'supplier_payment',
-]);
+const NEGATIVE_KINDS = new Set<JournalKind>(['return_to_supplier', 'defect_transfer', 'writeoff', 'supplier_payment']);
 
 // Ordered list of kind chips above the warehouse-docs list. `null` is
 // the "Все" filter — passes no `type` param to the API.
@@ -323,17 +318,10 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
   const visual = journalKindVisual[item.kind];
   const isNegative = NEGATIVE_KINDS.has(item.kind);
   const amountColor =
-    item.kind === 'used_purchase'
-      ? colors.purple[700]
-      : isNegative
-        ? colors.red[600]
-        : colors.green[600];
+    item.kind === 'used_purchase' ? colors.purple[700] : isNegative ? colors.red[600] : colors.green[600];
   // Title prefers payeeName for supplier_payment ("Оплата: ООО Х"),
   // otherwise falls back to the backend-provided title.
-  const title =
-    item.kind === 'supplier_payment' && item.payeeName
-      ? `Оплата: ${item.payeeName}`
-      : item.title;
+  const title = item.kind === 'supplier_payment' && item.payeeName ? `Оплата: ${item.payeeName}` : item.title;
   const subtitle = item.subtitle || journalKindLabels[item.kind];
   return (
     <TouchableOpacity
@@ -357,10 +345,7 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
             <Text style={[styles.warehouseCardTitle, { color: palette.text.primary }]} numberOfLines={1}>
               {title}
             </Text>
-            <Text
-              style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]} numberOfLines={1}>
               {subtitle}
             </Text>
           </View>
@@ -369,9 +354,7 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
               {isNegative ? '-' : '+'}
               {formatMoney(Math.abs(item.amount))}
             </Text>
-            <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>
-              {formatDate(item.occurredAt)}
-            </Text>
+            <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>{formatDate(item.occurredAt)}</Text>
           </View>
         </View>
       </View>
@@ -414,6 +397,11 @@ export default function ChecksScreen() {
   // param. Серверный фильтр потом можно добавить, когда появится
   // отдельный endpoint /checks/returns.
   const [returnsOnly, setReturnsOnly] = useState(false);
+  // «Отложенные» — СЕРВЕРНЫЙ фильтр: бэк принимает аддитивный параметр
+  // isDeferred=true (GET /checks) и отдаёт только отложенные черновики.
+  // В отличие от returnsOnly это не клиентский filter — отложенные могут
+  // не попасть на уже загруженные страницы, поэтому фильтруем на сервере.
+  const [deferredOnly, setDeferredOnly] = useState(false);
   const [showDateFromPicker, setShowDateFromPicker] = useState(false);
   const [showDateToPicker, setShowDateToPicker] = useState(false);
 
@@ -423,7 +411,8 @@ export default function ChecksScreen() {
   const [warehouseKind, setWarehouseKind] = useState<JournalKind | null>(null);
   const [selectedDoc, setSelectedDoc] = useState<JournalDoc | null>(null);
 
-  const activeFilterCount = (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0) + (returnsOnly ? 1 : 0);
+  const activeFilterCount =
+    (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0) + (returnsOnly ? 1 : 0) + (deferredOnly ? 1 : 0);
 
   const { data: allUsers } = useQuery<User[]>({
     queryKey: ['users-for-filter'],
@@ -457,10 +446,16 @@ export default function ChecksScreen() {
     data: checksData,
     isLoading,
     isFetching,
+    isError,
+    isPlaceholderData,
     dataUpdatedAt,
+    refetch,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    fetchPreviousPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
   } = useInfiniteQuery<PaginatedResponse<Check>>({
     // Page key intentionally excludes the page number so all loaded
     // pages share a single cache entry. This is what lets the user
@@ -472,6 +467,11 @@ export default function ChecksScreen() {
       dateFrom ? toISODate(dateFrom) : '',
       dateTo ? toISODate(dateTo) : '',
       filterMasterId,
+      // Слот 5 — фильтр «Отложенные». Всегда присутствует (стабильная
+      // длина ключа); позиции 0..4 НЕ двигать — persistentCache
+      // (POSITIONAL_SEARCH_IDX) опирается на то, что search стоит в
+      // индексе 1. Новые фильтры — только дописывать в хвост.
+      deferredOnly ? 'deferred' : '',
     ],
     initialPageParam: 1,
     queryFn: async ({ pageParam = 1 }) => {
@@ -480,13 +480,31 @@ export default function ChecksScreen() {
       if (dateFrom) params.dateFrom = toISODate(dateFrom);
       if (dateTo) params.dateTo = toISODate(dateTo);
       if (filterMasterId) params.masterId = filterMasterId;
+      // isDeferred — аддитивный серверный параметр: true → только
+      // отложенные. Выключенный фильтр параметр НЕ шлёт (undefined),
+      // поведение и ответ сервера идентичны прежним.
+      if (deferredOnly) params.isDeferred = true;
       const res = await checksApi.getAll(params);
       return res.data;
     },
-    getNextPageParam: (lastPage, allPages) => {
-      const loaded = allPages.reduce((acc, p) => acc + (p?.data?.length ?? 0), 0);
-      return loaded < (lastPage?.total ?? 0) ? allPages.length + 1 : undefined;
+    // ВАЖНО: считаем по НОМЕРУ страницы (lastPageParam), а не по длине
+    // allPages — с maxPages TanStack выбрасывает самые старые страницы
+    // из кеша, и allPages.length перестаёт совпадать с номером последней.
+    getNextPageParam: (lastPage, _allPages, lastPageParam) => {
+      const page = (lastPageParam as number) ?? 1;
+      return page * limit < (lastPage?.total ?? 0) ? page + 1 : undefined;
     },
+    getPreviousPageParam: (_firstPage, _allPages, firstPageParam) => {
+      const page = (firstPageParam as number) ?? 1;
+      return page > 1 ? page - 1 : undefined;
+    },
+    // RNPERF-7: держим в кеше максимум 5 страниц (100 строк). 30-секундный
+    // focus-poll перезапрашивает ТОЛЬКО удержанные страницы — без maxPages
+    // глубокий скролл превращал каждый poll в десятки последовательных
+    // запросов. Выпавшие при глубоком скролле свежие страницы дозагружаются
+    // обратно через fetchPreviousPage (onStartReached на FlashList) при
+    // скролле к началу списка.
+    maxPages: 5,
     // Журнал — холодный список, который меняется редко (новые чеки идут
     // через invalidate в delete/create мутациях). 5 минут «свежо», 30 минут
     // живёт в памяти — возврат с CheckDetail попадает прямо в кеш.
@@ -596,10 +614,7 @@ export default function ChecksScreen() {
   // Flatten all loaded pages — newest first comes from page 1, older
   // appended below from page 2+. The reduce avoids creating a fresh
   // array on every render unless the underlying pages change.
-  const allLoadedChecks = useMemo(
-    () => (checksData?.pages ?? []).flatMap((p) => p?.data ?? []),
-    [checksData?.pages],
-  );
+  const allLoadedChecks = useMemo(() => (checksData?.pages ?? []).flatMap((p) => p?.data ?? []), [checksData?.pages]);
   // Returns-only фильтр работает на уже загруженных страницах. Бэк
   // не отдаёт серверный isReturned-параметр (пока), но `placeholderData`
   // + `checks-infinite` cache держат страницы тёплыми — клиентский
@@ -924,12 +939,7 @@ export default function ChecksScreen() {
               size={14}
               color={returnsOnly ? colors.red[600] : palette.text.secondary}
             />
-            <Text
-              style={[
-                styles.returnsToggleLabel,
-                { color: returnsOnly ? colors.red[700] : palette.text.primary },
-              ]}
-            >
+            <Text style={[styles.returnsToggleLabel, { color: returnsOnly ? colors.red[700] : palette.text.primary }]}>
               Только возвраты
             </Text>
             <View
@@ -938,12 +948,56 @@ export default function ChecksScreen() {
                 { backgroundColor: returnsOnly ? colors.red[500] : palette.border.subtle },
               ]}
             >
+              <View style={[styles.returnsToggleSwitchKnob, returnsOnly && styles.returnsToggleSwitchKnobOn]} />
+            </View>
+          </TouchableOpacity>
+
+          {/* «Отложенные» — серверный фильтр по isDeferred. Тот же
+              toggle-row паттерн, что и «Только возвраты» выше. Красная
+              палитра сознательно совпадает с плашкой «Отложен» на
+              карточках чеков (red[100]/red[700]) — фильтр и статус
+              читаются как одно состояние. */}
+          <TouchableOpacity
+            onPress={() => {
+              setDeferredOnly((v) => !v);
+              setPage(1);
+            }}
+            activeOpacity={0.7}
+            style={[
+              styles.returnsToggleRow,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              deferredOnly && styles.returnsToggleRowActive,
+            ]}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: deferredOnly }}
+            accessibilityLabel="Только отложенные"
+          >
+            <Ionicons name="time-outline" size={14} color={deferredOnly ? colors.red[600] : palette.text.secondary} />
+            <Text style={[styles.returnsToggleLabel, { color: deferredOnly ? colors.red[700] : palette.text.primary }]}>
+              Отложенные
+            </Text>
+            {/* Счётчик «бесплатный»: когда фильтр активен, total первой
+                страницы УЖЕ равен числу отложенных — отдельный запрос
+                ради цифры не нужен. isPlaceholderData-guard прячет цифру,
+                пока на экране данные предыдущего ключа (иначе на миг
+                мелькал бы общий total всех чеков). */}
+            {deferredOnly && !isPlaceholderData && checksData !== undefined && (
               <View
                 style={[
-                  styles.returnsToggleSwitchKnob,
-                  returnsOnly && styles.returnsToggleSwitchKnobOn,
+                  styles.deferredCountBadge,
+                  { backgroundColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100] },
                 ]}
-              />
+              >
+                <Text style={styles.deferredCountBadgeText}>{total}</Text>
+              </View>
+            )}
+            <View
+              style={[
+                styles.returnsToggleSwitch,
+                { backgroundColor: deferredOnly ? colors.red[500] : palette.border.subtle },
+              ]}
+            >
+              <View style={[styles.returnsToggleSwitchKnob, deferredOnly && styles.returnsToggleSwitchKnobOn]} />
             </View>
           </TouchableOpacity>
 
@@ -955,6 +1009,7 @@ export default function ChecksScreen() {
                 setDateTo(null);
                 setFilterMasterId('');
                 setReturnsOnly(false);
+                setDeferredOnly(false);
                 setPage(1);
               }}
             >
@@ -993,6 +1048,10 @@ export default function ChecksScreen() {
       {activeTab === 'checks' ? (
         <>
           {/* Cold-start path:
+             - `isError` И ни одной загруженной страницы (нет даже кеша) ⇒
+               честный error-state с «Повторить» — раньше тут показывался
+               вводящий в заблуждение skeleton/empty. Если кеш есть —
+               показываем список (SWR), фон сам дотянет свежее.
              - `checksData === undefined` ⇒ never fetched yet AND no cached
                value — show skeleton (NOT an EmptyState — empty state on
                cold start was the "пусто" flash the owner reported).
@@ -1000,7 +1059,23 @@ export default function ChecksScreen() {
                legitimate empty state.
              - `checksData` defined ⇒ render the list immediately, even
                while a background refetch is in flight (SWR). */}
-          {checksData === undefined ? (
+          {isError && checksData === undefined ? (
+            // ScrollView-обёртка нужна ради pull-to-refresh: жест должен
+            // работать и из error-state, а не только когда список жив.
+            <ScrollView
+              contentContainerStyle={styles.errorStateWrap}
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+              }
+            >
+              <EmptyState
+                icon="warning"
+                title="Не удалось загрузить журнал"
+                description="Проверьте подключение к интернету и попробуйте ещё раз"
+                action={{ label: 'Повторить', onPress: () => refetch() }}
+              />
+            </ScrollView>
+          ) : checksData === undefined ? (
             <ListSkeleton count={8} />
           ) : checks.length === 0 && !isLoading ? (
             <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
@@ -1026,7 +1101,22 @@ export default function ChecksScreen() {
                 if (hasNextPage && !isFetchingNextPage) fetchNextPage();
               }}
               onEndReachedThreshold={0.6}
+              // Симметричная подгрузка вверх: когда maxPages выкинул
+              // страницу 1 (самые свежие чеки), скролл к началу списка
+              // дотягивает её обратно. FlashList v2 держит позицию через
+              // maintainVisibleContentPosition (включён по умолчанию).
+              onStartReached={() => {
+                if (hasPreviousPage && !isFetchingPreviousPage) fetchPreviousPage();
+              }}
+              onStartReachedThreshold={0.2}
               ItemSeparatorComponent={ListGap}
+              ListHeaderComponent={
+                isFetchingPreviousPage ? (
+                  <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
+                    <ActivityIndicator size="small" color={colors.primary[500]} />
+                  </View>
+                ) : null
+              }
               ListFooterComponent={
                 isFetchingNextPage ? (
                   <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
@@ -1041,11 +1131,7 @@ export default function ChecksScreen() {
         <>
           {/* Kind filter chips — drive `journalApi.warehouseDocs({type})`.
               Horizontal scroll so all 7 chips fit on small screens. */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.kindChipsRow}
-          >
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.kindChipsRow}>
             {KIND_CHIPS.map((chip) => {
               const active = warehouseKind === chip.key;
               const visual = chip.key ? journalKindVisual[chip.key] : null;
@@ -1057,12 +1143,8 @@ export default function ChecksScreen() {
                   style={[
                     styles.kindChip,
                     {
-                      backgroundColor: active
-                        ? (visual?.accentColor ?? colors.primary[600])
-                        : palette.bg.muted,
-                      borderColor: active
-                        ? (visual?.accentColor ?? colors.primary[600])
-                        : palette.border.subtle,
+                      backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
+                      borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
                     },
                   ]}
                   accessibilityRole="button"
@@ -1070,18 +1152,9 @@ export default function ChecksScreen() {
                   accessibilityLabel={chip.label}
                 >
                   {visual && (
-                    <Ionicons
-                      name={visual.icon}
-                      size={12}
-                      color={active ? colors.white : palette.text.secondary}
-                    />
+                    <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
                   )}
-                  <Text
-                    style={[
-                      styles.kindChipText,
-                      { color: active ? colors.white : palette.text.secondary },
-                    ]}
-                  >
+                  <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
                     {chip.label}
                   </Text>
                 </TouchableOpacity>
@@ -1131,11 +1204,7 @@ export default function ChecksScreen() {
             const visual = journalKindVisual[doc.kind];
             const isNegative = NEGATIVE_KINDS.has(doc.kind);
             const amountColor =
-              doc.kind === 'used_purchase'
-                ? colors.purple[700]
-                : isNegative
-                  ? colors.red[600]
-                  : colors.green[600];
+              doc.kind === 'used_purchase' ? colors.purple[700] : isNegative ? colors.red[600] : colors.green[600];
             return (
               <View style={{ gap: spacing[3] }}>
                 <View style={[styles.docDetailHeader, { borderBottomColor: palette.border.subtle }]}>
@@ -1174,9 +1243,7 @@ export default function ChecksScreen() {
                 )}
                 <View style={styles.docDetailRow}>
                   <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Сумма</Text>
-                  <Text
-                    style={[styles.docDetailValue, { color: amountColor, fontWeight: fontWeight.bold }]}
-                  >
+                  <Text style={[styles.docDetailValue, { color: amountColor, fontWeight: fontWeight.bold }]}>
                     {isNegative ? '-' : '+'}
                     {formatMoney(Math.abs(doc.amount))}
                   </Text>
@@ -1330,6 +1397,19 @@ const styles = StyleSheet.create({
   returnsToggleSwitchKnobOn: {
     transform: [{ translateX: 16 }],
   },
+  // Счётчик отложенных на toggle-row «Отложенные». Цветовая пара
+  // red[100]/red[700] — ровно та же, что у плашки «Отложен» на карточке
+  // чека (deferredBadge/deferredText), bg в dark-mode задаётся inline.
+  deferredCountBadge: {
+    minWidth: 20,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    marginRight: spacing[1],
+  },
+  deferredCountBadgeText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.red[700] },
 
   // ── Warehouse kind chips (above the warehouse-docs list) ────────
   // Horizontal scroll row driving `journalApi.warehouseDocs({ type })`.
@@ -1433,6 +1513,11 @@ const styles = StyleSheet.create({
   // height (added inline at the FlashList consumers below to avoid
   // hard-coding the bar height here).
   list: { paddingHorizontal: spacing[4] },
+
+  // Error-state контейнер (чеки не загрузились и кеша нет): растягиваем
+  // ScrollView на весь экран и центрируем EmptyState, чтобы блок стоял
+  // там же, где skeleton/empty — без прыжков layout'а между состояниями.
+  errorStateWrap: { flexGrow: 1, justifyContent: 'center' },
 
   // Date group headers
   dateGroupHeader: {

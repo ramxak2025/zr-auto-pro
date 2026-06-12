@@ -39,14 +39,14 @@ function formatMoney(v: number) {
   return (
     Math.round(v)
       .toString()
-      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD'
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
 }
 
-// \u042D\u043A\u0440\u0430\u043D\u0438\u0440\u0443\u0435\u043C \u043B\u044E\u0431\u043E\u0435 \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u043E\u0435 \u0442\u0435\u043A\u0441\u0442\u043E\u0432\u043E\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435 \u043F\u0435\u0440\u0435\u0434 \u0432\u0441\u0442\u0430\u0432\u043A\u043E\u0439 \u0432 HTML \u0447\u0435\u043A\u0430/PDF.
-// \u0418\u043C\u0435\u043D\u0430 \u043A\u043B\u0438\u0435\u043D\u0442\u0430/\u043A\u043E\u043C\u043F\u0430\u043D\u0438\u0438/\u0430\u0432\u0442\u043E \u0441 \u0441\u0438\u043C\u0432\u043E\u043B\u0430\u043C\u0438 < > & " ' \u0438\u043D\u0430\u0447\u0435 \u043B\u043E\u043C\u0430\u044E\u0442 \u0440\u0430\u0437\u043C\u0435\u0442\u043A\u0443
-// \u0438\u043B\u0438 \u00AB\u0441\u044A\u0435\u0434\u0430\u044E\u0442\u00BB \u0442\u0435\u043A\u0441\u0442 \u0432 \u0441\u0433\u0435\u043D\u0435\u0440\u0438\u0440\u043E\u0432\u0430\u043D\u043D\u043E\u043C PDF. \u041F\u0440\u0438\u043C\u0435\u043D\u044F\u0442\u044C \u043A\u043E \u0412\u0421\u0415\u041C \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F\u043C \u0438\u0437
-// \u0434\u0430\u043D\u043D\u044B\u0445; \u0447\u0438\u0441\u043B\u0430/\u0434\u0430\u0442\u044B, \u043A\u043E\u0442\u043E\u0440\u044B\u0435 \u043C\u044B \u0444\u043E\u0440\u043C\u0430\u0442\u0438\u0440\u0443\u0435\u043C \u0441\u0430\u043C\u0438, \u044D\u043A\u0440\u0430\u043D\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u043D\u0435 \u043D\u0443\u0436\u043D\u043E.
+// Экранируем любое свободное текстовое значение перед вставкой в HTML чека/PDF.
+// Имена клиента/компании/авто с символами < > & " ' иначе ломают разметку
+// или «съедают» текст в сгенерированном PDF. Применять ко ВСЕМ значениям из
+// данных; числа/даты, которые мы форматируем сами, экранировать не нужно.
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -250,8 +250,7 @@ export default function CheckDetailScreen() {
   // к нему доступ. Mapping роли на permission — собственно роли (бэк
   // PermissionGuard не проверяет наш новый endpoint, но UI-уровень
   // отрезает мастеров сразу).
-  const canFileReturn =
-    user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  const canFileReturn = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
   const [returnModalOpen, setReturnModalOpen] = useState(false);
   const [returnScope, setReturnScope] = useState<ReturnScope>('full');
   const [returnDestination, setReturnDestination] = useState<ReturnDestination>('warehouse');
@@ -377,11 +376,11 @@ export default function CheckDetailScreen() {
   const generatePdf = async () => {
     if (!check) return;
     const c = company;
-    // \u0412\u0441\u0435 \u0441\u0442\u0440\u043E\u043A\u043E\u0432\u044B\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F \u043D\u0438\u0436\u0435 \u2014 \u0441\u0432\u043E\u0431\u043E\u0434\u043D\u044B\u0439 \u0442\u0435\u043A\u0441\u0442 \u0438\u0437 \u0434\u0430\u043D\u043D\u044B\u0445; \u044D\u043A\u0440\u0430\u043D\u0438\u0440\u0443\u0435\u043C \u0438\u0445
-    // \u0447\u0435\u0440\u0435\u0437 escapeHtml \u043F\u0435\u0440\u0435\u0434 \u0432\u0441\u0442\u0430\u0432\u043A\u043E\u0439 \u0432 HTML, \u0438\u043D\u0430\u0447\u0435 \u0441\u0438\u043C\u0432\u043E\u043B\u044B < > & " ' \u043B\u043E\u043C\u0430\u044E\u0442
-    // \u0432\u0435\u0440\u0441\u0442\u043A\u0443 \u0447\u0435\u043A\u0430/PDF. \u0427\u0438\u0441\u043B\u0430 \u0438 \u0434\u0430\u0442\u044B \u0444\u043E\u0440\u043C\u0430\u0442\u0438\u0440\u0443\u0435\u043C \u0441\u0430\u043C\u0438 \u2014 \u0438\u0445 \u043D\u0435 \u044D\u043A\u0440\u0430\u043D\u0438\u0440\u0443\u0435\u043C.
-    const companyName = escapeHtml(c?.legalName || c?.name || '\u0410\u0432\u0442\u043E\u0441\u0435\u0440\u0432\u0438\u0441');
-    const inn = c?.inn ? `\u0418\u041D\u041D ${escapeHtml(c.inn)}` : '';
+    // Все строковые значения ниже — свободный текст из данных; экранируем их
+    // через escapeHtml перед вставкой в HTML, иначе символы < > & " ' ломают
+    // верстку чека/PDF. Числа и даты форматируем сами — их не экранируем.
+    const companyName = escapeHtml(c?.legalName || c?.name || 'Автосервис');
+    const inn = c?.inn ? `ИНН ${escapeHtml(c.inn)}` : '';
     const addr = escapeHtml(c?.address || '');
     const phone = escapeHtml(c?.phone || '');
     const footer = escapeHtml(c?.receiptFooter || '');
@@ -415,15 +414,15 @@ export default function CheckDetailScreen() {
         <h2>${companyName}</h2>
         <div class="meta">${[inn, addr, phone].filter(Boolean).join(' | ')}</div>
         <hr/>
-        <div><strong>\u0427\u0435\u043A #${check.number}</strong> \u043E\u0442 ${date}</div>
-        ${check.client ? `<div>\u041A\u043B\u0438\u0435\u043D\u0442: ${escapeHtml(check.client.fullName)}</div>` : '<div>\u041A\u043B\u0438\u0435\u043D\u0442: \u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C</div>'}
-        ${check.car ? `<div>\u0410\u0432\u0442\u043E: ${escapeHtml(check.car.makeModel)} ${escapeHtml(check.car.plateNumber || '')}</div>` : ''}
-        ${check.master ? `<div>\u041C\u0430\u0441\u0442\u0435\u0440: ${escapeHtml(check.master.fullName)}</div>` : ''}
+        <div><strong>Чек #${check.number}</strong> от ${date}</div>
+        ${check.client ? `<div>Клиент: ${escapeHtml(check.client.fullName)}</div>` : '<div>Клиент: Розничный покупатель</div>'}
+        ${check.car ? `<div>Авто: ${escapeHtml(check.car.makeModel)} ${escapeHtml(check.car.plateNumber || '')}</div>` : ''}
+        ${check.master ? `<div>Мастер: ${escapeHtml(check.master.fullName)}</div>` : ''}
         ${
           safeServices.length > 0
             ? `
-          <h3 style="margin:12px 0 4px">\u0423\u0441\u043B\u0443\u0433\u0438</h3>
-          <table><thead><tr><th>\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435</th><th style="text-align:right">\u041A\u043E\u043B.</th><th style="text-align:right">\u0421\u0443\u043C\u043C\u0430</th></tr></thead>
+          <h3 style="margin:12px 0 4px">Услуги</h3>
+          <table><thead><tr><th>Название</th><th style="text-align:right">Кол.</th><th style="text-align:right">Сумма</th></tr></thead>
           <tbody>${servicesHtml}</tbody></table>
         `
             : ''
@@ -431,15 +430,15 @@ export default function CheckDetailScreen() {
         ${
           safeProducts.length > 0
             ? `
-          <h3 style="margin:12px 0 4px">\u0422\u043E\u0432\u0430\u0440\u044B</h3>
-          <table><thead><tr><th>\u041D\u0430\u0437\u0432\u0430\u043D\u0438\u0435</th><th style="text-align:right">\u041A\u043E\u043B.</th><th style="text-align:right">\u0421\u0443\u043C\u043C\u0430</th></tr></thead>
+          <h3 style="margin:12px 0 4px">Товары</h3>
+          <table><thead><tr><th>Название</th><th style="text-align:right">Кол.</th><th style="text-align:right">Сумма</th></tr></thead>
           <tbody>${productsHtml}</tbody></table>
         `
             : ''
         }
         <hr/>
-        ${(check.discount ?? 0) > 0 ? `<div>\u0421\u043A\u0438\u0434\u043A\u0430: -${formatMoney(check.discount ?? 0)}</div>` : ''}
-        <div class="total">\u0418\u0422\u041E\u0413\u041E: ${formatMoney(check.totalRevenue)}</div>
+        ${(check.discount ?? 0) > 0 ? `<div>Скидка: -${formatMoney(check.discount ?? 0)}</div>` : ''}
+        <div class="total">ИТОГО: ${formatMoney(check.totalRevenue)}</div>
         <div style="font-size:11px;color:#666;text-align:right">${escapeHtml(paymentLabels[check.paymentMethod] || check.paymentMethod)}</div>
         ${footer ? `<div class="footer">${footer}</div>` : ''}
       </body></html>
@@ -450,26 +449,73 @@ export default function CheckDetailScreen() {
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
           mimeType: 'application/pdf',
-          dialogTitle: `\u0427\u0435\u043A #${check.number}`,
+          dialogTitle: `Чек #${check.number}`,
         });
       } else {
-        Alert.alert('PDF \u0441\u043E\u0437\u0434\u0430\u043D', uri);
+        Alert.alert('PDF создан', uri);
       }
     } catch {
-      Alert.alert(
-        '\u041E\u0448\u0438\u0431\u043A\u0430',
-        '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043E\u0437\u0434\u0430\u0442\u044C PDF',
-      );
+      Alert.alert('Ошибка', 'Не удалось создать PDF');
     }
   };
 
   const deleteMutation = useMutation({
     mutationFn: () => checksApi.remove(id),
     onSuccess: () => {
+      haptic('success');
+      // Журнал живёт на ['checks-infinite'], дашборд и касса — на своих
+      // ключах. Инвалидируем все потребители, иначе удалённый чек
+      // продолжает висеть в списках до ручного pull-to-refresh.
+      // ['products'] / ['low-stock'] сознательно НЕ трогаем: бэкенд при
+      // удалении чека остатки на склад не возвращает.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      // Чека больше нет — выкидываем его деталку из кеша, чтобы повторное
+      // открытие по stale-ссылке не отрисовало удалённые данные.
+      queryClient.removeQueries({ queryKey: ['check', id] });
       navigation.goBack();
     },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить чек');
+    },
   });
+
+  // ── «Принять оплату» по отложенному чеку ─────────────────────────
+  // Web-parity: frontend CheckDetailPage делает PATCH { isDeferred: false }
+  // — чек закрывается и попадает в выручку. paymentStatus НЕ шлём:
+  // бэкенд сам выводит статус из isDeferred. Доступно только с
+  // permission checks_edit (та же гейтовка, что и у кнопки «Изменить»).
+  const acceptPaymentMutation = useMutation({
+    mutationFn: () => checksApi.update(id, { isDeferred: false }),
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['check', id] });
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось принять оплату');
+    },
+  });
+
+  const handleAcceptPayment = () => {
+    if (!check) return;
+    haptic('select');
+    Alert.alert('Принять оплату по чеку?', `Чек #${check.number} на ${formatMoney(check.totalRevenue)} будет закрыт.`, [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Принять', onPress: () => acceptPaymentMutation.mutate() },
+    ]);
+  };
 
   // ── Return mutation ──────────────────────────────────────────────
   // POST /checks/:id/returns. На бэке атомарно:
@@ -631,12 +677,7 @@ export default function CheckDetailScreen() {
   };
 
   if (isLoading) return <LoadingSpinner />;
-  if (!check)
-    return (
-      <Text style={{ padding: 20, textAlign: 'center' }}>
-        {'\u0427\u0435\u043A \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D'}
-      </Text>
-    );
+  if (!check) return <Text style={{ padding: 20, textAlign: 'center' }}>{'Чек не найден'}</Text>;
 
   // Возвращённые чеки заморожены: ни редактировать, ни удалять, ни
   // оформлять второй возврат. Permission остаётся, но UI его подавляет —
@@ -648,7 +689,7 @@ export default function CheckDetailScreen() {
   const canViewProfit = hasPermission('profit_view');
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = badgeColors[badgeKey];
-  const isDeferred = (check as any).isDeferred;
+  const isDeferred = !!check.isDeferred;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
@@ -660,7 +701,7 @@ export default function CheckDetailScreen() {
         <View style={styles.headerCenter}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flexWrap: 'wrap' }}>
             <Text style={[styles.headerTitle, { color: palette.text.primary }]}>
-              {'\u0427\u0435\u043A'} #{check.number}
+              {'Чек'} #{check.number}
             </Text>
             {isReturned && (
               <View style={styles.returnedHeaderBadge}>
@@ -708,18 +749,14 @@ export default function CheckDetailScreen() {
           {canDelete && (
             <TouchableOpacity
               onPress={() => {
-                Alert.alert(
-                  '\u0423\u0434\u0430\u043B\u0438\u0442\u044C?',
-                  '\u042D\u0442\u043E \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 \u043D\u0435\u043E\u0431\u0440\u0430\u0442\u0438\u043C\u043E',
-                  [
-                    { text: '\u041E\u0442\u043C\u0435\u043D\u0430', style: 'cancel' },
-                    {
-                      text: '\u0423\u0434\u0430\u043B\u0438\u0442\u044C',
-                      style: 'destructive',
-                      onPress: () => deleteMutation.mutate(),
-                    },
-                  ],
-                );
+                Alert.alert('Удалить?', 'Это действие необратимо', [
+                  { text: 'Отмена', style: 'cancel' },
+                  {
+                    text: 'Удалить',
+                    style: 'destructive',
+                    onPress: () => deleteMutation.mutate(),
+                  },
+                ]);
               }}
               style={[styles.actionBtn, { backgroundColor: colors.red[50] }]}
             >
@@ -756,7 +793,7 @@ export default function CheckDetailScreen() {
             <Text
               style={[styles.statusChipText, isDeferred ? { color: colors.amber[600] } : { color: colors.green[700] }]}
             >
-              {isDeferred ? '\u041E\u0442\u043B\u043E\u0436\u0435\u043D' : '\u0417\u0430\u043A\u0440\u044B\u0442'}
+              {isDeferred ? 'Отложен' : 'Закрыт'}
             </Text>
           </View>
           <View style={[styles.paymentChip, { backgroundColor: badge.bg, borderColor: badge.bg }]}>
@@ -781,6 +818,31 @@ export default function CheckDetailScreen() {
           <Text style={[styles.timeChip, { color: palette.text.tertiary }]}>{formatTime(check.date)}</Text>
         </View>
 
+        {/* «Принять оплату» — one-tap закрытие отложенного чека.
+            Видна только при isDeferred и только с permission checks_edit
+            (canEdit уже включает !isReturned — возвращённый чек заморожен).
+            Web-parity: PATCH { isDeferred: false }, как на сайте. */}
+        {canEdit && isDeferred && (
+          <TouchableOpacity
+            style={styles.acceptPaymentBtn}
+            onPress={handleAcceptPayment}
+            disabled={acceptPaymentMutation.isPending}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Принять оплату"
+            accessibilityState={{ disabled: acceptPaymentMutation.isPending }}
+          >
+            {acceptPaymentMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <>
+                <Ionicons name="cash-outline" size={17} color={colors.white} />
+                <Text style={styles.acceptPaymentBtnText}>Принять оплату</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
+
         {/* Client & info — modern glassmorphism style card */}
         <View style={[styles.infoCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <TouchableOpacity
@@ -795,8 +857,7 @@ export default function CheckDetailScreen() {
             <View style={styles.infoContent}>
               <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Клиент</Text>
               <Text style={[styles.infoValue, { color: palette.text.primary }]}>
-                {check.client?.fullName ??
-                  '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}
+                {check.client?.fullName ?? 'Розничный покупатель'}
               </Text>
             </View>
             {check.clientId ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
@@ -871,9 +932,7 @@ export default function CheckDetailScreen() {
 
         {/* Contextual Knowledge Base — regulations / typical works for this
             car make + intake-handover checklists. Self-hides when empty. */}
-        {check.car && (
-          <KnowledgeForCarRow makeModel={check.car.makeModel} navigation={navigation} palette={palette} />
-        )}
+        {check.car && <KnowledgeForCarRow makeModel={check.car.makeModel} navigation={navigation} palette={palette} />}
 
         {/* Comment */}
         {check.comment && (
@@ -1244,9 +1303,7 @@ export default function CheckDetailScreen() {
                       <Text style={[styles.returnLineName, { color: palette.text.primary }]} numberOfLines={1}>
                         {s.name}
                       </Text>
-                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>
-                        Услуга · из {max}
-                      </Text>
+                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>Услуга · из {max}</Text>
                     </View>
                   </TouchableOpacity>
                   {row.selected && (
@@ -1296,9 +1353,7 @@ export default function CheckDetailScreen() {
                       <Text style={[styles.returnLineName, { color: palette.text.primary }]} numberOfLines={1}>
                         {p.name}
                       </Text>
-                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>
-                        Товар · из {max}
-                      </Text>
+                      <Text style={[styles.returnLineSub, { color: palette.text.tertiary }]}>Товар · из {max}</Text>
                     </View>
                   </TouchableOpacity>
                   {row.selected && (
@@ -1323,7 +1378,7 @@ export default function CheckDetailScreen() {
                 </View>
               );
             })}
-            {((check.services?.length ?? 0) + (check.products?.length ?? 0)) === 0 && (
+            {(check.services?.length ?? 0) + (check.products?.length ?? 0) === 0 && (
               <Text style={{ textAlign: 'center', color: palette.text.tertiary, paddingVertical: spacing[3] }}>
                 Нет позиций для частичного возврата.
               </Text>
@@ -1520,6 +1575,26 @@ const styles = StyleSheet.create({
   },
   paymentChipText: { fontSize: 12, fontWeight: fontWeight.medium },
   timeChip: { fontSize: 12, marginLeft: 'auto' },
+
+  // «Принять оплату» — primary CTA для отложенного чека. Зелёная,
+  // во всю ширину, в стиле существующих primary-кнопок экрана
+  // (returnSubmitBtn): сплошная заливка + белый semibold текст +
+  // ActivityIndicator на время запроса.
+  acceptPaymentBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.green[600],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+    shadowColor: colors.green[700],
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  acceptPaymentBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
 
   // Info card
   infoCard: {
