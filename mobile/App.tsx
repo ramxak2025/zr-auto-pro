@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StatusBar } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Alert, StatusBar } from 'react-native';
+import { CommonActions, NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
+import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import NetInfo from '@react-native-community/netinfo';
 import * as Font from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -14,9 +15,22 @@ import { BroadcastNotificationProvider } from './src/contexts/BroadcastNotificat
 import AppNavigator from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
+import OfflineBanner from './src/components/OfflineBanner';
 import { colors } from './src/theme';
+import { haptic } from './src/platform/haptics';
 import { hydrateCache, hydratePriorityCache, attachPersistence } from './src/utils/persistentCache';
 import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
+
+// Wire TanStack Query's onlineManager to the real device connectivity
+// (NetInfo). Without this RN has no `online`/`offline` browser events, so
+// React Query would consider the app permanently online: offline queries
+// would burn their retry and error out instead of pausing, and the
+// OfflineBanner below would have no source of truth.
+onlineManager.setEventListener((setOnline) =>
+  NetInfo.addEventListener((state) => {
+    setOnline(!!state.isConnected);
+  }),
+);
 
 // Configure how notifications are handled when the app is in the foreground.
 // Must be set before any notification arrives — top-level call outside component.
@@ -51,8 +65,70 @@ const queryClient = new QueryClient({
       // single biggest perceptible-perf win — search/pager swaps feel native.
       placeholderData: (prev: unknown) => prev,
     },
+    mutations: {
+      // Mutations must FAIL FAST when offline instead of pausing forever:
+      // with the default networkMode 'online' an offline mutate() never
+      // settles, so every button gated on `isPending` would hang until the
+      // network returns. 'always' lets axios fail immediately → onError.
+      networkMode: 'always',
+      // Global fallback for the many mutations without a local onError —
+      // a write that silently dies (offline, 500, validation) is the worst
+      // failure mode for учёт. A mutation that defines its own onError
+      // OVERRIDES this default, so there are never double alerts.
+      onError: (err: unknown) => {
+        haptic('error');
+        const e = err as { response?: { data?: { message?: string | string[] } }; message?: string };
+        const raw = e?.response?.data?.message;
+        const serverMsg = Array.isArray(raw) ? raw.join('\n') : raw;
+        Alert.alert('Ошибка', serverMsg || e?.message || 'Не удалось выполнить действие');
+      },
+    },
   },
 });
+
+// ── Push-tap navigation ──────────────────────────────────────────────────────
+// Root navigation ref lets the notification-response listener (which lives
+// OUTSIDE the navigator tree) deep-link into the app. `CheckDetail` is NOT
+// registered on the root stack — it lives inside the Checks tab's nested
+// stack (ChecksStack), so we navigate Main → Checks → CheckDetail; the tab
+// bar stays visible, exactly like opening a check from Журнал by hand.
+const navigationRef = createNavigationContainerRef();
+
+// Cold-start queue: a tap on a push can arrive before the navigator has
+// mounted (auth still resolving). Park the checkId and flush it in onReady.
+let pendingCheckId: string | null = null;
+
+// Dedupe guard — the same response can surface both via the live listener
+// and via getLastNotificationResponseAsync() on cold start.
+let lastHandledNotificationId: string | null = null;
+
+function openCheckFromPush(checkId: string): void {
+  if (!navigationRef.isReady()) {
+    pendingCheckId = checkId;
+    return;
+  }
+  navigationRef.dispatch(
+    CommonActions.navigate('Main', {
+      screen: 'Checks',
+      params: { screen: 'CheckDetail', params: { id: checkId } },
+    }),
+  );
+}
+
+function handleNotificationResponse(response: Notifications.NotificationResponse): void {
+  const id = response.notification.request.identifier;
+  if (id && id === lastHandledNotificationId) return;
+  lastHandledNotificationId = id;
+  const data = response.notification.request.content.data as Record<string, unknown>;
+  // When the notification carries a checkId, navigate to that check.
+  if (data?.checkId) {
+    openCheckFromPush(String(data.checkId));
+  }
+  // Tapped superadmin broadcast while backgrounded: no navigation needed —
+  // the BroadcastNotificationProvider re-fetches unseen broadcasts whenever
+  // the app returns to the foreground (AppState → 'active'). Bringing the
+  // app forward via the tap therefore surfaces the modal on its own.
+}
 
 export default function App() {
   const [cacheReady, setCacheReady] = useState(false);
@@ -123,25 +199,18 @@ export default function App() {
 
   // Notification response listener — handles taps on push notifications
   // while the app is backgrounded or cold-started from a notification.
+  // The actual navigation lives in handleNotificationResponse above (root
+  // navigationRef + cold-start queue). getLastNotificationResponseAsync
+  // covers the killed-app case, where the live listener can miss the tap
+  // that launched the process; the identifier dedupe inside the handler
+  // makes the two paths safe to run together.
   useEffect(() => {
-    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response.notification.request.content.data as Record<string, unknown>;
-      // When the notification carries a checkId, navigate to that check.
-      // We use console.log here because the navigation ref is not yet
-      // available at the App level; screens pick up deep links via the
-      // URL scheme instead. Non-critical — no alert on failure.
-      if (data?.checkId) {
-        console.log('[Push] Notification tapped with checkId:', data.checkId);
-      }
-      // Tapped superadmin broadcast while backgrounded: there's no nav ref
-      // here to push a screen, but the BroadcastNotificationProvider re-fetches
-      // unseen broadcasts whenever the app returns to the foreground (AppState
-      // → 'active'). Bringing the app forward via the tap therefore surfaces
-      // the modal on its own — no extra handling needed at this level.
-      if (data?.type === 'superadmin_broadcast') {
-        console.log('[Push] Broadcast tapped — provider will surface it on foreground');
-      }
-    });
+    const sub = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (response) handleNotificationResponse(response);
+      })
+      .catch(() => {});
     return () => sub.remove();
   }, []);
 
@@ -223,6 +292,16 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
           <SalaryNotificationProvider>
             <BroadcastNotificationProvider>
               <NavigationContainer
+                ref={navigationRef}
+                onReady={() => {
+                  // Flush a push-tap that arrived before the navigator
+                  // mounted (cold start from a notification).
+                  if (pendingCheckId) {
+                    const id = pendingCheckId;
+                    pendingCheckId = null;
+                    openCheckFromPush(id);
+                  }
+                }}
                 theme={{
                   dark: mode === 'dark',
                   colors: {
@@ -247,6 +326,9 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
                   translucent
                 />
                 {fontsReady && <AppNavigator />}
+                {/* Offline strip mounts BEFORE the splash so the splash
+                    still covers it during boot. Renders null while online. */}
+                <OfflineBanner />
                 {showSplash && <SplashOverlay />}
               </NavigationContainer>
             </BroadcastNotificationProvider>

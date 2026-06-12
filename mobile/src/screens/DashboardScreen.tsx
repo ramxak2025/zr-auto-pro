@@ -6,12 +6,20 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Alert,
   RefreshControl,
   Dimensions,
-  PanResponder,
   Platform,
 } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming, Easing } from 'react-native-reanimated';
+import Animated, {
+  useAnimatedStyle,
+  useAnimatedProps,
+  useSharedValue,
+  withTiming,
+  Easing,
+  runOnJS,
+} from 'react-native-reanimated';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import CachedImage from '../components/CachedImage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,6 +38,7 @@ import {
   usersApi,
   reportsApi,
   warehouseAnalyticsApi,
+  productsApi,
 } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -40,6 +49,7 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import FreshnessBadge from '../components/FreshnessBadge';
+import QueryErrorState from '../components/QueryErrorState';
 import type {
   SalarySummary,
   TodayEmployeeStatus,
@@ -49,13 +59,20 @@ import type {
   RecentReview,
   WarehouseSummary,
   ReorderItem,
+  Product,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { updateWidgetData } from '../utils/widgetBridge';
 import { haptic } from '../platform/haptics';
+import { toLocalISODate } from '../utils/dates';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+
+// Scrub line + dots графика — анимируются через useAnimatedProps на UI-потоке
+// (RNPERF-11). Те же animated-SVG обёртки, что и в StatsRadar (Polygon).
+const AnimatedSvgLine = Animated.createAnimatedComponent(Line);
+const AnimatedSvgCircle = Animated.createAnimatedComponent(Circle);
 
 // Width of each x-axis label box. Each label is absolutely positioned
 // at `pointX - X_AXIS_LABEL_W / 2` so its centre aligns with the point.
@@ -236,6 +253,20 @@ function OwnerHero({ name }: { name: string }) {
   // tuned in `theme/palette.ts`.
   const { palette } = useThemeMode();
   const heroColors = palette.heroGradient;
+
+  // M7: запрос упал и кэша нет (true cold-start failure) — честный
+  // error-state вместо нулевой «прибыли». Пока есть прошлые данные,
+  // глобальный stale-while-revalidate продолжает их показывать.
+  if (v2.isError && v2.data === undefined) {
+    return (
+      <AnimatedCard index={0} style={[styles.heroCard, { backgroundColor: palette.bg.card }]}>
+        <QueryErrorState
+          description="Показатели за сегодня недоступны. Проверьте соединение."
+          onRetry={() => v2.refetch()}
+        />
+      </AnimatedCard>
+    );
+  }
 
   return (
     <AnimatedCard index={0} style={styles.heroCard}>
@@ -423,6 +454,17 @@ function KpiStrip() {
     const now = new Date();
     return `${months[now.getMonth()]} ${now.getFullYear()}`;
   }, []);
+
+  // M7: без кэша и с упавшим запросом KPI-тайлы рисовали нули — владелец
+  // принимал бы «0 ₽ оборота» за правду. Показываем error-state с retry.
+  if (month.isError && c === undefined) {
+    return (
+      <View>
+        <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>{monthHeader}</Text>
+        <QueryErrorState description="Показатели месяца недоступны" onRetry={() => month.refetch()} />
+      </View>
+    );
+  }
 
   return (
     <View>
@@ -616,7 +658,7 @@ function OwnerAnalyticsChart() {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const palette = useColors();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['dashboard-chart', period, offset],
     queryFn: async () => (await checksApi.getDashboardChart(period, offset)).data,
     staleTime: 30_000,
@@ -629,9 +671,16 @@ function OwnerAnalyticsChart() {
   // burning JS-thread cycles for no visible effect. Removed.
   const pointsLen = data?.points?.length ?? 0;
 
+  // RNPERF-11: позиция скраба живёт в shared value и двигается целиком на
+  // UI-потоке (Gesture.Pan + useAnimatedProps). -1 = скраб скрыт. JS-state
+  // `selectedIdx` обновляется через runOnJS ТОЛЬКО при смене индекса — он
+  // нужен лишь текстовым значениям под графиком, не линии/точкам.
+  const scrubIdx = useSharedValue(-1);
+
   useEffect(() => {
+    scrubIdx.value = -1;
     setSelectedIdx((prev) => (prev === null ? prev : null));
-  }, [period, offset, pointsLen]);
+  }, [period, offset, pointsLen, scrubIdx]);
 
   const handlePeriodChange = (p: ChartPeriod) => {
     setPeriod(p);
@@ -742,26 +791,77 @@ function OwnerAnalyticsChart() {
     [profVals, svgW, svgH, overallMax],
   );
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => points.length > 1,
-        onMoveShouldSetPanResponder: () => points.length > 1,
-        onPanResponderGrant: (e) => {
-          const x = e.nativeEvent.locationX;
-          const clamped = Math.max(0, Math.min(svgW, x));
-          const idx = Math.round((clamped / svgW) * (points.length - 1));
-          setSelectedIdx(idx);
-        },
-        onPanResponderMove: (e) => {
-          const x = e.nativeEvent.locationX;
-          const clamped = Math.max(0, Math.min(svgW, x));
-          const idx = Math.round((clamped / svgW) * (points.length - 1));
-          setSelectedIdx(idx);
-        },
-      }),
-    [points.length, svgW],
+  // RNPERF-11: бывший PanResponder гонял каждое move-событие через JS-мост и
+  // дёргал setState на каждый пиксель — при занятом JS-потоке скраб ронял
+  // кадры. Теперь Gesture.Pan() — worklet: индекс считается на UI-потоке,
+  // линия/точки двигаются через useAnimatedProps без участия JS. runOnJS
+  // зовётся ТОЛЬКО когда индекс реально сменился (для текстовых значений).
+  const pointsCount = points.length;
+
+  // Прекомпьют координат точек — worklet'ы читают готовые массивы (копия
+  // уезжает на UI-поток при пересоздании worklet'а, т.е. при смене данных).
+  const xs = useMemo(
+    () => points.map((_: unknown, i: number) => (pointsCount > 1 ? (i / (pointsCount - 1)) * svgW : 0)),
+    [points, pointsCount, svgW],
   );
+  const revYs = useMemo(
+    () => revVals.map((v: number) => svgH - (v / overallMax) * (svgH * 0.85) - 4),
+    [revVals, svgH, overallMax],
+  );
+  const profYs = useMemo(
+    () => profVals.map((v: number) => svgH - (v / overallMax) * (svgH * 0.85) - 4),
+    [profVals, svgH, overallMax],
+  );
+
+  const scrubGesture = useMemo(() => {
+    const moveTo = (x: number) => {
+      'worklet';
+      if (pointsCount < 2) return;
+      const clamped = Math.max(0, Math.min(svgW, x));
+      const idx = Math.round((clamped / svgW) * (pointsCount - 1));
+      if (idx !== scrubIdx.value) {
+        scrubIdx.value = idx;
+        runOnJS(setSelectedIdx)(idx);
+      }
+    };
+    return (
+      Gesture.Pan()
+        // minDistance(0) — скраб появляется сразу на touch-down (как раньше
+        // onPanResponderGrant) и перехватывает жест у родительского ScrollView,
+        // идентично прежнему onStartShouldSetPanResponder: true.
+        .minDistance(0)
+        .maxPointers(1)
+        .shouldCancelWhenOutside(false)
+        .enabled(pointsCount > 1)
+        .onBegin((e) => {
+          moveTo(e.x);
+        })
+        .onUpdate((e) => {
+          moveTo(e.x);
+        })
+    );
+    // setSelectedIdx стабилен (useState), scrubIdx — shared value.
+  }, [pointsCount, svgW, scrubIdx]);
+
+  // Скраб-линия и точки всегда смонтированы; видимость и позиция управляются
+  // с UI-потока. opacity 0 при scrubIdx < 0 — поведение идентично прежнему
+  // условному рендеру `selPoint !== null && <Line/>`.
+  const scrubLineProps = useAnimatedProps(() => {
+    const i = scrubIdx.value;
+    const valid = i >= 0 && i < xs.length;
+    const x = valid ? xs[i] : 0;
+    return { x1: x, x2: x, opacity: valid ? 1 : 0 };
+  });
+  const scrubRevDotProps = useAnimatedProps(() => {
+    const i = scrubIdx.value;
+    const valid = i >= 0 && i < revYs.length;
+    return { cx: valid ? xs[i] : 0, cy: valid ? revYs[i] : 0, opacity: valid ? 1 : 0 };
+  });
+  const scrubProfDotProps = useAnimatedProps(() => {
+    const i = scrubIdx.value;
+    const valid = i >= 0 && i < profYs.length;
+    return { cx: valid ? xs[i] : 0, cy: valid ? profYs[i] : 0, opacity: valid ? 1 : 0 };
+  });
 
   // ─────────────────────────────────────────────────────────────────────
   // Race-safe scrub state.
@@ -772,14 +872,11 @@ function OwnerAnalyticsChart() {
   // stale, now-out-of-range index — returning `undefined`. The previous
   // code only null-checked, so `selPoint.revenue` crashed.
   //
-  // We coalesce undefined to null here so every downstream read is safe,
-  // and re-clamp `selX` to the new array length to avoid drawing the
-  // scrub line off-canvas in the same intermediate frame.
+  // We coalesce undefined to null here so every downstream read is safe.
+  // (Геометрия скраб-линии/точек больше не считается здесь — она живёт в
+  // useAnimatedProps выше и сама клампится к актуальной длине массивов.)
   const safeSelectedIdx = selectedIdx !== null && selectedIdx >= 0 && selectedIdx < points.length ? selectedIdx : null;
   const selPoint = safeSelectedIdx !== null ? points[safeSelectedIdx] : null;
-  const selX = safeSelectedIdx !== null && points.length > 1 ? (safeSelectedIdx / (points.length - 1)) * svgW : 0;
-  const selRevY = selPoint ? svgH - ((selPoint.revenue || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
-  const selProfY = selPoint ? svgH - ((selPoint.profit || 0) / overallMax) * (svgH * 0.85) - 4 : 0;
 
   const displayRevenue = selPoint ? selPoint.revenue || 0 : totalRevenue;
   const displayProfit = selPoint ? selPoint.profit || 0 : totalProfit;
@@ -873,76 +970,97 @@ function OwnerAnalyticsChart() {
         })}
       </View>
 
-      {isLoading ? (
+      {isError && data === undefined ? (
+        // M7: график упал без кэша — не рисуем пустую «нулевую» кривую.
+        <QueryErrorState description="График недоступен. Проверьте соединение." onRetry={() => refetch()} />
+      ) : isLoading ? (
         <View style={{ height: svgH, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator color={colors.primary[500]} />
         </View>
       ) : points.length > 1 ? (
         <View style={styles.chartBody}>
-          <View style={{ height: svgH, width: svgW, position: 'relative' }} {...panResponder.panHandlers}>
-            <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
-              <Defs>
-                <SvgGrad id="revGradLight" x1="0" y1="0" x2="0" y2="1">
-                  <Stop offset="0%" stopColor={colors.primary[500]} stopOpacity={0.34} />
-                  <Stop offset="100%" stopColor={colors.primary[500]} stopOpacity={0} />
-                </SvgGrad>
-                <SvgGrad id="profGradLight" x1="0" y1="0" x2="0" y2="1">
-                  <Stop offset="0%" stopColor={colors.cyan[400]} stopOpacity={0.2} />
-                  <Stop offset="100%" stopColor={colors.cyan[400]} stopOpacity={0} />
-                </SvgGrad>
-              </Defs>
-              {[0.25, 0.5, 0.75].map((pct) => (
-                <Line
-                  key={pct}
-                  x1={0}
-                  y1={svgH * (1 - pct)}
-                  x2={svgW}
-                  y2={svgH * (1 - pct)}
-                  stroke={palette.border.subtle}
-                  strokeWidth={1}
-                />
-              ))}
-              <Path d={revAreaPath} fill="url(#revGradLight)" />
-              <Path
-                d={revLinePath}
-                stroke={colors.primary[600]}
-                strokeWidth={3}
-                strokeLinecap="round"
-                fill="none"
-              />
-              <Path d={profAreaPath} fill="url(#profGradLight)" />
-              <Path
-                d={profLinePath}
-                stroke={colors.cyan[600]}
-                strokeWidth={2}
-                strokeLinecap="round"
-                fill="none"
-                strokeDasharray="4,4"
-              />
-              {selPoint !== null && (
-                <>
-                  <Line
-                    x1={selX}
+          {/* Локальный GestureHandlerRootView — в App.tsx нет корневого
+              (тот же приём, что BottomSheet внутри Modal). Для вложенного
+              использования это обычный View, оркестрирующий RNGH-жесты
+              своего поддерева. */}
+          <GestureHandlerRootView>
+            <GestureDetector gesture={scrubGesture}>
+              <View style={{ height: svgH, width: svgW, position: 'relative' }}>
+                <Svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
+                  <Defs>
+                    <SvgGrad id="revGradLight" x1="0" y1="0" x2="0" y2="1">
+                      <Stop offset="0%" stopColor={colors.primary[500]} stopOpacity={0.34} />
+                      <Stop offset="100%" stopColor={colors.primary[500]} stopOpacity={0} />
+                    </SvgGrad>
+                    <SvgGrad id="profGradLight" x1="0" y1="0" x2="0" y2="1">
+                      <Stop offset="0%" stopColor={colors.cyan[400]} stopOpacity={0.2} />
+                      <Stop offset="100%" stopColor={colors.cyan[400]} stopOpacity={0} />
+                    </SvgGrad>
+                  </Defs>
+                  {[0.25, 0.5, 0.75].map((pct) => (
+                    <Line
+                      key={pct}
+                      x1={0}
+                      y1={svgH * (1 - pct)}
+                      x2={svgW}
+                      y2={svgH * (1 - pct)}
+                      stroke={palette.border.subtle}
+                      strokeWidth={1}
+                    />
+                  ))}
+                  <Path d={revAreaPath} fill="url(#revGradLight)" />
+                  <Path
+                    d={revLinePath}
+                    stroke={colors.primary[600]}
+                    strokeWidth={3}
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                  <Path d={profAreaPath} fill="url(#profGradLight)" />
+                  <Path
+                    d={profLinePath}
+                    stroke={colors.cyan[600]}
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    fill="none"
+                    strokeDasharray="4,4"
+                  />
+                  {/* Скраб-линия + точки: всегда смонтированы, позиция и
+                      видимость управляются worklet'ами на UI-потоке —
+                      ни одного JS-вызова на move-событие. */}
+                  <AnimatedSvgLine
+                    animatedProps={scrubLineProps}
                     y1={0}
-                    x2={selX}
                     y2={svgH}
                     stroke={colors.primary[400]}
                     strokeWidth={1}
                     strokeDasharray="3,3"
                   />
-                  <Circle cx={selX} cy={selRevY} r={5.5} fill={colors.primary[600]} stroke="white" strokeWidth={2} />
-                  <Circle cx={selX} cy={selProfY} r={4} fill={colors.cyan[600]} stroke="white" strokeWidth={1.5} />
-                </>
-              )}
-            </Svg>
+                  <AnimatedSvgCircle
+                    animatedProps={scrubRevDotProps}
+                    r={5.5}
+                    fill={colors.primary[600]}
+                    stroke="white"
+                    strokeWidth={2}
+                  />
+                  <AnimatedSvgCircle
+                    animatedProps={scrubProfDotProps}
+                    r={4}
+                    fill={colors.cyan[600]}
+                    stroke="white"
+                    strokeWidth={1.5}
+                  />
+                </Svg>
 
-            {/* The floating tooltip that previously overlaid the scrubbed
-                point (date + revenue + profit) was removed per owner —
-                the exact same numbers are already displayed in the stats
-                row just below the chart, so the overlay was duplicating
-                information and obscuring the curve. The scrub line +
-                circles remain to indicate which point is selected. */}
-          </View>
+                {/* The floating tooltip that previously overlaid the scrubbed
+                    point (date + revenue + profit) was removed per owner —
+                    the exact same numbers are already displayed in the stats
+                    row just below the chart, so the overlay was duplicating
+                    information and obscuring the curve. The scrub line +
+                    circles remain to indicate which point is selected. */}
+              </View>
+            </GestureDetector>
+          </GestureHandlerRootView>
 
           {/* X-axis ticks. Each label is positioned absolutely so its
               center sits exactly on the data point's x-coordinate —
@@ -991,7 +1109,13 @@ function OwnerAnalyticsChart() {
               {selPoint ? formatPointDate(selPoint.date).toUpperCase() : 'ИТОГО ЗА ПЕРИОД'}
             </Text>
             {selPoint !== null && (
-              <TouchableOpacity onPress={() => setSelectedIdx(null)} hitSlop={8}>
+              <TouchableOpacity
+                onPress={() => {
+                  scrubIdx.value = -1;
+                  setSelectedIdx(null);
+                }}
+                hitSlop={8}
+              >
                 <Text style={styles.scopeBarClearLight}>сбросить</Text>
               </TouchableOpacity>
             )}
@@ -1152,7 +1276,10 @@ function OnShiftSnapshot() {
 function CallsSnapshot() {
   const navigation = useNavigation<any>();
   const palette = useColors();
-  const today = new Date().toISOString().slice(0, 10);
+  // LOCAL date — `toISOString()` is UTC: after local midnight (and before
+  // UTC midnight) the widget showed YESTERDAY's calls in RU timezones.
+  // Must stay in sync with the ['calls-summary', today] login prefetch.
+  const today = toLocalISODate();
   const { data, isLoading } = useQuery({
     queryKey: ['calls-summary', today],
     queryFn: async () => (await callsApi.getCalls({ date: today })).data.summary,
@@ -1413,8 +1540,22 @@ function CashPositionCard() {
   const warranty = data?.cashPosition.warranty ?? 0;
   const total = data?.cashPosition.total ?? 0;
 
-  const rows: { key: 'cash' | 'card' | 'warranty'; label: string; value: number; icon: keyof typeof Ionicons.glyphMap; color: string; bg: string }[] = [
-    { key: 'cash', label: 'Наличные', value: cash, icon: 'cash-outline', color: colors.green[600], bg: colors.green[50] },
+  const rows: {
+    key: 'cash' | 'card' | 'warranty';
+    label: string;
+    value: number;
+    icon: keyof typeof Ionicons.glyphMap;
+    color: string;
+    bg: string;
+  }[] = [
+    {
+      key: 'cash',
+      label: 'Наличные',
+      value: cash,
+      icon: 'cash-outline',
+      color: colors.green[600],
+      bg: colors.green[50],
+    },
     { key: 'card', label: 'На карте', value: card, icon: 'card-outline', color: colors.blue[600], bg: colors.blue[50] },
     {
       key: 'warranty',
@@ -1491,7 +1632,10 @@ function MarginCard() {
   const chipBg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : palette.bg.muted;
 
   return (
-    <AnimatedCard index={6} style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+    <AnimatedCard
+      index={6}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
       <View style={styles.ownerCardHeader}>
         <View style={[styles.ownerCardIcon, { backgroundColor: colors.green[50] }]}>
           <Ionicons name="stats-chart-outline" size={16} color={colors.green[600]} />
@@ -1516,9 +1660,7 @@ function MarginCard() {
               size={12}
               color={chipColor}
             />
-            <Text style={[styles.marginChipText, { color: chipColor }]}>
-              {Math.abs(change).toFixed(0)}%
-            </Text>
+            <Text style={[styles.marginChipText, { color: chipColor }]}>{Math.abs(change).toFixed(0)}%</Text>
           </View>
         )}
       </View>
@@ -1556,7 +1698,10 @@ function DeferredCard() {
   if (!data) {
     if (isLoading)
       return (
-        <AnimatedCard index={7} style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+        <AnimatedCard
+          index={7}
+          style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
           <Skeleton width={'70%'} height={20} radius={6} />
         </AnimatedCard>
       );
@@ -1594,7 +1739,8 @@ function DeferredCard() {
         <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 'auto' }} />
       </View>
       <Text style={[styles.deferredMain, { color: palette.text.primary }]}>
-        <Text style={[styles.deferredAccent, { color: accentColor }]}>{count}</Text> {count === 1 ? 'чек' : count < 5 ? 'чека' : 'чеков'} на{' '}
+        <Text style={[styles.deferredAccent, { color: accentColor }]}>{count}</Text>{' '}
+        {count === 1 ? 'чек' : count < 5 ? 'чека' : 'чеков'} на{' '}
         <Text style={[styles.deferredAccent, { color: accentColor }]}>{formatMoney(sum)}</Text>
       </Text>
       <Text style={[styles.deferredCaption, { color: palette.text.tertiary }]}>ждут оплаты</Text>
@@ -1707,9 +1853,7 @@ function WarehouseAnalyticsWidget() {
             <Text style={[styles.warehouseHeroValue, { color: palette.text.primary }]} numberOfLines={1}>
               {formatMoney(totalValue)}
             </Text>
-            <Text style={[styles.warehouseHeroCaption, { color: palette.text.tertiary }]}>
-              Капитал в товаре
-            </Text>
+            <Text style={[styles.warehouseHeroCaption, { color: palette.text.tertiary }]}>Капитал в товаре</Text>
           </View>
           {summary && (
             <View style={[styles.warehouseDeltaChip, { backgroundColor: deltaBg }]}>
@@ -1736,9 +1880,7 @@ function WarehouseAnalyticsWidget() {
           {isLoading ? (
             <Skeleton width={60} height={18} radius={6} />
           ) : (
-            <Text style={[styles.warehouseStatValue, { color: palette.text.primary }]}>
-              {summary?.itemsCount ?? 0}
-            </Text>
+            <Text style={[styles.warehouseStatValue, { color: palette.text.primary }]}>{summary?.itemsCount ?? 0}</Text>
           )}
         </View>
         <View style={[styles.warehouseStatCell, styles.warehouseStatCellRight]}>
@@ -1759,9 +1901,7 @@ function WarehouseAnalyticsWidget() {
       {/* Reorder forecast */}
       <View style={styles.warehouseReorderHeader}>
         <Text style={styles.warehouseReorderEmoji}>🤖</Text>
-        <Text style={[styles.warehouseReorderTitle, { color: palette.text.secondary }]}>
-          Рекомендуем заказать
-        </Text>
+        <Text style={[styles.warehouseReorderTitle, { color: palette.text.secondary }]}>Рекомендуем заказать</Text>
       </View>
       {forecastQuery.isLoading && reorderTop.length === 0 ? (
         <View style={{ gap: spacing[1.5] }}>
@@ -1772,9 +1912,7 @@ function WarehouseAnalyticsWidget() {
       ) : reorderTop.length === 0 ? (
         <View style={styles.warehouseReorderEmpty}>
           <Ionicons name="checkmark-circle" size={18} color={colors.green[500]} />
-          <Text style={[styles.warehouseReorderEmptyText, { color: palette.text.tertiary }]}>
-            Запасы в норме
-          </Text>
+          <Text style={[styles.warehouseReorderEmptyText, { color: palette.text.tertiary }]}>Запасы в норме</Text>
         </View>
       ) : (
         <View style={{ gap: spacing[1.5] }}>
@@ -1788,16 +1926,10 @@ function WarehouseAnalyticsWidget() {
             return (
               <View
                 key={item.productId}
-                style={[
-                  styles.warehouseReorderRow,
-                  { backgroundColor: palette.bg.muted, borderLeftColor: urgencyBar },
-                ]}
+                style={[styles.warehouseReorderRow, { backgroundColor: palette.bg.muted, borderLeftColor: urgencyBar }]}
               >
                 <View style={{ flex: 1 }}>
-                  <Text
-                    style={[styles.warehouseReorderName, { color: palette.text.primary }]}
-                    numberOfLines={1}
-                  >
+                  <Text style={[styles.warehouseReorderName, { color: palette.text.primary }]} numberOfLines={1}>
                     {item.name}
                   </Text>
                   <Text style={[styles.warehouseReorderMeta, { color: palette.text.tertiary }]}>
@@ -1812,6 +1944,69 @@ function WarehouseAnalyticsWidget() {
           })}
         </View>
       )}
+    </AnimatedCard>
+  );
+}
+
+// ── 4b. Заканчиваются товары ────────────────────────────────────────────────
+// M10: ['low-stock'] греется в prefetchAfterLogin, зеркалится в persistent
+// cache и ревалидируется на foreground — но до сих пор ни один экран его не
+// читал. Компактная карточка: до 3 названий + бейдж «ещё N». Пустой список
+// или недоступный запрос → null (нулевая стоимость в layout'е). Тап → таб
+// «Склад». Рендерится только в AdminDashboard — там же, где остальная
+// складская аналитика (мастеру управление запасами не показываем).
+function LowStockCard() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  // Ключ/фабрика 1-в-1 как в AuthContext.prefetchAfterLogin — иначе кэш мимо.
+  const { data } = useQuery<Product[]>({
+    queryKey: ['low-stock'],
+    queryFn: async () => (await productsApi.getLowStock()).data,
+    staleTime: 60_000,
+  });
+
+  const items = data ?? [];
+  if (items.length === 0) return null;
+
+  const top = items.slice(0, 3);
+  const rest = items.length - top.length;
+
+  return (
+    <AnimatedCard
+      index={9}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={() => {
+        haptic('tap');
+        // Таб «Склад» — как KpiStrip ходит в таб «Журнал» ('Checks').
+        navigation.navigate('Main', { screen: 'Products' });
+      }}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: colors.red[50] }]}>
+          <Ionicons name="alert-circle" size={16} color={colors.red[500]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЗАКАНЧИВАЮТСЯ ТОВАРЫ</Text>
+        <View style={styles.lowStockHeaderRight}>
+          {rest > 0 && (
+            <View style={[styles.lowStockBadge, { backgroundColor: colors.red[50] }]}>
+              <Text style={styles.lowStockBadgeText}>ещё {rest}</Text>
+            </View>
+          )}
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </View>
+      </View>
+      <View style={{ gap: spacing[1.5] }}>
+        {top.map((p) => (
+          <View key={p.id} style={styles.lowStockRow}>
+            <Text style={[styles.lowStockName, { color: palette.text.primary }]} numberOfLines={1}>
+              {p.name}
+            </Text>
+            <Text style={styles.lowStockQty}>
+              {p.stock} {p.unit || 'шт'}
+            </Text>
+          </View>
+        ))}
+      </View>
     </AnimatedCard>
   );
 }
@@ -2056,22 +2251,14 @@ function ClientsNewVsReturningCard() {
                   return (
                     <TouchableOpacity
                       key={off}
-                      style={[
-                        styles.dayChip,
-                        { backgroundColor: active ? colors.primary[600] : palette.bg.muted },
-                      ]}
+                      style={[styles.dayChip, { backgroundColor: active ? colors.primary[600] : palette.bg.muted }]}
                       onPress={() => {
                         haptic('tap');
                         setDayOffset(off);
                       }}
                       activeOpacity={0.7}
                     >
-                      <Text
-                        style={[
-                          styles.dayChipText,
-                          { color: active ? colors.white : palette.text.secondary },
-                        ]}
-                      >
+                      <Text style={[styles.dayChipText, { color: active ? colors.white : palette.text.secondary }]}>
                         {formatDayLabel(off)}
                       </Text>
                     </TouchableOpacity>
@@ -2214,11 +2401,7 @@ function BestDayOfWeekCard() {
               const h = maxRev > 0 ? Math.max((rev / maxRev) * (H - 18), 2) : 2;
               const isBest = wd === best;
               const isWorst = wd === worst;
-              const fill = isBest
-                ? colors.green[500]
-                : isWorst
-                  ? colors.orange[500]
-                  : colors.primary[300];
+              const fill = isBest ? colors.green[500] : isWorst ? colors.orange[500] : colors.primary[300];
               return (
                 <View
                   key={wd}
@@ -2238,9 +2421,7 @@ function BestDayOfWeekCard() {
                       backgroundColor: fill,
                     }}
                   />
-                  <Text style={[styles.weekdayLabel, { color: palette.text.tertiary }]}>
-                    {WEEKDAY_SHORT[wd]}
-                  </Text>
+                  <Text style={[styles.weekdayLabel, { color: palette.text.tertiary }]}>{WEEKDAY_SHORT[wd]}</Text>
                 </View>
               );
             })}
@@ -2511,13 +2692,20 @@ function MonthForecastCard() {
           <Ionicons
             name={delta.tone === 'up' ? 'arrow-up' : delta.tone === 'down' ? 'arrow-down' : 'remove'}
             size={12}
-            color={delta.tone === 'up' ? colors.green[700] : delta.tone === 'down' ? colors.red[700] : palette.text.tertiary}
+            color={
+              delta.tone === 'up' ? colors.green[700] : delta.tone === 'down' ? colors.red[700] : palette.text.tertiary
+            }
           />
           <Text
             style={[
               styles.forecastChipText,
               {
-                color: delta.tone === 'up' ? colors.green[700] : delta.tone === 'down' ? colors.red[700] : palette.text.tertiary,
+                color:
+                  delta.tone === 'up'
+                    ? colors.green[700]
+                    : delta.tone === 'down'
+                      ? colors.red[700]
+                      : palette.text.tertiary,
               },
             ]}
           >
@@ -2569,6 +2757,7 @@ function AdminDashboard({ name }: { name: string }) {
       <MarginCard />
       <DeferredCard />
       <WarehouseAnalyticsWidget />
+      <LowStockCard />
       <ClientsNewVsReturningCard />
       <CallFunnelWidget />
       <RetentionCard />
@@ -2603,6 +2792,16 @@ function ShiftControl() {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
     },
+    // Без onError мастер жал «Открыть смену», запрос молча умирал (offline /
+    // 500), спиннер исчезал — и человек был уверен, что смена открыта.
+    onError: (err: unknown) => {
+      haptic('error');
+      const e = err as { response?: { data?: { message?: string } }; message?: string };
+      Alert.alert(
+        'Ошибка',
+        e?.response?.data?.message || e?.message || 'Не удалось открыть смену. Проверьте соединение.',
+      );
+    },
   });
 
   const closeShift = useMutation({
@@ -2610,6 +2809,14 @@ function ShiftControl() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shifts'] });
       queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+    },
+    onError: (err: unknown) => {
+      haptic('error');
+      const e = err as { response?: { data?: { message?: string } }; message?: string };
+      Alert.alert(
+        'Ошибка',
+        e?.response?.data?.message || e?.message || 'Не удалось закрыть смену. Проверьте соединение.',
+      );
     },
   });
 
@@ -3816,6 +4023,41 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1,
     textTransform: 'uppercase',
+  },
+
+  // ── Заканчиваются товары (M10) ────────────────────────────────────────────
+  lowStockHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginLeft: 'auto',
+  },
+  lowStockBadge: {
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  lowStockBadgeText: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    color: colors.red[600],
+  },
+  lowStockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+  },
+  lowStockName: {
+    flex: 1,
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+  },
+  lowStockQty: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    color: colors.red[600],
+    fontVariant: ['tabular-nums'],
   },
 
   // Hero — additional rows

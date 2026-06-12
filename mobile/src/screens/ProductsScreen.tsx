@@ -40,7 +40,9 @@ import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
 import type { Product, PaginatedResponse, StockMovement, Warehouse } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -276,22 +278,10 @@ export default function ProductsScreen() {
 
   const [search, setSearch] = useState('');
   const limit = 500;
-  // Slim list payload (audit #5): the warehouse list + its row component
-  // only render these columns. Asking the backend's `?fields=` projection
-  // (backend/src/common/field-filter.ts) for exactly this set drops the
-  // heaviest part of the response — the `bundle_items` JSONB, plus the
-  // nested supplier object and other unrendered columns. The full product
-  // shape (with bundleItems) is still fetched separately by CheckCreate /
-  // the picker via their own `['all-products-check']` query, so nothing
-  // downstream loses data. Field names are the camelCase keys produced by
-  // the backend's `mapProduct`, because `?fields=` filters the mapped
-  // object, not raw DB columns.
-  //
-  // NOTE: this is a constant, intentionally NOT part of the query KEY — a
-  // parallel agent owns prefetch keyed on ['products', { search, limit,
-  // warehouseId }] and the key shape must stay byte-for-byte identical.
-  const PRODUCT_LIST_FIELDS =
-    'id,name,stock,minStock,sellPrice,costPrice,photo,category,unit,warehouseId,supplierId,warrantyDays,barcode';
+  // Slim list payload (audit #5) — `?fields=` projection. The field set now
+  // lives in src/constants/productFields.ts (PRODUCT_LIST_FIELDS), shared
+  // with the AuthContext login prefetch so the warmed cache entry is
+  // byte-identical to what this screen fetches itself.
   const [refreshing, setRefreshing] = useState(false);
   // activePath теперь живёт в route.params, чтобы каждый уровень папки был
   // отдельным push в native stack. iOS edge-swipe слева делает pop —
@@ -328,6 +318,9 @@ export default function ProductsScreen() {
   >([]);
   const [inventoryReason, setInventoryReason] = useState('');
   const [showInventoryPicker, setShowInventoryPicker] = useState(false);
+  // Non-null while the sequential per-item inventory commit runs —
+  // drives the «N из M…» counter on the submit button and blocks re-entry.
+  const [inventoryCommitProgress, setInventoryCommitProgress] = useState<{ done: number; total: number } | null>(null);
 
   // Inventory folder navigation (separate from main warehouse)
   const [invActivePath, setInvActivePath] = useState<string[]>([]);
@@ -507,37 +500,52 @@ export default function ProductsScreen() {
   const createMutation = useMutation({
     mutationFn: (d: any) => productsApi.create(d),
     onSuccess: () => {
+      haptic('success');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      // Product picker in \u041A\u0430\u0441\u0441\u0430 reads the full list under its own key \u2014
+      // keep it in sync, otherwise the picker shows stale price/stock.
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       closeModal();
     },
-    onError: () =>
+    onError: () => {
+      haptic('error');
       Alert.alert(
         '\u041E\u0448\u0438\u0431\u043A\u0430',
         '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0438 \u0442\u043E\u0432\u0430\u0440\u0430',
-      ),
+      );
+    },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => productsApi.update(id, data),
     onSuccess: () => {
+      haptic('success');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       closeModal();
     },
-    onError: () =>
+    onError: () => {
+      haptic('error');
       Alert.alert(
         '\u041E\u0448\u0438\u0431\u043A\u0430',
         '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438',
-      ),
+      );
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => productsApi.remove(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['products'] }),
-    onError: () =>
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+    },
+    onError: () => {
+      haptic('error');
       Alert.alert(
         '\u041E\u0448\u0438\u0431\u043A\u0430',
         '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u0438',
-      ),
+      );
+    },
   });
 
   // Optimistic stock update \u2014 applies the new value to every cached
@@ -578,6 +586,7 @@ export default function ProductsScreen() {
       return { prev };
     },
     onError: (err: any, _vars, ctx) => {
+      haptic('error');
       ctx?.prev.forEach(([key, val]) => queryClient.setQueryData(key, val));
       Alert.alert(
         '\u041E\u0448\u0438\u0431\u043A\u0430',
@@ -587,6 +596,7 @@ export default function ProductsScreen() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
     },
   });
 
@@ -1004,7 +1014,75 @@ export default function ProductsScreen() {
     setShowInventoryModal(true);
   };
 
+  // Inventory commit is a sequence of independent per-item server calls —
+  // NOT a transaction. A mid-loop failure used to abort the whole batch
+  // silently (items before the failure were committed, the rest were not,
+  // and the user only saw a generic error). Now every item is attempted,
+  // failures are collected and can be retried without re-sending the
+  // items that already landed on the server.
+  const commitInventoryItems = async (
+    toCommit: { productId: string; name: string; currentStock: number; actualStock: string }[],
+    totals: { shortageTotal: number; excessTotal: number; sessionCount: number },
+  ) => {
+    setInventoryCommitProgress({ done: 0, total: toCommit.length });
+    const failed: typeof toCommit = [];
+    let firstErrorMsg = '';
+    try {
+      for (let i = 0; i < toCommit.length; i++) {
+        const item = toCommit[i];
+        try {
+          await productsApi.updateStock(item.productId, {
+            type: 'inventory' as const,
+            quantity: Number(item.actualStock) || 0,
+            reason: inventoryReason || undefined,
+          });
+          // The sheet now reflects the server: the row is no longer
+          // «changed», so a retry pass won't re-send it.
+          setInventoryItems((prev) =>
+            prev.map((it) =>
+              it.productId === item.productId ? { ...it, currentStock: Number(item.actualStock) || 0 } : it,
+            ),
+          );
+        } catch (err: any) {
+          failed.push(item);
+          if (!firstErrorMsg) firstErrorMsg = err?.response?.data?.message || '';
+        }
+        setInventoryCommitProgress({ done: i + 1, total: toCommit.length });
+      }
+    } finally {
+      // Whatever happened, part of the batch may have landed on the
+      // server — the cached lists must refetch.
+      setInventoryCommitProgress(null);
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+    }
+
+    if (failed.length === 0) {
+      haptic('success');
+      setShowInventoryModal(false);
+      Alert.alert(
+        'Готово',
+        `Инвентаризация завершена. Изменено: ${totals.sessionCount} товаров. Недостача: ${formatMoney(totals.shortageTotal)}, Излишки: ${formatMoney(totals.excessTotal)}`,
+      );
+      return;
+    }
+
+    haptic('error');
+    const failedList = failed.map((f) => `• ${f.name}`).join('\n');
+    Alert.alert(
+      'Инвентаризация не завершена',
+      `Проведено ${toCommit.length - failed.length} из ${toCommit.length}. Не удалось обновить:\n${failedList}` +
+        (firstErrorMsg ? `\n\n${firstErrorMsg}` : ''),
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Повторить незавершённые', onPress: () => commitInventoryItems(failed, totals) },
+      ],
+    );
+  };
+
   const handleInventorySubmit = async () => {
+    if (inventoryCommitProgress) return;
     const changed = inventoryItems.filter((item) => String(item.currentStock) !== item.actualStock);
     if (changed.length === 0) {
       Alert.alert('Инвентаризация', 'Нет изменений в остатках');
@@ -1022,24 +1100,7 @@ export default function ProductsScreen() {
       else if (diff > 0) excessTotal += diff * cost;
     }
 
-    try {
-      for (const item of changed) {
-        await productsApi.updateStock(item.productId, {
-          type: 'inventory' as const,
-          quantity: Number(item.actualStock) || 0,
-          reason: inventoryReason || undefined,
-        });
-      }
-      queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
-      setShowInventoryModal(false);
-      Alert.alert(
-        'Готово',
-        `Инвентаризация завершена. Изменено: ${changed.length} товаров. Недостача: ${formatMoney(shortageTotal)}, Излишки: ${formatMoney(excessTotal)}`,
-      );
-    } catch (err: any) {
-      Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка при инвентаризации');
-    }
+    await commitInventoryItems(changed, { shortageTotal, excessTotal, sessionCount: changed.length });
   };
 
   const filteredInventoryItems = inventorySearch
@@ -1112,6 +1173,7 @@ export default function ProductsScreen() {
       });
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       setShowWriteoffModal(false);
       Alert.alert(
         '\u0413\u043E\u0442\u043E\u0432\u043E',
@@ -1166,10 +1228,15 @@ export default function ProductsScreen() {
   const setSellPriceMutation = useMutation({
     mutationFn: ({ id, price }: { id: string; price: number }) => productsApi.setSellPrice(id, price),
     onSuccess: () => {
+      haptic('success');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       closeSellPriceEditor();
     },
-    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось установить цену'),
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось установить цену');
+    },
   });
 
   const handleSetSellPriceSubmit = () => {
@@ -1256,6 +1323,7 @@ export default function ProductsScreen() {
       }
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       const targetLabel = transferTarget === 'defect' ? 'брак' : 'Б/У';
       const productName = transferProduct.name;
       closeTransferDialog();
@@ -1311,6 +1379,7 @@ export default function ProductsScreen() {
       });
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       setShowCorrectionModal(false);
       const diff = newQty - correctionProductStock;
       Alert.alert(
@@ -1544,7 +1613,9 @@ export default function ProductsScreen() {
           \u0432\u043B\u0430\u0434\u0435\u043B\u0435\u0446 \u043D\u0435 \u0438\u0441\u043A\u0430\u043B \u043A\u043D\u043E\u043F\u043A\u0443 \u00AB+\u00BB. \u0412\u0438\u0434\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0432 \u043A\u043E\u0440\u043D\u0435 \u0441\u043A\u043B\u0430\u0434\u0430,
           \u043D\u0435 \u0434\u0443\u0431\u043B\u0438\u0440\u0443\u0435\u0442\u0441\u044F \u043D\u0430 \u043F\u043E\u0434\u043F\u0430\u043F\u043A\u0430\u0445, \u0447\u0442\u043E\u0431\u044B \u043D\u0435 \u0437\u0430\u0433\u0440\u043E\u043C\u043E\u0436\u0434\u0430\u0442\u044C \u0441\u043F\u0438\u0441\u043E\u043A. */}
       {activeWarehouse?.kind === 'defect' && activePath.length === 0 && !search && (
-        <View style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+        <View
+          style={[styles.defectInfoHint, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        >
           <Ionicons name="information-circle-outline" size={16} color={colors.orange[600]} />
           <Text style={[styles.defectInfoHintText, { color: palette.text.secondary }]}>
             Товары попадают в брак только через перемещение со склада или возврат от клиента
@@ -1721,7 +1792,9 @@ export default function ProductsScreen() {
         </View>
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'\u041E\u0441\u0442\u0430\u0442\u043E\u043A'}</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+              {'\u041E\u0441\u0442\u0430\u0442\u043E\u043A'}
+            </Text>
             <TextInput
               value={stock}
               onChangeText={setStock}
@@ -1732,7 +1805,9 @@ export default function ProductsScreen() {
             />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'\u041C\u0438\u043D. \u043E\u0441\u0442\u0430\u0442\u043E\u043A'}</Text>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+              {'\u041C\u0438\u043D. \u043E\u0441\u0442\u0430\u0442\u043E\u043A'}
+            </Text>
             <TextInput
               value={minStock}
               onChangeText={setMinStock}
@@ -1744,11 +1819,10 @@ export default function ProductsScreen() {
           </View>
         </View>
         <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
-          <TouchableOpacity
-            style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
-            onPress={closeModal}
-          >
-            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>{'\u041E\u0442\u043C\u0435\u043D\u0430'}</Text>
+          <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeModal}>
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>
+              {'\u041E\u0442\u043C\u0435\u043D\u0430'}
+            </Text>
           </TouchableOpacity>
           {editingProduct && (
             <TouchableOpacity
@@ -1810,7 +1884,9 @@ export default function ProductsScreen() {
             <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435'}</Text>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>
+              {'\u0421\u043F\u0438\u0441\u0430\u043D\u0438\u0435'}
+            </Text>
             <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
               {
                 '\u0421\u043F\u0438\u0441\u0430\u0442\u044C \u0431\u0440\u0430\u043A, \u043F\u043E\u0442\u0435\u0440\u0438, \u043F\u0440\u043E\u0441\u0440\u043E\u0447\u043A\u0443'
@@ -1828,7 +1904,9 @@ export default function ProductsScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Корректировка'}</Text>
-            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>{'Точечная корректировка остатков'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              {'Точечная корректировка остатков'}
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
@@ -1848,7 +1926,9 @@ export default function ProductsScreen() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Корзина'}</Text>
-              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>{'Восстановление удалённых товаров'}</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                {'Восстановление удалённых товаров'}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
           </TouchableOpacity>
@@ -1886,8 +1966,16 @@ export default function ProductsScreen() {
               <Ionicons name="arrow-back" size={22} color={colors.gray[900]} />
             </TouchableOpacity>
             <Text style={styles.invFullTitle}>{'Инвентаризация'}</Text>
-            <TouchableOpacity style={styles.invFullSubmitBtn} onPress={handleInventorySubmit}>
-              <Text style={styles.invFullSubmitBtnText}>{'Провести'}</Text>
+            <TouchableOpacity
+              style={[styles.invFullSubmitBtn, inventoryCommitProgress ? { opacity: 0.6 } : null]}
+              onPress={handleInventorySubmit}
+              disabled={!!inventoryCommitProgress}
+            >
+              <Text style={styles.invFullSubmitBtnText}>
+                {inventoryCommitProgress
+                  ? `${inventoryCommitProgress.done} из ${inventoryCommitProgress.total}…`
+                  : 'Провести'}
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -2312,11 +2400,7 @@ export default function ProductsScreen() {
         <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Текущий остаток'}</Text>
           <View
-            style={[
-              styles.formInput,
-              formInputThemed,
-              { backgroundColor: palette.bg.muted, justifyContent: 'center' },
-            ]}
+            style={[styles.formInput, formInputThemed, { backgroundColor: palette.bg.muted, justifyContent: 'center' }]}
           >
             <Text style={{ fontSize: fontSize.sm, color: palette.text.secondary }}>
               {correctionProductStock} {'шт'}
@@ -2576,9 +2660,7 @@ export default function ProductsScreen() {
                 ]}
                 multiline
                 placeholder={
-                  transferTarget === 'defect'
-                    ? 'Например: повреждена упаковка, не подлежит продаже'
-                    : 'Необязательно'
+                  transferTarget === 'defect' ? 'Например: повреждена упаковка, не подлежит продаже' : 'Необязательно'
                 }
                 placeholderTextColor={palette.text.tertiary}
               />

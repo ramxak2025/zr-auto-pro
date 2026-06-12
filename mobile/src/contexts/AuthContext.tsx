@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import type { QueryClient } from '@tanstack/react-query';
 import {
   authApi,
@@ -23,6 +24,8 @@ import {
 import { onAuthExpired, setAuthToken } from '../api/axios';
 import { captureException } from '../sentry';
 import { clearPersistentCache } from '../utils/persistentCache';
+import { toLocalISODate } from '../utils/dates';
+import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
 import type { User, UserPermissions, UserRole } from '../../../shared/types';
 
 interface AuthContextType {
@@ -144,20 +147,11 @@ interface AuthProviderProps {
  * Errors are swallowed — they'll surface naturally when the screen mounts.
  */
 function prefetchAfterLogin(qc: QueryClient): void {
-  // Unscoped fallback slot. ProductsScreen's real key includes the resolved
-  // main `warehouseId` (see the warehouse-scoped prefetch below, fired once
-  // `['warehouses']` resolves), so this slot alone was a structural MISS for
-  // the screen. We keep it as a cheap fallback for any caller that reads the
-  // un-scoped key, but the screen-matching warm-up happens in the
-  // warehouses `.then()` so the Склад tab is an actual cache hit.
-  qc.prefetchQuery({
-    queryKey: ['products', { search: '', limit: 500 }],
-    queryFn: async () => {
-      const res = await productsApi.getAll({ search: '', page: 1, limit: 500 });
-      return res.data;
-    },
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
+  // NOTE: there is deliberately NO un-scoped ['products', { search, limit }]
+  // prefetch here. ProductsScreen's real key includes the resolved main
+  // `warehouseId` (see the warehouse-scoped prefetch below, fired once
+  // `['warehouses']` resolves) — the un-scoped slot was a structural MISS
+  // nothing ever read, costing a full heavy products payload on every login.
 
   // Mirror key for the cash-side product picker. `ProductPickerModal`
   // reads `['all-products-check']` so opening the picker is a cache hit
@@ -204,14 +198,23 @@ function prefetchAfterLogin(qc: QueryClient): void {
 
         // Склад first-open cache HIT. ProductsScreen reads
         //   ['products', { search: '', limit: 500, warehouseId: <main.id> }]
-        // (it defaults to the main warehouse). The earlier un-scoped
-        // ['products', { search:'', limit:500 }] prefetch never matched that
-        // slot, so the screen still flashed empty + refetched. Warming the
-        // EXACT warehouse-scoped key here makes the first Склад open instant.
+        // (it defaults to the main warehouse). Warming the EXACT
+        // warehouse-scoped key here makes the first Склад open instant.
+        // `fields` mirrors the screen's slim `?fields=` projection (shared
+        // PRODUCT_LIST_FIELDS constant) so the prefetched payload is
+        // byte-identical to what the screen itself would fetch — without it
+        // the prefetch pulled the heavy unprojected shape (bundle_items
+        // JSONB, nested supplier) the list never renders.
         qc.prefetchQuery({
           queryKey: ['products', { search: '', limit: 500, warehouseId: main.id }],
           queryFn: async () => {
-            const res = await productsApi.getAll({ search: '', page: 1, limit: 500, warehouseId: main.id });
+            const res = await productsApi.getAll({
+              search: '',
+              page: 1,
+              limit: 500,
+              warehouseId: main.id,
+              fields: PRODUCT_LIST_FIELDS,
+            } as Parameters<typeof productsApi.getAll>[0] & { fields: string });
             return res.data;
           },
           staleTime: 5 * 60_000,
@@ -253,9 +256,17 @@ function prefetchAfterLogin(qc: QueryClient): void {
     staleTime: 5 * 60_000,
   }).catch(() => {});
 
-  qc.prefetchQuery({
-    queryKey: ['clients', { search: '', page: 1, limit: 50 }],
-    queryFn: async () => (await clientsApi.getAll({ search: '', page: 1, limit: 50 })).data,
+  // ClientsScreen reads via `useInfiniteQuery` keyed
+  //   ['clients-infinite', { search: '', filter: 'all', source: null }]
+  // (defaults: empty search, «Все» filter, no source filter — see
+  // ClientsScreen). The old plain ['clients', …] prefetch landed in a slot
+  // nothing reads. Mirror the screen's EXACT key + page-1 request
+  // (limit 20, `source: null` — NOT '') so the first open is a cache HIT.
+  qc.prefetchInfiniteQuery({
+    queryKey: ['clients-infinite', { search: '', filter: 'all', source: null }],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam = 1 }) =>
+      (await clientsApi.getAll({ search: '', page: pageParam as number, limit: 20 })).data,
     staleTime: 5 * 60_000,
   }).catch(() => {});
 
@@ -332,7 +343,9 @@ function prefetchAfterLogin(qc: QueryClient): void {
     staleTime: 60_000,
   }).catch(() => {});
 
-  const today = new Date().toISOString().slice(0, 10);
+  // LOCAL date — `toISOString()` is UTC and pointed the «Звонки сегодня»
+  // prefetch at yesterday's slot after local midnight in RU timezones.
+  const today = toLocalISODate();
   qc.prefetchQuery({
     queryKey: ['calls-summary', today],
     queryFn: async () => (await callsApi.getCalls({ date: today })).data.summary,
@@ -360,6 +373,14 @@ function prefetchAfterLogin(qc: QueryClient): void {
 }
 
 /**
+ * The Expo push token this device registered for the CURRENT session.
+ * Cached at register time so logout() can unregister the exact same token —
+ * otherwise the previous user keeps receiving pushes for their old tenant
+ * after someone else signs in on this device.
+ */
+let registeredPushToken: string | null = null;
+
+/**
  * Request push permission and register the Expo push token with the server.
  * Silently swallows all errors — push is non-critical.
  */
@@ -379,11 +400,19 @@ async function registerPushToken(): Promise<void> {
       finalStatus = status;
     }
     if (finalStatus !== 'granted') return;
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: '2d08b9be-9503-4e31-9198-8ec7093e44d7',
-    });
+    // The EAS projectId comes from app.json → extra.eas.projectId — the one
+    // and only source of truth. NEVER hardcode it here: a stale hardcoded id
+    // (from a deleted EAS project) silently produces tokens Expo can't
+    // deliver to, which is exactly the bug this read replaced.
+    const projectId = (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId;
+    if (!projectId) {
+      console.warn('[push] EAS projectId missing from expo config — skipping push registration');
+      return;
+    }
+    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
     await pushApi.register(tokenData.data, platform);
+    registeredPushToken = tokenData.data;
   } catch (err) {
     // Push registration is best-effort and must never block login, but a
     // SILENT failure (missing APNs entitlement, denied permission, projectId
@@ -573,6 +602,14 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   }, []);
 
   const logout = useCallback(async () => {
+    // Unregister this device's push token BEFORE the bearer is dropped —
+    // fire-and-forget, same as the logout call itself. Without this the
+    // previous user keeps receiving their tenant's pushes after user B
+    // signs in on the same device.
+    if (registeredPushToken) {
+      pushApi.unregister(registeredPushToken).catch(() => {});
+      registeredPushToken = null;
+    }
     authApi.logout().catch(() => {});
     // Cancel in-flight queries first so a stale request can't land
     // after we've torn down state and revive an entry under the next

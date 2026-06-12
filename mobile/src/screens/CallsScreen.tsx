@@ -9,6 +9,7 @@ import {
   Linking,
   Animated as RNAnimated,
   Pressable,
+  RefreshControl,
 } from 'react-native';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, AudioModule } from 'expo-audio';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -456,7 +457,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     }, []),
   );
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ['calls', dateStr],
     queryFn: async () => {
       const res = await callsApi.getCalls({ date: dateStr });
@@ -465,6 +466,19 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     staleTime: 30_000,
     refetchInterval: pollEnabled ? 60_000 : false,
   });
+
+  // Pull-to-refresh — local `refreshing` state (same pattern as ChecksScreen)
+  // instead of raw `isFetching`, so the 60-second background poll never
+  // yanks the spinner open mid-scroll.
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refetch]);
 
   const calls: Call[] = data?.calls ?? [];
   const summary: CallsSummary | undefined = data?.summary;
@@ -561,9 +575,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
         <Text style={[styles.digest, { color: palette.text.secondary }]} numberOfLines={1}>
           {dateLabel}: {summary.total ?? 0} звонков
           {summary.missed > 0 ? ` · ${summary.missed} пропущенных` : ''}
-          {calls.filter((c) => !!c.client).length > 0
-            ? ` · ${calls.filter((c) => !!c.client).length} → клиенты`
-            : ''}
+          {calls.filter((c) => !!c.client).length > 0 ? ` · ${calls.filter((c) => !!c.client).length} → клиенты` : ''}
         </Text>
       )}
 
@@ -616,6 +628,9 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
         style={[styles.list, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
         contentContainerStyle={{ paddingBottom: tabBarHeight + spacing[4] }}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
       >
         {isLoading ? (
           <ActivityIndicator size="small" color={colors.primary[500]} style={{ marginTop: spacing[10] }} />

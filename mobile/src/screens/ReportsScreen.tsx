@@ -62,6 +62,7 @@ import {
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
+import { toLocalISODate } from '../utils/dates';
 import type { FinancialReport, DashboardV2 } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -86,7 +87,11 @@ function formatMoneyCompact(v: number): string {
 }
 
 function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  // LOCAL date, not toISOString() (UTC): в RU-зонах (UTC+3…+12) UTC-срез
+  // после местной полуночи давал ВЧЕРАШНИЙ день — все финансовые периоды
+  // («Сегодня», начало месяца/квартала/года) съезжали на сутки.
+  // parseDateStr ниже тоже локальный → round-trip симметричен.
+  return toLocalISODate(d);
 }
 
 function parseDateStr(s: string): Date {
@@ -158,12 +163,32 @@ function getDateRange(period: PeriodKey, custom?: DateRange): DateRange {
 }
 
 const RU_MONTHS = [
-  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
 ];
 const RU_MONTHS_NOM = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
 ];
 
 /** Человекочитаемый ярлык периода для шеринга / PDF («Май 2026», «1 — 30 мая»). */
@@ -494,19 +519,16 @@ export default function ReportsScreen() {
     setExporting(null);
   }, []);
 
-  const beginExport = useCallback(
-    (kind: 'pdf' | 'table' | 'image') => {
-      // Re-arm: clear any stale timeout first.
-      if (exportTimeoutRef.current) clearTimeout(exportTimeoutRef.current);
-      setExporting(kind);
-      exportTimeoutRef.current = setTimeout(() => {
-        exportTimeoutRef.current = null;
-        setExporting(null);
-        Alert.alert('Долго не отвечает', 'Не удалось завершить за отведённое время. Попробуйте ещё раз.');
-      }, 45_000);
-    },
-    [],
-  );
+  const beginExport = useCallback((kind: 'pdf' | 'table' | 'image') => {
+    // Re-arm: clear any stale timeout first.
+    if (exportTimeoutRef.current) clearTimeout(exportTimeoutRef.current);
+    setExporting(kind);
+    exportTimeoutRef.current = setTimeout(() => {
+      exportTimeoutRef.current = null;
+      setExporting(null);
+      Alert.alert('Долго не отвечает', 'Не удалось завершить за отведённое время. Попробуйте ещё раз.');
+    }, 45_000);
+  }, []);
 
   // Clear the safety timer if the screen unmounts mid-export.
   useEffect(() => {
@@ -597,9 +619,7 @@ export default function ReportsScreen() {
     // so we wait two animation frames for the gradient + SVG to paint.
     setShowStoriesCard(true);
     try {
-      await new Promise<void>((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-      );
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
       if (!storiesCardRef.current) {
         throw new Error('stories card not mounted');
       }
@@ -763,11 +783,7 @@ export default function ReportsScreen() {
         <View ref={captureViewRef} collapsable={false} style={{ gap: spacing[3] }}>
           {/* PERIOD SWITCHER */}
           <View style={styles.periodWrap}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.periodRow}
-            >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
               {PERIODS.map((p) => (
                 <TouchableOpacity
                   key={p.key}
@@ -814,7 +830,10 @@ export default function ReportsScreen() {
             {period === 'custom' && (
               <View style={styles.customRangeRow}>
                 <TouchableOpacity
-                  style={[styles.customDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  style={[
+                    styles.customDateBtn,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  ]}
                   onPress={() => setShowCustomPicker('from')}
                   activeOpacity={0.7}
                 >
@@ -823,7 +842,10 @@ export default function ReportsScreen() {
                 </TouchableOpacity>
                 <Text style={[styles.customDash, { color: palette.text.tertiary }]}>—</Text>
                 <TouchableOpacity
-                  style={[styles.customDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  style={[
+                    styles.customDateBtn,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  ]}
                   onPress={() => setShowCustomPicker('to')}
                   activeOpacity={0.7}
                 >
@@ -953,16 +975,17 @@ export default function ReportsScreen() {
                   activeOpacity={0.7}
                 >
                   <Text style={[styles.collapseTitle, { color: palette.text.primary }]}>Прибыли и убытки (P&L)</Text>
-                  <Ionicons
-                    name={pnlOpen ? 'chevron-up' : 'chevron-down'}
-                    size={18}
-                    color={palette.text.tertiary}
-                  />
+                  <Ionicons name={pnlOpen ? 'chevron-up' : 'chevron-down'} size={18} color={palette.text.tertiary} />
                 </TouchableOpacity>
                 {pnlOpen && (
                   <View style={{ marginTop: spacing[3] }}>
                     <PnLRow label="Доходы" amount={revenue} palette={palette} tone="positive" />
-                    <PnLRow label="Расходы" amount={-(productCost + salaries + otherExpenses)} palette={palette} tone="negative" />
+                    <PnLRow
+                      label="Расходы"
+                      amount={-(productCost + salaries + otherExpenses)}
+                      palette={palette}
+                      tone="negative"
+                    />
                     <View style={[styles.pnlDivider, { backgroundColor: palette.border.subtle }]} />
                     <PnLRow label="Чистая прибыль" amount={netProfit} palette={palette} tone="bold" />
                     <TouchableOpacity style={styles.pnlPdfBtn} onPress={exportPdf} activeOpacity={0.85}>
@@ -987,9 +1010,7 @@ export default function ReportsScreen() {
                 <View style={styles.marginRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.marginValue, { color: palette.text.primary }]}>{marginPct.toFixed(1)}%</Text>
-                    <Text style={[styles.cardCaption, { color: palette.text.tertiary }]}>
-                      Чистая прибыль / Оборот
-                    </Text>
+                    <Text style={[styles.cardCaption, { color: palette.text.tertiary }]}>Чистая прибыль / Оборот</Text>
                   </View>
                   <DeltaChip value={marginDelta} suffix="%" />
                 </View>
@@ -1035,10 +1056,7 @@ export default function ReportsScreen() {
                     return (
                       <View key={row.name} style={styles.expRow}>
                         <View style={styles.expRowHead}>
-                          <Text
-                            style={[styles.expRowName, { color: palette.text.primary }]}
-                            numberOfLines={1}
-                          >
+                          <Text style={[styles.expRowName, { color: palette.text.primary }]} numberOfLines={1}>
                             {row.name}
                           </Text>
                           <Text style={[styles.expRowAmount, { color: palette.text.primary }]}>
@@ -1181,7 +1199,17 @@ export default function ReportsScreen() {
                 <View style={{ gap: spacing[2] }}>
                   <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>ИНСАЙТЫ</Text>
                   {insights.map((ins, idx) => (
-                    <AnimatedCard key={idx} index={8 + idx} style={[styles.insightCard, { backgroundColor: insightBg(ins.tone, palette.bg.card), borderColor: insightBorder(ins.tone, palette.border.subtle) }]}>
+                    <AnimatedCard
+                      key={idx}
+                      index={8 + idx}
+                      style={[
+                        styles.insightCard,
+                        {
+                          backgroundColor: insightBg(ins.tone, palette.bg.card),
+                          borderColor: insightBorder(ins.tone, palette.border.subtle),
+                        },
+                      ]}
+                    >
                       <View style={[styles.insightIcon, { backgroundColor: insightIconBg(ins.tone) }]}>
                         <Ionicons name={ins.icon} size={16} color={insightIconColor(ins.tone)} />
                       </View>
@@ -1403,9 +1431,7 @@ function FunnelRow({
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.funnelLabel, { color: palette.text.primary }]}>{label}</Text>
-          {pct && (
-            <Text style={[styles.funnelPct, { color: palette.text.tertiary }]}>{pct}% от выручки</Text>
-          )}
+          {pct && <Text style={[styles.funnelPct, { color: palette.text.tertiary }]}>{pct}% от выручки</Text>}
         </View>
       </View>
       <Text style={[styles.funnelAmount, { color: amountColor }, tone === 'final' && styles.funnelAmountFinal]}>
@@ -1460,11 +1486,7 @@ function PnLRow({
   return (
     <View style={styles.pnlRow}>
       <Text
-        style={[
-          styles.pnlLabel,
-          { color: palette.text.primary },
-          tone === 'bold' && { fontWeight: fontWeight.bold },
-        ]}
+        style={[styles.pnlLabel, { color: palette.text.primary }, tone === 'bold' && { fontWeight: fontWeight.bold }]}
       >
         {label}
       </Text>
@@ -1504,9 +1526,7 @@ function PersonalRecordCard({
         <View style={styles.recordRow}>
           <Text style={[styles.recordLabel, { color: palette.text.secondary }]}>Лучший день</Text>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[styles.recordValue, { color: palette.text.primary }]}>
-              {formatMoney(bestDay.value)}
-            </Text>
+            <Text style={[styles.recordValue, { color: palette.text.primary }]}>{formatMoney(bestDay.value)}</Text>
             <Text style={[styles.recordCaption, { color: palette.text.tertiary }]}>{bestDay.date}</Text>
           </View>
         </View>
@@ -1515,9 +1535,7 @@ function PersonalRecordCard({
         <View style={styles.recordRow}>
           <Text style={[styles.recordLabel, { color: palette.text.secondary }]}>Лучший месяц</Text>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[styles.recordValue, { color: palette.text.primary }]}>
-              {formatMoney(bestMonth.value)}
-            </Text>
+            <Text style={[styles.recordValue, { color: palette.text.primary }]}>{formatMoney(bestMonth.value)}</Text>
             <Text style={[styles.recordCaption, { color: palette.text.tertiary }]}>{bestMonth.ym}</Text>
           </View>
         </View>
@@ -1602,11 +1620,7 @@ function TargetsModal({
     <RNModal visible={visible} animationType="none" transparent onRequestClose={onClose} statusBarTranslucent>
       <View style={styles.modalOverlay}>
         {/* Smooth blur fade-in replaces the old dark dim (#13.5 / #7). */}
-        <Animated.View
-          style={StyleSheet.absoluteFill}
-          entering={FadeIn.duration(220)}
-          exiting={FadeOut.duration(160)}
-        >
+        <Animated.View style={StyleSheet.absoluteFill} entering={FadeIn.duration(220)} exiting={FadeOut.duration(160)}>
           <ModalBlurBackdrop onPress={onClose} />
         </Animated.View>
         <Animated.View
@@ -1700,7 +1714,8 @@ function buildInsights({
     const currMargin = report.revenue > 0 ? (report.netProfit / report.revenue) * 100 : 0;
     const prevMargin = prevReport.revenue > 0 ? (prevReport.netProfit / prevReport.revenue) * 100 : 0;
     const marginDrop = prevMargin - currMargin;
-    const salaryRise = prevReport.salaries > 0 ? ((report.salaries - prevReport.salaries) / prevReport.salaries) * 100 : 0;
+    const salaryRise =
+      prevReport.salaries > 0 ? ((report.salaries - prevReport.salaries) / prevReport.salaries) * 100 : 0;
     if (marginDrop >= 3 && salaryRise >= 5) {
       out.push({
         text: `Маржа упала на ${marginDrop.toFixed(1)}% — выросли зарплаты +${salaryRise.toFixed(0)}%`,
@@ -1827,7 +1842,10 @@ const EXPENSE_COLORS = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+  return s.replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string,
+  );
 }
 
 // Shared print-safe CSS + branded header. Kept deliberately conservative —
@@ -2047,7 +2065,12 @@ const styles = StyleSheet.create({
   periodChipActive: { backgroundColor: colors.primary[600] },
   periodText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
   periodTextActive: { color: colors.white },
-  compareRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing[1] },
+  compareRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[1],
+  },
   compareLabel: { fontSize: fontSize.sm },
   toggleTrack: {
     width: 44,
@@ -2191,7 +2214,13 @@ const styles = StyleSheet.create({
   // YoY
   yoyRow: { flexDirection: 'row', gap: spacing[3] },
   yoyLabel: { fontSize: 11, fontWeight: fontWeight.medium, marginBottom: 2 },
-  yoyValue: { fontSize: 24, lineHeight: 30, fontWeight: fontWeight.bold, marginBottom: spacing[1], letterSpacing: -0.5 },
+  yoyValue: {
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: fontWeight.bold,
+    marginBottom: spacing[1],
+    letterSpacing: -0.5,
+  },
 
   // KPI rings
   kpiHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[3] },
@@ -2218,7 +2247,13 @@ const styles = StyleSheet.create({
   insightText: { flex: 1, fontSize: fontSize.sm, lineHeight: 18 },
 
   // Forecast
-  forecastValue: { fontSize: 28, lineHeight: 34, fontWeight: fontWeight.bold, marginVertical: spacing[1], letterSpacing: -0.5 },
+  forecastValue: {
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: fontWeight.bold,
+    marginVertical: spacing[1],
+    letterSpacing: -0.5,
+  },
 
   // Alert
   alertCard: {
@@ -2266,7 +2301,12 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold },
   modalClose: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   modalBody: { padding: spacing[5], gap: spacing[3] },
-  modalLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, textTransform: 'uppercase', letterSpacing: 0.5 },
+  modalLabel: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   modalInput: {
     fontSize: fontSize.base,
     fontWeight: fontWeight.semibold,

@@ -34,7 +34,7 @@
  * canEdit role gating preserved: only director / admin / superadmin
  * see the issue button, the FABs and the trash icon.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -45,6 +45,7 @@ import {
   Modal as RNModal,
   Alert,
   Platform,
+  RefreshControl,
   useWindowDimensions,
   KeyboardAvoidingView,
 } from 'react-native';
@@ -482,12 +483,23 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
       qc.invalidateQueries({ queryKey: ['eq-summary'] });
       qc.invalidateQueries({ queryKey: ['eq-trash'] });
     },
+    // Кнопка остаётся активной — после ошибки можно сразу повторить.
+    onError: (err: unknown) => {
+      haptic('error');
+      const e = err as { response?: { data?: { message?: string } }; message?: string };
+      Alert.alert('Ошибка', e?.response?.data?.message || e?.message || 'Не удалось списать инструмент');
+    },
   });
   const returnMut = useMutation({
     mutationFn: (id: string) => equipmentApi.returnToStorage(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['eq-user', emp.userId] });
       qc.invalidateQueries({ queryKey: ['eq-summary'] });
+    },
+    onError: (err: unknown) => {
+      haptic('error');
+      const e = err as { response?: { data?: { message?: string } }; message?: string };
+      Alert.alert('Ошибка', e?.response?.data?.message || e?.message || 'Не удалось вернуть предмет в подсобку');
     },
   });
 
@@ -518,62 +530,77 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
         {list.map((item: any) => {
           const expired = isExpired(item);
           return (
-          <View
-            key={item.id}
-            style={[
-              styles.equipItem,
-              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-              expired && styles.equipItemExpired,
-            ]}
-          >
-            {item.photo ? (
-              <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
-                <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
-              </TouchableOpacity>
-            ) : (
-              <View
-                style={[
-                  styles.equipPhoto,
-                  { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
-                ]}
-              >
-                <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
-              </View>
-            )}
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.equipName, { color: palette.text.primary }]} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
-              {item.serviceLifeMonths && (
-                <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
-                  Срок: {item.serviceLifeMonths} мес.
-                </Text>
+            <View
+              key={item.id}
+              style={[
+                styles.equipItem,
+                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                expired && styles.equipItemExpired,
+              ]}
+            >
+              {item.photo ? (
+                <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
+                  <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
+                </TouchableOpacity>
+              ) : (
+                <View
+                  style={[
+                    styles.equipPhoto,
+                    { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
+                  ]}
+                >
+                  <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
+                </View>
               )}
-              {expired && (
-                <View style={styles.expiredPill}>
-                  <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
-                  <Text style={styles.expiredPillText}>Срок истёк</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.equipName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
+                {item.serviceLifeMonths && (
+                  <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
+                    Срок: {item.serviceLifeMonths} мес.
+                  </Text>
+                )}
+                {expired && (
+                  <View style={styles.expiredPill}>
+                    <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
+                    <Text style={styles.expiredPillText}>Срок истёк</Text>
+                  </View>
+                )}
+              </View>
+              {canEdit && (
+                <View style={{ flexDirection: 'row', gap: spacing[1] }}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      haptic('tap');
+                      returnMut.mutate(item.id);
+                    }}
+                    style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Вернуть в подсобку"
+                  >
+                    <Ionicons name="arrow-undo" size={14} color={colors.blue[500]} />
+                  </TouchableOpacity>
+                  {/* Списание — деструктив с маленькой иконки-мишени, поэтому
+                    обязательный confirm (паттерн CheckDetailScreen). */}
+                  <TouchableOpacity
+                    onPress={() => {
+                      haptic('tap');
+                      Alert.alert('Списать инструмент?', `«${item.name}» будет перемещён в корзину (хранится 7 дней)`, [
+                        { text: 'Отмена', style: 'cancel' },
+                        { text: 'Списать', style: 'destructive', onPress: () => trashMut.mutate(item.id) },
+                      ]);
+                    }}
+                    style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Списать в корзину"
+                  >
+                    <Ionicons name="trash-outline" size={14} color={colors.red[400]} />
+                  </TouchableOpacity>
                 </View>
               )}
             </View>
-            {canEdit && (
-              <View style={{ flexDirection: 'row', gap: spacing[1] }}>
-                <TouchableOpacity
-                  onPress={() => returnMut.mutate(item.id)}
-                  style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
-                >
-                  <Ionicons name="arrow-undo" size={14} color={colors.blue[500]} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => trashMut.mutate(item.id)}
-                  style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
-                >
-                  <Ionicons name="trash-outline" size={14} color={colors.red[400]} />
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
           );
         })}
       </View>
@@ -682,7 +709,9 @@ function IssueModal({
       setCategoryType('tools');
       onClose();
     },
-    onError: () => haptic('error'),
+    // Без локального onError срабатывает глобальный fallback из App.tsx —
+    // haptic('error') + Alert с текстом ошибки сервера. Локальный хендлер
+    // только с хаптикой ПЕРЕКРЫВАЛ бы его и глотал сообщение.
   });
 
   const pickFromStorage = (item: any) => {
@@ -822,11 +851,7 @@ function IssueModal({
               haptic('select');
               setCategoryType(ct.k);
             }}
-            style={[
-              styles.catBtn,
-              { backgroundColor: palette.bg.muted },
-              categoryType === ct.k && styles.catBtnActive,
-            ]}
+            style={[styles.catBtn, { backgroundColor: palette.bg.muted }, categoryType === ct.k && styles.catBtnActive]}
           >
             <Text
               style={[
@@ -874,7 +899,9 @@ function CreateFolderDialog({ visible, onClose }: { visible: boolean; onClose: (
       setName('');
       onClose();
     },
-    onError: () => haptic('error'),
+    // Без локального onError срабатывает глобальный fallback из App.tsx —
+    // haptic('error') + Alert с текстом ошибки сервера. Локальный хендлер
+    // только с хаптикой ПЕРЕКРЫВАЛ бы его и глотал сообщение.
   });
 
   const submit = () => {
@@ -950,7 +977,9 @@ function CreateStorageItemDialog({
       setPhoto('');
       onClose();
     },
-    onError: () => haptic('error'),
+    // Без локального onError срабатывает глобальный fallback из App.tsx —
+    // haptic('error') + Alert с текстом ошибки сервера. Локальный хендлер
+    // только с хаптикой ПЕРЕКРЫВАЛ бы его и глотал сообщение.
   });
 
   const pickPhoto = async () => {
@@ -1108,6 +1137,11 @@ function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => vo
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['eq-trash'] });
       qc.invalidateQueries({ queryKey: ['eq-summary'] });
+    },
+    onError: (err: unknown) => {
+      haptic('error');
+      const e = err as { response?: { data?: { message?: string } }; message?: string };
+      Alert.alert('Ошибка', e?.response?.data?.message || e?.message || 'Не удалось восстановить предмет');
     },
   });
 
@@ -1327,7 +1361,9 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
       qc.invalidateQueries({ queryKey: ['expenses'] });
       setDeleteTarget(null);
     },
-    onError: () => haptic('error'),
+    // Без локального onError срабатывает глобальный fallback из App.tsx —
+    // haptic('error') + Alert с текстом ошибки сервера. Локальный хендлер
+    // только с хаптикой ПЕРЕКРЫВАЛ бы его и глотал сообщение.
   });
 
   const catCounts: Record<string, number> = {};
@@ -1449,55 +1485,55 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
           items.map((item: any) => {
             const expired = isExpired(item);
             return (
-            <View
-              key={item.id}
-              style={[
-                styles.equipItem,
-                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                expired && styles.equipItemExpired,
-              ]}
-            >
-              {item.photo ? (
-                <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
-                  <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
-                </TouchableOpacity>
-              ) : (
-                <View
-                  style={[
-                    styles.equipPhoto,
-                    { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
-                  ]}
-                >
-                  <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
-                </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
-                <Text style={styles.equipCost}>{formatMoney(item.purchasePrice)}</Text>
-                <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
-                  В наличии: {item.quantity} {item.unit}
-                </Text>
-                {expired && (
-                  <View style={styles.expiredPill}>
-                    <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
-                    <Text style={styles.expiredPillText}>Срок истёк</Text>
+              <View
+                key={item.id}
+                style={[
+                  styles.equipItem,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  expired && styles.equipItemExpired,
+                ]}
+              >
+                {item.photo ? (
+                  <TouchableOpacity onPress={() => setPhotoUrl(item.photo)}>
+                    <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
+                  </TouchableOpacity>
+                ) : (
+                  <View
+                    style={[
+                      styles.equipPhoto,
+                      { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
+                    ]}
+                  >
+                    <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
                   </View>
                 )}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
+                  <Text style={styles.equipCost}>{formatMoney(item.purchasePrice)}</Text>
+                  <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
+                    В наличии: {item.quantity} {item.unit}
+                  </Text>
+                  {expired && (
+                    <View style={styles.expiredPill}>
+                      <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
+                      <Text style={styles.expiredPillText}>Срок истёк</Text>
+                    </View>
+                  )}
+                </View>
+                {canEdit && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      haptic('tap');
+                      setDeleteTarget(item);
+                    }}
+                    style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Удалить предмет"
+                  >
+                    <Ionicons name="trash-outline" size={14} color={colors.red[500]} />
+                  </TouchableOpacity>
+                )}
               </View>
-              {canEdit && (
-                <TouchableOpacity
-                  onPress={() => {
-                    haptic('tap');
-                    setDeleteTarget(item);
-                  }}
-                  style={[styles.equipBtn, { backgroundColor: palette.bg.muted }]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Удалить предмет"
-                >
-                  <Ionicons name="trash-outline" size={14} color={colors.red[500]} />
-                </TouchableOpacity>
-              )}
-            </View>
             );
           })
         )}
@@ -1554,6 +1590,25 @@ export default function EquipmentScreen() {
     enabled: isMaster,
   });
 
+  // Pull-to-refresh — invalidate every equipment slot this screen (and the
+  // nested StorageTab) reads; inactive ones are just marked stale. Local
+  // `refreshing` state, same pattern as ChecksScreen.
+  const qcRefresh = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.allSettled([
+        qcRefresh.invalidateQueries({ queryKey: ['eq-summary'] }),
+        qcRefresh.invalidateQueries({ queryKey: ['eq-cats'] }),
+        qcRefresh.invalidateQueries({ queryKey: ['eq-storage'] }),
+        qcRefresh.invalidateQueries({ queryKey: ['eq-my'] }),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [qcRefresh]);
+
   const headerTrailing = useMemo(() => {
     if (!canEdit) return undefined;
     return (
@@ -1578,44 +1633,49 @@ export default function EquipmentScreen() {
     return (
       <View style={{ flex: 1, backgroundColor: palette.bg.canvas }}>
         <IosScreenHeader title="Моё имущество" onBack={() => navigation.goBack()} />
-        <ScrollView contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}>
+        <ScrollView
+          contentContainerStyle={{ padding: spacing[4], paddingBottom: tabBarHeight + spacing[4] }}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+          }
+        >
           <Text style={{ fontSize: fontSize.xs, color: palette.text.tertiary, marginBottom: spacing[3] }}>
             {myEquipment.length} предметов на {formatMoney(total)}
           </Text>
           {myEquipment.map((item: any) => {
             const expired = isExpired(item);
             return (
-            <View
-              key={item.id}
-              style={[
-                styles.equipItem,
-                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                expired && styles.equipItemExpired,
-              ]}
-            >
-              {item.photo ? (
-                <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
-              ) : (
-                <View
-                  style={[
-                    styles.equipPhoto,
-                    { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
-                  ]}
-                >
-                  <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
-                </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
-                <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
-                {expired && (
-                  <View style={styles.expiredPill}>
-                    <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
-                    <Text style={styles.expiredPillText}>Срок истёк</Text>
+              <View
+                key={item.id}
+                style={[
+                  styles.equipItem,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  expired && styles.equipItemExpired,
+                ]}
+              >
+                {item.photo ? (
+                  <CachedImage source={{ uri: item.photo }} style={styles.equipPhoto} />
+                ) : (
+                  <View
+                    style={[
+                      styles.equipPhoto,
+                      { backgroundColor: palette.bg.muted, alignItems: 'center', justifyContent: 'center' },
+                    ]}
+                  >
+                    <Ionicons name="cube-outline" size={18} color={palette.text.tertiary} />
                   </View>
                 )}
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
+                  <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
+                  {expired && (
+                    <View style={styles.expiredPill}>
+                      <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
+                      <Text style={styles.expiredPillText}>Срок истёк</Text>
+                    </View>
+                  )}
+                </View>
               </View>
-            </View>
             );
           })}
         </ScrollView>
@@ -1640,6 +1700,9 @@ export default function EquipmentScreen() {
           paddingBottom: tabBarHeight + spacing[10], // give FAB room to sit above the last row
         }}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+        }
       >
         {tab === 'employees' && (
           <View style={styles.grid}>
