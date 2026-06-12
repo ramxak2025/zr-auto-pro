@@ -982,22 +982,26 @@ export class KnowledgeService {
   async listCourses(tenantID: string, role: string, userID: string) {
     await this.ensureSeed(tenantID);
     const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+    // NOTE: `isManager` is interpolated into the SQL text (it only toggles the
+    // `published` predicate) and must NOT appear in the parameter array — an
+    // unused $n placeholder makes Postgres fail the parse with
+    // `could not determine data type of parameter` → 500 on every request.
     const { rows } = await this.pool.query(
       `SELECT c.id, c.title, c.description, c.cover_image, c.category_id, c.published,
               c.sort_order, c.created_at, c.updated_at,
               (SELECT COUNT(*) FROM knowledge_lessons l WHERE l.course_id = c.id)::int AS lesson_count,
               (SELECT COUNT(*) FROM knowledge_lessons l
                  JOIN knowledge_lesson_progress p
-                   ON p.lesson_id = l.id AND p.user_id = $3
+                   ON p.lesson_id = l.id AND p.user_id = $2
                 WHERE l.course_id = c.id)::int AS completed_lessons,
               EXISTS(
                 SELECT 1 FROM knowledge_course_completion cc
-                WHERE cc.course_id = c.id AND cc.user_id = $3
+                WHERE cc.course_id = c.id AND cc.user_id = $2
               ) AS completed
        FROM knowledge_courses c
        WHERE c.tenant_id=$1 ${isManager ? '' : 'AND c.published = true'}
        ORDER BY c.sort_order, c.created_at`,
-      [tenantID, isManager, userID],
+      [tenantID, userID],
     );
     return rows.map(mapCourseSlim);
   }
