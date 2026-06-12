@@ -49,6 +49,11 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
   const navigation = useNavigation<any>();
   const palette = useColors();
 
+  // Single shared subscription slot for the whole app: the same
+  // ['subscription'] key is prefetched in AuthContext.prefetchAfterLogin, so
+  // every gated screen reads one cached entry instead of refetching.
+  // staleTime 5 min — the plan changes rarely; a background refetch keeps it
+  // honest without ever blocking navigation.
   const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
     queryFn: async () => (await subscriptionApi.get()).data,
@@ -60,11 +65,28 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
     return <>{children}</>;
   }
 
-  // Optimistic while loading — never flash a paywall before we know the plan.
+  // FAIL-OPEN, QUIET. The gate may only block when the server POSITIVELY
+  // said «this feature is not in the plan». Every uncertain state lets the
+  // user through:
+  //   • still loading (no data yet)  → render the screen, no paywall flash;
+  //   • fetch failed with no cache   → render the screen, no error state —
+  //     a network blip must never lock a paid customer out of his data;
+  //   • fetch failed WITH cache      → `sub` keeps the cached value (React
+  //     Query retains data on error), gate works off the cached plan.
+  // `!sub` covers BOTH the loading and the error-without-cache case — `data`
+  // stays undefined when the query errors against an empty cache, so a slow
+  // or failed subscription fetch can never block or paywall a screen.
   if (!sub) return <>{children}</>;
 
+  // Contract-shape guard: if the payload has no resolvable feature list
+  // (older backend / partial response), we cannot prove the feature is
+  // missing — fail open rather than paywall a paying tenant.
+  if (!Array.isArray(sub.features)) {
+    return <>{children}</>;
+  }
+
   // Gate on the server-resolved feature list (authoritative, by planId).
-  if (Array.isArray(sub.features) && sub.features.includes(featureKey)) {
+  if (sub.features.includes(featureKey)) {
     return <>{children}</>;
   }
 

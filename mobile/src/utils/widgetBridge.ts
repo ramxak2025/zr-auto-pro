@@ -54,3 +54,27 @@ export function updateWidgetData(data: WidgetData): void {
     // Silent fail — widget is non-critical.
   }
 }
+
+/**
+ * Wipe the widget payload on logout / 401 / account switch.
+ *
+ * Writes the `role: 'none'` sentinel; AuTexaWidget.swift maps it to the
+ * neutral «Откройте Autexa» empty state. Without this, the previous
+ * session's numbers (e.g. the owner's оборот/прибыль) stayed on the
+ * springboard after logout AND were shown to the NEXT user — a master
+ * logging in on the same device saw the owner's profit widget until his
+ * own dashboard overwrote the payload. Fire-and-forget, no-op on Android.
+ */
+export function clearWidgetData(): void {
+  if (Platform.OS !== 'ios') return;
+  try {
+    setWidgetData(
+      JSON.stringify({
+        role: 'none',
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  } catch {
+    // Silent fail — widget is non-critical.
+  }
+}

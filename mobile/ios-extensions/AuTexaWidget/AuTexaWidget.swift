@@ -39,6 +39,12 @@ struct WidgetPayload: Codable {
 
     var isMaster: Bool { role == "master" }
 
+    /// `role: "none"` is the logged-out sentinel written by
+    /// `clearWidgetData()` (widgetBridge.ts) on logout / 401 / account
+    /// switch. It must render the neutral empty state — NOT the owner
+    /// layout with zeros, and never the previous session's numbers.
+    var isCleared: Bool { role == "none" }
+
     /// Gallery / placeholder previews.
     static let ownerSample = WidgetPayload(
         role: "owner", revenue: 48_500, profitToday: 21_300, checksCount: 14,
@@ -75,7 +81,10 @@ struct AuTexaWidgetProvider: TimelineProvider {
     func getSnapshot(in context: Context, completion: @escaping (AuTexaWidgetEntry) -> Void) {
         // Widget gallery: show real data when the app has written some,
         // otherwise a polished sample so the preview never looks broken.
-        let payload = loadWidgetPayload() ?? (context.isPreview ? .ownerSample : nil)
+        // A cleared (logged-out) payload counts as "no data" for previews.
+        let stored = loadWidgetPayload()
+        let real = (stored?.isCleared == true) ? nil : stored
+        let payload = real ?? (context.isPreview ? .ownerSample : nil)
         completion(AuTexaWidgetEntry(date: Date(), payload: payload))
     }
 
@@ -397,7 +406,7 @@ struct AuTexaWidgetEntryView: View {
 
     var body: some View {
         Group {
-            if let payload = entry.payload {
+            if let payload = entry.payload, !payload.isCleared {
                 if payload.isMaster {
                     if family == .systemMedium {
                         MasterMediumView(payload: payload)

@@ -23,6 +23,7 @@ import {
 } from '../api/services';
 import { onAuthExpired, setAuthToken } from '../api/axios';
 import { captureException } from '../sentry';
+import { clearWidgetData } from '../utils/widgetBridge';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { toLocalISODate } from '../utils/dates';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
@@ -145,8 +146,28 @@ interface AuthProviderProps {
 /**
  * Fire-and-forget prefetch of cacheable reference data.
  * Errors are swallowed — they'll surface naturally when the screen mounts.
+ *
+ * ROLE HYGIENE (prod incident 2026-06): this fan-out used to fire for EVERY
+ * role identically. Under a master that meant a wave of owner-only requests
+ * (`/checks/dashboard`, `/products/low-stock`, `/calls?date=…`) competing
+ * with the queries the master dashboard actually needs (`/salary/my`,
+ * `/shifts/my`) — and `/calls` is a guaranteed 400×2 (global retry: 1) on
+ * tenants without the МоиЗвонки integration. Every prefetch below is now
+ * gated by the same role/permission rules the screens themselves use
+ * (mirrors `hasPermission` further down this file): a master session fires
+ * ZERO requests it isn't allowed to make or has no screen for.
  */
-function prefetchAfterLogin(qc: QueryClient): void {
+function prefetchAfterLogin(qc: QueryClient, user: User): void {
+  // Mirror of AuthContext.hasPermission (the canonical helper): director and
+  // superadmin implicitly hold every permission; admin/master fall back to
+  // the explicit permissions object from /auth/me.
+  const can = (perm: keyof UserPermissions): boolean =>
+    user.role === 'superadmin' || user.role === 'director' || !!user.permissions?.[perm];
+  // Owner-side dashboard (AdminDashboard in DashboardScreen) mounts for
+  // director / superadmin / admin — masters render MasterDashboard, which
+  // never reads the owner widget keys prefetched under this flag.
+  const isOwnerSide = user.role === 'director' || user.role === 'superadmin' || user.role === 'admin';
+
   // NOTE: there is deliberately NO un-scoped ['products', { search, limit }]
   // prefetch here. ProductsScreen's real key includes the resolved main
   // `warehouseId` (see the warehouse-scoped prefetch below, fired once
@@ -246,15 +267,19 @@ function prefetchAfterLogin(qc: QueryClient): void {
   }).catch(() => {});
 
   // Suppliers / clients / cars / equipment — heavy reference lists; user
-  // perceives screens as instant when these are warm.
-  qc.prefetchQuery({
-    queryKey: ['suppliers', ''],
-    queryFn: async () => {
-      const res: any = await suppliersApi.getAll({ search: '' });
-      return res.data?.data ?? res.data ?? [];
-    },
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
+  // perceives screens as instant when these are warm. Suppliers is
+  // permission-gated in MoreScreen (`suppliers_access`) — a master without
+  // it has no screen that reads this key, so don't burn the request.
+  if (can('suppliers_access')) {
+    qc.prefetchQuery({
+      queryKey: ['suppliers', ''],
+      queryFn: async () => {
+        const res: any = await suppliersApi.getAll({ search: '' });
+        return res.data?.data ?? res.data ?? [];
+      },
+      staleTime: 5 * 60_000,
+    }).catch(() => {});
+  }
 
   // ClientsScreen reads via `useInfiniteQuery` keyed
   //   ['clients-infinite', { search: '', filter: 'all', source: null }]
@@ -262,19 +287,22 @@ function prefetchAfterLogin(qc: QueryClient): void {
   // ClientsScreen). The old plain ['clients', …] prefetch landed in a slot
   // nothing reads. Mirror the screen's EXACT key + page-1 request
   // (limit 20, `source: null` — NOT '') so the first open is a cache HIT.
-  qc.prefetchInfiniteQuery({
-    queryKey: ['clients-infinite', { search: '', filter: 'all', source: null }],
-    initialPageParam: 1,
-    queryFn: async ({ pageParam = 1 }) =>
-      (await clientsApi.getAll({ search: '', page: pageParam as number, limit: 20 })).data,
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
+  // Both keys feed the Clients screen, gated by `clients_view` in MoreScreen.
+  if (can('clients_view')) {
+    qc.prefetchInfiniteQuery({
+      queryKey: ['clients-infinite', { search: '', filter: 'all', source: null }],
+      initialPageParam: 1,
+      queryFn: async ({ pageParam = 1 }) =>
+        (await clientsApi.getAll({ search: '', page: pageParam as number, limit: 20 })).data,
+      staleTime: 5 * 60_000,
+    }).catch(() => {});
 
-  qc.prefetchQuery({
-    queryKey: ['cars', { search: '', page: 1, limit: 50 }],
-    queryFn: async () => (await carsApi.getAll({ search: '', page: 1, limit: 50 })).data,
-    staleTime: 5 * 60_000,
-  }).catch(() => {});
+    qc.prefetchQuery({
+      queryKey: ['cars', { search: '', page: 1, limit: 50 }],
+      queryFn: async () => (await carsApi.getAll({ search: '', page: 1, limit: 50 })).data,
+      staleTime: 5 * 60_000,
+    }).catch(() => {});
+  }
 
   qc.prefetchQuery({
     queryKey: ['eq-summary'],
@@ -328,29 +356,32 @@ function prefetchAfterLogin(qc: QueryClient): void {
     staleTime: 5 * 60_000,
   }).catch(() => {});
 
-  // Dashboard widgets — owners see TodayQuickStats / LowStockWidget /
-  // MissedCallsWidget. Tiny endpoints, prefetch always (master role
-  // simply won't render the widgets, no cost on render).
-  qc.prefetchQuery({
-    queryKey: ['checks-dashboard'],
-    queryFn: async () => (await checksApi.getDashboard()).data,
-    staleTime: 30_000,
-  }).catch(() => {});
+  // Owner-dashboard-only widgets (LowStockCard / CallsSnapshot in
+  // DashboardScreen's AdminDashboard). Masters never mount these widgets and
+  // never read these keys — prefetching under a master was pure waste, and
+  // `/calls` is a guaranteed 400 on tenants without the МоиЗвонки
+  // integration (×2 with the global retry), polluting the master login.
+  //
+  // NOTE: the former ['checks-dashboard'] prefetch was removed entirely —
+  // no `useQuery` anywhere in mobile/src reads that key any more (only
+  // write-side invalidations reference it), so it was a dead request on
+  // every login for every role.
+  if (isOwnerSide) {
+    qc.prefetchQuery({
+      queryKey: ['low-stock'],
+      queryFn: async () => (await productsApi.getLowStock()).data,
+      staleTime: 60_000,
+    }).catch(() => {});
 
-  qc.prefetchQuery({
-    queryKey: ['low-stock'],
-    queryFn: async () => (await productsApi.getLowStock()).data,
-    staleTime: 60_000,
-  }).catch(() => {});
-
-  // LOCAL date — `toISOString()` is UTC and pointed the «Звонки сегодня»
-  // prefetch at yesterday's slot after local midnight in RU timezones.
-  const today = toLocalISODate();
-  qc.prefetchQuery({
-    queryKey: ['calls-summary', today],
-    queryFn: async () => (await callsApi.getCalls({ date: today })).data.summary,
-    staleTime: 60_000,
-  }).catch(() => {});
+    // LOCAL date — `toISOString()` is UTC and pointed the «Звонки сегодня»
+    // prefetch at yesterday's slot after local midnight in RU timezones.
+    const today = toLocalISODate();
+    qc.prefetchQuery({
+      queryKey: ['calls-summary', today],
+      queryFn: async () => (await callsApi.getCalls({ date: today })).data.summary,
+      staleTime: 60_000,
+    }).catch(() => {});
+  }
 
   // Subscription gates the entire app (FeatureGate paywall). Prefetch it
   // so the first protected screen doesn't flash the loading state.
@@ -490,7 +521,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         setUser(fresh);
         persistUser(fresh).catch(() => {});
         // Token still valid — kick off prefetch for a warm session.
-        if (queryClient) prefetchAfterLogin(queryClient);
+        if (queryClient) prefetchAfterLogin(queryClient, fresh);
       } catch (err) {
         if (cancelled) return;
         if (isAuthExpiry(err)) {
@@ -546,6 +577,9 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
       // Clear persistent cache so the next login starts fresh
       clearPersistentCache().catch(() => {});
+      // Session died — the widget must not keep showing the dead session's
+      // numbers (same privacy contract as the cached-user wipe above).
+      clearWidgetData();
       queryClient?.clear();
     });
   }, [queryClient]);
@@ -568,6 +602,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       queryClient?.cancelQueries().catch(() => {});
       queryClient?.clear();
       await clearPersistentCache().catch(() => {});
+      // Same cross-tenant/-role isolation for the home-screen widget: the
+      // App Group payload may still hold user A's numbers (e.g. the owner's
+      // прибыль). Wipe it BEFORE B's session starts — B's own dashboard
+      // re-populates it with the correct role-shaped payload on first load.
+      clearWidgetData();
       // Drop tenant A's bearer + ETag cache BEFORE priming B's token, so a
       // 304 against an A-era ETag can never resurrect A's body into B's
       // session. setAuthToken(null) clears the ETag map; setAuthToken(t)
@@ -583,7 +622,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setAuthToken(t);
       setToken(t);
       setUser(u);
-      if (queryClient) prefetchAfterLogin(queryClient);
+      if (queryClient) prefetchAfterLogin(queryClient, u);
     },
     [queryClient],
   );
@@ -624,6 +663,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     await AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
     await AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
     await clearPersistentCache().catch(() => {});
+    // Wipe the home-screen widget payload — the owner's revenue/profit (or a
+    // master's earnings) must never stay visible on the springboard after
+    // logout, nor leak into the next user's widget until their dashboard
+    // writes fresh role-shaped data.
+    clearWidgetData();
     queryClient?.clear();
     setToken(null);
     setUser(null);
@@ -648,6 +692,10 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       queryClient?.cancelQueries().catch(() => {});
       queryClient?.clear();
       await clearPersistentCache().catch(() => {});
+      // Same widget isolation as login(): the superadmin's (or previous
+      // session's) widget payload must not survive into the impersonated
+      // tenant's session.
+      clearWidgetData();
       setAuthToken(null);
       await AsyncStorage.setItem('token', t);
       await persistUser(u);
@@ -656,7 +704,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       setToken(t);
       setUser(u);
       setIsImpersonating(true);
-      if (queryClient) prefetchAfterLogin(queryClient);
+      if (queryClient) prefetchAfterLogin(queryClient, u);
     },
     [queryClient],
   );

@@ -3184,7 +3184,7 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
 function MasterDashboard() {
   const palette = useColors();
   const { user } = useAuth();
-  const { data, isLoading } = useQuery<SalarySummary>({
+  const { data, isLoading, isError, refetch } = useQuery<SalarySummary>({
     queryKey: ['salary', 'my-summary'],
     queryFn: async () => {
       const res = await salaryApi.getMy();
@@ -3224,8 +3224,17 @@ function MasterDashboard() {
     });
   }, [hasSalary, earningsToday, earningsMonth, shiftOpen]);
 
-  if (isLoading) return <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />;
-  if (!data) return <Text style={styles.errorBanner}>Не удалось загрузить данные</Text>;
+  // Honest, retryable error state (prod incident 2026-06): the old static
+  // «Не удалось загрузить данные» banner was a dead end — no retry button,
+  // so a master whose /salary/my failed once (timeout / network blip) was
+  // stuck until he killed the app. With cached data the global
+  // stale-while-revalidate keeps rendering the previous numbers instead.
+  if (isError && data === undefined) {
+    return (
+      <QueryErrorState description="Заработок за сегодня недоступен. Проверьте соединение." onRetry={() => refetch()} />
+    );
+  }
+  if (isLoading || !data) return <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />;
 
   const initials =
     user?.fullName
@@ -3435,45 +3444,47 @@ export default function DashboardScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    // Invalidate only the queries this screen actually reads. The previous
-    // `invalidateQueries()` (no filter) refetched EVERY key in the app —
-    // products list, schedule grid, suppliers, cars — every time the
-    // owner pulled to refresh the dashboard. On a slow connection that
-    // stalled the JS thread with 15+ parallel refetches and a flurry of
-    // SWR `placeholderData` swaps across screens that weren't even on
-    // the stack. Targeting the dashboard-only keys cuts that to ~7.
-    const dashboardKeys: (string | (string | number)[])[][] = [
-      // Owner-side widgets:
+    // Invalidate only the queries THIS role's dashboard actually reads. The
+    // previous single list mixed owner and master keys: a master's
+    // pull-to-refresh would mark owner-only queries (dashboard-v2,
+    // warehouse-analytics, …) stale — and `/reports/*` +
+    // `/warehouse-analytics/*` are 403 for masters (controller-level
+    // @Roles('director','admin','superadmin')), so any accidentally-active
+    // observer turned the gesture into a wave of forbidden requests + error
+    // states. Splitting by role guarantees the master experience fires ZERO
+    // requests it isn't allowed to make. (And never `invalidateQueries()`
+    // with no filter — that refetched EVERY key in the app.)
+    const ownerKeys: (string | (string | number)[])[][] = [
       ['dashboard-chart'],
       ['dashboard-v2'],
       ['schedule-today'],
-      ['marketing-dashboard'],
       ['calls-summary'],
-      // Owner widget queries (new in iter#14):
       // owner-alerts → replaced by WarehouseAnalyticsWidget; pull-to-refresh
-      // now invalidates both warehouse-analytics sub-queries.
+      // invalidates both warehouse-analytics sub-queries.
       ['warehouse-analytics'],
+      ['low-stock'],
       ['clients-new-returning'],
       ['retention'],
       ['best-day-week'],
       ['recent-reviews'],
       ['call-funnel'],
-      // Master-side widgets:
+    ];
+    const masterKeys: (string | (string | number)[])[][] = [
       ['shifts'],
       ['salary'],
       // MasterRecentChecks reads ['checks', 'recent-master']; restrict
       // the invalidation to that exact suffix so we don't accidentally
       // refetch the entire Journal infinite-scroll cache.
       ['checks', 'recent-master'],
+      // MasterRatingCard reads the marketing dashboard (open to all roles).
+      ['marketing-dashboard'],
       // MyAttendanceRankWidget reads ['schedule', monthStart, monthEnd]
       // and ['users']. ['schedule'] alone matches every month-window
       // ever cached; restrict to the explicit prefix so we don't tear
       // down the schedule grid on a different month.
       ['users'],
-      // employee-ranking — оставляем на случай, если MasterDashboard или
-      // другие виджеты потом снова начнут читать ranking.
-      ['employee-ranking'],
     ];
+    const dashboardKeys = isMaster ? masterKeys : ownerKeys;
     await Promise.all(dashboardKeys.map((key) => queryClient.invalidateQueries({ queryKey: key })));
     setRefreshing(false);
   };
@@ -4481,15 +4492,8 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, textAlign: 'center', paddingVertical: spacing[3] },
 
   // ── LEGACY (master path) ─────────────────────────────────────────────────
-  errorBanner: {
-    backgroundColor: colors.red[50],
-    borderRadius: borderRadius.xl,
-    padding: spacing[4],
-    fontSize: fontSize.sm,
-    color: colors.red[700],
-    textAlign: 'center',
-    margin: spacing[4],
-  },
+  // (errorBanner removed — MasterDashboard now uses the shared
+  // QueryErrorState component with a working «Повторить» button.)
   shiftRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   shiftLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   shiftIcon: { width: 40, height: 40, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
