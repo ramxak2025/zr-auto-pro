@@ -19,6 +19,9 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.autexa.mobile",
       "buildNumber": "3",
+      "entitlements": {
+        "com.apple.security.application-groups": ["group.com.autexa.mobile"]
+      },
       "infoPlist": {
         "NSCameraUsageDescription": "Приложению нужен доступ к камере для фотографирования документов и автомобилей",
         "NSPhotoLibraryUsageDescription": "Приложению нужен доступ к галерее для выбора фотографий",
@@ -77,13 +80,29 @@
       "apiUrl": "https://autexa.pw/api",
       "sentryDsn": "https://d248fd476c55b8b4854145c66cd9c115@o4511507149291520.ingest.us.sentry.io/4511507152502784",
       "eas": {
-        "projectId": "cccdafdb-191a-4271-a61a-f95ab35cb223"
+        "projectId": "cccdafdb-191a-4271-a61a-f95ab35cb223",
+        "build": {
+          "experimental": {
+            "ios": {
+              "appExtensions": [
+                {
+                  "targetName": "AuTexaWidget",
+                  "bundleIdentifier": "com.autexa.mobile.widget",
+                  "entitlements": {
+                    "com.apple.security.application-groups": ["group.com.autexa.mobile"]
+                  }
+                }
+              ]
+            }
+          }
+        }
       }
     },
     "plugins": [
       "expo-updates",
       "./plugins/withDisableUserScriptSandboxing.js",
       "./plugins/withAndroidPredictiveBack.js",
+      "./plugins/withWidgetExtension.js",
       [
         "expo-build-properties",
         {

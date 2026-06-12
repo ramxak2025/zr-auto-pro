@@ -2,12 +2,12 @@ import ExpoModulesCore
 import UIKit
 import WidgetKit
 
-/// The AuTexaWidget extension target is temporarily disabled (commit 6c2b25c)
-/// and the app currently ships WITHOUT the App Group entitlement, so writing
-/// into `group.com.autexa.mobile` would be a dead write into a suite nobody
-/// reads. Flip back to `true` together with re-enabling the widget extension
-/// AND restoring the app-group entitlement in app.json.
-private let WIDGET_ENABLED = false
+/// The AuTexaWidget extension target is enabled again: the config plugin
+/// `plugins/withWidgetExtension.js` is back in app.json plugins, the main app
+/// carries the `group.com.autexa.mobile` App Group entitlement, and EAS signs
+/// the extension via `extra.eas.build.experimental.ios.appExtensions`. The
+/// write below lands in the shared suite the widget reads on its timeline.
+private let WIDGET_ENABLED = true
 
 public class AutexaLiquidGlassModule: Module {
   public func definition() -> ModuleDefinition {
@@ -29,9 +29,10 @@ public class AutexaLiquidGlassModule: Module {
     // request. Immediately reloads all widget timelines so the Home Screen
     // reflects the new data within seconds.
     //
-    // `json` must be a JSON string conforming to the WidgetDashboardData
-    // struct in ios-extensions/AuTexaWidget/AuTexaWidget.swift:
-    //   { revenue, checksCount, profitToday, shiftOpen, updatedAt }
+    // `json` must be a JSON string conforming to the WidgetPayload struct
+    // in ios-extensions/AuTexaWidget/AuTexaWidget.swift. Role-dependent:
+    //   master → { role: "master", earningsToday, earningsMonth, shiftOpen?, updatedAt }
+    //   owner  → { role: "owner", revenue, profitToday, checksCount, updatedAt }
     //
     // On any OS where WidgetKit is not available (iOS < 14) the write still
     // succeeds (UserDefaults) but reloadAllTimelines is a no-op.

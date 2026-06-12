@@ -20,11 +20,13 @@ const WIDGET_TARGET = 'AuTexaWidget';
 const APP_GROUP = 'group.com.autexa.mobile';
 const WIDGET_BUNDLE_ID = 'com.autexa.mobile.widget';
 const DEPLOYMENT_TARGET = '17.0';
-// Apple Developer Team for owner Ramazan Shamsudinov, matches the
-// cert installed in the keychain. Setting on the widget target via
-// the plugin avoids the "Signing for AuTexaWidget requires a
-// development team" error after every prebuild --clean.
-const DEVELOPMENT_TEAM = 'XHTQCBD2K4';
+// Apple Developer Team for owner Ramazan Shamsudinov. MUST be the PAID
+// team 98SHYK65HQ (the OU of the installed distribution cert) — NOT the
+// free Personal Team XHTQCBD2K4, which produces the 7-day "Unable to
+// Verify App" nag and cannot provision com.autexa.mobile.widget on EAS.
+// Setting it on the widget target via the plugin avoids the "Signing for
+// AuTexaWidget requires a development team" error after prebuild --clean.
+const DEVELOPMENT_TEAM = '98SHYK65HQ';
 const SRC_DIR = path.join(__dirname, '..', 'ios-extensions', 'AuTexaWidget');
 
 function copyWidgetFiles(iosRoot) {
@@ -49,10 +51,7 @@ function writeWidgetEntitlements(iosRoot) {
 </dict>
 </plist>
 `;
-  fs.writeFileSync(
-    path.join(iosRoot, WIDGET_TARGET, `${WIDGET_TARGET}.entitlements`),
-    content
-  );
+  fs.writeFileSync(path.join(iosRoot, WIDGET_TARGET, `${WIDGET_TARGET}.entitlements`), content);
 }
 
 // ── A) App Groups entitlement on main app ─────────────────────────────────────
@@ -96,12 +95,7 @@ const withWidgetTarget = (config) =>
     //    Copy Files build phase in the first (main) target that embeds the
     //    widget .appex. So we DO NOT add an "Embed App Extensions" phase
     //    ourselves — that would create a duplicate.
-    const widgetTarget = proj.addTarget(
-      WIDGET_TARGET,
-      'app_extension',
-      WIDGET_TARGET,
-      WIDGET_BUNDLE_ID
-    );
+    const widgetTarget = proj.addTarget(WIDGET_TARGET, 'app_extension', WIDGET_TARGET, WIDGET_BUNDLE_ID);
     const widgetTargetUuid = widgetTarget.uuid;
 
     // 2. addTarget leaves buildPhases empty on the new target. Source files,
@@ -130,16 +124,10 @@ const withWidgetTarget = (config) =>
     //    so any file added to it inherits that prefix. We pass BARE filenames
     //    here — otherwise we'd get the double `AuTexaWidget/AuTexaWidget/...`
     //    that fails the build.
-    const swiftFiles = fs
-      .readdirSync(path.join(iosRoot, WIDGET_TARGET))
-      .filter((f) => f.endsWith('.swift'));
+    const swiftFiles = fs.readdirSync(path.join(iosRoot, WIDGET_TARGET)).filter((f) => f.endsWith('.swift'));
 
     for (const file of swiftFiles) {
-      proj.addSourceFile(
-        file,
-        { target: widgetTargetUuid },
-        widgetGroupKey
-      );
+      proj.addSourceFile(file, { target: widgetTargetUuid }, widgetGroupKey);
     }
 
     // Info.plist and entitlements: file refs only (no build phase).
@@ -160,9 +148,8 @@ const withWidgetTarget = (config) =>
       // XCConfigurationList for our target is referenced by widgetTarget's
       // pbxNativeTarget.buildConfigurationList; that list's `buildConfigurations`
       // array contains UUIDs that match keys in this section.
-      const targetCfgList = proj.hash.project.objects.XCConfigurationList[
-        widgetTarget.pbxNativeTarget.buildConfigurationList
-      ];
+      const targetCfgList =
+        proj.hash.project.objects.XCConfigurationList[widgetTarget.pbxNativeTarget.buildConfigurationList];
       if (!targetCfgList || !Array.isArray(targetCfgList.buildConfigurations)) continue;
       const ourConfigUuids = targetCfgList.buildConfigurations.map((c) => c.value);
       if (!ourConfigUuids.includes(key)) continue;

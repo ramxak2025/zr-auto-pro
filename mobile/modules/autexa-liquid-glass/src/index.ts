@@ -11,9 +11,10 @@ export { AutexaKassaButton } from './AutexaKassaButton';
  * the AuTexaWidget WidgetKit extension can display it on the Home Screen.
  * Immediately triggers a widget timeline reload (WidgetCenter.reloadAllTimelines).
  *
- * `json` must be a JSON string matching:
- *   { revenue: number, checksCount: number, profitToday: number,
- *     shiftOpen: boolean, updatedAt: string }
+ * `json` must be a JSON string matching the role-aware WidgetPayload
+ * (see ios-extensions/AuTexaWidget/AuTexaWidget.swift):
+ *   master → { role: 'master', earningsToday, earningsMonth, shiftOpen?, updatedAt }
+ *   owner  → { role: 'owner', revenue, profitToday, checksCount, updatedAt }
  *
  * Safe to call on Android — falls through to a no-op silently.
  */

@@ -241,10 +241,10 @@ function OwnerHero({ name }: { name: string }) {
   useEffect(() => {
     if (!hasV2) return;
     updateWidgetData({
+      role: 'owner',
       revenue: revenueToday,
-      checksCount: checksToday,
       profitToday,
-      shiftOpen: false,
+      checksCount: checksToday,
     });
   }, [hasV2, revenueToday, checksToday, profitToday]);
 
@@ -3192,6 +3192,37 @@ function MasterDashboard() {
     },
     staleTime: 30_000,
   });
+
+  // Mirror of ShiftControl's query — identical key + staleTime, so
+  // TanStack dedupes this observer into the single fetch ShiftControl
+  // already makes (both mount in the same render pass). No extra
+  // network request — only used for the widget's shift indicator.
+  const { data: myShifts } = useQuery<Shift[]>({
+    queryKey: ['shifts', 'my'],
+    queryFn: async () => {
+      const res = await shiftsApi.getMy();
+      return res.data;
+    },
+    staleTime: 10_000,
+  });
+  const shiftOpen = (myShifts ?? []).some((s) => !s.closedAt);
+
+  // Sync the iOS home-screen widget with the master's earnings.
+  // Source: salaryApi.getMy() — the exact numbers the «Сегодня /
+  // За месяц» cards below already render. Primitive deps only —
+  // `data` gets a fresh reference on every successful refetch.
+  const hasSalary = data !== undefined;
+  const earningsToday = data?.today ?? 0;
+  const earningsMonth = data?.month ?? 0;
+  useEffect(() => {
+    if (!hasSalary) return;
+    updateWidgetData({
+      role: 'master',
+      earningsToday,
+      earningsMonth,
+      shiftOpen,
+    });
+  }, [hasSalary, earningsToday, earningsMonth, shiftOpen]);
 
   if (isLoading) return <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary[600]} />;
   if (!data) return <Text style={styles.errorBanner}>Не удалось загрузить данные</Text>;
