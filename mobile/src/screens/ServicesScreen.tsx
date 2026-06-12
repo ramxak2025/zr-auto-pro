@@ -25,6 +25,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Service, PaginatedResponse } from '../../../shared/types';
 
@@ -112,25 +113,42 @@ export default function ServicesScreen() {
   const createMutation = useMutation({
     mutationFn: (d: any) => servicesApi.create(d),
     onSuccess: () => {
+      haptic('success');
       queryClient.invalidateQueries({ queryKey: ['services'] });
+      // Касса reads the full list under its own key — keep it fresh too.
+      queryClient.invalidateQueries({ queryKey: ['all-services'] });
       closeModal();
     },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при создании'),
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Ошибка при создании');
+    },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => servicesApi.update(id, data),
     onSuccess: () => {
+      haptic('success');
       queryClient.invalidateQueries({ queryKey: ['services'] });
+      queryClient.invalidateQueries({ queryKey: ['all-services'] });
       closeModal();
     },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при обновлении'),
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Ошибка при обновлении');
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => servicesApi.remove(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['services'] }),
-    onError: () => Alert.alert('Ошибка', 'Ошибка при удалении'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['services'] });
+      queryClient.invalidateQueries({ queryKey: ['all-services'] });
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Ошибка при удалении');
+    },
   });
 
   const openCreate = () => {

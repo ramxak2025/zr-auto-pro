@@ -381,13 +381,16 @@ export default function MoreScreen() {
   });
   const pendingRegsCount = pendingRegs?.count ?? 0;
 
-  const currentPlan = sub?.plans?.find((p) => p.name === sub?.planName);
-  const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
+  // Lock badges mirror FeatureGate exactly: gate on the server-resolved
+  // `sub.features` (authoritative, keyed by planId) — NOT the fragile
+  // plan-NAME match against sub.plans. Superadmin bypasses everything;
+  // while the subscription is loading nothing is shown locked
+  // (optimistic, same as FeatureGate never flashing a paywall).
   const isBypass = user?.role === 'superadmin';
 
   const isFeatureLocked = (featureKey?: string) => {
     if (!featureKey || isBypass || !sub) return false;
-    return !planFeatures.includes(featureKey);
+    return !(Array.isArray(sub.features) && sub.features.includes(featureKey));
   };
 
   const filterItem = (item: MenuItem): boolean => {
@@ -537,7 +540,12 @@ export default function MoreScreen() {
         {/* Logout */}
         <TouchableOpacity
           style={[styles.logoutBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          onPress={logout}
+          onPress={() =>
+            Alert.alert('Выйти из аккаунта?', 'Вы сможете снова войти по логину и паролю.', [
+              { text: 'Отмена', style: 'cancel' },
+              { text: 'Выйти', style: 'destructive', onPress: () => logout() },
+            ])
+          }
           activeOpacity={0.7}
         >
           <Ionicons name="log-out-outline" size={18} color={colors.red[600]} />

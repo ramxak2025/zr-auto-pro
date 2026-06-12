@@ -816,7 +816,7 @@ export default function SupplierDetailScreen() {
                         <Text style={[styles.deliveryDate, { color: palette.text.primary }]}>{formatDate(d.date)}</Text>
                         {d.paymentStatus === 'paid' && (
                           <View style={[styles.statusBadge, styles.statusPaid]}>
-                            <Ionicons name="checkmark-circle" size={11} color={colors.green[700]} />
+                            <Ionicons name="checkmark-circle" size={13} color={colors.green[700]} />
                             <Text style={[styles.statusBadgeText, { color: colors.green[700] }]}>Оплачено</Text>
                           </View>
                         )}
@@ -1152,14 +1152,20 @@ export default function SupplierDetailScreen() {
       {/* Used-purchase modal — owner types a free-form product name +
           qty + price + optional folder. Backend auto-creates or
           increments the matching Б/У SKU and grows supplier debt. */}
-      <Modal visible={usedPurchaseModalOpen} onClose={() => setUsedPurchaseModalOpen(false)} title="Покупка б/у запчасти">
+      <Modal
+        visible={usedPurchaseModalOpen}
+        onClose={() => setUsedPurchaseModalOpen(false)}
+        title="Покупка б/у запчасти"
+      >
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
           {/* Informational chip — owner needs to know the financial
               side of this action ends up in the «Покупка товара»
               expenses bucket. Backend handles the bookkeeping; UI
               just makes that contract visible so there's no surprise
               when reviewing expenses. */}
-          <View style={[styles.expenseNotice, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <View
+            style={[styles.expenseNotice, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
             <Ionicons name="information-circle-outline" size={16} color={colors.primary[600]} />
             <Text style={[styles.expenseNoticeText, { color: palette.text.secondary }]}>
               Эта покупка автоматически попадёт в расходы в категорию «Покупка товара».
@@ -1211,8 +1217,9 @@ export default function SupplierDetailScreen() {
               placeholderTextColor={colors.gray[400]}
             />
             <Text style={{ fontSize: 11, color: colors.gray[500], marginTop: spacing[1] }}>
-              Если не заполнено, цена будет {Number(upPrice) > 0 ? `≈ ${formatMoney(Number(upPrice))} (= закупочной)` : 'не установлена'}.
-              {'\n'}Установите её позже на складе Б/У.
+              Если не заполнено, цена будет{' '}
+              {Number(upPrice) > 0 ? `≈ ${formatMoney(Number(upPrice))} (= закупочной)` : 'не установлена'}.{'\n'}
+              Установите её позже на складе Б/У.
             </Text>
           </View>
           <View style={styles.formField}>

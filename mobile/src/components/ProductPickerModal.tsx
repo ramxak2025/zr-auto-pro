@@ -504,10 +504,7 @@ export default function ProductPickerModal({
             drag the blur up too); swipe-back stays on `panResponder`. */}
         <ModalBlurBackdrop onPress={handleClose} />
         <Animated.View
-          style={[
-            styles.container,
-            { transform: [{ translateX: panX }, { translateY: cardTranslateY }] },
-          ]}
+          style={[styles.container, { transform: [{ translateX: panX }, { translateY: cardTranslateY }] }]}
           {...panResponder.panHandlers}
         >
           {/* Handle bar */}
@@ -575,7 +572,7 @@ export default function ProductPickerModal({
                       <Text style={styles.warehouseDropdownSub}>{sub}</Text>
                     </View>
                     {active ? (
-                      <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />
+                      <Ionicons name="checkmark" size={20} color={colors.primary[600]} />
                     ) : (
                       <View style={{ width: 20 }} />
                     )}

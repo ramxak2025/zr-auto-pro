@@ -6,14 +6,7 @@
  *
  * A single semantic `name` maps to the correct glyph on each platform.
  * If you need a glyph that isn't mapped yet — add it to GLYPH_MAP below.
- *
- * Note: expo-symbols is installed via `npx expo install expo-symbols` on the
- * developer's machine but isn't pinned in package.json (it's a recent SDK
- * addition). The @ts-ignore below keeps the typecheck green when the dev
- * environment hasn't run `expo install` yet — at runtime the module loads
- * normally on iOS via Expo autolinking.
  */
-// @ts-ignore — optional native module (installed via `expo install expo-symbols`)
 import { SymbolView } from 'expo-symbols';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import React from 'react';

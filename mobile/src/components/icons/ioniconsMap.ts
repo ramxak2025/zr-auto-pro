@@ -22,7 +22,18 @@ export interface IconMapEntry {
   lucide: string;
   /** true → bolder stroke (matches Ionicons' filled style). */
   solid?: boolean;
-  /** true → render with fill (instead of just stroke). For pill/badge icons. */
+  /**
+   * true → also fill the SVG paths with `color` (not just stroke them).
+   *
+   * ВАЖНО (правило fill-аудита 2026-06): the shim passes `fill={color}`
+   * down to EVERY child path of the lucide glyph, so any same-color stroke
+   * lying INSIDE a filled shape becomes invisible. Therefore `fill` is
+   * allowed ONLY for true silhouettes — glyphs whose meaning survives as a
+   * solid shape with no meaning-bearing interior strokes (Heart, Star,
+   * Play, Flame, Folder, Bookmark, …). Never for «кружок + глиф» badges
+   * (check / x / alert / play inside a circle), envelopes, cards, cubes,
+   * receipts, buildings — those degrade into illegible blobs.
+   */
   fill?: boolean;
 }
 
@@ -75,20 +86,27 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
 
   // ── close / check ─────────────────────────────────────────────────────
   close: { lucide: 'X', solid: true },
-  'close-circle': { lucide: 'XCircle', solid: true, fill: true },
+  'close-circle': { lucide: 'XCircle', solid: true },
   'close-circle-outline': { lucide: 'XCircle' },
   checkmark: { lucide: 'Check', solid: true },
-  'checkmark-circle': { lucide: 'CheckCircle', solid: true, fill: true },
-  'checkmark-circle-outline': { lucide: 'CheckCircle' },
+  // CircleCheck = замкнутый круг + галочка. НЕ 'CheckCircle': в lucide это
+  // алиас CircleCheckBig (разорванная дуга), который с fill вырождался в
+  // «жирную каплю» — жалоба владельца.
+  'checkmark-circle': { lucide: 'CircleCheck', solid: true },
+  'checkmark-circle-outline': { lucide: 'CircleCheck' },
+  'checkmark-done': { lucide: 'CheckCheck', solid: true },
+  'checkmark-done-outline': { lucide: 'CheckCheck' },
 
   // ── people / accounts ─────────────────────────────────────────────────
   person: { lucide: 'User', solid: true, fill: true },
   'person-outline': { lucide: 'User' },
-  'person-circle': { lucide: 'CircleUserRound', solid: true, fill: true },
+  // person-circle / people-circle: без fill — заливка внешнего круга прячет
+  // фигурку внутри (однотонный диск вместо иконки).
+  'person-circle': { lucide: 'CircleUserRound', solid: true },
   'person-circle-outline': { lucide: 'CircleUserRound' },
   people: { lucide: 'Users', solid: true, fill: true },
   'people-outline': { lucide: 'Users' },
-  'people-circle': { lucide: 'UsersRound', solid: true, fill: true },
+  'people-circle': { lucide: 'UsersRound', solid: true },
   'people-circle-outline': { lucide: 'UsersRound' },
 
   // ── communication ─────────────────────────────────────────────────────
@@ -98,7 +116,8 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'chatbubble-ellipses-outline': { lucide: 'MessageCircle' },
   'chatbubbles-outline': { lucide: 'MessagesSquare' },
   'paper-plane-outline': { lucide: 'Send' },
-  send: { lucide: 'Send', solid: true, fill: true },
+  // Send: линия сгиба проходит внутри корпуса самолётика — fill её прячет.
+  send: { lucide: 'Send', solid: true },
   'logo-whatsapp': { lucide: 'MessageCircle' },
 
   // ── commerce / money ──────────────────────────────────────────────────
@@ -110,7 +129,7 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'pricetags-outline': { lucide: 'Tags' },
   'gift-outline': { lucide: 'Gift' },
   'receipt-outline': { lucide: 'Receipt' },
-  receipt: { lucide: 'Receipt', solid: true, fill: true },
+  receipt: { lucide: 'Receipt', solid: true },
   'storefront-outline': { lucide: 'Store' },
 
   // ── productivity / docs ───────────────────────────────────────────────
@@ -134,16 +153,16 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'bus-outline': { lucide: 'Bus' },
   'home-outline': { lucide: 'Home' },
   'business-outline': { lucide: 'Building2' },
-  business: { lucide: 'Building2', solid: true, fill: true },
+  business: { lucide: 'Building2', solid: true },
 
   // ── work / tools ──────────────────────────────────────────────────────
   'build-outline': { lucide: 'Wrench' },
   build: { lucide: 'Wrench', solid: true },
   'construct-outline': { lucide: 'Wrench' },
   'cube-outline': { lucide: 'Box' },
-  cube: { lucide: 'Box', solid: true, fill: true },
+  cube: { lucide: 'Box', solid: true },
   'camera-outline': { lucide: 'Camera' },
-  camera: { lucide: 'Camera', solid: true, fill: true },
+  camera: { lucide: 'Camera', solid: true },
 
   // ── status / charts ───────────────────────────────────────────────────
   'analytics-outline': { lucide: 'BarChart3' },
@@ -151,13 +170,13 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'bar-chart': { lucide: 'BarChart3', solid: true },
   'bar-chart-outline': { lucide: 'BarChart3' },
   'pie-chart-outline': { lucide: 'PieChart' },
-  'pie-chart': { lucide: 'PieChart', solid: true, fill: true },
+  'pie-chart': { lucide: 'PieChart', solid: true },
   speedometer: { lucide: 'Gauge', solid: true },
   'speedometer-outline': { lucide: 'Gauge' },
   'trending-up': { lucide: 'TrendingUp', solid: true },
   'trending-up-outline': { lucide: 'TrendingUp' },
   'trending-down-outline': { lucide: 'TrendingDown' },
-  trophy: { lucide: 'Trophy', solid: true, fill: true },
+  trophy: { lucide: 'Trophy', solid: true },
   'trophy-outline': { lucide: 'Trophy' },
   star: { lucide: 'Star', solid: true, fill: true },
 
@@ -173,9 +192,11 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'expand-outline': { lucide: 'Maximize2' },
   search: { lucide: 'Search', solid: true },
   'search-outline': { lucide: 'Search' },
-  'alert-circle': { lucide: 'AlertCircle', solid: true, fill: true },
+  // alert-circle / warning: «!» внутри контура — с fill превращались в
+  // однотонный диск / сплошной треугольник без восклицательного знака.
+  'alert-circle': { lucide: 'AlertCircle', solid: true },
   'information-circle-outline': { lucide: 'Info' },
-  warning: { lucide: 'AlertTriangle', solid: true, fill: true },
+  warning: { lucide: 'AlertTriangle', solid: true },
   'warning-outline': { lucide: 'AlertTriangle' },
   'lock-closed': { lucide: 'Lock', solid: true, fill: true },
   'enter-outline': { lucide: 'LogIn' },
@@ -206,12 +227,13 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'grid-outline': { lucide: 'LayoutGrid' },
   grid: { lucide: 'LayoutGrid', solid: true, fill: true },
   'help-circle-outline': { lucide: 'HelpCircle' },
-  home: { lucide: 'Home', solid: true, fill: true },
+  // Home: дверь — отдельный штрих внутри контура дома, fill её прятал.
+  home: { lucide: 'Home', solid: true },
   journal: { lucide: 'BookOpen', solid: true },
   'link-outline': { lucide: 'Link' },
   'location-outline': { lucide: 'MapPin' },
   'map-outline': { lucide: 'Map' },
-  medkit: { lucide: 'BriefcaseMedical', solid: true, fill: true },
+  medkit: { lucide: 'BriefcaseMedical', solid: true },
   'medkit-outline': { lucide: 'BriefcaseMedical' },
   menu: { lucide: 'Menu', solid: true },
   moon: { lucide: 'Moon', solid: true, fill: true },
@@ -236,7 +258,8 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   funnel: { lucide: 'Funnel', solid: true, fill: true },
   'funnel-outline': { lucide: 'Funnel' },
   // Verified-status / trust glyphs (e.g. user list, supplier card).
-  'shield-checkmark': { lucide: 'ShieldCheck', solid: true, fill: true },
+  // Без fill: галочка лежит внутри щита, заливка превращала её в блоб.
+  'shield-checkmark': { lucide: 'ShieldCheck', solid: true },
   // Sync / pull-to-refresh affordances rendered as text icons in some lists.
   sync: { lucide: 'RotateCw', solid: true },
   'sync-outline': { lucide: 'RotateCw' },
@@ -266,7 +289,7 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'hammer-outline': { lucide: 'Hammer' },
   // Multi-image picker.
   'images-outline': { lucide: 'Images' },
-  images: { lucide: 'Images', solid: true, fill: true },
+  images: { lucide: 'Images', solid: true },
   // Repeat / loop (recurring expenses, subscriptions).
   'repeat-outline': { lucide: 'Repeat' },
   repeat: { lucide: 'Repeat', solid: true },
@@ -292,20 +315,22 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'play-outline': { lucide: 'Play' },
   pause: { lucide: 'Pause', solid: true, fill: true },
   'pause-outline': { lucide: 'Pause' },
-  // Refresh.
+  // Refresh (включая refresh-circle, который раньше падал в Circle-заглушку).
   refresh: { lucide: 'RefreshCw', solid: true },
-  // Mail.
-  mail: { lucide: 'Mail', solid: true, fill: true },
-  // Location.
-  location: { lucide: 'MapPin', solid: true, fill: true },
+  'refresh-circle': { lucide: 'RefreshCw', solid: true },
+  // Mail: клапан конверта — штрих внутри прямоугольника, fill его прятал.
+  mail: { lucide: 'Mail', solid: true },
+  // Location: точка внутри булавки исчезала под заливкой.
+  location: { lucide: 'MapPin', solid: true },
   // Time.
   time: { lucide: 'Clock', solid: true },
   // Briefcase / work.
   briefcase: { lucide: 'Briefcase', solid: true, fill: true },
   'briefcase-outline': { lucide: 'Briefcase' },
-  // Wallet / card filled.
-  wallet: { lucide: 'Wallet', solid: true, fill: true },
-  card: { lucide: 'CreditCard', solid: true, fill: true },
+  // Wallet / card: клапан кошелька и магнитная полоса лежат внутри корпуса —
+  // с fill оба вырождались в прямоугольный блоб.
+  wallet: { lucide: 'Wallet', solid: true },
+  card: { lucide: 'CreditCard', solid: true },
   // Link / hyperlink.
   link: { lucide: 'Link', solid: true },
   // Lock outline.
@@ -313,18 +338,19 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // Cog alias for settings.
   cog: { lucide: 'Settings', solid: true },
   'cog-outline': { lucide: 'Settings' },
-  // Receipt outline filled.
-  'storefront': { lucide: 'Store', solid: true, fill: true },
+  // Storefront: дверь рисуется внутри корпуса магазина — fill снят.
+  storefront: { lucide: 'Store', solid: true },
   // EquipmentScreen "Форма" section.
   'shirt-outline': { lucide: 'Shirt' },
   shirt: { lucide: 'Shirt', solid: true, fill: true },
-  // Play-circle variants (used in admin Activate buttons).
-  'play-circle': { lucide: 'PlayCircle', solid: true, fill: true },
+  // Play-circle variants (used in admin Activate buttons). Без fill:
+  // треугольник лежит внутри круга и исчезал под заливкой.
+  'play-circle': { lucide: 'PlayCircle', solid: true },
   'play-circle-outline': { lucide: 'PlayCircle' },
   // Construct (alias of construct-outline).
   construct: { lucide: 'Wrench', solid: true },
   // Document/text variants for sheets.
-  document: { lucide: 'FileText', solid: true, fill: true },
+  document: { lucide: 'FileText', solid: true },
   'document-outline': { lucide: 'FileText' },
 
   // ── Reports / Salary / Schedule cosmetic-bug audit (2026-05) ───────────
@@ -334,14 +360,14 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // Picture/image variants — Reports has an "Картинка" export tile that
   // previously fell back to Circle.
   'image-outline': { lucide: 'Image' },
-  image: { lucide: 'Image', solid: true, fill: true },
+  image: { lucide: 'Image', solid: true },
   // Pulse — used in Reports AI-insights for "revenue up but profit
   // lagging" insight; we previously rendered Circle for it.
   'pulse-outline': { lucide: 'Activity' },
   pulse: { lucide: 'Activity', solid: true },
   // Ribbon — Salary screen "Премии за месяц" section + "Добавить премию"
   // CTA + premium row icon. Was rendering as a Circle blob.
-  ribbon: { lucide: 'Ribbon', solid: true, fill: true },
+  ribbon: { lucide: 'Ribbon', solid: true },
   'ribbon-outline': { lucide: 'Ribbon' },
   // Wallet filled — Salary screen "Выдать зарплату" CTA. Outline already
   // present, this is the solid variant matching the gradient pill.
@@ -364,11 +390,14 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // Active variants of tabs that previously fell back to Circle when the
   // screen stripped the `-outline` suffix at runtime. `pie-chart-outline`
   // is intentionally not redeclared here — it's already mapped earlier.
-  chatbubbles: { lucide: 'MessagesSquare', solid: true, fill: true },
+  // chatbubbles: два пузыря перекрываются — заливка заднего закрашивала
+  // границу переднего, сливая их в один блоб. chatbox — одиночный замкнутый
+  // контур, силуэт чистый, fill остаётся.
+  chatbubbles: { lucide: 'MessagesSquare', solid: true },
   chatbox: { lucide: 'MessageSquare', solid: true, fill: true },
   // Active variants of the Mailings tab segmented control + the manual
-  // review-request CTA inside MarketingScreen.
-  'paper-plane': { lucide: 'Send', solid: true, fill: true },
+  // review-request CTA inside MarketingScreen. Без fill — см. `send`.
+  'paper-plane': { lucide: 'Send', solid: true },
   // MoreScreen "Интеграции" menu entry — owner reported a circle. The
   // SF-Symbols-equivalent is "puzzlepiece.extension".
   'extension-puzzle-outline': { lucide: 'Puzzle' },
@@ -383,3 +412,20 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // status card still has a visible affordance.
   'logo-google': { lucide: 'Globe', solid: true, fill: false },
 };
+
+// ── Fill-аудит 2026-06 ───────────────────────────────────────────────────────
+// IoniconsShim передаёт `fill={color}` КАЖДОМУ дочернему path lucide-глифа,
+// поэтому одноцветные штрихи внутри залитой фигуры становятся невидимыми
+// (галочка в круге → «жирная капля», конверт → пустой прямоугольник).
+// Правило: `fill: true` оставлен ТОЛЬКО у глифов-силуэтов, проверенных по
+// фактическим path'ам в node_modules/lucide-react-native (v1.17.0):
+//   • одиночный замкнутый контур: Heart, Star, Play, Flame, Bookmark, Folder,
+//     Moon, Funnel, Zap, Shirt, Puzzle, MessageCircle, MessageSquare;
+//   • несколько фигур без смыслонесущих штрихов ВНУТРИ заливки: Circle (точка),
+//     Pause (два прямоугольника), LayoutGrid (4 плитки с зазорами), Lock (дужка
+//     над корпусом), Sun (лучи вне диска), User/Users (голова над телом), Car
+//     (колёса по нижней кромке), Bell (язычок ниже купола), Briefcase (ручка
+//     над корпусом), SkipBack/SkipForward (планка вне треугольника).
+// У всех остальных fill снят: внутренние штрихи (галочка/крест/«!»/двери/окна/
+// линзы/линии текста) исчезали под заливкой. Не возвращать fill без проверки
+// геометрии глифа.

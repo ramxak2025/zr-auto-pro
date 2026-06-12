@@ -131,9 +131,7 @@ const ReviewItem = React.memo(function ReviewItem({ review, index, palette }: Re
       {review.employeeName && (
         <View style={[styles.reviewEmployeeTag, { borderTopColor: palette.border.subtle }]}>
           <Ionicons name="person-outline" size={12} color={palette.text.tertiary} />
-          <Text style={[styles.reviewEmployeeText, { color: palette.text.tertiary }]}>
-            {review.employeeName}
-          </Text>
+          <Text style={[styles.reviewEmployeeText, { color: palette.text.tertiary }]}>{review.employeeName}</Text>
         </View>
       )}
     </AnimatedCard>
@@ -165,8 +163,7 @@ function MotivationCard() {
   }, [settingsQuery.data, dirty]);
 
   const save = useMutation({
-    mutationFn: () =>
-      marketingApi.updateSettings({ motivationMessage: draft.trim() } as Partial<ReviewSettings>),
+    mutationFn: () => marketingApi.updateSettings({ motivationMessage: draft.trim() } as Partial<ReviewSettings>),
     onSuccess: () => {
       haptic('success');
       setDirty(false);
@@ -191,18 +188,14 @@ function MotivationCard() {
           <View style={[styles.giftBadge, { backgroundColor: colors.amber[50] }]}>
             <Ionicons name="gift-outline" size={16} color={colors.amber[700]} />
           </View>
-          <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>
-            Подарок за отзыв
-          </Text>
+          <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>Подарок за отзыв</Text>
         </View>
-        {settingsQuery.data?.motivationMessage ? (
-          <View style={styles.motivationActiveDot} />
-        ) : null}
+        {settingsQuery.data?.motivationMessage ? <View style={styles.motivationActiveDot} /> : null}
       </View>
 
       <Text style={[styles.motivationHint, { color: palette.text.tertiary }]}>
-        Эта фраза будет показана клиенту на странице оценки, а также подставлена в шаблон сообщения вместо
-        {' '}{'{motivation}'}.
+        Эта фраза будет показана клиенту на странице оценки, а также подставлена в шаблон сообщения вместо{' '}
+        {'{motivation}'}.
       </Text>
 
       <TextInput
@@ -243,17 +236,8 @@ function MotivationCard() {
           <ActivityIndicator size="small" color={dirty ? colors.white : palette.text.tertiary} />
         ) : (
           <>
-            <Ionicons
-              name="checkmark-circle"
-              size={16}
-              color={dirty ? colors.white : palette.text.tertiary}
-            />
-            <Text
-              style={[
-                styles.motivationSaveText,
-                { color: dirty ? colors.white : palette.text.tertiary },
-              ]}
-            >
+            <Ionicons name="checkmark" size={16} color={dirty ? colors.white : palette.text.tertiary} />
+            <Text style={[styles.motivationSaveText, { color: dirty ? colors.white : palette.text.tertiary }]}>
               {dirty ? 'Сохранить' : 'Без изменений'}
             </Text>
           </>
@@ -315,9 +299,7 @@ function ClientSourcesCard() {
       Alert.alert('Пустое значение', 'Введите название источника');
       return;
     }
-    const exists = sources.some(
-      (s, i) => i !== editIndex && s.toLowerCase() === value.toLowerCase(),
-    );
+    const exists = sources.some((s, i) => i !== editIndex && s.toLowerCase() === value.toLowerCase());
     if (exists) {
       Alert.alert('Уже есть', 'Такой источник уже в списке');
       return;
@@ -375,8 +357,8 @@ function ClientSourcesCard() {
         </View>
 
         <Text style={[styles.motivationHint, { color: palette.text.tertiary }]}>
-          Откуда клиент узнал о сервисе. Этот список появляется при добавлении клиента. Если список пуст —
-          источник не запрашивается.
+          Откуда клиент узнал о сервисе. Этот список появляется при добавлении клиента. Если список пуст — источник не
+          запрашивается.
         </Text>
 
         {sourcesQuery.isLoading && sources.length === 0 ? (
@@ -468,7 +450,7 @@ function ClientSourcesCard() {
             <ActivityIndicator size="small" color={colors.white} />
           ) : (
             <>
-              <Ionicons name="checkmark-circle" size={16} color={colors.white} />
+              <Ionicons name="checkmark" size={16} color={colors.white} />
               <Text style={styles.primaryBtnText}>Сохранить</Text>
             </>
           )}
@@ -575,9 +557,7 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.ctaTitle, { color: palette.text.primary }]}>Запросить отзыв вручную</Text>
-          <Text style={[styles.ctaSub, { color: palette.text.secondary }]}>
-            Отправьте клиенту персональную ссылку
-          </Text>
+          <Text style={[styles.ctaSub, { color: palette.text.secondary }]}>Отправьте клиенту персональную ссылку</Text>
         </View>
         <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
       </Pressable>
@@ -728,11 +708,7 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
             >
               <View style={[styles.empRankBadge, { backgroundColor: palette.bg.muted }]}>
                 {idx < 3 ? (
-                  <Ionicons
-                    name="trophy"
-                    size={16}
-                    color={idx === 0 ? '#FFD700' : idx === 1 ? '#C0C0C0' : '#CD7F32'}
-                  />
+                  <Ionicons name="trophy" size={16} color={idx === 0 ? '#FFD700' : idx === 1 ? '#C0C0C0' : '#CD7F32'} />
                 ) : (
                   <Text style={[styles.empRankText, { color: palette.text.tertiary }]}>{idx + 1}</Text>
                 )}
@@ -748,9 +724,7 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
                   </Text>
                 </View>
               </View>
-              <Text style={[styles.empRating, { color: palette.text.primary }]}>
-                {(emp.avgRating || 0).toFixed(1)}
-              </Text>
+              <Text style={[styles.empRating, { color: palette.text.primary }]}>{(emp.avgRating || 0).toFixed(1)}</Text>
             </View>
           ))}
         </AnimatedCard>
@@ -805,8 +779,18 @@ function ReviewsTab() {
   const monthLabel = useMemo(() => {
     const [y, m] = month.split('-').map(Number);
     const names = [
-      'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-      'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+      'Январь',
+      'Февраль',
+      'Март',
+      'Апрель',
+      'Май',
+      'Июнь',
+      'Июль',
+      'Август',
+      'Сентябрь',
+      'Октябрь',
+      'Ноябрь',
+      'Декабрь',
     ];
     return `${names[m - 1]} ${y}`;
   }, [month]);
@@ -869,23 +853,22 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
   // Debounce-ish: refetch on every change but staleTime swallows duplicates.
   const clientsQuery = useQuery({
     queryKey: ['marketing-request-clients', search],
-    queryFn: async () =>
-      (await clientsApi.getAll({ search, page: 1, limit: 30 })).data,
+    queryFn: async () => (await clientsApi.getAll({ search, page: 1, limit: 30 })).data,
     enabled: visible,
     staleTime: 30_000,
   });
   const clients = clientsQuery.data?.data ?? [];
 
   const sendSms = useMutation({
-    mutationFn: ({ phone, text }: { phone: string; text: string }) =>
-      marketingApi.sendSms({ phone, text }),
+    mutationFn: ({ phone, text }: { phone: string; text: string }) => marketingApi.sendSms({ phone, text }),
   });
 
   const buildText = (client: Client): string => {
     const firstName = client.fullName.split(' ')[0] || client.fullName;
-    const greeting = channel === 'whatsapp'
-      ? `Здравствуйте, ${firstName}! Будем благодарны за отзыв о нашем сервисе.`
-      : `Здравствуйте, ${firstName}! Оставьте, пожалуйста, отзыв о работе сервиса. Ссылка придёт отдельным сообщением.`;
+    const greeting =
+      channel === 'whatsapp'
+        ? `Здравствуйте, ${firstName}! Будем благодарны за отзыв о нашем сервисе.`
+        : `Здравствуйте, ${firstName}! Оставьте, пожалуйста, отзыв о работе сервиса. Ссылка придёт отдельным сообщением.`;
     return motivation ? `${greeting}\n\n${motivation}` : greeting;
   };
 
@@ -920,12 +903,7 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
     <Modal visible={visible} onClose={onClose} title="Запросить отзыв">
       {/* Motivation preview — what the client will actually see */}
       {motivation ? (
-        <View
-          style={[
-            styles.motivationPreview,
-            { borderColor: colors.amber[200], backgroundColor: colors.amber[50] },
-          ]}
-        >
+        <View style={[styles.motivationPreview, { borderColor: colors.amber[200], backgroundColor: colors.amber[50] }]}>
           <View style={[styles.giftBadge, { backgroundColor: colors.amber[100] }]}>
             <Ionicons name="gift-outline" size={14} color={colors.amber[700]} />
           </View>
@@ -963,10 +941,7 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
                   color={active ? palette.accent.primary : palette.text.tertiary}
                 />
                 <Text
-                  style={[
-                    styles.channelChipText,
-                    { color: active ? palette.accent.primary : palette.text.secondary },
-                  ]}
+                  style={[styles.channelChipText, { color: active ? palette.accent.primary : palette.text.secondary }]}
                 >
                   {c === 'sms' ? 'SMS' : 'WhatsApp'}
                 </Text>
@@ -1001,9 +976,7 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
         {clientsQuery.isLoading ? (
           <ActivityIndicator color={colors.primary[600]} style={{ marginVertical: spacing[4] }} />
         ) : clients.length === 0 ? (
-          <Text style={[styles.platformsHint, { color: palette.text.tertiary }]}>
-            Ничего не найдено
-          </Text>
+          <Text style={[styles.platformsHint, { color: palette.text.tertiary }]}>Ничего не найдено</Text>
         ) : (
           <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
             {clients.map((c) => {
@@ -1034,9 +1007,7 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
                       {c.phone || 'нет телефона'}
                     </Text>
                   </View>
-                  {active && (
-                    <Ionicons name="checkmark-circle" size={20} color={palette.accent.primary} />
-                  )}
+                  {active && <Ionicons name="checkmark" size={20} color={palette.accent.primary} />}
                 </TouchableOpacity>
               );
             })}

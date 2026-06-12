@@ -24,6 +24,7 @@ import { useColors } from '../contexts/ThemeContext';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -327,7 +328,12 @@ export default function CashFlowScreen() {
     }, []),
   );
 
-  const { data: cashflow, isLoading } = useQuery<any>({
+  const {
+    data: cashflow,
+    isLoading,
+    isError: isCashflowError,
+    refetch: refetchCashflow,
+  } = useQuery<any>({
     queryKey: ['cashflow', dateFrom, dateTo, effectiveEmployeeId],
     queryFn: async () => {
       const params: any = { dateFrom, dateTo };
@@ -429,23 +435,20 @@ export default function CashFlowScreen() {
     [datePickerMode],
   );
 
-  const handlePickMode = useCallback(
-    (m: Mode) => {
-      haptic('select');
-      if (m === 'employee') {
-        // "По сотруднику" всегда открывает пикер — даже если уже выбран
-        // кто-то, владелец может захотеть поменять выбор без сброса
-        // через "Все сотрудники".
-        setShowEmployeePicker(true);
-        return;
-      }
-      setMode('all');
-      setEmployeeId('');
-      setEmployeeName('');
-      setExpandedDay(null);
-    },
-    [],
-  );
+  const handlePickMode = useCallback((m: Mode) => {
+    haptic('select');
+    if (m === 'employee') {
+      // "По сотруднику" всегда открывает пикер — даже если уже выбран
+      // кто-то, владелец может захотеть поменять выбор без сброса
+      // через "Все сотрудники".
+      setShowEmployeePicker(true);
+      return;
+    }
+    setMode('all');
+    setEmployeeId('');
+    setEmployeeName('');
+    setExpandedDay(null);
+  }, []);
 
   const handleClearEmployee = useCallback(() => {
     haptic('select');
@@ -478,10 +481,7 @@ export default function CashFlowScreen() {
   );
 
   // ── Derived ──────────────────────────────────────────────────────────
-  const totals = useMemo(
-    () => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 },
-    [cashflow?.totals],
-  );
+  const totals = useMemo(() => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 }, [cashflow?.totals]);
   const days = useMemo<any[]>(() => cashflow?.days || [], [cashflow?.days]);
 
   // Sort newest-first so the user reads "what happened today" without
@@ -649,7 +649,10 @@ export default function CashFlowScreen() {
         {canFilterByEmployee && (
           <View style={[styles.modeSeg, { backgroundColor: palette.bg.muted }]}>
             <TouchableOpacity
-              style={[styles.modeSegBtn, mode === 'all' && [styles.modeSegBtnActive, { backgroundColor: palette.bg.card }]]}
+              style={[
+                styles.modeSegBtn,
+                mode === 'all' && [styles.modeSegBtnActive, { backgroundColor: palette.bg.card }],
+              ]}
               onPress={() => handlePickMode('all')}
               activeOpacity={0.7}
             >
@@ -713,14 +716,14 @@ export default function CashFlowScreen() {
         )}
 
         {/* ── Body ───────────────────────────────────────────────────── */}
-        {cashflow === undefined ? (
+        {isCashflowError && cashflow === undefined ? (
+          // Запрос упал и кэша нет — честный error-state вместо вечного
+          // скелетона. Пока есть прошлые данные, SWR показывает их.
+          <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetchCashflow()} />
+        ) : cashflow === undefined ? (
           renderColdStart()
         ) : !cashflow && !isLoading ? (
-          <EmptyState
-            title="Нет операций"
-            description="За выбранный период чеков не было"
-            icon="wallet"
-          />
+          <EmptyState title="Нет операций" description="За выбранный период чеков не было" icon="wallet" />
         ) : (
           <>
             {/* Hero totals card */}
@@ -770,11 +773,7 @@ export default function CashFlowScreen() {
               {period === 'day' ? 'За день' : 'По дням'}
             </Text>
             {daysSorted.length === 0 ? (
-              <EmptyState
-                title="Нет операций"
-                description="Нет операций за выбранный период"
-                icon="receipt"
-              />
+              <EmptyState title="Нет операций" description="Нет операций за выбранный период" icon="receipt" />
             ) : (
               daysSorted.map((day: any, idx: number) => {
                 const isOpen = expandedDay === day.date;
@@ -782,10 +781,7 @@ export default function CashFlowScreen() {
                 return (
                   <AnimatedCard
                     key={day.date}
-                    style={[
-                      styles.dayCard,
-                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                    ]}
+                    style={[styles.dayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
                     index={idx + 1}
                   >
                     <TouchableOpacity
@@ -804,9 +800,7 @@ export default function CashFlowScreen() {
                           })}
                         </Text>
                       </View>
-                      <Text style={[styles.dayTotal, { color: palette.text.primary }]}>
-                        {formatMoney(day.total)}
-                      </Text>
+                      <Text style={[styles.dayTotal, { color: palette.text.primary }]}>{formatMoney(day.total)}</Text>
                       <Ionicons
                         name={isOpen ? 'chevron-up' : 'chevron-down'}
                         size={16}
@@ -848,9 +842,7 @@ export default function CashFlowScreen() {
                         {/* ── Доходы: чеки (госномер + сумма) ──────────── */}
                         <View style={styles.detailSubLabelRow}>
                           <View style={[styles.detailDot, { backgroundColor: colors.green[500] }]} />
-                          <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>
-                            Чеки
-                          </Text>
+                          <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>Чеки</Text>
                         </View>
                         {isLoadingChecks && !expandedChecks ? (
                           <View style={{ paddingVertical: spacing[3], alignItems: 'center' }}>
@@ -872,9 +864,7 @@ export default function CashFlowScreen() {
                           <View style={[styles.expensesBlock, { borderTopColor: palette.border.subtle }]}>
                             <View style={styles.detailSubLabelRow}>
                               <View style={[styles.detailDot, { backgroundColor: colors.rose[500] }]} />
-                              <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>
-                                Расходы
-                              </Text>
+                              <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>Расходы</Text>
                               <Text style={[styles.expensesTotal, { color: colors.rose[600] }]}>
                                 −{formatMoney(expandedExpenses.reduce((s, e) => s + (e.amount || 0), 0))}
                               </Text>
@@ -900,7 +890,12 @@ export default function CashFlowScreen() {
       </ScrollView>
 
       {/* Employee picker modal */}
-      <Modal visible={showEmployeePicker} transparent animationType="fade" onRequestClose={() => setShowEmployeePicker(false)}>
+      <Modal
+        visible={showEmployeePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowEmployeePicker(false)}
+      >
         <View style={styles.modalRoot}>
           <ModalBlurBackdrop onPress={() => setShowEmployeePicker(false)} />
           <TouchableOpacity activeOpacity={1} style={[styles.modalContent, { backgroundColor: palette.bg.card }]}>
@@ -1064,11 +1059,8 @@ function CheckRow({
 // ─────────────────────────────────────────────────────────────────────────────
 function ExpenseRow({ expense, palette }: { expense: any; palette: ReturnType<typeof useColors> }) {
   const purpose: string =
-    (expense?.description && String(expense.description).trim()) ||
-    expense?.categoryName ||
-    'Расход';
-  const sub: string | undefined =
-    expense?.description && expense?.categoryName ? expense.categoryName : undefined;
+    (expense?.description && String(expense.description).trim()) || expense?.categoryName || 'Расход';
+  const sub: string | undefined = expense?.description && expense?.categoryName ? expense.categoryName : undefined;
   return (
     <View style={styles.checkRow}>
       <View style={[styles.checkIcon, { backgroundColor: colors.rose[50] }]}>
@@ -1084,9 +1076,7 @@ function ExpenseRow({ expense, palette }: { expense: any; palette: ReturnType<ty
           </Text>
         )}
       </View>
-      <Text style={[styles.checkAmount, { color: colors.rose[600] }]}>
-        −{formatMoney(expense?.amount || 0)}
-      </Text>
+      <Text style={[styles.checkAmount, { color: colors.rose[600] }]}>−{formatMoney(expense?.amount || 0)}</Text>
     </View>
   );
 }

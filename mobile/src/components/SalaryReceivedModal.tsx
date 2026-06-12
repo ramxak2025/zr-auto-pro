@@ -158,12 +158,7 @@ function formatMoney(v: number): string {
   );
 }
 
-export default function SalaryReceivedModal({
-  visible,
-  payment,
-  onConfirm,
-  confirming,
-}: SalaryReceivedModalProps) {
+export default function SalaryReceivedModal({ visible, payment, onConfirm, confirming }: SalaryReceivedModalProps) {
   const [reduceMotion, setReduceMotion] = React.useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -284,7 +279,7 @@ const CTAButton = React.memo(function CTAButton({ confirming, onPress }: CTAButt
             <ActivityIndicator color={colors.white} />
           ) : (
             <>
-              <Ionicons name="checkmark-circle" size={20} color={colors.white} />
+              <Ionicons name="checkmark" size={20} color={colors.white} />
               <Text style={styles.ctaText}>Подтвердить получение</Text>
             </>
           )}

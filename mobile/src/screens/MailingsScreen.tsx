@@ -154,10 +154,7 @@ function AutoTab() {
           hitSlop={8}
         >
           <View
-            style={[
-              styles.switchTrack,
-              { backgroundColor: enabled ? palette.accent.primary : palette.border.strong },
-            ]}
+            style={[styles.switchTrack, { backgroundColor: enabled ? palette.accent.primary : palette.border.strong }]}
           >
             <View style={[styles.switchThumb, { transform: [{ translateX: enabled ? 20 : 2 }] }]} />
           </View>
@@ -242,9 +239,7 @@ function AutoTab() {
           placeholderTextColor={palette.text.tertiary}
         />
 
-        <Text style={[styles.varHint, { color: palette.text.tertiary }]}>
-          Переменные — нажмите, чтобы вставить
-        </Text>
+        <Text style={[styles.varHint, { color: palette.text.tertiary }]}>Переменные — нажмите, чтобы вставить</Text>
         <View style={styles.varRow}>
           {[
             { label: '{имя}', insert: '{имя}' },
@@ -254,14 +249,9 @@ function AutoTab() {
             <TouchableOpacity
               key={v.label}
               onPress={() => insertVariable(v.insert)}
-              style={[
-                styles.varChip,
-                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-              ]}
+              style={[styles.varChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
             >
-              <Text style={{ fontSize: 12, color: palette.accent.primary, fontWeight: '600' }}>
-                {v.label}
-              </Text>
+              <Text style={{ fontSize: 12, color: palette.accent.primary, fontWeight: '600' }}>{v.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
@@ -285,7 +275,7 @@ function AutoTab() {
             <ActivityIndicator size="small" color={colors.white} />
           ) : (
             <>
-              <Ionicons name="checkmark-circle" size={16} color={colors.white} />
+              <Ionicons name="checkmark" size={16} color={colors.white} />
               <Text style={styles.actionBtnPrimaryText}>Сохранить</Text>
             </>
           )}
@@ -308,17 +298,13 @@ function AutoTab() {
           ) : (
             <>
               <Ionicons name="paper-plane-outline" size={16} color={palette.text.primary} />
-              <Text style={[styles.actionBtnSecondaryText, { color: palette.text.primary }]}>
-                Отправить сейчас
-              </Text>
+              <Text style={[styles.actionBtnSecondaryText, { color: palette.text.primary }]}>Отправить сейчас</Text>
             </>
           )}
         </TouchableOpacity>
       </View>
 
-      {sendResult ? (
-        <Text style={[styles.resultText, { color: palette.text.tertiary }]}>{sendResult}</Text>
-      ) : null}
+      {sendResult ? <Text style={[styles.resultText, { color: palette.text.tertiary }]}>{sendResult}</Text> : null}
     </View>
   );
 }
@@ -344,8 +330,7 @@ function ManualTab({
 
   const clientsQuery = useQuery({
     queryKey: ['mailings-clients', search],
-    queryFn: async () =>
-      (await clientsApi.getAll({ search, page: 1, limit: 50 })).data,
+    queryFn: async () => (await clientsApi.getAll({ search, page: 1, limit: 50 })).data,
     staleTime: 30_000,
   });
   const clients = clientsQuery.data?.data ?? [];
@@ -398,10 +383,7 @@ function ManualTab({
         textPreview: message.slice(0, 80),
       };
       setHistory([entry, ...history].slice(0, 50));
-      Alert.alert(
-        'Готово',
-        `Отправлено: ${res.sent}${res.errors ? `, ошибок: ${res.errors}` : ''}`,
-      );
+      Alert.alert('Готово', `Отправлено: ${res.sent}${res.errors ? `, ошибок: ${res.errors}` : ''}`);
       setPicked({});
       setMessage('');
       queryClient.invalidateQueries({ queryKey: ['marketing-dashboard'] });
@@ -430,9 +412,7 @@ function ManualTab({
               <Ionicons name="people-outline" size={15} color={palette.text.primary} />
               <Text style={[styles.stepTitle, { color: palette.text.primary }]}>Получатели</Text>
             </View>
-            <Text style={[styles.stepCount, { color: palette.text.tertiary }]}>
-              Выбрано: {pickedIds.length}
-            </Text>
+            <Text style={[styles.stepCount, { color: palette.text.tertiary }]}>Выбрано: {pickedIds.length}</Text>
           </View>
           {pickedIds.length > 0 && (
             <TouchableOpacity
@@ -573,15 +553,10 @@ function ManualTab({
             <TouchableOpacity
               key={tpl.id}
               onPress={() => applyTemplate(tpl)}
-              style={[
-                styles.templateChip,
-                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-              ]}
+              style={[styles.templateChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
             >
               <Ionicons name="document-text-outline" size={13} color={palette.text.secondary} />
-              <Text style={{ fontSize: 12, fontWeight: '600', color: palette.text.secondary }}>
-                {tpl.title}
-              </Text>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: palette.text.secondary }}>{tpl.title}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -609,11 +584,7 @@ function ManualTab({
 
       {/* Step 3 — Send */}
       <TouchableOpacity
-        style={[
-          styles.bigSendBtn,
-          { backgroundColor: palette.accent.primary },
-          !canSend && { opacity: 0.5 },
-        ]}
+        style={[styles.bigSendBtn, { backgroundColor: palette.accent.primary }, !canSend && { opacity: 0.5 }]}
         disabled={!canSend}
         onPress={() => {
           haptic('tap');
@@ -679,9 +650,7 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
           <Ionicons name="time-outline" size={28} color={palette.text.tertiary} />
         </View>
         <Text style={[styles.emptyTitle, { color: palette.text.primary }]}>Здесь будут отправленные рассылки</Text>
-        <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>
-          История появится после первой отправки
-        </Text>
+        <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>История появится после первой отправки</Text>
       </View>
     );
   }
@@ -698,8 +667,7 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
               style={[
                 styles.histIcon,
                 {
-                  backgroundColor:
-                    h.channel === 'whatsapp' ? '#dcf8c6' : palette.accent.primarySoft,
+                  backgroundColor: h.channel === 'whatsapp' ? '#dcf8c6' : palette.accent.primarySoft,
                 },
               ]}
             >
@@ -724,17 +692,9 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
               </Text>
             </View>
             <View
-              style={[
-                styles.statusPill,
-                h.failed === 0 ? styles.statusPillOk : { backgroundColor: colors.orange[50] },
-              ]}
+              style={[styles.statusPill, h.failed === 0 ? styles.statusPillOk : { backgroundColor: colors.orange[50] }]}
             >
-              <Text
-                style={[
-                  styles.statusPillText,
-                  { color: h.failed === 0 ? colors.green[700] : colors.orange[700] },
-                ]}
-              >
+              <Text style={[styles.statusPillText, { color: h.failed === 0 ? colors.green[700] : colors.orange[700] }]}>
                 {h.failed === 0 ? 'Доставлено' : 'Частично'}
               </Text>
             </View>
@@ -797,10 +757,7 @@ export default function MailingsScreen() {
             return (
               <TouchableOpacity
                 key={tab.key}
-                style={[
-                  styles.tab,
-                  active && [styles.tabActive, { backgroundColor: palette.bg.card }],
-                ]}
+                style={[styles.tab, active && [styles.tabActive, { backgroundColor: palette.bg.card }]]}
                 onPress={() => {
                   haptic('select');
                   setActiveTab(tab.key);

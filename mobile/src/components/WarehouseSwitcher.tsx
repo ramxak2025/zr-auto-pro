@@ -116,7 +116,7 @@ export default function WarehouseSwitcher({
                           : 'Б/У детали и комплектующие'}
                     </Text>
                   </View>
-                  {isSelected && <Ionicons name="checkmark-circle" size={22} color={palette.accent.primary} />}
+                  {isSelected && <Ionicons name="checkmark" size={20} color={palette.accent.primary} />}
                 </TouchableOpacity>
               );
             })

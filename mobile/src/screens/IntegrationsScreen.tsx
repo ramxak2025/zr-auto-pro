@@ -372,10 +372,7 @@ function ProviderModal({
     setCopied(false);
   }, [provider, existing]);
 
-  const webhookUrl = useMemo(
-    () => (provider ? webhookUrlFor(provider.key, tenantId) : ''),
-    [provider, tenantId],
-  );
+  const webhookUrl = useMemo(() => (provider ? webhookUrlFor(provider.key, tenantId) : ''), [provider, tenantId]);
 
   const save = useMutation({
     mutationFn: (payload: any) => marketingApi.upsertIntegration(payload),
@@ -539,17 +536,8 @@ function ProviderModal({
       {/* Webhook */}
       <View style={styles.formField}>
         <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Webhook URL</Text>
-        <View
-          style={[
-            styles.webhookRow,
-            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-          ]}
-        >
-          <Text
-            style={[styles.webhookText, { color: palette.text.primary }]}
-            numberOfLines={1}
-            ellipsizeMode="middle"
-          >
+        <View style={[styles.webhookRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Text style={[styles.webhookText, { color: palette.text.primary }]} numberOfLines={1} ellipsizeMode="middle">
             {webhookUrl}
           </Text>
           <TouchableOpacity
@@ -573,35 +561,22 @@ function ProviderModal({
 
       {/* Active toggle */}
       <TouchableOpacity
-        style={[
-          styles.activeRow,
-          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-        ]}
+        style={[styles.activeRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
         onPress={() => {
           haptic('select');
           setIsActive((v) => !v);
         }}
       >
         <View style={{ flex: 1 }}>
-          <Text style={[styles.activeLabel, { color: palette.text.primary }]}>
-            Использовать как основной
-          </Text>
+          <Text style={[styles.activeLabel, { color: palette.text.primary }]}>Использовать как основной</Text>
           <Text style={[styles.activeSub, { color: palette.text.tertiary }]}>
             Отключите, чтобы сохранить настройки, но не использовать
           </Text>
         </View>
         <View
-          style={[
-            styles.switchTrack,
-            { backgroundColor: isActive ? palette.accent.primary : palette.border.strong },
-          ]}
+          style={[styles.switchTrack, { backgroundColor: isActive ? palette.accent.primary : palette.border.strong }]}
         >
-          <View
-            style={[
-              styles.switchThumb,
-              { transform: [{ translateX: isActive ? 20 : 2 }] },
-            ]}
-          />
+          <View style={[styles.switchThumb, { transform: [{ translateX: isActive ? 20 : 2 }] }]} />
         </View>
       </TouchableOpacity>
 
@@ -634,9 +609,7 @@ function ProviderModal({
         ) : (
           <>
             <Ionicons name="flash-outline" size={16} color={palette.text.secondary} />
-            <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>
-              Тест подключения
-            </Text>
+            <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Тест подключения</Text>
           </>
         )}
       </TouchableOpacity>
@@ -655,7 +628,7 @@ function ProviderModal({
           <ActivityIndicator size="small" color={colors.white} />
         ) : (
           <>
-            <Ionicons name="checkmark-circle" size={16} color={colors.white} />
+            <Ionicons name="checkmark" size={16} color={colors.white} />
             <Text style={styles.primaryBtnText}>Сохранить</Text>
           </>
         )}
@@ -673,12 +646,7 @@ function ProviderModal({
       )}
 
       {/* Log placeholder */}
-      <View
-        style={[
-          styles.logBlock,
-          { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted },
-        ]}
-      >
+      <View style={[styles.logBlock, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}>
         <View style={styles.logHeader}>
           <Ionicons name="terminal-outline" size={14} color={palette.text.tertiary} />
           <Text style={[styles.logHeaderText, { color: palette.text.secondary }]}>Журнал событий</Text>
@@ -716,8 +684,7 @@ function PlatformModal({
   }, [platform, existing]);
 
   const save = useMutation({
-    mutationFn: () =>
-      marketingApi.upsertPlatformLink({ platform: platform!.key, url: url.trim(), isActive }),
+    mutationFn: () => marketingApi.upsertPlatformLink({ platform: platform!.key, url: url.trim(), isActive }),
     onSuccess: () => {
       haptic('success');
       queryClient.invalidateQueries({ queryKey: ['marketing-platform-links'] });
@@ -754,9 +721,7 @@ function PlatformModal({
             <Ionicons name={platform.iconName as any} size={26} color={platform.tone.fg} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>
-              {platform.description}
-            </Text>
+            <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{platform.description}</Text>
           </View>
         </View>
         <View style={[styles.notice, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}>
@@ -776,16 +741,12 @@ function PlatformModal({
           <Ionicons name={platform.iconName as any} size={26} color={platform.tone.fg} />
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>
-            {platform.description}
-          </Text>
+          <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{platform.description}</Text>
         </View>
       </View>
 
       <View style={styles.formField}>
-        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
-          Ссылка на профиль / страницу отзывов
-        </Text>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Ссылка на профиль / страницу отзывов</Text>
         <TextInput
           value={url}
           onChangeText={setUrl}
@@ -811,10 +772,7 @@ function PlatformModal({
       </View>
 
       <TouchableOpacity
-        style={[
-          styles.activeRow,
-          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-        ]}
+        style={[styles.activeRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
         onPress={() => {
           haptic('select');
           setIsActive((v) => !v);
@@ -822,10 +780,7 @@ function PlatformModal({
       >
         <Text style={[styles.activeLabel, { color: palette.text.primary }]}>Показывать в воронке</Text>
         <View
-          style={[
-            styles.switchTrack,
-            { backgroundColor: isActive ? palette.accent.primary : palette.border.strong },
-          ]}
+          style={[styles.switchTrack, { backgroundColor: isActive ? palette.accent.primary : palette.border.strong }]}
         >
           <View style={[styles.switchThumb, { transform: [{ translateX: isActive ? 20 : 2 }] }]} />
         </View>
@@ -850,7 +805,7 @@ function PlatformModal({
           <ActivityIndicator size="small" color={colors.white} />
         ) : (
           <>
-            <Ionicons name="checkmark-circle" size={16} color={colors.white} />
+            <Ionicons name="checkmark" size={16} color={colors.white} />
             <Text style={styles.primaryBtnText}>Сохранить</Text>
           </>
         )}
@@ -898,9 +853,7 @@ export default function IntegrationsScreen() {
     staleTime: 60_000,
   });
 
-  const integrations: MessagingIntegration[] = Array.isArray(integrationsQuery.data)
-    ? integrationsQuery.data
-    : [];
+  const integrations: MessagingIntegration[] = Array.isArray(integrationsQuery.data) ? integrationsQuery.data : [];
   const platformLinks: ReviewPlatformLink[] = Array.isArray(platformsQuery.data) ? platformsQuery.data : [];
 
   // Find which DB row matches each visual provider card. We key by
@@ -908,8 +861,7 @@ export default function IntegrationsScreen() {
   const findIntegration = (p: ProviderDef): MessagingIntegration | undefined =>
     integrations.find((i) => i.providerType === p.dbType);
 
-  const findLink = (p: PlatformDef): ReviewPlatformLink | undefined =>
-    platformLinks.find((l) => l.platform === p.key);
+  const findLink = (p: PlatformDef): ReviewPlatformLink | undefined => platformLinks.find((l) => l.platform === p.key);
 
   const loading = integrationsQuery.isLoading || platformsQuery.isLoading;
 

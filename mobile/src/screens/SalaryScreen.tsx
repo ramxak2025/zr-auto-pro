@@ -51,6 +51,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
+import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
 import { BottomSheet } from '../components/BottomSheet';
 import SalaryEnvelopeAnimation from '../components/SalaryEnvelopeAnimation';
@@ -104,14 +105,16 @@ function formatMoney(v: number): string {
   return (
     Math.round(v)
       .toString()
-      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ' + RUBLE
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') +
+    ' ' +
+    RUBLE
   );
 }
 
 function formatMoneyShort(v: number): string {
   // For chip rows where space is tight. 5 200 → 5.2k after ≥10 000 to
   // stay readable on iPhone SE width.
-  if (Math.abs(v) >= 100000) return (Math.round(v / 1000)).toString() + ' к ' + RUBLE;
+  if (Math.abs(v) >= 100000) return Math.round(v / 1000).toString() + ' к ' + RUBLE;
   return formatMoney(v);
 }
 
@@ -237,12 +240,7 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }:
     >
       {/* Top line: avatar | name+pct | amount | chevron */}
       <View style={styles.rowTopLine}>
-        <LinearGradient
-          colors={avatar}
-          style={styles.rowAvatar}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        >
+        <LinearGradient colors={avatar} style={styles.rowAvatar} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
           <Text style={styles.rowAvatarText}>{initials}</Text>
         </LinearGradient>
 
@@ -377,7 +375,12 @@ export default function SalaryScreen() {
 
   // ── Data ─────────────────────────────────────────────────────────────────
 
-  const { data: salaries, isLoading } = useQuery<MasterSalary[]>({
+  const {
+    data: salaries,
+    isLoading,
+    isError: isSalariesError,
+    refetch: refetchSalaries,
+  } = useQuery<MasterSalary[]>({
     queryKey: ['salary', dateFrom, dateTo],
     queryFn: async () => {
       const res = await salaryApi.getAll({ dateFrom, dateTo });
@@ -446,10 +449,7 @@ export default function SalaryScreen() {
       // eslint-disable-next-line no-console
       console.error('[Salary] payment error', err?.response?.status, err?.response?.data, err?.message);
       const friendly =
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        err?.message ||
-        'Не удалось создать выплату';
+        err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Не удалось создать выплату';
       Alert.alert('Ошибка', String(friendly));
     },
   });
@@ -477,10 +477,7 @@ export default function SalaryScreen() {
       // eslint-disable-next-line no-console
       console.error('[Salary] premium error', err?.response?.status, err?.response?.data, err?.message);
       const friendly =
-        err?.response?.data?.message ||
-        err?.response?.data?.error ||
-        err?.message ||
-        'Не удалось добавить премию';
+        err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Не удалось добавить премию';
       Alert.alert('Ошибка', String(friendly));
     },
   });
@@ -699,7 +696,11 @@ export default function SalaryScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Зарплата" onBack={() => navigation.goBack()} trailing={trailingMonthChip} />
 
-      {salaries === undefined ? (
+      {isSalariesError && salaries === undefined ? (
+        // Запрос упал и кэша нет — честный error-state вместо вечного
+        // спиннера. Пока есть прошлые данные, SWR показывает их.
+        <QueryErrorState description="Проверьте соединение и попробуйте ещё раз" onRetry={() => refetchSalaries()} />
+      ) : salaries === undefined ? (
         <LoadingSpinner />
       ) : salaries.length === 0 && !isLoading ? (
         <ScrollView
@@ -743,7 +744,12 @@ export default function SalaryScreen() {
       )}
 
       {/* Detail sheet */}
-      <BottomSheet visible={!!detailMaster} onClose={closeDetail} title={detailMaster?.masterName || ''} heightRatio={0.86}>
+      <BottomSheet
+        visible={!!detailMaster}
+        onClose={closeDetail}
+        title={detailMaster?.masterName || ''}
+        heightRatio={0.86}
+      >
         {detailMaster ? (
           <DetailContent
             master={detailMaster}
@@ -764,8 +770,7 @@ export default function SalaryScreen() {
           setFormMasterId(null);
         }}
         title={
-          (payType === 'salary' ? 'Выдать зарплату' : 'Выдать аванс') +
-          (formMasterName ? ' — ' + formMasterName : '')
+          (payType === 'salary' ? 'Выдать зарплату' : 'Выдать аванс') + (formMasterName ? ' — ' + formMasterName : '')
         }
       >
         <PaymentForm
@@ -941,9 +946,7 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
         expanded={showHistory}
         onToggle={() => setShowHistory((v) => !v)}
         palette={palette}
-        rightAccessory={
-          <Text style={[styles.sectionCount, { color: palette.text.tertiary }]}>{payments.length}</Text>
-        }
+        rightAccessory={<Text style={[styles.sectionCount, { color: palette.text.tertiary }]}>{payments.length}</Text>}
       >
         {payments.length === 0 ? (
           <Text style={[styles.emptyInline, { color: palette.text.tertiary }]}>Выплат пока нет</Text>
@@ -1078,9 +1081,7 @@ function BreakdownRow({ icon, color, label, subLabel, value, palette }: Breakdow
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[styles.breakdownLabel, { color: palette.text.primary }]}>{label}</Text>
-        {subLabel ? (
-          <Text style={[styles.breakdownSub, { color: palette.text.tertiary }]}>{subLabel}</Text>
-        ) : null}
+        {subLabel ? <Text style={[styles.breakdownSub, { color: palette.text.tertiary }]}>{subLabel}</Text> : null}
       </View>
       <Text style={[styles.breakdownValue, { color: palette.text.primary }]}>{formatMoney(value)}</Text>
     </View>
@@ -1135,9 +1136,7 @@ function PaymentRow({ payment, palette }: PaymentRowProps) {
         <View style={[styles.paymentTypeBadge, { borderColor: tone }]}>
           <Text style={[styles.paymentTypeBadgeText, { color: tone }]}>{label}</Text>
         </View>
-        <Text style={[styles.paymentRowDate, { color: palette.text.tertiary }]}>
-          {formatPaymentDate(payment.date)}
-        </Text>
+        <Text style={[styles.paymentRowDate, { color: palette.text.tertiary }]}>{formatPaymentDate(payment.date)}</Text>
         {payment.comment ? (
           <Text style={[styles.paymentRowComment, { color: palette.text.tertiary }]} numberOfLines={2}>
             «{payment.comment}»
@@ -1145,7 +1144,7 @@ function PaymentRow({ payment, palette }: PaymentRowProps) {
         ) : null}
         {payment.confirmedAt ? (
           <View style={styles.paymentRowConfirmed}>
-            <Ionicons name="checkmark-circle" size={12} color={colors.green[600]} />
+            <Ionicons name="checkmark-circle" size={14} color={colors.green[600]} />
             <Text style={[styles.paymentRowConfirmedText, { color: colors.green[600] }]}>
               Получено {formatConfirmedTimestamp(payment.confirmedAt)}
             </Text>
@@ -1221,9 +1220,7 @@ function PaymentForm({
 
       <View style={styles.formField}>
         <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сумма</Text>
-        <View
-          style={[styles.formInputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        >
+        <View style={[styles.formInputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
           <TextInput
             style={[styles.formTextInput, { color: palette.text.primary }]}
@@ -1239,9 +1236,7 @@ function PaymentForm({
 
       <View style={styles.formField}>
         <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий (необязательно)</Text>
-        <View
-          style={[styles.formInputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        >
+        <View style={[styles.formInputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           <Ionicons name="chatbubble-outline" size={14} color={palette.text.tertiary} />
           <TextInput
             style={[styles.formTextInput, { color: palette.text.primary }]}
@@ -1447,12 +1442,7 @@ function TypeChip({ active, onPress, icon, label, gradient, palette }: TypeChipP
   return (
     <TouchableOpacity style={styles.typeChip} activeOpacity={0.75} onPress={onPress}>
       {active ? (
-        <LinearGradient
-          colors={gradient}
-          style={styles.typeChipGradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-        >
+        <LinearGradient colors={gradient} style={styles.typeChipGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
           <Ionicons name={icon} size={14} color={colors.white} />
           <Text style={styles.typeChipTextActive}>{label}</Text>
         </LinearGradient>

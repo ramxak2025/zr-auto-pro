@@ -92,7 +92,11 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={[styles.backBtn, { backgroundColor: palette.bg.muted }]}>
+        <Pressable
+          onPress={() => navigation.goBack()}
+          hitSlop={10}
+          style={[styles.backBtn, { backgroundColor: palette.bg.muted }]}
+        >
           <Ionicons name="chevron-back" size={20} color={palette.text.primary} />
         </Pressable>
         <Text style={[styles.headerTitle, { color: palette.text.primary }]}>{title}</Text>
@@ -113,9 +117,7 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
           <Text style={styles.heroTitle}>{title}</Text>
           {unlockingPlan ? (
             <>
-              <Text style={styles.heroPlan}>
-                Доступно на тарифе «{unlockingPlan.name}»
-              </Text>
+              <Text style={styles.heroPlan}>Доступно на тарифе «{unlockingPlan.name}»</Text>
               <View style={styles.priceRow}>
                 <Text style={styles.priceValue}>{unlockingPlan.monthlyPrice.toLocaleString('ru-RU')}</Text>
                 <Text style={styles.priceSuffix}> ₽/мес</Text>
@@ -135,7 +137,7 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
           </Text>
           {planHighlights.map((b, i) => (
             <View key={i} style={styles.benefitRow}>
-              <Ionicons name="checkmark-circle" size={20} color={colors.green[500]} />
+              <Ionicons name="checkmark" size={20} color={colors.green[500]} />
               <Text style={[styles.benefitText, { color: palette.text.secondary }]}>{b}</Text>
             </View>
           ))}

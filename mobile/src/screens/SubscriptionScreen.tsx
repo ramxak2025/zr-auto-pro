@@ -205,7 +205,7 @@ export default function SubscriptionScreen() {
                           return (
                             <View key={feat.key} style={styles.featureRow}>
                               <Ionicons
-                                name={included ? 'checkmark-circle' : 'close-circle'}
+                                name={included ? 'checkmark' : 'close'}
                                 size={18}
                                 color={included ? colors.green[500] : palette.text.tertiary}
                               />

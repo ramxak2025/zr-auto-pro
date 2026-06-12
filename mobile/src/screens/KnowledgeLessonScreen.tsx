@@ -60,7 +60,12 @@ export default function KnowledgeLessonScreen() {
 
   // The lesson lives on getCourse — read it from there (cache-first) so we don't
   // need a separate lesson endpoint and stay consistent with the detail screen.
-  const { data: course, isLoading, isError, refetch } = useQuery<KnowledgeCourse>({
+  const {
+    data: course,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<KnowledgeCourse>({
     queryKey: ['knowledge-course', courseId],
     queryFn: async () => (await knowledgeApi.getCourse(courseId)).data,
     enabled: !!courseId,
@@ -75,7 +80,7 @@ export default function KnowledgeLessonScreen() {
   const lessonIndex = React.useMemo(() => lessons.findIndex((l) => l.id === lessonId), [lessons, lessonId]);
   const nextLesson = lessonIndex >= 0 && lessonIndex + 1 < lessons.length ? lessons[lessonIndex + 1] : undefined;
 
-  const quiz = lesson?.hasQuiz ? lesson.quiz ?? [] : [];
+  const quiz = lesson?.hasQuiz ? (lesson.quiz ?? []) : [];
   const hasQuiz = quiz.length > 0;
 
   // answers[i] = selected option index for question i, or -1 (unanswered).
@@ -174,7 +179,10 @@ export default function KnowledgeLessonScreen() {
         <ScrollView
           // Reserve room for the floating tab bar AND the sticky CTA, which
           // itself sits a full tabBarHeight above the bar.
-          contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + STICKY_CTA_BAND + tabBarHeight + spacing[4] }]}
+          contentContainerStyle={[
+            styles.content,
+            { paddingBottom: tabBarHeight + STICKY_CTA_BAND + tabBarHeight + spacing[4] },
+          ]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}
@@ -211,7 +219,10 @@ export default function KnowledgeLessonScreen() {
               {quiz.map((q, qIdx) => (
                 <View
                   key={qIdx}
-                  style={[styles.questionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                  style={[
+                    styles.questionCard,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  ]}
                 >
                   <Text variant="bodyEmph" style={{ color: palette.text.primary, marginBottom: spacing[2.5] }}>
                     {qIdx + 1}. {q.question}
@@ -291,9 +302,9 @@ export default function KnowledgeLessonScreen() {
             ]}
           >
             {alreadyDone ? (
-              <Ionicons name="checkmark-circle" size={20} color={colors.green[600]} />
+              <Ionicons name="checkmark" size={20} color={colors.green[600]} />
             ) : (
-              <Ionicons name={hasQuiz ? 'checkmark-done' : 'checkmark-circle'} size={20} color={colors.white} />
+              <Ionicons name="checkmark" size={20} color={colors.white} />
             )}
             <Text variant="callout" color={alreadyDone ? palette.text.secondary : colors.white}>
               {ctaLabel}
