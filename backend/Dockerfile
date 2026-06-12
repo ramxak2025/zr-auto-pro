@@ -6,7 +6,11 @@ COPY . .
 RUN npm run build
 
 FROM node:20-alpine
-RUN apk add --no-cache wget
+# No `apk add` here on purpose: Alpine's package CDN (dl-cdn.alpinelinux.org)
+# intermittently black-holes over IPv6 from the VDS, which made `apk add wget`
+# hang for hours on an uncached build and blocked deploys. The container
+# healthcheck now uses Node's built-in http (see docker-compose.yml), so the
+# image needs no extra packages and the build never touches the apk network.
 WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules

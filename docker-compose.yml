@@ -17,7 +17,7 @@ services:
       - -c
       - config_file=/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -35,11 +35,17 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
       PORT: 3000
     expose:
-      - '3000'
+      - "3000"
     volumes:
       - uploads:/app/uploads
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/api/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -56,7 +62,7 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - '8080:80'
+      - "8080:80"
     volumes:
       - uploads:/app/uploads:ro
       - ./downloads:/app/downloads:ro
@@ -69,9 +75,9 @@ services:
     environment:
       DEPLOY_SECRET: ${DEPLOY_SECRET:?DEPLOY_SECRET must be set in .env}
       DEPLOY_BRANCH: ${DEPLOY_BRANCH:-refactor/full-audit-2026}
-      WEBHOOK_PORT: '9000'
+      WEBHOOK_PORT: "9000"
     ports:
-      - '127.0.0.1:9000:9000'
+      - "127.0.0.1:9000:9000"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/deploy/repo
