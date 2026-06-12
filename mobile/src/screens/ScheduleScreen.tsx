@@ -5,6 +5,7 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   TextInput,
   StyleSheet,
   RefreshControl,
@@ -12,12 +13,10 @@ import {
   AccessibilityInfo,
   Alert,
   Dimensions,
+  InteractionManager,
   Switch,
+  type GestureResponderEvent,
 } from 'react-native';
-// Native AutexaScheduleGrid was integrated in iter#2 but disabled in
-// iter#3 — see comment near the schedule grid render. The Swift module
-// remains in mobile/modules/autexa-liquid-glass/ios/ for a future
-// retry; we only stop importing it here.
 import Reanimated, {
   FadeIn,
   FadeInDown,
@@ -228,7 +227,11 @@ function getCellDot(entry?: ScheduleEntry): CellDescriptor {
   const dateOnly = String(entry.date ?? '').slice(0, 10);
   if (!dateOnly) return EMPTY_CELL;
   const isPast = new Date(`${dateOnly}T23:59:59`) < new Date();
-  const isToday = dateOnly === new Date().toISOString().slice(0, 10);
+  // LOCAL today, not UTC: toISOString() flips to the next day after
+  // 21:00 Moscow time (UTC+3), которое до полуночи помечало «сегодня»
+  // прогулом. The grid keys all dates via formatDate (local) — the
+  // today comparison must use the same clock.
+  const isToday = dateOnly === formatDate(new Date());
 
   // 1. Больничный
   if (note.includes('больнич'))
@@ -523,8 +526,31 @@ const GridDayRow = memo(function GridDayRow({
   emptyDotColor,
 }: GridDayRowProps) {
   const firstName = userName?.split(' ')[0];
+
+  // ONE row-level Pressable instead of 28–31 TouchableOpacity instances
+  // per row: a full month with ~12 masters was mounting 300-500 touchable
+  // natives synchronously during the push transition, blocking the JS
+  // thread — the screen appeared frozen/blank. The cells are a fixed
+  // CELL_W grid, so the tapped day is derived from the touch X offset.
+  // Cells render `pointerEvents="none"` so the hit test always targets
+  // the row itself and `locationX` is row-relative on both platforms.
+  const handleRowPress = (evt: GestureResponderEvent) => {
+    const idx = Math.floor(evt.nativeEvent.locationX / CELL_W);
+    if (idx < 0 || idx >= days.length) return;
+    const ds = formatDate(days[idx]);
+    const entry = entryMap.get(`${userId}-${ds}`);
+    if (canEdit) haptic('tap');
+    onCellPress(userId, ds, entry, firstName);
+  };
+
   return (
-    <View style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: rowStripBg }]}>
+    <Pressable
+      onPress={handleRowPress}
+      style={[{ flexDirection: 'row', height: ROW_H }, rowIdx % 2 === 1 && { backgroundColor: rowStripBg }]}
+      // 44pt min hit target — each cell column is CELL_W=44 wide and the
+      // row is ROW_H ≥ 44pt tall, so every tappable day region meets the
+      // iOS HIG tap-target requirement.
+    >
       {days.map((d) => {
         const ds = formatDate(d);
         const entry = entryMap.get(`${userId}-${ds}`);
@@ -548,8 +574,9 @@ const GridDayRow = memo(function GridDayRow({
               : 'transparent';
 
         return (
-          <TouchableOpacity
+          <View
             key={ds}
+            pointerEvents="none"
             style={[
               styles.gridCell,
               {
@@ -561,14 +588,6 @@ const GridDayRow = memo(function GridDayRow({
               },
               isToday && styles.gridCellToday,
             ]}
-            onPress={() => {
-              if (canEdit) haptic('tap');
-              onCellPress(userId, ds, entry, firstName);
-            }}
-            activeOpacity={canEdit ? 0.5 : 1}
-            // 44pt min hit target — width is column-width but vertically
-            // each row is ROW_H ≥ 44pt; the cell already meets the iOS
-            // HIG tap-target requirement.
           >
             {cell.hasEntry && cell.icon ? (
               cell.label ? (
@@ -588,10 +607,10 @@ const GridDayRow = memo(function GridDayRow({
             ) : (
               canEdit && <View style={[styles.gridCellEmpty, { backgroundColor: emptyDotColor }]} />
             )}
-          </TouchableOpacity>
+          </View>
         );
       })}
-    </View>
+    </Pressable>
   );
 });
 
@@ -673,7 +692,11 @@ function GridTab() {
     staleTime: 30_000,
   });
 
-  const { data: usersData } = useQuery<User[]>({
+  const {
+    data: usersData,
+    isError: usersError,
+    refetch: refetchUsers,
+  } = useQuery<User[]>({
     queryKey: ['users'],
     queryFn: async () => {
       const res = await usersApi.getAll();
@@ -683,9 +706,22 @@ function GridTab() {
     staleTime: 5 * 60_000,
   });
 
+  // Deferred grid mount — the month grid is ~300-450 cells; mounting it
+  // synchronously during the push transition blocked the JS thread and
+  // the screen looked frozen. First render paints the cheap GridSkeleton;
+  // the real grid mounts after the navigation animation settles.
+  const [gridReady, setGridReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setGridReady(true));
+    return () => task.cancel();
+  }, []);
+
   // Prefetch adjacent months so swiping the month pager feels instant — by
   // the time the user actually goes to Dec/Feb, the data is already cached.
+  // Gated behind gridReady: the warm-up requests must not compete with the
+  // first paint of the current month.
   React.useEffect(() => {
+    if (!gridReady) return;
     const prevMonth = new Date(year, month - 1, 1);
     const nextMonth = new Date(year, month + 1, 1);
     [prevMonth, nextMonth].forEach((m) => {
@@ -700,7 +736,7 @@ function GridTab() {
         staleTime: 30_000,
       });
     });
-  }, [year, month, queryClient]);
+  }, [gridReady, year, month, queryClient]);
 
   // Master list shown as rows in the schedule grid. Robust against any
   // shape of usersData (undefined, null, empty, missing isActive flags):
@@ -1163,15 +1199,21 @@ function GridTab() {
       </ScrollView>
 
       {/* Schedule states:
-          1. We don't yet have ANY user info (neither cached usersData nor
-             the authed user) → skeleton.
-          2. We have user info but the master list is empty → onboarding.
-          3. Otherwise → calendar grid. Note: we don't gate on usersData
-             being undefined any more, because activeUsers already falls
-             back to the auth user — that single row is enough to render
-             the grid even on fresh tenants. */}
-      {activeUsers.length === 0 && !user ? (
+          1. The push transition hasn't settled yet (gridReady=false), or
+             the ['users'] query is still loading with nothing cached →
+             skeleton, never a premature «Нет мастеров».
+          2. The ['users'] query failed with nothing cached → tap-to-retry
+             error row.
+          3. Users resolved but the master list is empty → onboarding.
+          4. Otherwise → calendar grid. activeUsers already falls back to
+             the auth user, so a fresh tenant still renders a one-row grid. */}
+      {!gridReady || (activeUsers.length === 0 && usersData === undefined && !usersError) ? (
         <GridSkeleton />
+      ) : activeUsers.length === 0 && usersData === undefined && usersError ? (
+        <TouchableOpacity onPress={() => refetchUsers()} style={styles.errorBanner} activeOpacity={0.7}>
+          <Ionicons name="cloud-offline-outline" size={16} color={colors.red[600]} />
+          <Text style={styles.errorBannerText}>Не удалось загрузить сотрудников. Нажмите, чтобы повторить.</Text>
+        </TouchableOpacity>
       ) : activeUsers.length === 0 ? (
         <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
           <View
@@ -1192,14 +1234,8 @@ function GridTab() {
           </Text>
         </View>
       ) : (
-        /* Schedule grid — RN implementation. The native Swift grid built
-           in iter#2 (mobile/modules/autexa-liquid-glass/ios/AutexaScheduleGridView.swift)
-           is intentionally NOT used here: physical-iPhone testing showed
-           the RN visual layer was clearer and the owner asked to keep
-           the familiar design. The lag from iter#2's setTimeout-based
-           scroll sync is fixed below by replacing handleLeftScroll /
-           handleRightScroll with reanimated useAnimatedScrollHandler so
-           the names column and the day grid sync ON THE UI THREAD —
+        /* Schedule grid — the names column and the day grid sync ON THE
+           UI THREAD via reanimated useAnimatedScrollHandler + scrollTo,
            no JS bridge round-trip per scroll frame. */
         <View style={{ flex: 1, flexDirection: 'row' }}>
           {/* Sticky left column -- employee names with avatar initials */}
@@ -1319,9 +1355,7 @@ function GridTab() {
                 weekendText={palette.mode === 'dark' ? colors.red[400] : colors.red[400]}
                 dayText={palette.text.primary}
                 dowText={palette.text.tertiary}
-                todayColumnBg={
-                  palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.15)' : colors.primary[50]
-                }
+                todayColumnBg={palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.15)' : colors.primary[50]}
               />
 
               {/* Day cells — Reanimated.ScrollView so the UI-thread
@@ -1355,12 +1389,8 @@ function GridTab() {
                     isDark={palette.mode === 'dark'}
                     dividerColor={palette.border.subtle}
                     rowStripBg={palette.mode === 'dark' ? 'rgba(255,255,255,0.025)' : colors.gray[50] + '60'}
-                    todayColumnBg={
-                      palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.12)' : colors.primary[50]
-                    }
-                    weekendColumnBg={
-                      palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.05)' : colors.red[50] + '30'
-                    }
+                    todayColumnBg={palette.mode === 'dark' ? 'rgba(59, 130, 246, 0.12)' : colors.primary[50]}
+                    weekendColumnBg={palette.mode === 'dark' ? 'rgba(239, 68, 68, 0.05)' : colors.red[50] + '30'}
                     emptyDotColor={palette.mode === 'dark' ? 'rgba(255,255,255,0.08)' : colors.gray[200]}
                   />
                 ))}
@@ -1740,19 +1770,33 @@ function TodayTab() {
 
 // ============== SHIFTS TAB ==============
 function ShiftsTab() {
-  // Same lifted month so changing it in the header reflects across tabs.
-  // ShiftsTab consumes only — the picker lives in the screen header.
-  const { currentMonth } = useScheduleMonth();
-  const year = currentMonth.getFullYear();
-  const month = currentMonth.getMonth();
   const tabBarHeight = useTabBarHeight();
+
+  // Honest month stepper: /schedule/my-stats now accepts dateFrom/dateTo,
+  // so the tab consumes the same lifted month state as the grid (header
+  // trailing stepper, see showMonthStepper in ScheduleScreen). We always
+  // pass the explicit range — even for the current month — so the result
+  // is deterministic and the queryKey maps 1:1 to what is on screen.
+  const { currentMonth } = useScheduleMonth();
+  // Same defensive fallback as GridTab — an out-of-shape Date must never
+  // produce NaN in the queryKey or an "Invalid Date" range.
+  const safeMonth = currentMonth instanceof Date && !isNaN(currentMonth.getTime()) ? currentMonth : new Date();
+  const year = safeMonth.getFullYear();
+  const month = safeMonth.getMonth();
+  // LOCAL date formatting (formatDate) — toISOString would shift the
+  // month boundary for UTC+ timezones.
+  const dateFrom = formatDate(new Date(year, month, 1));
+  const dateTo = formatDate(new Date(year, month + 1, 0));
 
   const { data: stats, isLoading } = useQuery({
     queryKey: ['schedule-my-stats', year, month],
     queryFn: async () => {
-      const res = await scheduleApi.getMyStats();
+      const res = await scheduleApi.getMyStats({ dateFrom, dateTo });
       return res.data;
     },
+    // keep previous month visible while next month loads — no flash to empty
+    placeholderData: (prev) => prev,
+    staleTime: 30_000,
   });
 
   const s: any = stats || {};
@@ -1916,11 +1960,16 @@ function RatingTab() {
     queryFn: async () => (await usersApi.getAll()).data ?? [],
   });
 
+  // Same eligibility rule as the grid's activeUsers: owners (superadmin /
+  // director / owner) не отображаются в графике — и в рейтинге тоже.
   const users = useMemo(
     () =>
-      (usersData || []).filter(
-        (u) => u && u.id && u.isActive && !u.hiddenFromSchedule && !u.hiddenEverywhere,
-      ),
+      (usersData || []).filter((u) => {
+        if (!u || !u.id || !u.isActive) return false;
+        if (u.hiddenFromSchedule || u.hiddenEverywhere) return false;
+        const role = (u.role || '').toString().toLowerCase();
+        return role !== 'superadmin' && role !== 'director' && role !== 'owner';
+      }),
     [usersData],
   );
 
@@ -2263,8 +2312,7 @@ function SettingsTab() {
   const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes' | 'shifts'>('daysoff');
   const tabBarHeight = useTabBarHeight();
 
-  const canEditSettings =
-    user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  const canEditSettings = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
@@ -2285,10 +2333,7 @@ function SettingsTab() {
   // Defensive: drop null/orphaned rows (a malformed users payload after a
   // deletion could contain holes) so the settings sub-tabs never call a
   // method on `undefined`.
-  const activeUsers = useMemo(
-    () => (usersData || []).filter((u) => u && u.id && u.isActive),
-    [usersData],
-  );
+  const activeUsers = useMemo(() => (usersData || []).filter((u) => u && u.id && u.isActive), [usersData]);
 
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
     const user = activeUsers.find((u) => u.id === userId);
@@ -2368,8 +2413,7 @@ function SettingsTab() {
       // any derived views fresh on the next visit.
       Alert.alert('Сохранено', 'Настройки смен обновлены');
     },
-    onError: (err: any) =>
-      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить настройки'),
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить настройки'),
   });
 
   const saveShiftSettings = () => {
@@ -2436,10 +2480,7 @@ function SettingsTab() {
 
           {/* Toggle list */}
           <View
-            style={[
-              styles.shiftListCard,
-              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            ]}
+            style={[styles.shiftListCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           >
             {SHIFT_STATUS_OPTIONS.map((opt, idx) => {
               const on = shiftKeys.has(opt.key);
@@ -2485,8 +2526,7 @@ function SettingsTab() {
               style={[
                 styles.shiftSaveBtn,
                 {
-                  backgroundColor:
-                    !dirty || shiftSettingsMutation.isPending ? palette.bg.muted : colors.primary[600],
+                  backgroundColor: !dirty || shiftSettingsMutation.isPending ? palette.bg.muted : colors.primary[600],
                 },
               ]}
               activeOpacity={0.85}
@@ -2495,17 +2535,8 @@ function SettingsTab() {
                 <ActivityIndicator color={colors.white} size="small" />
               ) : (
                 <>
-                  <Ionicons
-                    name="save-outline"
-                    size={16}
-                    color={!dirty ? palette.text.tertiary : colors.white}
-                  />
-                  <Text
-                    style={[
-                      styles.shiftSaveBtnText,
-                      { color: !dirty ? palette.text.tertiary : colors.white },
-                    ]}
-                  >
+                  <Ionicons name="save-outline" size={16} color={!dirty ? palette.text.tertiary : colors.white} />
+                  <Text style={[styles.shiftSaveBtnText, { color: !dirty ? palette.text.tertiary : colors.white }]}>
                     Сохранить
                   </Text>
                 </>
@@ -2772,8 +2803,10 @@ export default function ScheduleScreen() {
 
   // Compact month stepper inside the header trailing slot. Tap on the
   // month label resets to today; arrows step ± one month with a haptic.
-  // Hidden on Today tab (which is single-day), Rating tab (year-wide),
-  // and Settings (no time scope).
+  // Visible on the grid AND «Смены» tabs — both consume the same lifted
+  // month state, and /schedule/my-stats now honours dateFrom/dateTo, so
+  // the stepper is honest on both. Today is single-day, Rating has its
+  // own in-tab month switcher, Settings has no time scope.
   const showMonthStepper = tab === 'grid' || tab === 'shifts';
   const trailingMonthStepper = showMonthStepper ? (
     <View style={styles.headerMonthStepper}>

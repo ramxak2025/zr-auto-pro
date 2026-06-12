@@ -113,6 +113,22 @@ function gated(featureKey: string, ScreenComponent: React.ComponentType<any>) {
   };
 }
 
+// Gated screens hoisted to MODULE scope — calling gated() inline in
+// `component={...}` created a brand-new component identity on every
+// MoreStackNavigator render, so React Navigation unmounted and
+// remounted the screen mid-push (owner-reported «Расписание
+// открывается через раз»). One stable identity per screen for the
+// app's lifetime fixes that for all nine gated routes at once.
+const GatedSchedule = gated('schedule_view', ScheduleScreen);
+const GatedClients = gated('clients_view', ClientsScreen);
+const GatedCars = gated('clients_view', CarsScreen);
+const GatedServices = gated('services_view', ServicesScreen);
+const GatedSuppliers = gated('suppliers_view', SuppliersScreen);
+const GatedCashFlow = gated('cashflow_view', CashFlowScreen);
+const GatedSalary = gated('salary_view', SalaryScreen);
+const GatedReports = gated('reports_view', ReportsScreen);
+const GatedUsers = gated('users_manage', UsersScreen);
+
 export type RootStackParamList = {
   Login: undefined;
   Main: undefined;
@@ -217,8 +233,8 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="DismissedEmployees" component={DismissedEmployeesScreen} />
       <MoreStack.Screen name="Trash" component={TrashScreen} />
       <MoreStack.Screen name="Subscription" component={SubscriptionScreen} />
-      <MoreStack.Screen name="Schedule" component={gated('schedule_view', ScheduleScreen)} />
-      <MoreStack.Screen name="Clients" component={gated('clients_view', ClientsScreen)} />
+      <MoreStack.Screen name="Schedule" component={GatedSchedule} />
+      <MoreStack.Screen name="Clients" component={GatedClients} />
       <MoreStack.Screen name="KnowledgeBase" component={KnowledgeBaseScreen} />
       <MoreStack.Screen name="KnowledgeCategory" component={KnowledgeCategoryScreen} />
       <MoreStack.Screen name="KnowledgeArticle" component={KnowledgeArticleScreen} />
@@ -230,20 +246,20 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="KnowledgeTroubleshooting" component={KnowledgeTroubleshootingScreen} />
       <MoreStack.Screen name="KnowledgeTroubleshootingDetail" component={KnowledgeTroubleshootingDetailScreen} />
       <MoreStack.Screen name="KnowledgeTroubleshootingEditor" component={KnowledgeTroubleshootingEditorScreen} />
-      <MoreStack.Screen name="Cars" component={gated('clients_view', CarsScreen)} />
-      <MoreStack.Screen name="Services" component={gated('services_view', ServicesScreen)} />
-      <MoreStack.Screen name="Suppliers" component={gated('suppliers_view', SuppliersScreen)} />
-      <MoreStack.Screen name="CashFlow" component={gated('cashflow_view', CashFlowScreen)} />
-      <MoreStack.Screen name="Salary" component={gated('salary_view', SalaryScreen)} />
+      <MoreStack.Screen name="Cars" component={GatedCars} />
+      <MoreStack.Screen name="Services" component={GatedServices} />
+      <MoreStack.Screen name="Suppliers" component={GatedSuppliers} />
+      <MoreStack.Screen name="CashFlow" component={GatedCashFlow} />
+      <MoreStack.Screen name="Salary" component={GatedSalary} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
-      <MoreStack.Screen name="Reports" component={gated('reports_view', ReportsScreen)} />
+      <MoreStack.Screen name="Reports" component={GatedReports} />
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
       <MoreStack.Screen name="Calls" component={CallsScreen} />
       <MoreStack.Screen name="Mailings" component={MailingsScreen} />
       <MoreStack.Screen name="Integrations" component={IntegrationsScreen} />
       <MoreStack.Screen name="WarehouseAnalytics" component={WarehouseAnalyticsScreen} />
       <MoreStack.Screen name="Equipment" component={EquipmentStackNavigator} />
-      <MoreStack.Screen name="Users" component={gated('users_manage', UsersScreen)} />
+      <MoreStack.Screen name="Users" component={GatedUsers} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
       {/* UNGATED — every role manages their own notification preferences. */}
       <MoreStack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
@@ -320,6 +336,11 @@ function TabNavigator() {
       screenOptions={{
         headerShown: false,
         sceneStyle: { backgroundColor: 'transparent' },
+        // react-native-screens Freeze: blurred tabs stop re-rendering
+        // entirely (query refetches, context updates) until refocused.
+        // The custom PlatformTabBar lives OUTSIDE the screen containers,
+        // so the bar itself is never frozen.
+        freezeOnBlur: true,
         // Floating pill: the absolute position lifts the bar out of the
         // layout flow so screen content scrolls UNDER the glass — that's
         // what makes the bar feel native (visible content blurred through
