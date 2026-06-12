@@ -36,6 +36,7 @@ import { useNavigation } from '@react-navigation/native';
 import CachedImage from '../components/CachedImage';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { PressableScale } from '../platform/PressableScale';
@@ -235,10 +236,14 @@ export default function DismissedEmployeesScreen() {
 
   // Manager-role gate (mirrors the delete gate). director / admin /
   // superadmin manage the recycle bin; a master never reaches it.
-  const canManage =
-    me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin';
+  const canManage = me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin';
 
-  const { data: items, isLoading } = useQuery<User[]>({
+  const {
+    data: items,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<User[]>({
     queryKey: ['users-dismissed'],
     queryFn: async () => {
       const res = await usersApi.listDismissed();
@@ -271,9 +276,7 @@ export default function DismissedEmployeesScreen() {
   // instantly on either action; the invalidate then reconciles.
   const dropFromCache = useCallback(
     (id: string) => {
-      queryClient.setQueryData<User[]>(['users-dismissed'], (prev) =>
-        (prev ?? []).filter((u) => u.id !== id),
-      );
+      queryClient.setQueryData<User[]>(['users-dismissed'], (prev) => (prev ?? []).filter((u) => u.id !== id));
     },
     [queryClient],
   );
@@ -281,7 +284,10 @@ export default function DismissedEmployeesScreen() {
   const restoreMut = useMutation({
     mutationFn: (id: string) => usersApi.restore(id),
     onMutate: (id: string) => dropFromCache(id),
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      haptic('success');
+      invalidateAll();
+    },
     onError: () => {
       invalidateAll();
       Alert.alert('Ошибка', 'Не удалось восстановить сотрудника');
@@ -291,7 +297,10 @@ export default function DismissedEmployeesScreen() {
   const purgeMut = useMutation({
     mutationFn: (id: string) => usersApi.purge(id),
     onMutate: (id: string) => dropFromCache(id),
-    onSuccess: invalidateAll,
+    onSuccess: () => {
+      haptic('success');
+      invalidateAll();
+    },
     onError: () => {
       invalidateAll();
       Alert.alert('Ошибка', 'Не удалось удалить сотрудника');
@@ -339,13 +348,7 @@ export default function DismissedEmployeesScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: User }) => (
-      <DismissedRow
-        user={item}
-        palette={palette}
-        onRestore={confirmRestore}
-        onPurge={confirmPurge}
-        busy={busy}
-      />
+      <DismissedRow user={item} palette={palette} onRestore={confirmRestore} onPurge={confirmPurge} busy={busy} />
     ),
     [palette, confirmRestore, confirmPurge, busy],
   );
@@ -372,7 +375,14 @@ export default function DismissedEmployeesScreen() {
         onBack={() => navigation.goBack()}
       />
 
-      {isLoading && items === undefined ? (
+      {items === undefined && isError ? (
+        // Запрос упал и кэша нет — error-state с Retry (как в Сотрудниках).
+        <QueryErrorState
+          title="Не удалось загрузить «Уволенных»"
+          description="Проверьте соединение и попробуйте ещё раз."
+          onRetry={() => refetch()}
+        />
+      ) : isLoading && items === undefined ? (
         <ListSkeleton count={6} />
       ) : list.length === 0 ? (
         <EmptyState
@@ -386,10 +396,7 @@ export default function DismissedEmployeesScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           ItemSeparatorComponent={Spacer}
-          contentContainerStyle={[
-            styles.list,
-            Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
-          ]}
+          contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
           automaticallyAdjustContentInsets={false}

@@ -16,6 +16,17 @@
  * Kept: the hero (avatar + name + role/class + rank badge) and the
  * quick-actions bar (Call / WhatsApp / Schedule / Salary).
  *
+ * Unified visual-system additions (Сотрудники redesign):
+ *   • «Контакты» card — телефон (tap-to-call, long-press → share sheet со
+ *     «Скопировать») + WhatsApp;
+ *   • «Роль и доступ» card — роль / должность / команда / дата найма /
+ *     ставка (ставка — только менеджеры или сам сотрудник);
+ *   • «Уволить сотрудника» — destructive пункт в меню ⋯ (менеджеры; нельзя
+ *     себя / superadmin / владельца — зеркало canDelete из UsersScreen),
+ *     destructive-confirm Alert → usersApi.remove() (soft-dismiss), после
+ *     успеха ['user', id] инвалидируется и экран сам падает в read-only
+ *     «Уволен» состояние.
+ *
  * Data:
  *   • `employeesApi.fullProfile()` → stats / lifetime / achievements /
  *     yearHeatmap (used ONLY to compute salary period totals — not drawn).
@@ -46,6 +57,7 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  Share,
   StyleSheet,
   TouchableOpacity,
   View,
@@ -54,12 +66,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  RouteProp,
-  useFocusEffect,
-  useNavigation,
-  useRoute,
-} from '@react-navigation/native';
+import { RouteProp, useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { checksApi, employeesApi, equipmentApi, knowledgeApi, scheduleApi, usersApi } from '../api/services';
 import CachedImage from '../components/CachedImage';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -84,14 +91,11 @@ import type {
   User,
 } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
+import { formatPhone } from '../../../shared/validation/phone';
 import { ShareCardModal } from '../components/employee/ShareCardModal';
 import { EditProfileModal } from '../components/employee/EditProfileModal';
 import { AwardAchievementModal } from '../components/employee/AwardAchievementModal';
-import {
-  rankFromLifetime,
-  progressToNextRank,
-  rankLabelUpper,
-} from '../components/employee/rank';
+import { rankFromLifetime, progressToNextRank, rankLabelUpper } from '../components/employee/rank';
 
 type RouteParams = { EmployeeDetail: { id: string } };
 
@@ -131,13 +135,21 @@ const formatHM = (raw?: string | null): string => {
 const formatShortDate = (iso: string): string =>
   new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' });
 
+const formatLongDate = (iso: string): string => {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+};
+
 function statusBadge(s?: TodayEmployeeStatus): { text: string; bg: string; fg: string } {
   if (!s) return { text: '—', bg: 'rgba(255,255,255,0.18)', fg: '#fff' };
   const note = (s.note || '').toLowerCase();
   if (note.includes('больнич')) return { text: 'Б/Л', bg: 'rgba(244,114,182,0.30)', fg: '#fff' };
   if (s.isDayOff) return { text: 'Выходной', bg: 'rgba(255,255,255,0.18)', fg: '#fff' };
-  if (s.lateStatus === 'late_major') return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(248,113,113,0.34)', fg: '#fff' };
-  if (s.lateStatus === 'late_minor') return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(251,191,36,0.34)', fg: '#fff' };
+  if (s.lateStatus === 'late_major')
+    return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(248,113,113,0.34)', fg: '#fff' };
+  if (s.lateStatus === 'late_minor')
+    return { text: `Опоздал +${s.lateMinutes}'`, bg: 'rgba(251,191,36,0.34)', fg: '#fff' };
   if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time')
     return { text: 'На смене', bg: 'rgba(52,211,153,0.32)', fg: '#fff' };
   if (s.hasSchedule) return { text: 'Не пришёл', bg: 'rgba(248,113,113,0.30)', fg: '#fff' };
@@ -165,8 +177,7 @@ export default function EmployeeDetailScreen() {
   const tabBarHeight = useTabBarHeight();
 
   const isSelf = !!viewer && viewer.id === id;
-  const isOwnerLike =
-    viewer?.role === 'director' || viewer?.role === 'superadmin' || viewer?.role === 'admin';
+  const isOwnerLike = viewer?.role === 'director' || viewer?.role === 'superadmin' || viewer?.role === 'admin';
 
   // ── Full profile from the new endpoint ───────────────────────────────
   const {
@@ -226,6 +237,25 @@ export default function EmployeeDetailScreen() {
     onError: (e: any) => {
       Alert.alert('Ошибка', e?.response?.data?.message || e?.message || 'Не удалось удалить');
     },
+  });
+
+  // ── Увольнение (soft-dismiss → «Уволенные») ──────────────────────────
+  // Тот же endpoint и те же invalidations, что у deleteMutation в
+  // UsersScreen: usersApi.remove() НЕ удаляет учётку, а перемещает её в
+  // корзину «Уволенные» (восстановима в течение года). Дополнительно
+  // инвалидируем ['user', id] — refetch принесёт dismissedAt, и экран сам
+  // перейдёт в read-only состояние «Уволен».
+  const dismissMut = useMutation({
+    mutationFn: () => usersApi.remove(id),
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      queryClient.invalidateQueries({ queryKey: ['users-all'] });
+      queryClient.invalidateQueries({ queryKey: ['users-dismissed'] });
+      queryClient.invalidateQueries({ queryKey: ['user', id] });
+      Alert.alert('Готово', 'Сотрудник перемещён в «Уволенные»');
+    },
+    onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка увольнения'),
   });
 
   // ── Period switch for SALARY section ─────────────────────────────────
@@ -340,12 +370,26 @@ export default function EmployeeDetailScreen() {
   const rankProgress = progressToNextRank(rankInfo, lifetime.totalRevenue);
 
   const className =
-    profile.customTitle?.trim() ||
-    profile.positionTitle?.trim() ||
-    roleLabels[profile.role] ||
-    profile.role;
+    profile.customTitle?.trim() || profile.positionTitle?.trim() || roleLabels[profile.role] || profile.role;
   const initials = getInitials(profile.fullName);
   const status = statusBadge(today);
+
+  // ── Увольнение: gating зеркалит canDelete из UsersScreen ─────────────
+  // (нельзя уволить себя, superadmin'а и владельца; действие видят только
+  // менеджеры — director / admin / superadmin).
+  const canDismiss = isOwnerLike && !isSelf && profile.role !== 'superadmin' && profile.role !== 'director';
+
+  const confirmDismiss = () => {
+    haptic('warning');
+    Alert.alert(
+      'Уволить сотрудника?',
+      `${profile.fullName || 'Сотрудник'} будет перемещён в «Уволенные» и скрыт из списков, графика и Кассы. В течение года его можно восстановить.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Уволить', style: 'destructive', onPress: () => dismissMut.mutate() },
+      ],
+    );
+  };
 
   const shareData = {
     fullName: profile.fullName,
@@ -396,6 +440,14 @@ export default function EmployeeDetailScreen() {
       return;
     }
     Linking.openURL(`https://wa.me/${wa.replace(/[^\d]/g, '')}`);
+  };
+  // Long-press на телефоне — системный share sheet (в нём «Скопировать»,
+  // без новой зависимости на clipboard-модуль).
+  const sharePhone = () => {
+    const phone = userRecord?.phone || '';
+    if (!phone) return;
+    haptic('select');
+    Share.share({ message: formatPhone(phone) || phone }).catch(() => {});
   };
   const goSchedule = () => {
     haptic('tap');
@@ -452,6 +504,23 @@ export default function EmployeeDetailScreen() {
               />
             </>
           )}
+          {canDismiss && (
+            <>
+              <View style={[styles.menuDivider, { backgroundColor: palette.border.subtle }]} />
+              {/* Деструктив — стиль CheckDetailScreen: красный пункт +
+                  destructive-confirm Alert перед мутацией. */}
+              <MenuItem
+                icon="person-remove-outline"
+                label="Уволить сотрудника"
+                destructive
+                onPress={() => {
+                  setMenuOpen(false);
+                  confirmDismiss();
+                }}
+                palette={palette}
+              />
+            </>
+          )}
         </View>
       )}
 
@@ -477,6 +546,54 @@ export default function EmployeeDetailScreen() {
           rankProgress={rankProgress}
           status={status}
         />
+
+        {/* ── КОНТАКТЫ — tap-to-call / long-press → share («Скопировать») ── */}
+        <Card palette={palette}>
+          <CardHeader icon="call-outline" title="Контакты" palette={palette} />
+          <View style={{ gap: spacing[2] }}>
+            <ContactRow
+              icon="call-outline"
+              label="Телефон"
+              value={userRecord?.phone ? formatPhone(userRecord.phone) || userRecord.phone : 'Не указан'}
+              missing={!userRecord?.phone}
+              onPress={goCall}
+              onLongPress={sharePhone}
+              palette={palette}
+            />
+            <ContactRow
+              icon="logo-whatsapp"
+              label="WhatsApp"
+              value={profile.whatsapp ? formatPhone(profile.whatsapp) || profile.whatsapp : 'Не указан'}
+              missing={!profile.whatsapp}
+              onPress={goWhatsapp}
+              accent={colors.green[600]}
+              palette={palette}
+            />
+          </View>
+        </Card>
+
+        {/* ── РОЛЬ И ДОСТУП ───────────────────────────────────────────── */}
+        <Card palette={palette}>
+          <CardHeader icon="id-card-outline" title="Роль и доступ" palette={palette} />
+          <View style={{ gap: spacing[2.5] }}>
+            <InfoRow label="Роль" value={roleLabels[profile.role] || profile.role} palette={palette} />
+            {profile.customTitle?.trim() || profile.positionTitle?.trim() ? (
+              <InfoRow
+                label="Должность"
+                value={(profile.customTitle?.trim() || profile.positionTitle?.trim()) as string}
+                palette={palette}
+              />
+            ) : null}
+            {userRecord?.team ? <InfoRow label="Команда" value={userRecord.team} palette={palette} /> : null}
+            {profile.hireDate ? (
+              <InfoRow label="В команде с" value={formatLongDate(profile.hireDate)} palette={palette} />
+            ) : null}
+            {/* Ставка — чувствительно: только менеджеры или сам сотрудник. */}
+            {canSeeSalary && userRecord ? (
+              <InfoRow label="Ставка с чека" value={`${userRecord.salaryPercent}%`} palette={palette} />
+            ) : null}
+          </View>
+        </Card>
 
         {/* ── 1. ЕГО ГРАФИК (сегодня) ─────────────────────────────────── */}
         <Card palette={palette}>
@@ -518,8 +635,18 @@ export default function EmployeeDetailScreen() {
             </View>
             <PeriodSwitcher value={period} onChange={setPeriod} palette={palette} />
             <View style={[styles.tilesGrid, { marginTop: spacing[3] }]}>
-              <MetricTile label="Заработано" value={formatMoneyCompact(periodTotals.earnings)} highlight palette={palette} />
-              <MetricTile label="Выручка" value={formatMoneyCompact(periodTotals.revenue)} highlight palette={palette} />
+              <MetricTile
+                label="Заработано"
+                value={formatMoneyCompact(periodTotals.earnings)}
+                highlight
+                palette={palette}
+              />
+              <MetricTile
+                label="Выручка"
+                value={formatMoneyCompact(periodTotals.revenue)}
+                highlight
+                palette={palette}
+              />
               <MetricTile label="К выплате" value={formatMoneyCompact(periodTotals.toPay)} palette={palette} />
               <MetricTile label="Чеков" value={String(periodTotals.checks)} palette={palette} />
             </View>
@@ -603,7 +730,13 @@ export default function EmployeeDetailScreen() {
         ]}
       >
         <ActionBtn icon="call" label="Позвонить" onPress={goCall} palette={palette} />
-        <ActionBtn icon="logo-whatsapp" label="WhatsApp" onPress={goWhatsapp} palette={palette} accent={colors.green[600]} />
+        <ActionBtn
+          icon="logo-whatsapp"
+          label="WhatsApp"
+          onPress={goWhatsapp}
+          palette={palette}
+          accent={colors.green[600]}
+        />
         <ActionBtn icon="calendar" label="График" onPress={goSchedule} palette={palette} />
         {canSeeSalary && <ActionBtn icon="wallet" label="Зарплата" onPress={goSalary} palette={palette} />}
       </View>
@@ -961,7 +1094,10 @@ function MetricTile({
       <Text style={[styles.tileLabel, { color: palette.text.tertiary }]} numberOfLines={1}>
         {label}
       </Text>
-      <Text style={[styles.tileValue, { color: highlight ? colors.blue[700] : palette.text.primary }]} numberOfLines={1}>
+      <Text
+        style={[styles.tileValue, { color: highlight ? colors.blue[700] : palette.text.primary }]}
+        numberOfLines={1}
+      >
         {value}
       </Text>
     </View>
@@ -1067,7 +1203,12 @@ function ActionBtn({
       activeOpacity={0.85}
       onPressIn={() => Animated.spring(scale, { toValue: 0.94, useNativeDriver: true, speed: 30 }).start()}
       onPressOut={() =>
-        Animated.timing(scale, { toValue: 1, duration: 140, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start()
+        Animated.timing(scale, {
+          toValue: 1,
+          duration: 140,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }).start()
       }
       style={styles.actionBtn}
     >
@@ -1088,17 +1229,84 @@ function MenuItem({
   label,
   onPress,
   palette,
+  destructive,
 }: {
   icon: any;
   label: string;
   onPress: () => void;
   palette: Palette;
+  /** Красный пункт меню для необратимых действий (увольнение). */
+  destructive?: boolean;
 }) {
+  const color = destructive ? colors.red[500] : palette.text.primary;
   return (
     <TouchableOpacity onPress={onPress} activeOpacity={0.6} style={styles.menuItem}>
-      <Ionicons name={icon} size={18} color={palette.text.primary} />
-      <Text style={[styles.menuItemText, { color: palette.text.primary }]}>{label}</Text>
+      <Ionicons name={icon} size={18} color={color} />
+      <Text style={[styles.menuItemText, { color }]}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+/**
+ * ContactRow — строка карточки «Контакты»: tap = действие (позвонить /
+ * открыть WhatsApp), long-press = share sheet (скопировать). Та же
+ * геометрия, что у checkRow / invRow — единый ритм внутри карточек.
+ */
+function ContactRow({
+  icon,
+  label,
+  value,
+  missing,
+  onPress,
+  onLongPress,
+  accent,
+  palette,
+}: {
+  icon: any;
+  label: string;
+  value: string;
+  missing: boolean;
+  onPress: () => void;
+  onLongPress?: () => void;
+  accent?: string;
+  palette: Palette;
+}) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.75}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+      style={[styles.contactRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${value}`}
+    >
+      <View style={[styles.contactIconBox, { backgroundColor: palette.bg.card }]}>
+        <Ionicons name={icon} size={16} color={missing ? palette.text.tertiary : accent || colors.primary[600]} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.contactLabel, { color: palette.text.tertiary }]}>{label}</Text>
+        <Text
+          style={[styles.contactValue, { color: missing ? palette.text.tertiary : palette.text.primary }]}
+          numberOfLines={1}
+        >
+          {value}
+        </Text>
+      </View>
+      {!missing && <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />}
+    </TouchableOpacity>
+  );
+}
+
+/** InfoRow — строка «лейбл слева — значение справа» (карточка «Роль и доступ»). */
+function InfoRow({ label, value, palette }: { label: string; value: string; palette: Palette }) {
+  return (
+    <View style={styles.infoRow}>
+      <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>{label}</Text>
+      <Text style={[styles.infoValue, { color: palette.text.primary }]} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
   );
 }
 
@@ -1106,15 +1314,7 @@ function MenuItem({
 //  ЕГО ПОСЛЕДНИЕ ЧЕКИ — lazy, fetched when the card mounts (below the fold)
 // ──────────────────────────────────────────────────────────────────────────
 
-function RecentChecks({
-  employeeId,
-  palette,
-  navigation,
-}: {
-  employeeId: string;
-  palette: Palette;
-  navigation: any;
-}) {
+function RecentChecks({ employeeId, palette, navigation }: { employeeId: string; palette: Palette; navigation: any }) {
   const { data, isLoading } = useQuery<Check[]>({
     queryKey: ['employee-recent-checks', employeeId],
     queryFn: async () => {
@@ -1165,10 +1365,7 @@ function RecentChecks({
             </Text>
           </View>
           <Text
-            style={[
-              styles.checkAmount,
-              { color: c.isReturned ? palette.text.tertiary : palette.text.primary },
-            ]}
+            style={[styles.checkAmount, { color: c.isReturned ? palette.text.tertiary : palette.text.primary }]}
             numberOfLines={1}
           >
             {formatMoneyFull(c.totalRevenue)}
@@ -1240,15 +1437,7 @@ function Inventory({ employeeId, palette }: { employeeId: string; palette: Palet
 //  Manager view only (gated by the caller). Minimal: one progress line.
 // ──────────────────────────────────────────────────────────────────────────
 
-function RegulationsSummary({
-  employeeId,
-  accent,
-  palette,
-}: {
-  employeeId: string;
-  accent: string;
-  palette: Palette;
-}) {
+function RegulationsSummary({ employeeId, accent, palette }: { employeeId: string; accent: string; palette: Palette }) {
   const { data, isLoading } = useQuery<RegulationUserSummary>({
     queryKey: ['knowledge-regulation-summary', employeeId],
     queryFn: async () => (await knowledgeApi.regulationSummaryForUser(employeeId)).data,
@@ -1293,15 +1482,7 @@ function RegulationsSummary({
 //  course list (cached) then one progress query per course.
 // ──────────────────────────────────────────────────────────────────────────
 
-function LearningSummary({
-  employeeId,
-  accent,
-  palette,
-}: {
-  employeeId: string;
-  accent: string;
-  palette: Palette;
-}) {
+function LearningSummary({ employeeId, accent, palette }: { employeeId: string; accent: string; palette: Palette }) {
   const { data: courses, isLoading } = useQuery<KnowledgeCourse[]>({
     queryKey: ['knowledge-courses'],
     queryFn: async () => (await knowledgeApi.listCourses()).data,
@@ -1411,7 +1592,9 @@ function AchievementsModal({
 
           <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
             {achievements.length === 0 && (
-              <View style={[styles.emptyTrophy, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+              <View
+                style={[styles.emptyTrophy, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              >
                 <Text style={[styles.emptyTrophyText, { color: palette.text.tertiary }]}>
                   Значков пока нет. {isOwnerLike ? 'Выдайте первый ниже.' : ''}
                 </Text>
@@ -1428,7 +1611,11 @@ function AchievementsModal({
                       activeOpacity={0.85}
                       onLongPress={() => onLongPress(a)}
                       delayLongPress={400}
-                      style={[styles.trophyBadge, styles.trophyBadgeCustom, { borderColor: a.color || colors.amber[600] }]}
+                      style={[
+                        styles.trophyBadge,
+                        styles.trophyBadgeCustom,
+                        { borderColor: a.color || colors.amber[600] },
+                      ]}
                     >
                       <Text style={styles.trophyIcon}>{a.icon || '🏆'}</Text>
                       <Text style={[styles.trophyName, { color: colors.gray[900] }]} numberOfLines={2}>
@@ -1452,7 +1639,10 @@ function AchievementsModal({
                   {auto.map((a) => (
                     <View
                       key={a.id}
-                      style={[styles.trophyBadge, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}
+                      style={[
+                        styles.trophyBadge,
+                        { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted },
+                      ]}
                     >
                       <Text style={styles.trophyIcon}>{a.icon || '🏆'}</Text>
                       <Text style={[styles.trophyName, { color: palette.text.primary }]} numberOfLines={2}>
@@ -1672,7 +1862,12 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   rankProgressFill: { height: '100%', borderRadius: 3 },
-  rankProgressLabel: { color: 'rgba(255,255,255,0.85)', fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  rankProgressLabel: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 11,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
 
   // ── Cards ────────────────────────────────────────────────────────────
   card: {
@@ -1820,8 +2015,22 @@ const styles = StyleSheet.create({
   shiftCardSub: { fontSize: 12, marginTop: 1 },
 
   ringWrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-  ringTrack: { position: 'absolute', width: 44, height: 44, borderRadius: 22, borderWidth: 3, borderColor: 'rgba(15,23,42,0.08)' },
-  ringFill: { position: 'absolute', width: 44, height: 44, borderRadius: 22, borderWidth: 3, borderColor: 'transparent' },
+  ringTrack: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: 'rgba(15,23,42,0.08)',
+  },
+  ringFill: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 3,
+    borderColor: 'transparent',
+  },
   ringText: { fontSize: 11, fontWeight: '800', color: colors.primary[700], fontVariant: ['tabular-nums'] },
 
   // ── Segmented control (period) ─────────────────────────────────────
@@ -1848,6 +2057,35 @@ const styles = StyleSheet.create({
     marginTop: spacing[3],
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+
+  // ── Контакты / Роль и доступ ───────────────────────────────────────
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: 8,
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  contactIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  contactLabel: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  contactValue: { fontSize: 14, fontWeight: '600', letterSpacing: -0.2, marginTop: 1 },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    minHeight: 22,
+  },
+  infoLabel: { fontSize: 13, fontWeight: '500' },
+  infoValue: { flexShrink: 1, fontSize: 13, fontWeight: '700', letterSpacing: -0.2, textAlign: 'right' },
 
   // ── Recent checks ──────────────────────────────────────────────────
   checkRow: {

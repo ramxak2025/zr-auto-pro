@@ -20,12 +20,19 @@
  * #5 — сотрудники с `hiddenEverywhere` (напр. владелец) полностью
  * скрыты из списка.
  *
+ * Visual-system parity (Клиенты / Поставщики / Склад):
+ *   • `SearchInput` под шапкой — поиск по имени / роли / телефону;
+ *   • фильтр-чипсы по ролям (рендерятся только когда ролей ≥ 2);
+ *   • trailing «+» в шапке (менеджеры) — ведёт в «Пользователи», где
+ *     живёт единственная форма создания сотрудника (не дублируем её);
+ *   • `QueryErrorState` когда запрос упал и кэша нет.
+ *
  * Производительность: FlashList (single column), `React.memo` row со
  * стабильным `renderItem`, `PressableScale` + haptic, prefetch-on-press
  * (`onPressIn`) канонического `['employee-full-profile', id]`.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, StyleSheet, RefreshControl, Platform } from 'react-native';
+import { View, StyleSheet, RefreshControl, Platform, ScrollView, TouchableOpacity } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,6 +43,8 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { usersApi, scheduleApi, checksApi, employeesApi } from '../api/services';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
+import SearchInput from '../components/SearchInput';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { Text } from '../platform/Typography';
 import { PressableScale } from '../platform/PressableScale';
@@ -52,12 +61,15 @@ const SCREEN_PADDING = spacing[4]; // 16pt
 const AVATAR_SIZE = 44;
 const ROW_HEIGHT = 68; // dense but comfortable — fits ~11 rows per iPhone screen
 
-const ROLE_META: Record<string, { icon: keyof typeof Ionicons.glyphMap }> = {
-  superadmin: { icon: 'shield-checkmark' },
-  director: { icon: 'briefcase' },
-  admin: { icon: 'key' },
-  master: { icon: 'construct' },
+const ROLE_META: Record<string, { icon: keyof typeof Ionicons.glyphMap; chipIcon: keyof typeof Ionicons.glyphMap }> = {
+  superadmin: { icon: 'shield-checkmark', chipIcon: 'shield-checkmark-outline' },
+  director: { icon: 'briefcase', chipIcon: 'briefcase-outline' },
+  admin: { icon: 'key', chipIcon: 'key-outline' },
+  master: { icon: 'construct', chipIcon: 'construct-outline' },
 };
+
+// Стабильный порядок ролей в фильтр-чипсах (иерархия, как в UsersScreen).
+const ROLE_CHIP_ORDER = ['superadmin', 'director', 'admin', 'master'];
 
 const AVATAR_COLORS: Array<[string, string]> = [
   [colors.primary[500], colors.primary[700]],
@@ -170,7 +182,14 @@ export default function EmployeesScreen() {
   const showFinancials =
     me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin' || hasPermission('profit_view');
 
-  const { data: users, isLoading, isFetching, dataUpdatedAt } = useQuery<User[]>({
+  const {
+    data: users,
+    isLoading,
+    isFetching,
+    isError,
+    refetch,
+    dataUpdatedAt,
+  } = useQuery<User[]>({
     queryKey: ['users-all'],
     queryFn: async () => {
       const res = await usersApi.getAll();
@@ -179,6 +198,10 @@ export default function EmployeesScreen() {
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
+
+  // ── Поиск + фильтр по роли (client-side: весь штат уже на руках) ──
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
 
   // Pause the 60-second poll when the screen isn't focused. With a tab
   // navigator the screen stays MOUNTED behind the active tab — TanStack
@@ -219,8 +242,7 @@ export default function EmployeesScreen() {
   // «Уволенные» recycle-bin count for the footer affordance. Manager roles
   // only (director / admin / superadmin manage dismissals) — a master never
   // sees the entry point and we don't fire the request for them.
-  const canManageDismissed =
-    me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin';
+  const canManageDismissed = me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin';
 
   const { data: dismissed } = useQuery<User[]>({
     queryKey: ['users-dismissed'],
@@ -247,29 +269,53 @@ export default function EmployeesScreen() {
   }, [ranking]);
 
   const sortedUsers = useMemo(() => {
-    return (users ?? [])
-      // #5 — fully hidden employees (e.g. the owner) never appear.
-      // Defensive: a dismissed / purged user must never surface among the
-      // active staff even from a stale cache (the API already excludes them).
-      .filter((u) => u.isActive && !u.hiddenEverywhere && !u.dismissedAt && !u.purgedAt)
-      .sort((a, b) => {
-        // На смене → опоздавшие → остальные → выходной/нет данных
-        const sa = todayMap.get(a.id);
-        const sb = todayMap.get(b.id);
-        const rank = (s?: TodayEmployeeStatus): number => {
-          if (!s) return 5;
-          if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time') return 0;
-          if (s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') return 1;
-          if ((s.note || '').toLowerCase().includes('больнич')) return 4;
-          if (s.isDayOff) return 4;
-          if (s.hasSchedule) return 2;
-          return 3;
-        };
-        const r = rank(sa) - rank(sb);
-        if (r !== 0) return r;
-        return a.fullName.localeCompare(b.fullName, 'ru');
-      });
+    return (
+      (users ?? [])
+        // #5 — fully hidden employees (e.g. the owner) never appear.
+        // Defensive: a dismissed / purged user must never surface among the
+        // active staff even from a stale cache (the API already excludes them).
+        .filter((u) => u.isActive && !u.hiddenEverywhere && !u.dismissedAt && !u.purgedAt)
+        .sort((a, b) => {
+          // На смене → опоздавшие → остальные → выходной/нет данных
+          const sa = todayMap.get(a.id);
+          const sb = todayMap.get(b.id);
+          const rank = (s?: TodayEmployeeStatus): number => {
+            if (!s) return 5;
+            if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time') return 0;
+            if (s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') return 1;
+            if ((s.note || '').toLowerCase().includes('больнич')) return 4;
+            if (s.isDayOff) return 4;
+            if (s.hasSchedule) return 2;
+            return 3;
+          };
+          const r = rank(sa) - rank(sb);
+          if (r !== 0) return r;
+          return a.fullName.localeCompare(b.fullName, 'ru');
+        })
+    );
   }, [users, todayMap]);
+
+  // Роли, реально присутствующие в штате — чипсы рисуем только когда их ≥ 2.
+  const presentRoles = useMemo(() => {
+    const set = new Set(sortedUsers.map((u) => u.role as string));
+    return ROLE_CHIP_ORDER.filter((r) => set.has(r));
+  }, [sortedUsers]);
+
+  // Поиск (имя / роль / телефон) + чип роли поверх отсортированного списка.
+  const filteredUsers = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, '');
+    return sortedUsers.filter((u) => {
+      if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+      if (!q) return true;
+      if ((u.fullName || '').toLowerCase().includes(q)) return true;
+      if ((roleLabels[u.role] || u.role).toLowerCase().includes(q)) return true;
+      if (qDigits.length >= 3 && (u.phone || '').replace(/\D/g, '').includes(qDigits)) return true;
+      return false;
+    });
+  }, [sortedUsers, search, roleFilter]);
+
+  const isFiltering = search.trim().length > 0 || roleFilter !== 'all';
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -288,6 +334,14 @@ export default function EmployeesScreen() {
   const onOpenDismissed = useCallback(() => {
     haptic('tap');
     navigation.navigate('DismissedEmployees');
+  }, [navigation]);
+
+  // «+» — добавление сотрудника. Единственная форма создания живёт в разделе
+  // «Пользователи» (UsersScreen, feature-gate `users_manage`) — не дублируем
+  // её здесь, а ведём менеджера прямо туда.
+  const onAddEmployee = useCallback(() => {
+    haptic('tap');
+    navigation.navigate('Users');
   }, [navigation]);
 
   // Prefetch-on-tap — fires on `onPressIn` so the canonical
@@ -347,44 +401,157 @@ export default function EmployeesScreen() {
         title="Сотрудники"
         subtitle={users === undefined ? undefined : `На смене: ${onSmena} из ${sortedUsers.length}`}
         onBack={() => navigation.goBack()}
+        trailing={
+          canManageDismissed ? (
+            <TouchableOpacity
+              style={[styles.addBtn, { backgroundColor: palette.accent.primary }]}
+              onPress={onAddEmployee}
+              accessibilityRole="button"
+              accessibilityLabel="Добавить сотрудника"
+            >
+              <Ionicons name="add" size={18} color={colors.white} />
+            </TouchableOpacity>
+          ) : undefined
+        }
       />
       {/* FreshnessBadge — HYBRID-perf plan. Driven by the users-all query. */}
       <View style={styles.freshnessRow}>
         <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
       </View>
 
-      {users === undefined ? (
+      {users === undefined && isError ? (
+        // Запрос упал и кэша нет — честный error-state с Retry (глобальный
+        // stale-while-revalidate покрывает случай «кэш есть, фон упал»).
+        <QueryErrorState
+          title="Не удалось загрузить сотрудников"
+          description="Проверьте соединение и попробуйте ещё раз."
+          onRetry={() => refetch()}
+        />
+      ) : users === undefined ? (
         <ListSkeleton count={9} />
-      ) : sortedUsers.length === 0 && !isLoading ? (
-        <EmptyState
-          icon="people"
-          title="Сотрудников пока нет"
-          description="Пригласите команду через раздел «Пользователи»."
-        />
-      ) : (
-        <FlashList
-          data={sortedUsers}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          ItemSeparatorComponent={Spacer}
-          ListFooterComponent={
-            canManageDismissed ? (
+      ) : sortedUsers.length === 0 ? (
+        <View style={{ flex: 1 }}>
+          <EmptyState
+            icon="people"
+            title="Сотрудников пока нет"
+            description="Пригласите команду через раздел «Пользователи»."
+          />
+          {/* Даже при пустом штате «Уволенные» должны оставаться доступными —
+              иначе уволив всех, менеджер теряет вход в корзину. */}
+          {canManageDismissed && dismissedCount > 0 ? (
+            <View style={{ paddingHorizontal: SCREEN_PADDING }}>
               <DismissedFooter count={dismissedCount} palette={palette} onPress={onOpenDismissed} />
-            ) : null
-          }
-          contentContainerStyle={[
-            styles.list,
-            Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null,
-          ]}
-          contentInset={{ bottom: tabBarHeight }}
-          scrollIndicatorInsets={{ bottom: tabBarHeight }}
-          automaticallyAdjustContentInsets={false}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-          }
-        />
+            </View>
+          ) : null}
+        </View>
+      ) : (
+        <>
+          {/* Поиск — тот же SearchInput, что в Клиентах / Складе. */}
+          <View style={styles.searchWrap}>
+            <SearchInput value={search} onChange={setSearch} placeholder="Имя, роль или телефон" />
+          </View>
+
+          {/* Фильтр-чипсы по ролям — только когда в штате ≥ 2 разных ролей. */}
+          {presentRoles.length >= 2 ? (
+            <View style={styles.chipsBar}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+                <RoleChip
+                  active={roleFilter === 'all'}
+                  label="Все"
+                  icon="apps-outline"
+                  onPress={() => {
+                    haptic('select');
+                    setRoleFilter('all');
+                  }}
+                  palette={palette}
+                />
+                {presentRoles.map((r) => (
+                  <RoleChip
+                    key={r}
+                    active={roleFilter === r}
+                    label={roleLabels[r] || r}
+                    icon={(ROLE_META[r] || ROLE_META.master).chipIcon}
+                    onPress={() => {
+                      haptic('select');
+                      setRoleFilter((prev) => (prev === r ? 'all' : r));
+                    }}
+                    palette={palette}
+                  />
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
+          <FlashList
+            data={filteredUsers}
+            keyExtractor={(item) => item.id}
+            renderItem={renderItem}
+            ItemSeparatorComponent={Spacer}
+            ListEmptyComponent={
+              <EmptyState
+                icon="search"
+                title="Ничего не найдено"
+                description={search.trim() ? `Запрос: «${search.trim()}»` : 'Под выбранный фильтр никто не попал'}
+              />
+            }
+            ListFooterComponent={
+              // Во время поиска/фильтра футер прячем — он не результат запроса.
+              canManageDismissed && !isFiltering ? (
+                <DismissedFooter count={dismissedCount} palette={palette} onPress={onOpenDismissed} />
+              ) : null
+            }
+            contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
+            contentInset={{ bottom: tabBarHeight }}
+            scrollIndicatorInsets={{ bottom: tabBarHeight }}
+            automaticallyAdjustContentInsets={false}
+            keyboardShouldPersistTaps="handled"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+            }
+          />
+        </>
       )}
     </View>
+  );
+}
+
+// ── Фильтр-чип роли — зеркалит FilterChip из ClientsScreen (та же геометрия
+//    и активное состояние), чтобы разделы читались как одно приложение. ──
+function RoleChip({
+  active,
+  label,
+  icon,
+  onPress,
+  palette,
+}: {
+  active: boolean;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  palette: SemanticPalette;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={[
+        styles.chip,
+        {
+          backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
+          borderColor: active ? palette.accent.primary : palette.border.subtle,
+        },
+      ]}
+    >
+      <Ionicons name={icon} size={13} color={active ? palette.accent.primary : palette.text.secondary} />
+      <Text
+        style={[styles.chipLabel, { color: active ? palette.accent.primaryText : palette.text.secondary }]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
   );
 }
 
@@ -437,6 +604,42 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     minHeight: 14,
   },
+
+  // ── Header «+» (как в Клиентах) ──
+  addBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // ── Поиск + фильтр-чипсы (геометрия ClientsScreen) ──
+  searchWrap: { paddingHorizontal: spacing[4] },
+  // PINNED height — чипсы прижаты к верху, не растягиваются по flex-колонке
+  // (тот же фикс, что #19.1 в Клиентах).
+  chipsBar: {
+    height: 44,
+    flexGrow: 0,
+    flexShrink: 0,
+    justifyContent: 'center',
+  },
+  chipsRow: {
+    paddingHorizontal: spacing[4],
+    gap: spacing[2],
+    alignItems: 'center',
+  },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    maxWidth: 220,
+  },
+  chipLabel: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
 
   // ── Compact list row ──
   row: {
