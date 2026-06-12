@@ -30,6 +30,26 @@ log "Branch: $BRANCH"
 cd "$REPO_DIR"
 
 # ═══════════════════════════════════════════════════════
+# STEP -1: Освобождаем диск ПЕРЕД бэкапом и сборкой.
+# Причина: `docker compose build --no-cache` ниже создаёт полный
+# набор слоёв образа на КАЖDOM деплое, а backup.sh пишет дамп БД
+# каждый раз. За день из нескольких деплоев диск забивается старыми
+# образами / build-cache / дампами → `docker build` падает на «no space»,
+# и старый контейнер продолжает отдавать устаревший код. Эта очистка
+# делает деплой самовосстанавливающимся и идемпотентна.
+# pgdata НЕ трогаем: prune без --volumes, ротация только в backups/.
+# ═══════════════════════════════════════════════════════
+log "=== Freeing disk before deploy (prune unused images + build cache, rotate backups) ==="
+df -h / 2>&1 | tail -1 || true
+docker image prune -af 2>&1 || true
+docker builder prune -af 2>&1 || true
+# Держим только 10 самых свежих дампов в backups/ (по времени модификации).
+if [ -d "$REPO_DIR/backups" ]; then
+    ls -t "$REPO_DIR"/backups/* 2>/dev/null | tail -n +11 | xargs -r rm -f 2>&1 || true
+fi
+df -h / 2>&1 | tail -1 || true
+
+# ═══════════════════════════════════════════════════════
 # STEP 0: AUTOMATIC BACKUP before any changes
 # ═══════════════════════════════════════════════════════
 log "=== Creating backup before deploy ==="
