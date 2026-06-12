@@ -12,7 +12,6 @@ import {
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Swipeable } from 'react-native-gesture-handler';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -33,6 +32,7 @@ import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import FreshnessBadge from '../components/FreshnessBadge';
 import SourcePickerSheet from '../components/SourcePickerSheet';
 import SourcePickerInline from '../components/SourcePickerInline';
+import ClientListRow from '../components/ClientListRow';
 import CarPlateField from '../components/CarPlateField';
 import PlateResultCard from '../components/PlateResultCard';
 import RussianPlateInput, { type PlateMode } from '../components/RussianPlateInput';
@@ -42,29 +42,9 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { Client, Car, Check, PaginatedResponse } from '../../../shared/types';
 
-// ─── Avatar helpers (mirror ClientDetailScreen so initials/colour match) ───
-function getInitials(name: string): string {
-  const parts = (name || '').trim().split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  return (parts[0]?.[0] || '?').toUpperCase();
-}
-
-const AVATAR_PALETTE = [
-  colors.primary[500],
-  colors.green[600],
-  colors.orange[500],
-  colors.purple[700],
-  colors.teal[600],
-  colors.rose[500],
-  colors.indigo[600],
-  colors.yellow[600],
-];
-
-function getAvatarColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < (name || '').length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
-}
+// Avatar helpers (initials / colour) moved to components/ClientListRow.tsx —
+// they belong to the row, and the row now lives at module scope behind
+// React.memo so FlashList recycling stays a cheap prop update.
 
 type ClientFilter = 'all' | 'regular' | 'new' | 'source' | 'noplate';
 
@@ -83,6 +63,35 @@ type ClientsMode = 'plate' | 'client';
 // attached). Backend doesn't yet expose check-count per client on
 // the list endpoint, so we keep the heuristic conservative.
 const NEW_THRESHOLD_DAYS = 30;
+
+// ── RetailPinCard ──────────────────────────────────────────────────────
+// Retail-buyer hero — gradient card pinned OUTSIDE the virtualised list so
+// it never collides with row keys and FlashList stays homogenous. Reachable
+// in both modes so the __retail__ detail path is never lost. Module scope +
+// React.memo: a stable component TYPE, so parent re-renders update it in
+// place instead of remounting the gradient subtree (the old inline
+// `RetailPin` closure made the header remount on every screen re-render).
+const RetailPinCard = React.memo(function RetailPinCard({ onPress }: { onPress: () => void }) {
+  return (
+    <TouchableOpacity activeOpacity={0.85} onPress={onPress} style={styles.retailWrap}>
+      <LinearGradient
+        colors={[colors.primary[500], colors.primary[700]]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.retailCard}
+      >
+        <View style={styles.retailIconWrap}>
+          <Ionicons name="cart-outline" size={22} color={colors.white} />
+        </View>
+        <View style={styles.retailContent}>
+          <Text style={styles.retailTitle}>Розничный покупатель</Text>
+          <Text style={styles.retailSubtitle}>Быстрые продажи без клиента</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={colors.white} />
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+});
 
 export default function ClientsScreen() {
   const navigation = useNavigation<any>();
@@ -141,20 +150,28 @@ export default function ClientsScreen() {
   // automatically (server search is unaffected by client-side chips, but
   // keeping them in the key keeps the cache entry semantically correct and
   // avoids stale page accumulation across filters).
-  const { data, isLoading, isFetching, dataUpdatedAt, fetchNextPage, hasNextPage, isFetchingNextPage } =
-    useInfiniteQuery<PaginatedResponse<Client>>({
-      queryKey: ['clients-infinite', { search, filter, source: sourceFilter }],
-      initialPageParam: 1,
-      queryFn: async ({ pageParam = 1 }) => {
-        const res = await clientsApi.getAll({ search, page: pageParam as number, limit });
-        return res.data;
-      },
-      getNextPageParam: (lastPage, allPages) => {
-        const loaded = allPages.reduce((acc, p) => acc + (p?.data?.length ?? 0), 0);
-        return loaded < (lastPage?.total ?? 0) ? allPages.length + 1 : undefined;
-      },
-      placeholderData: (prev) => prev,
-    });
+  const {
+    data,
+    isLoading,
+    isFetching,
+    isPlaceholderData,
+    dataUpdatedAt,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery<PaginatedResponse<Client>>({
+    queryKey: ['clients-infinite', { search, filter, source: sourceFilter }],
+    initialPageParam: 1,
+    queryFn: async ({ pageParam = 1 }) => {
+      const res = await clientsApi.getAll({ search, page: pageParam as number, limit });
+      return res.data;
+    },
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((acc, p) => acc + (p?.data?.length ?? 0), 0);
+      return loaded < (lastPage?.total ?? 0) ? allPages.length + 1 : undefined;
+    },
+    placeholderData: (prev) => prev,
+  });
 
   // ── Plate-search query (Касса-style, #19.3) ─────────────────────────
   // Mirrors CheckCreateScreen: search clients by the normalized plate so
@@ -259,7 +276,9 @@ export default function ClientsScreen() {
     setModalOpen(true);
   };
 
-  const openEditModal = (client: Client) => {
+  // Stable identity (useCallback, setter-only body) — flows into the
+  // memoised ClientListRow, so a parent re-render doesn't bust row memo.
+  const openEditModal = useCallback((client: Client) => {
     setEditingClient(client);
     setFullName(client.fullName);
     setPhone(client.phone);
@@ -273,7 +292,13 @@ export default function ClientsScreen() {
     setCarMode('ru');
     setCarNoPlate(false);
     setModalOpen(true);
-  };
+  }, []);
+
+  // Swipe «Удалить» → ConfirmDialog. Stable for the memoised row.
+  const requestDelete = useCallback((id: string) => {
+    setDeleteId(id);
+    setConfirmOpen(true);
+  }, []);
 
   const closeModal = () => {
     setModalOpen(false);
@@ -514,97 +539,30 @@ export default function ClientsScreen() {
     [queryClient],
   );
 
+  // Row tap → ClientDetail. Stable for the memoised row.
+  const openClientDetail = useCallback((id: string) => navigation.navigate('ClientDetail', { id }), [navigation]);
+
+  // ── Row renderer (client mode) ──────────────────────────────────────
+  // The row is a module-scope React.memo component (ClientListRow). The
+  // previous inline version keyed its Swipeable by `item.id`, which forced
+  // a full unmount/remount of the row subtree on every FlashList v2
+  // recycle — fresh native views mid-scroll = blank cell for a frame =
+  // the «мерцают, исчезают-появляются» flicker the owner reported. Now a
+  // recycle is a plain prop update; stale swipe state is cleared inside
+  // ClientListRow via `reset()` when the bound id changes.
   const renderClient = useCallback(
-    ({ item }: { item: Client; index: number }) => {
-      const initials = getInitials(item.fullName);
-      const avatarBg = getAvatarColor(item.fullName);
-      const carsCount = item.cars?.length || 0;
-      const primaryPlate = item.cars?.[0]?.plateNumber;
-
-      const card = (
-        <TouchableOpacity
-          style={[styles.row, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
-          activeOpacity={0.6}
-          onPress={() => navigation.navigate('ClientDetail', { id: item.id })}
-          onPressIn={() => prefetchClientDetail(item.id)}
-        >
-          <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
-            <Text style={styles.avatarInitials}>{initials}</Text>
-          </View>
-          <View style={styles.info}>
-            <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
-              {item.fullName}
-            </Text>
-            <View style={styles.subLine}>
-              <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-                {formatPhone(item.phone || '') || 'Без телефона'}
-              </Text>
-              {primaryPlate ? (
-                <View style={[styles.platePill, { backgroundColor: palette.bg.muted }]}>
-                  <Text style={[styles.platePillText, { color: palette.text.primary }]} numberOfLines={1}>
-                    {primaryPlate}
-                  </Text>
-                </View>
-              ) : carsCount > 0 ? (
-                <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-                  · {carsCount} авто
-                </Text>
-              ) : null}
-            </View>
-          </View>
-          {item.source ? (
-            <View style={[styles.sourceTag, { backgroundColor: palette.bg.muted }]}>
-              <Text style={[styles.sourceTagText, { color: palette.text.secondary }]} numberOfLines={1}>
-                {item.source}
-              </Text>
-            </View>
-          ) : null}
-          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
-        </TouchableOpacity>
-      );
-
-      if (!canDelete) return card;
-
-      return (
-        <Swipeable
-          // FlashList v2 RECYCLES the view holder when this row scrolls off
-          // and a different client scrolls in. The legacy RNGH `Swipeable`
-          // keeps internal Animated drag/open state that is NOT tied to the
-          // item — a recycled holder would mutate a stale animated node and
-          // momentarily render an inconsistent (blank) frame. Keying the
-          // Swipeable to `item.id` forces a fresh instance per client on
-          // recycle, so no stale swipe state leaks between rows.
-          key={item.id}
-          renderRightActions={() => (
-            <View style={styles.swipeActionsRow}>
-              <TouchableOpacity style={styles.swipeEditAction} onPress={() => openEditModal(item)} activeOpacity={0.85}>
-                <Ionicons name="pencil" size={20} color={colors.white} />
-                <Text style={styles.swipeActionText}>Изменить</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.swipeDeleteAction}
-                onPress={() => {
-                  setDeleteId(item.id);
-                  setConfirmOpen(true);
-                }}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="trash-outline" size={20} color={colors.white} />
-                <Text style={styles.swipeActionText}>Удалить</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-          overshootRight={false}
-        >
-          {card}
-        </Swipeable>
-      );
-      // openEditModal / setDeleteId identities are stable across the
-      // component's lifetime; only depend on what actually flows into
-      // the row visuals.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    },
-    [canDelete, navigation, palette, prefetchClientDetail],
+    ({ item }: { item: Client; index: number }) => (
+      <ClientListRow
+        item={item}
+        canDelete={canDelete}
+        palette={palette}
+        onPress={openClientDetail}
+        onPressInRow={prefetchClientDetail}
+        onEdit={openEditModal}
+        onDeleteRequest={requestDelete}
+      />
+    ),
+    [canDelete, palette, openClientDetail, prefetchClientDetail, openEditModal, requestDelete],
   );
 
   // Plate-result row renderer (#19.3). The госномер is the visual anchor
@@ -624,32 +582,23 @@ export default function ClientsScreen() {
     [navigation, prefetchClientDetail],
   );
 
-  // Retail-pin hero — gradient card. The pin is OUTSIDE the virtualised
-  // list so it never collides with row keys and FlashList can stay
-  // homogenous. Reachable in both modes so the __retail__ detail path
-  // is never lost.
-  const RetailPin = () => (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={() => navigation.navigate('ClientDetail', { id: retailPinTargetId })}
-      style={styles.retailWrap}
-    >
-      <LinearGradient
-        colors={[colors.primary[500], colors.primary[700]]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.retailCard}
-      >
-        <View style={styles.retailIconWrap}>
-          <Ionicons name="cart-outline" size={22} color={colors.white} />
-        </View>
-        <View style={styles.retailContent}>
-          <Text style={styles.retailTitle}>Розничный покупатель</Text>
-          <Text style={styles.retailSubtitle}>Быстрые продажи без клиента</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={colors.white} />
-      </LinearGradient>
-    </TouchableOpacity>
+  // Retail-pin header — memoised ELEMENT around the module-scope
+  // RetailPinCard. The previous version declared the pin component INSIDE
+  // the render body, so every screen re-render (e.g. `isFetchingNextPage`
+  // flipping during scroll-pagination) produced a new component TYPE and
+  // React remounted the whole gradient header — a visible blink at the
+  // top of the list. Now the type is stable and re-renders are no-ops.
+  const openRetailDetail = useCallback(
+    () => navigation.navigate('ClientDetail', { id: retailPinTargetId }),
+    [navigation, retailPinTargetId],
+  );
+  const retailHeader = useMemo(
+    () => (
+      <View style={{ paddingHorizontal: spacing[4] }}>
+        <RetailPinCard onPress={openRetailDetail} />
+      </View>
+    ),
+    [openRetailDetail],
   );
 
   // Pick the freshness signal for the active mode so the badge doesn't
@@ -719,11 +668,7 @@ export default function ClientsScreen() {
             data={plateResults}
             keyExtractor={(item) => `${item.client.id}-${item.car.id}`}
             renderItem={renderPlateResult}
-            ListHeaderComponent={
-              <View style={{ paddingHorizontal: spacing[4] }}>
-                <RetailPin />
-              </View>
-            }
+            ListHeaderComponent={retailHeader}
             ListEmptyComponent={
               normalizedPlate.length >= 2 && !plateQuery.isFetching ? (
                 <EmptyState icon="car" title="Ничего не найдено" description={`Госномер «${plateSearch}» не найден`} />
@@ -842,13 +787,7 @@ export default function ClientsScreen() {
               data={displayClients}
               keyExtractor={(item) => item.id}
               renderItem={renderClient}
-              ListHeaderComponent={
-                showRetailPin ? (
-                  <View style={{ paddingHorizontal: spacing[4] }}>
-                    <RetailPin />
-                  </View>
-                ) : null
-              }
+              ListHeaderComponent={showRetailPin ? retailHeader : null}
               ListEmptyComponent={
                 !isLoading ? (
                   filteredClients.length === 0 && !search && filter === 'all' ? (
@@ -892,8 +831,13 @@ export default function ClientsScreen() {
               onEndReached={() => {
                 // Accumulate the next page instead of swapping the current
                 // one (audit #8.6). Guarded so a fast fling doesn't fire
-                // overlapping page fetches.
-                if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+                // overlapping page fetches. `!isPlaceholderData` matters:
+                // right after the search text changes, the list still shows
+                // the PREVIOUS key's pages via global `placeholderData` —
+                // paginating that borrowed snapshot would race the in-flight
+                // page-1 fetch of the NEW key and replace the visible rows
+                // with mismatched identities (visible as rows vanishing).
+                if (hasNextPage && !isFetchingNextPage && !isPlaceholderData) fetchNextPage();
               }}
               onEndReachedThreshold={0.5}
               ListFooterComponent={
@@ -1240,69 +1184,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
 
-  // Row
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    paddingHorizontal: spacing[4],
-    paddingVertical: spacing[2.5],
-    backgroundColor: colors.white,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.gray[200],
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarInitials: {
-    color: colors.white,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  info: { flex: 1, minWidth: 0 },
-  cardName: { fontSize: 15, fontWeight: '600', color: colors.gray[900], letterSpacing: -0.1 },
-  subLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
-  cardSub: { fontSize: 12, color: colors.gray[500] },
-  platePill: {
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 4,
-    backgroundColor: colors.gray[100],
-  },
-  platePillText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, color: colors.gray[800] },
-  sourceTag: {
-    maxWidth: 90,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 999,
-    backgroundColor: colors.gray[100],
-  },
-  sourceTagText: { fontSize: 10, fontWeight: '600' },
-
-  // Swipe
-  swipeActionsRow: { flexDirection: 'row' },
-  swipeEditAction: {
-    backgroundColor: colors.primary[600],
-    width: 84,
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  swipeDeleteAction: {
-    backgroundColor: colors.red[500],
-    width: 84,
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  swipeActionText: { color: colors.white, fontSize: 12, fontWeight: '600', letterSpacing: 0.2 },
+  // Row + swipe styles moved to components/ClientListRow.tsx with the row.
 
   // Form
   formField: { marginBottom: spacing[4] },
