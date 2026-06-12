@@ -27,6 +27,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import CachedImage from '../components/CachedImage';
 import Markdown from '../components/knowledge/Markdown';
 import { Text } from '../platform/Typography';
@@ -82,7 +83,13 @@ export default function KnowledgeArticleScreen() {
   // `undefined` = not yet read; `null` = never acked locally.
   const [ackedVersion, setAckedVersion] = React.useState<number | null | undefined>(undefined);
 
-  const { data: article, isLoading, isError, refetch } = useQuery<KnowledgeArticle>({
+  const {
+    data: article,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<KnowledgeArticle>({
     queryKey: ['knowledge-article', id],
     queryFn: async () => (await knowledgeApi.getArticle(id)).data,
     enabled: !!id,
@@ -158,10 +165,7 @@ export default function KnowledgeArticleScreen() {
   // *update* (vs. a first-time ack) and can say so.
   const currentVersion = article?.version ?? 1;
   const regulationUpdated =
-    isRegulation &&
-    article?.acknowledged === false &&
-    ackedVersion != null &&
-    ackedVersion < currentVersion;
+    isRegulation && article?.acknowledged === false && ackedVersion != null && ackedVersion < currentVersion;
 
   // Acks list (manager, regulation only) — lazy: only fetched when modal opens.
   const { data: acks } = useQuery<KnowledgeAcksResponse>({
@@ -211,14 +215,13 @@ export default function KnowledgeArticleScreen() {
         trailing={headerTrailing}
       />
 
-      {isLoading && !article ? (
+      {article === undefined && isFetching ? (
         <LoadingSpinner />
-      ) : isError && !article ? (
-        <EmptyState
-          icon="warning"
-          title="Не удалось загрузить"
+      ) : isError && article === undefined ? (
+        <QueryErrorState
+          title="Не удалось загрузить статью"
           description="Проверьте соединение и попробуйте снова."
-          action={{ label: 'Повторить', onPress: () => refetch() }}
+          onRetry={() => refetch()}
         />
       ) : article ? (
         <ScrollView
@@ -228,8 +231,7 @@ export default function KnowledgeArticleScreen() {
             // shown — exactly the action-bar band (which floats just above the
             // tab bar). No double tab-bar inset, so no oversized dead zone.
             {
-              paddingBottom:
-                tabBarHeight + (showStickyAck ? ACK_BAR_GAP + ACK_BAR_HEIGHT : 0) + spacing[6],
+              paddingBottom: tabBarHeight + (showStickyAck ? ACK_BAR_GAP + ACK_BAR_HEIGHT : 0) + spacing[6],
             },
           ]}
           contentInset={{ bottom: tabBarHeight }}
@@ -347,7 +349,10 @@ export default function KnowledgeArticleScreen() {
                 />
                 <Text
                   variant="footnote"
-                  style={{ color: feedback?.myFeedback === true ? colors.green[700] : palette.text.secondary, fontWeight: '600' }}
+                  style={{
+                    color: feedback?.myFeedback === true ? colors.green[700] : palette.text.secondary,
+                    fontWeight: '600',
+                  }}
                 >
                   {feedback?.helpfulCount ?? 0}
                 </Text>
@@ -370,7 +375,10 @@ export default function KnowledgeArticleScreen() {
                 />
                 <Text
                   variant="footnote"
-                  style={{ color: feedback?.myFeedback === false ? colors.red[700] : palette.text.secondary, fontWeight: '600' }}
+                  style={{
+                    color: feedback?.myFeedback === false ? colors.red[700] : palette.text.secondary,
+                    fontWeight: '600',
+                  }}
                 >
                   {feedback?.notHelpfulCount ?? 0}
                 </Text>
@@ -391,7 +399,11 @@ export default function KnowledgeArticleScreen() {
                     onPress={() => openAttachment(att.url)}
                     style={({ pressed }) => [
                       styles.attachRow,
-                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, opacity: pressed ? 0.7 : 1 },
+                      {
+                        backgroundColor: palette.bg.card,
+                        borderColor: palette.border.subtle,
+                        opacity: pressed ? 0.7 : 1,
+                      },
                     ]}
                   >
                     <View style={[styles.attachIcon, { backgroundColor: palette.accent.primarySoft }]}>
@@ -439,7 +451,10 @@ export default function KnowledgeArticleScreen() {
             </Pressable>
           ) : null}
         </ScrollView>
-      ) : null}
+      ) : (
+        // pending без активного запроса (offline-пауза) — спиннер, не пустота.
+        <LoadingSpinner />
+      )}
 
       {/* Sticky «Ознакомлен» CTA — a compact bar that floats just above the
           floating Liquid-Glass tab bar. Anchored at `bottom: tabBarHeight +
@@ -476,7 +491,10 @@ export default function KnowledgeArticleScreen() {
       <Modal visible={acksOpen} transparent animationType="slide" onRequestClose={() => setAcksOpen(false)}>
         <Pressable style={styles.modalBackdrop} onPress={() => setAcksOpen(false)}>
           <Pressable
-            style={[styles.modalSheet, { backgroundColor: palette.bg.elevated, paddingBottom: Math.max(insets.bottom, spacing[4]) }]}
+            style={[
+              styles.modalSheet,
+              { backgroundColor: palette.bg.elevated, paddingBottom: Math.max(insets.bottom, spacing[4]) },
+            ]}
             onPress={(e) => e.stopPropagation()}
           >
             <View style={[styles.modalHandle, { backgroundColor: palette.border.strong }]} />

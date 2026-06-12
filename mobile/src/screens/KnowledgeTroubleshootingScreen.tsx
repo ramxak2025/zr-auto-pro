@@ -10,12 +10,13 @@
  * system, carMake, tag}); we keep the result query keyed on all inputs.
  */
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import IosScreenHeader from '../components/IosScreenHeader';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import TroubleshootingRow from '../components/knowledge/TroubleshootingRow';
@@ -48,7 +49,13 @@ export default function KnowledgeTroubleshootingScreen() {
   const [tag, setTag] = React.useState<string | null>(null);
 
   // Full dataset — drives the chip vocabulary (cheap, cached).
-  const { data: all } = useQuery<Troubleshooting[]>({
+  const {
+    data: all,
+    isError: allError,
+    isFetching: allFetching,
+    isRefetching: allRefetching,
+    refetch: refetchAll,
+  } = useQuery<Troubleshooting[]>({
     queryKey: ['knowledge-troubleshooting', 'all'],
     queryFn: async () => (await knowledgeApi.listTroubleshooting()).data,
     staleTime: STALE,
@@ -72,7 +79,13 @@ export default function KnowledgeTroubleshootingScreen() {
 
   const filtersActive = !!debouncedSearch || !!system || !!carMake || !!tag;
 
-  const { data: results, isFetching } = useQuery<Troubleshooting[]>({
+  const {
+    data: results,
+    isFetching: searchFetching,
+    isError: searchError,
+    isRefetching: searchRefetching,
+    refetch: refetchSearch,
+  } = useQuery<Troubleshooting[]>({
     queryKey: ['knowledge-troubleshooting', 'search', debouncedSearch, system, carMake, tag],
     queryFn: async () =>
       (
@@ -87,9 +100,19 @@ export default function KnowledgeTroubleshootingScreen() {
     staleTime: 30_000,
   });
 
-  // When no filter is active, just show the whole list.
+  // When no filter is active, just show the whole list. The honest state
+  // machine below reads ONLY the active query's flags — раньше «loading»
+  // считался как `!all`, и упавший запрос крутил скелетон вечно.
   const list = filtersActive ? results : all;
-  const loading = filtersActive ? isFetching && !results : !all;
+  const listFetching = filtersActive ? searchFetching : allFetching;
+  const listError = filtersActive ? searchError : allError;
+  const retry = filtersActive ? refetchSearch : refetchAll;
+
+  const onRefresh = React.useCallback(() => {
+    refetchAll();
+    if (filtersActive) refetchSearch();
+  }, [refetchAll, refetchSearch, filtersActive]);
+  const refreshing = filtersActive ? searchRefetching : allRefetching;
 
   const openEntry = React.useCallback(
     (entry: Troubleshooting) => {
@@ -125,6 +148,9 @@ export default function KnowledgeTroubleshootingScreen() {
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.text.tertiary} />
+        }
       >
         <SearchInput value={search} onChange={setSearch} placeholder="Симптом, причина, узел…" />
 
@@ -148,22 +174,26 @@ export default function KnowledgeTroubleshootingScreen() {
           </View>
         ) : null}
 
-        {/* Results */}
+        {/* Results — honest state machine: skeleton while fetching without
+            data → error state (НИКОГДА не «пусто» при ошибке) → list →
+            truly-empty success. */}
         <View style={styles.results}>
-          {loading ? (
+          {list === undefined && listFetching ? (
             <ListSkeleton count={6} />
-          ) : list && list.length > 0 ? (
+          ) : listError && list === undefined ? (
+            <QueryErrorState description="Проверьте соединение и попробуйте снова." onRetry={() => retry()} />
+          ) : list === undefined ? (
+            // pending без активного запроса (например, offline-пауза) —
+            // держим скелетон, «пусто» здесь было бы враньём.
+            <ListSkeleton count={6} />
+          ) : list.length > 0 ? (
             <View style={styles.rowList}>
               {list.map((entry) => (
                 <TroubleshootingRow key={entry.id} entry={entry} onPress={openEntry} />
               ))}
             </View>
           ) : filtersActive ? (
-            <EmptyState
-              icon="search"
-              title="Ничего не найдено"
-              description="Измените запрос или сбросьте фильтры."
-            />
+            <EmptyState icon="search" title="Ничего не найдено" description="Измените запрос или сбросьте фильтры." />
           ) : (
             <EmptyState
               icon="build"
@@ -173,7 +203,11 @@ export default function KnowledgeTroubleshootingScreen() {
                   ? 'Добавьте первую запись — нажмите «+» в правом верхнем углу.'
                   : 'Здесь появятся типовые неисправности и решения.'
               }
-              action={isManager ? { label: 'Добавить', onPress: () => navigation.navigate('KnowledgeTroubleshootingEditor', {}) } : undefined}
+              action={
+                isManager
+                  ? { label: 'Добавить', onPress: () => navigation.navigate('KnowledgeTroubleshootingEditor', {}) }
+                  : undefined
+              }
             />
           )}
         </View>

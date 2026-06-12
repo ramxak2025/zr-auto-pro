@@ -14,6 +14,7 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import IosScreenHeader from '../components/IosScreenHeader';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import { ListSkeleton } from '../components/Skeleton';
 import ArticleRow from '../components/knowledge/ArticleRow';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -36,7 +37,7 @@ export default function KnowledgeCategoryScreen() {
   const type = route.params?.type;
   const title = route.params?.name ?? (type === 'regulation' ? 'Регламенты' : 'Категория');
 
-  const { data, isLoading, isError, refetch, isRefetching } = useQuery<KnowledgeArticle[]>({
+  const { data, isLoading, isError, isFetching, refetch, isRefetching } = useQuery<KnowledgeArticle[]>({
     queryKey: ['knowledge-articles', 'category', categoryId ?? null, type ?? null],
     queryFn: async () => (await knowledgeApi.listArticles({ categoryId, type })).data,
     staleTime: 60_000,
@@ -61,19 +62,21 @@ export default function KnowledgeCategoryScreen() {
         automaticallyAdjustContentInsets={false}
         showsVerticalScrollIndicator={false}
         refreshControl={
-          <RefreshControl refreshing={isRefetching && !isLoading} onRefresh={refetch} tintColor={palette.text.tertiary} />
+          <RefreshControl
+            refreshing={isRefetching && !isLoading}
+            onRefresh={refetch}
+            tintColor={palette.text.tertiary}
+          />
         }
       >
-        {isLoading && !data ? (
+        {data === undefined && isFetching ? (
           <ListSkeleton count={6} />
-        ) : isError && !data ? (
-          <EmptyState
-            icon="warning"
-            title="Не удалось загрузить"
-            description="Проверьте соединение и попробуйте снова."
-            action={{ label: 'Повторить', onPress: () => refetch() }}
-          />
-        ) : data && data.length > 0 ? (
+        ) : isError && data === undefined ? (
+          // Ошибка без кэша → честный error-state, НЕ «здесь пока пусто».
+          <QueryErrorState description="Проверьте соединение и попробуйте снова." onRetry={() => refetch()} />
+        ) : data === undefined ? (
+          <ListSkeleton count={6} />
+        ) : data.length > 0 ? (
           <View style={styles.rowList}>
             {data.map((a) => (
               <ArticleRow key={a.id} article={a} onPress={openArticle} />
@@ -84,9 +87,7 @@ export default function KnowledgeCategoryScreen() {
             icon={type === 'regulation' ? 'shield-check' : 'journal'}
             title="Здесь пока пусто"
             description={
-              type === 'regulation'
-                ? 'В этой категории ещё нет регламентов.'
-                : 'В этой категории ещё нет статей.'
+              type === 'regulation' ? 'В этой категории ещё нет регламентов.' : 'В этой категории ещё нет статей.'
             }
           />
         )}

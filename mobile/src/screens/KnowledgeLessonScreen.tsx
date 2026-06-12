@@ -24,6 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import Markdown from '../components/knowledge/Markdown';
 import { Text } from '../platform/Typography';
 import { iosSectionLabel } from '../platform/iosSurface';
@@ -62,14 +63,16 @@ export default function KnowledgeLessonScreen() {
   // need a separate lesson endpoint and stay consistent with the detail screen.
   const {
     data: course,
-    isLoading,
     isError,
+    isFetching,
     refetch,
   } = useQuery<KnowledgeCourse>({
     queryKey: ['knowledge-course', courseId],
     queryFn: async () => (await knowledgeApi.getCourse(courseId)).data,
     enabled: !!courseId,
-    staleTime: 20_000,
+    // 60s, единый со staleTime этого же ключа на KnowledgeCourseDetailScreen —
+    // одинаковый ключ с разными staleTime давал лишние рефетчи при переходах.
+    staleTime: 60_000,
   });
 
   const lessons = course?.lessons ?? [];
@@ -164,15 +167,17 @@ export default function KnowledgeLessonScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title={route.params?.title ?? lesson?.title ?? 'Урок'} onBack={() => navigation.goBack()} />
 
-      {isLoading && !course ? (
+      {course === undefined && isFetching ? (
         <LoadingSpinner />
-      ) : isError && !course ? (
-        <EmptyState
-          icon="warning"
-          title="Не удалось загрузить"
+      ) : isError && course === undefined ? (
+        <QueryErrorState
+          title="Не удалось загрузить урок"
           description="Проверьте соединение и попробуйте снова."
-          action={{ label: 'Повторить', onPress: () => refetch() }}
+          onRetry={() => refetch()}
         />
+      ) : course === undefined ? (
+        // pending без активного запроса (offline-пауза) — спиннер, не пустота.
+        <LoadingSpinner />
       ) : !lesson ? (
         <EmptyState icon="warning" title="Урок не найден" description="Возможно, он был удалён." />
       ) : (

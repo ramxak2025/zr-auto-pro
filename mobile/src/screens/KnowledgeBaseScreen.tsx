@@ -23,6 +23,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import IosScreenHeader from '../components/IosScreenHeader';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import ArticleRow from '../components/knowledge/ArticleRow';
@@ -52,14 +53,16 @@ export default function KnowledgeBaseScreen() {
   const isSearching = debouncedSearch.length > 0;
 
   // ── Categories ──────────────────────────────────────────────────────────
-  const { data: categories } = useQuery<KnowledgeCategory[]>({
+  const { data: categories, refetch: refetchCategories } = useQuery<KnowledgeCategory[]>({
     queryKey: ['knowledge-categories'],
     queryFn: async () => (await knowledgeApi.listCategories()).data,
     staleTime: 5 * 60_000,
   });
 
   // ── Courses (for the «Учебный центр» entry's overall progress) ──────────
-  const { data: courses } = useQuery<KnowledgeCourse[]>({
+  // Чисто декоративный запрос: при ошибке (включая текущий 500 на
+  // /knowledge/courses) плитка просто показывает подпись без прогресса.
+  const { data: courses, refetch: refetchCourses } = useQuery<KnowledgeCourse[]>({
     queryKey: ['knowledge-courses'],
     queryFn: async () => (await knowledgeApi.listCourses()).data,
     staleTime: STALE,
@@ -73,7 +76,7 @@ export default function KnowledgeBaseScreen() {
   }, [courses]);
 
   // ── Pending regulations badge ───────────────────────────────────────────
-  const { data: pending } = useQuery<{ count: number }>({
+  const { data: pending, refetch: refetchPending } = useQuery<{ count: number }>({
     queryKey: ['knowledge-regulations-pending'],
     queryFn: async () => (await knowledgeApi.regulationsPendingCount()).data,
     staleTime: STALE,
@@ -81,7 +84,7 @@ export default function KnowledgeBaseScreen() {
   const pendingCount = pending?.count ?? 0;
 
   // ── Pinned ──────────────────────────────────────────────────────────────
-  const { data: pinned } = useQuery<KnowledgeArticle[]>({
+  const { data: pinned, refetch: refetchPinned } = useQuery<KnowledgeArticle[]>({
     queryKey: ['knowledge-articles', 'pinned'],
     queryFn: async () => (await knowledgeApi.listArticles({ pinned: 'true' })).data,
     staleTime: STALE,
@@ -91,6 +94,7 @@ export default function KnowledgeBaseScreen() {
   const {
     data: recent,
     isLoading: recentLoading,
+    isFetching: recentFetching,
     isError: recentError,
     refetch: refetchRecent,
     isRefetching: recentRefetching,
@@ -101,6 +105,17 @@ export default function KnowledgeBaseScreen() {
     // Surface a failed load quickly instead of retrying with long backoff.
     retry: 1,
   });
+
+  // Pull-to-refresh оживляет ВЕСЬ экран (категории, курсы, бейдж регламентов,
+  // закреплённые, недавние), а не только «Недавние» — иначе после починки
+  // сервера часть секций оставалась бы пустой до истечения staleTime.
+  const onRefreshAll = React.useCallback(() => {
+    refetchCategories();
+    refetchCourses();
+    refetchPending();
+    refetchPinned();
+    refetchRecent();
+  }, [refetchCategories, refetchCourses, refetchPending, refetchPinned, refetchRecent]);
 
   // ── Search results ──────────────────────────────────────────────────────
   const {
@@ -176,7 +191,7 @@ export default function KnowledgeBaseScreen() {
         refreshControl={
           <RefreshControl
             refreshing={recentRefetching && !recentLoading}
-            onRefresh={refetchRecent}
+            onRefresh={onRefreshAll}
             tintColor={palette.text.tertiary}
           />
         }
@@ -184,18 +199,17 @@ export default function KnowledgeBaseScreen() {
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск по базе знаний" />
 
         {isSearching ? (
-          // ── SEARCH RESULTS ──────────────────────────────────────────────
+          // ── SEARCH RESULTS — honest state machine: skeleton → error
+          // (никогда не «ничего не найдено» при упавшем запросе) → list →
+          // truly-empty success.
           <View style={styles.section}>
-            {searchFetching && !results ? (
+            {results === undefined && searchFetching ? (
               <ListSkeleton count={5} />
-            ) : searchError && !results ? (
-              <EmptyState
-                icon="warning"
-                title="Не удалось загрузить"
-                description="Проверьте соединение и попробуйте снова."
-                action={{ label: 'Повторить', onPress: () => refetchSearch() }}
-              />
-            ) : results && results.length > 0 ? (
+            ) : searchError && results === undefined ? (
+              <QueryErrorState description="Проверьте соединение и попробуйте снова." onRetry={() => refetchSearch()} />
+            ) : results === undefined ? (
+              <ListSkeleton count={5} />
+            ) : results.length > 0 ? (
               <View style={styles.rowList}>
                 {results.map((a) => (
                   <ArticleRow key={a.id} article={a} onPress={openArticle} />
@@ -299,9 +313,7 @@ export default function KnowledgeBaseScreen() {
             {/* ── Категории ────────────────────────────────────────────── */}
             {categories && categories.length > 0 ? (
               <View style={styles.section}>
-                <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
-                  Категории
-                </Text>
+                <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Категории</Text>
                 <View style={styles.tileGrid}>
                   {categories.map((cat) => (
                     <Pressable
@@ -335,16 +347,19 @@ export default function KnowledgeBaseScreen() {
             {/* ── Недавние ─────────────────────────────────────────────── */}
             <View style={styles.section}>
               <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Недавние</Text>
-              {recentLoading && !recent ? (
+              {recent === undefined && recentFetching ? (
                 <ListSkeleton count={5} />
-              ) : recentError && !recent ? (
-                <EmptyState
-                  icon="warning"
-                  title="Не удалось загрузить"
+              ) : recentError && recent === undefined ? (
+                // Ошибка без кэша — честный error-state с «Повторить».
+                // «Пока пусто» при ошибке здесь и был баг «то показывает,
+                // то пишет что пусто».
+                <QueryErrorState
                   description="Проверьте соединение и попробуйте снова."
-                  action={{ label: 'Повторить', onPress: () => refetchRecent() }}
+                  onRetry={() => refetchRecent()}
                 />
-              ) : recent && recent.length > 0 ? (
+              ) : recent === undefined ? (
+                <ListSkeleton count={5} />
+              ) : recent.length > 0 ? (
                 <View style={styles.rowList}>
                   {recent.slice(0, 12).map((a) => (
                     <ArticleRow key={a.id} article={a} onPress={openArticle} />
@@ -359,7 +374,11 @@ export default function KnowledgeBaseScreen() {
                       ? 'Создайте первую статью или регламент — нажмите «+» в правом верхнем углу.'
                       : 'Здесь появятся статьи и регламенты автосервиса.'
                   }
-                  action={isManager ? { label: 'Создать статью', onPress: () => navigation.navigate('KnowledgeEditor', {}) } : undefined}
+                  action={
+                    isManager
+                      ? { label: 'Создать статью', onPress: () => navigation.navigate('KnowledgeEditor', {}) }
+                      : undefined
+                  }
                 />
               )}
             </View>

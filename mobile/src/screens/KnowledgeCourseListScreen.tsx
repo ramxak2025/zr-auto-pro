@@ -15,6 +15,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import IosScreenHeader from '../components/IosScreenHeader';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import { ListSkeleton } from '../components/Skeleton';
 import CourseCard from '../components/knowledge/CourseCard';
 import ProgressBar from '../components/knowledge/ProgressBar';
@@ -35,10 +36,12 @@ export default function KnowledgeCourseListScreen() {
   const { isRole } = useAuth();
   const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
-  const { data, isLoading, isError, refetch, isRefetching } = useQuery<KnowledgeCourse[]>({
+  const { data, isLoading, isError, isFetching, refetch, isRefetching } = useQuery<KnowledgeCourse[]>({
     queryKey: ['knowledge-courses'],
     queryFn: async () => (await knowledgeApi.listCourses()).data,
-    staleTime: 30_000,
+    // 60s, единый со staleTime этого же ключа на KnowledgeBaseScreen —
+    // разные значения на один ключ давали лишние рефетчи при переходах.
+    staleTime: 60_000,
   });
 
   const openCourse = React.useCallback(
@@ -84,7 +87,13 @@ export default function KnowledgeCourseListScreen() {
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={isRefetching && !isLoading} onRefresh={refetch} tintColor={palette.text.tertiary} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching && !isLoading}
+            onRefresh={refetch}
+            tintColor={palette.text.tertiary}
+          />
+        }
       >
         {overall ? (
           <View style={[styles.overall, { backgroundColor: palette.accent.primarySoft }]}>
@@ -104,16 +113,20 @@ export default function KnowledgeCourseListScreen() {
           </View>
         ) : null}
 
-        {isLoading && !data ? (
+        {data === undefined && isFetching ? (
           <ListSkeleton count={4} />
-        ) : isError && !data ? (
-          <EmptyState
-            icon="warning"
-            title="Не удалось загрузить"
+        ) : isError && data === undefined ? (
+          // Сервер сейчас может отдавать 500 — честная ошибка с «Повторить»
+          // вместо вечного спиннера или ложного «пусто». Как только бэкенд
+          // починят, retry / pull-to-refresh оживят экран без апдейта.
+          <QueryErrorState
+            title="Не удалось загрузить курсы"
             description="Проверьте соединение и попробуйте снова."
-            action={{ label: 'Повторить', onPress: () => refetch() }}
+            onRetry={() => refetch()}
           />
-        ) : data && data.length > 0 ? (
+        ) : data === undefined ? (
+          <ListSkeleton count={4} />
+        ) : data.length > 0 ? (
           <View style={styles.list}>
             {data.map((c) => (
               <CourseCard key={c.id} course={c} onPress={openCourse} />
@@ -128,7 +141,11 @@ export default function KnowledgeCourseListScreen() {
                 ? 'Создайте первый курс — нажмите «+» в правом верхнем углу.'
                 : 'Здесь появятся обучающие курсы автосервиса.'
             }
-            action={isManager ? { label: 'Создать курс', onPress: () => navigation.navigate('KnowledgeCourseEditor', {}) } : undefined}
+            action={
+              isManager
+                ? { label: 'Создать курс', onPress: () => navigation.navigate('KnowledgeCourseEditor', {}) }
+                : undefined
+            }
           />
         )}
       </ScrollView>

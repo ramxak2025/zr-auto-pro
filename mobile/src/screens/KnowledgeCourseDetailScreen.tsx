@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import CachedImage from '../components/CachedImage';
 import ProgressBar from '../components/knowledge/ProgressBar';
 import { Text } from '../platform/Typography';
@@ -47,11 +48,19 @@ export default function KnowledgeCourseDetailScreen() {
 
   const id = route.params?.id;
 
-  const { data: course, isLoading, isError, refetch } = useQuery<KnowledgeCourse>({
+  const {
+    data: course,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<KnowledgeCourse>({
     queryKey: ['knowledge-course', id],
     queryFn: async () => (await knowledgeApi.getCourse(id)).data,
     enabled: !!id,
-    staleTime: 20_000,
+    // 60s, единый со staleTime этого же ключа на KnowledgeLessonScreen.
+    // Прогресс обновляют мутации через invalidateQueries, так что дольше
+    // держать кэш безопасно.
+    staleTime: 60_000,
   });
 
   const lessons = course?.lessons ?? [];
@@ -99,14 +108,13 @@ export default function KnowledgeCourseDetailScreen() {
         trailing={headerTrailing}
       />
 
-      {isLoading && !course ? (
+      {course === undefined && isFetching ? (
         <LoadingSpinner />
-      ) : isError && !course ? (
-        <EmptyState
-          icon="warning"
-          title="Не удалось загрузить"
+      ) : isError && course === undefined ? (
+        <QueryErrorState
+          title="Не удалось загрузить курс"
           description="Проверьте соединение и попробуйте снова."
-          action={{ label: 'Повторить', onPress: () => refetch() }}
+          onRetry={() => refetch()}
         />
       ) : course ? (
         <ScrollView
@@ -149,7 +157,9 @@ export default function KnowledgeCourseDetailScreen() {
               </View>
             </View>
           ) : (
-            <View style={[styles.progressCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <View
+              style={[styles.progressCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
               <View style={styles.progressTop}>
                 <Text variant="bodyEmph" style={{ color: palette.text.primary }}>
                   {course.completedLessons} из {course.lessonCount} уроков
@@ -191,7 +201,10 @@ export default function KnowledgeCourseDetailScreen() {
             </View>
           )}
         </ScrollView>
-      ) : null}
+      ) : (
+        // pending без активного запроса (offline-пауза) — спиннер, не пустота.
+        <LoadingSpinner />
+      )}
     </View>
   );
 }
@@ -211,7 +224,13 @@ function LessonRow({
   palette: ReturnType<typeof useColors>;
   onPress: () => void;
 }) {
-  const iconName = lesson.completed ? 'checkmark-circle' : locked ? 'lock-closed' : isNext ? 'play-circle' : 'ellipse-outline';
+  const iconName = lesson.completed
+    ? 'checkmark-circle'
+    : locked
+      ? 'lock-closed'
+      : isNext
+        ? 'play-circle'
+        : 'ellipse-outline';
   const iconColor = lesson.completed
     ? colors.green[500]
     : locked
