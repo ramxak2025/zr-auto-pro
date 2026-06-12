@@ -750,3 +750,7 @@ docs/ios-redesign/FINAL_REPORT.md (этот документ)
 Полные детали, fallback-стратегии и acceptance-чеклист: `docs/ios-redesign/FULL_AUDIT_FIX_2026_06_12.md`.
 
 Проверки: mobile tsc/eslint/jest 176/176 — зелёные; backend typecheck/lint/build — зелёные; frontend typecheck/build — зелёные; `expo prebuild --clean` + `pod install` + `xcodebuild` (Debug, iphonesimulator, compile-only) — **BUILD SUCCEEDED**. На устройстве не запускалось — владелец тестирует на физическом iPhone по чеклисту из документа выше.
+
+## Iteration #5 — 2026-06-13 (ночное продакшен-укрепление по фидбеку с устройства)
+
+Владелец протестировал build 9: мастер-роль медленная с ошибками, виджет мастера показывает прибыль, Склад в вечной загрузке, Клиенты дёргаются, Учебный центр мёртв, База знаний «то пусто». Живые curl-пробы прода под обеими ролями дали точные корни: SQL-баг $2-параметра в /knowledge/courses (500 всем), гонка клиентского ETag-LRU (пустота вместо данных), retry на 4xx + владельческие запросы под мастером (403→ретраи→спиннеры), deadlock enabled-гейта Склада, setState-на-recycle легаси-Swipeable на Fabric, неочищаемый App Group payload виджета. Все шесть закрыты с file:line-доказательствами: `docs/ios-redesign/NIGHT_HARDENING_2026_06_13.md`. Также: миграция 069 (hot-path индексы), staleTime 30с для горячих ключей, честные error-стейты на всех 7 KB-экранах.
