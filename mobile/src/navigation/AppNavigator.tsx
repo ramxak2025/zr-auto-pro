@@ -336,11 +336,17 @@ function TabNavigator() {
       screenOptions={{
         headerShown: false,
         sceneStyle: { backgroundColor: 'transparent' },
-        // react-native-screens Freeze: blurred tabs stop re-rendering
-        // entirely (query refetches, context updates) until refocused.
-        // The custom PlatformTabBar lives OUTSIDE the screen containers,
-        // so the bar itself is never frozen.
-        freezeOnBlur: true,
+        // NOTE: freezeOnBlur was REMOVED (2026-06-13). On New Arch (Fabric)
+        // it suspends+detaches each blurred tab's subtree; the tabs whose
+        // content is a nested native-stack (Склад/Products, Журнал/Checks,
+        // Ещё/More → Клиенты/Расписание/…) failed to re-commit their native
+        // view tree on thaw → the tab switched but the scene stayed blank
+        // («не открывается / ошибка»). Dashboard & Касса (plain screens) were
+        // unaffected — exactly matching the owner's report. The query-refetch
+        // suppression it gave is non-essential: global staleTime +
+        // placeholderData prev=>prev + persistentCache already make blurred
+        // tabs cheap. Do per-screen focus-gating (useFocusEffect `enabled`)
+        // if needed later — never a subtree-wide freeze over native stacks.
         // Floating pill: the absolute position lifts the bar out of the
         // layout flow so screen content scrolls UNDER the glass — that's
         // what makes the bar feel native (visible content blurred through

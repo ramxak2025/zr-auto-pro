@@ -347,12 +347,26 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
       emitPress(nearest)
 
     case .cancelled, .failed:
-      // SYSTEM cancelled the gesture (incoming call, app switcher, etc.) —
-      // the user never confirmed a switch, so restore the pre-pan tab and
-      // spring the droplet home WITHOUT emitting onTabPress.
       isPanning = false
-      activeIndex = prePanIndex
-      animateToIndex(prePanIndex)
+      // A tap on a physical iPhone almost always carries a few points of
+      // finger drift, which can trip the pan recognizer (.began) and then
+      // resolve as .cancelled/.failed — with the OLD code that silently
+      // restored the pre-pan tab and emitted nothing, so the tab "не
+      // открывался". Distinguish a real drag (system-cancelled mid-swipe)
+      // from a stationary tap by translation: < 12pt means the user never
+      // actually dragged → honor it as a tap and switch. Only a genuine
+      // drag restores the pre-pan tab silently.
+      let translation = gr.translation(in: self)
+      if abs(translation.x) < 12 && abs(translation.y) < 12 {
+        let slotW = bounds.width / CGFloat(max(1, tabCount))
+        let idx = max(0, min(tabCount - 1, Int(location.x / slotW)))
+        activeIndex = idx
+        animateToIndex(idx)
+        emitPress(idx)
+      } else {
+        activeIndex = prePanIndex
+        animateToIndex(prePanIndex)
+      }
 
     default:
       break
@@ -365,12 +379,19 @@ public class AutexaLiquidGlassTabBarView: ExpoView {
     let x = gr.location(in: self).x
     let slotW = bounds.width / CGFloat(max(1, tabCount))
     let index = max(0, min(tabCount - 1, Int(x / slotW)))
+    // ALWAYS emit onTabPress. React-navigation is the single source of truth
+    // and no-ops if the tab is already focused (TabBar.ios.tsx navigateToTab
+    // checks `!focused`), and a re-tap on the active tab is the standard
+    // scroll-to-top / pop-to-root gesture. The old `index != activeIndex`
+    // guard dropped genuine taps whenever the native activeIndex had drifted
+    // ahead of the real route (e.g. after a pan-cancel) — a tab then refused
+    // to open. Cosmetic droplet move + haptic stay gated on an actual change.
     if index != activeIndex {
       activeIndex = index
       animateToIndex(index)
       selectionFeedback.selectionChanged()
-      emitPress(index)
     }
+    emitPress(index)
   }
 
   // MARK: - Spring animation between tabs
