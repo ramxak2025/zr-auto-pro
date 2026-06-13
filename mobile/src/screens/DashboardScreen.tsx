@@ -1516,8 +1516,9 @@ function CashPositionCard() {
   const navigation = useNavigation<any>();
   // Near-live cash position: poll every 30s but only while the Dashboard is
   // focused (no background battery drain when the user is on another tab).
-  // Paired with axios If-None-Match → most refetches are ~0-byte 304s. Pattern
-  // mirrors CallsScreen's focus-gated poll.
+  // (The client-side If-None-Match/304 layer was removed — see api/axios.ts —
+  // so each poll is a normal full GET.) Pattern mirrors CallsScreen's
+  // focus-gated poll.
   const [pollEnabled, setPollEnabled] = useState(false);
   useFocusEffect(
     useCallback(() => {

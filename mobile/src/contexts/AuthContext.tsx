@@ -563,8 +563,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // state and resurrects a stale `queryClient` entry under a
       // re-authenticated session (mixing tenants A and B briefly).
       queryClient?.cancelQueries().catch(() => {});
-      // Clear the in-memory token + ETag cache (the axios 401 handler already
-      // called setAuthToken(null), but this listener also fires for the
+      // Clear the in-memory bearer (the axios 401 handler already called
+      // setAuthToken(null), but this listener also fires for the
       // coalesced/secondary paths — idempotent and cheap).
       setAuthToken(null);
       setToken(null);
@@ -607,11 +607,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // прибыль). Wipe it BEFORE B's session starts — B's own dashboard
       // re-populates it with the correct role-shaped payload on first load.
       clearWidgetData();
-      // Drop tenant A's bearer + ETag cache BEFORE priming B's token, so a
-      // 304 against an A-era ETag can never resurrect A's body into B's
-      // session. setAuthToken(null) clears the ETag map; setAuthToken(t)
-      // installs B's bearer for every subsequent request without an
-      // AsyncStorage read on the prefetch fan-out.
+      // Drop tenant A's bearer BEFORE priming B's token. setAuthToken(null)
+      // clears the in-memory bearer; setAuthToken(t) installs B's for every
+      // subsequent request without an AsyncStorage read on the prefetch
+      // fan-out. (The client-side ETag layer that used to leak A's body into B
+      // via a 304 was removed — see api/axios.ts.)
       setAuthToken(null);
       await AsyncStorage.setItem('token', t);
       // Persist B's user AFTER clearPersistentCache() above (which only wipes
@@ -654,8 +654,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     // after we've torn down state and revive an entry under the next
     // user's session.
     queryClient?.cancelQueries().catch(() => {});
-    // Drop in-memory bearer + ETag cache so subsequent requests are
-    // unauthenticated and no stale 304 body survives into the next session.
+    // Drop the in-memory bearer so subsequent requests are unauthenticated.
     setAuthToken(null);
     await AsyncStorage.removeItem('token');
     // Wipe the cached user identity — tenant safety: user B logging in on the

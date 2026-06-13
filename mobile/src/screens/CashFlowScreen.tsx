@@ -262,7 +262,16 @@ export default function CashFlowScreen() {
   const queryClient = useQueryClient();
   const { isRole } = useAuth();
   const palette = useColors();
-  const canFilterByEmployee = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
+  // «Движение денег» — owner-facing money screen. `/reports/cashflow` is
+  // controller-gated @Roles('director','admin','superadmin') → a master
+  // gets a deterministic 403 (live-probed 2026-06-13: master=403,
+  // director=200). Without this gate the master's query fired, errored, and
+  // rendered a generic «Проверьте соединение» card whose retry could never
+  // succeed (the owner's exact «retry doesn't help» symptom). Same canonical
+  // role check used everywhere else in the app (`isRole`), identical to
+  // `canFilterByEmployee` — a master simply has no access to this screen.
+  const canViewCashFlow = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
+  const canFilterByEmployee = canViewCashFlow;
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
 
@@ -317,9 +326,10 @@ export default function CashFlowScreen() {
   const effectiveEmployeeId = mode === 'employee' ? employeeId : '';
 
   // Near-live cash flow: poll every 30s but only while the screen is focused
-  // (no background battery drain / JS tick when the user is elsewhere). Paired
-  // with axios If-None-Match → most refetches are ~0-byte 304s. Pattern
-  // mirrors CallsScreen's focus-gated poll.
+  // (no background battery drain / JS tick when the user is elsewhere). (The
+  // client-side If-None-Match/304 layer was removed — see api/axios.ts — so
+  // each poll is a normal full GET.) Pattern mirrors CallsScreen's focus-gated
+  // poll.
   const [pollEnabled, setPollEnabled] = useState(false);
   useFocusEffect(
     useCallback(() => {
@@ -341,9 +351,13 @@ export default function CashFlowScreen() {
       const res = await reportsApi.getCashFlow(params);
       return res.data;
     },
+    // Never fire `/reports/cashflow` for a role the server forbids (master →
+    // 403). The screen also early-returns a clean «нет доступа» state below,
+    // so this is belt-and-suspenders against the 403 → error-card symptom.
+    enabled: canViewCashFlow,
     placeholderData: (prev: unknown) => prev,
     refetchOnReconnect: true,
-    refetchInterval: pollEnabled ? 30_000 : false,
+    refetchInterval: canViewCashFlow && pollEnabled ? 30_000 : false,
   });
 
   // Lazy per-day check list — fires only when a card is expanded.
@@ -356,7 +370,7 @@ export default function CashFlowScreen() {
       const res = await checksApi.getAll(params);
       return res.data;
     },
-    enabled: !!expandedDay,
+    enabled: canViewCashFlow && !!expandedDay,
     // No placeholderData: when the user switches days the rows must reset to
     // undefined so the loading gate shows a spinner instead of briefly
     // flashing the PREVIOUS day's checks + total. These keys aren't
@@ -380,7 +394,7 @@ export default function CashFlowScreen() {
       });
       return res.data as any[];
     },
-    enabled: !!expandedDay,
+    enabled: canViewCashFlow && !!expandedDay,
   });
 
   // ── Handlers ─────────────────────────────────────────────────────────
@@ -556,6 +570,24 @@ export default function CashFlowScreen() {
       })}
     </View>
   );
+
+  // Role-gated access. A master reaching this screen (e.g. via a deep link or
+  // a future menu entry) must see a clean «нет доступа» — NEVER a broken
+  // error card driven by a 403. No period switcher / queries for this branch.
+  if (!canViewCashFlow) {
+    return (
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader title="Движение денег" onBack={() => navigation.goBack()} />
+        <View style={styles.noAccessWrap}>
+          <EmptyState
+            title="Нет доступа"
+            description="Движение денег доступно только владельцу и администратору."
+            icon="lock"
+          />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -1083,6 +1115,7 @@ function ExpenseRow({ expense, palette }: { expense: any; palette: ReturnType<ty
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+  noAccessWrap: { flex: 1, justifyContent: 'center', paddingHorizontal: spacing[6] },
   scrollContent: { padding: spacing[4], gap: spacing[3] },
 
   // Period switcher (header trailing)

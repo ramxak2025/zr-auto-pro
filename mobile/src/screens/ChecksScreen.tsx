@@ -427,8 +427,9 @@ export default function ChecksScreen() {
 
   // Near-live journal: poll the loaded pages every 30s, but only while the
   // screen is focused, so a backgrounded Журнал tab spends no JS tick or
-  // network roundtrip. Paired with axios If-None-Match → most refetches are
-  // ~0-byte 304s. Pattern mirrors CallsScreen's focus-gated poll.
+  // network roundtrip. (The client-side If-None-Match/304 layer was removed —
+  // see api/axios.ts — so each poll is a normal full GET.) Pattern mirrors
+  // CallsScreen's focus-gated poll.
   const [pollEnabled, setPollEnabled] = useState(false);
   useFocusEffect(
     useCallback(() => {
