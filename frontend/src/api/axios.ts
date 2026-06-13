@@ -15,10 +15,34 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Guard against multiple simultaneous 401 redirects causing race conditions.
+// Guard against multiple simultaneous redirects causing race conditions.
 // Uses a timestamp-based debounce instead of a permanent boolean flag
 // to avoid the bug where the flag was never reset.
 let lastRedirectTime = 0;
+
+/**
+ * Tear down the session and bounce to /login. Called ONLY when the token is
+ * proven invalid by the session-validating endpoint (/auth/me). A full page
+ * reload does NOT run AuthContext.logout(), so we purge the SW API cache and
+ * the persist IndexedDB store here too (cross-tenant isolation on a shared
+ * browser). Debounced so a wave of failures fires this once.
+ */
+function hardLogoutRedirect(): void {
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+
+  const now = Date.now();
+  if (window.location.pathname !== '/login' && now - lastRedirectTime > 2000) {
+    lastRedirectTime = now;
+    void clearPersistentCache();
+    void purgeApiCache();
+    // Give the purge a brief head start, then redirect regardless — never hang
+    // the user on a stuck SW. The direct caches.delete() resolves in a few ms.
+    setTimeout(() => {
+      window.location.href = '/login';
+    }, 200);
+  }
+}
 
 api.interceptors.response.use(
   (res) => res,
@@ -32,31 +56,25 @@ api.interceptors.response.use(
     const status = error.response.status;
     const url = error.config?.url || '';
 
-    // Unauthorized — clear token and redirect (debounce 2s to avoid multiple redirects).
-    // EXCEPTION: never auto-logout on /auth/me failures — that endpoint is the
-    // one we use to validate the token, and a transient hiccup must not log out
-    // an otherwise-valid session. AuthContext handles 401 from /me itself.
-    if (status === 401 && !url.includes('/auth/me')) {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-
-      const now = Date.now();
-      if (window.location.pathname !== '/login' && now - lastRedirectTime > 2000) {
-        lastRedirectTime = now;
-        // Cross-tenant isolation: this redirect is a full page reload, which
-        // does NOT run AuthContext.logout(). The SW API cache and the persist
-        // IndexedDB store survive the reload, so purge them here too before
-        // navigating — otherwise tenant A's `/api` payloads / dehydrated lists
-        // could be served to the next login on a shared browser.
-        void clearPersistentCache();
-        void purgeApiCache();
-        // Give the purge a brief head start, then redirect regardless — never
-        // hang the user on a stuck SW. The direct caches.delete() inside
-        // purgeApiCache() resolves in a few ms, so 200ms is ample.
-        setTimeout(() => {
-          window.location.href = '/login';
-        }, 200);
-      }
+    // ── Session validity: /auth/me is the SOLE authority ───────────────────
+    // A 401 means "this request was not authorized" — it does NOT mean the
+    // session token is dead. The ONLY endpoint that proves the token itself is
+    // invalid is /auth/me (it validates the bearer and nothing else). A 401
+    // from any DATA endpoint (a permission-scoped resource the current role
+    // can't read, an owner-only widget a master shouldn't hit, a deterministic
+    // server-side failure on real data) must surface to React Query as an
+    // error WITHOUT wiping a valid token — otherwise one unrelated 401 during
+    // the post-refresh data fan-out logs the user out on EVERY refresh.
+    //
+    // This mirrors mobile, where the navigation gate is driven by
+    // `useAuth().user` (revalidated via /auth/me), never by a data endpoint.
+    //
+    // AuthContext owns the /auth/me boot path: it clears the token only when
+    // /auth/me itself returns 401/403. For a 401 on /auth/me that happens
+    // OUTSIDE that boot flow (e.g. a background refreshUser after the token was
+    // revoked), we tear the session down here so the user lands on /login.
+    if (status === 401 && url.includes('/auth/me')) {
+      hardLogoutRedirect();
     }
 
     // Rate-limited — log so we can see in console, but don't logout
@@ -70,7 +88,7 @@ api.interceptors.response.use(
     }
 
     return Promise.reject(error);
-  }
+  },
 );
 
 export default api;
