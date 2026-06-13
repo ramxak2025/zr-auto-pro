@@ -3,14 +3,45 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 
+// Matches a calendar date `YYYY-MM-DD`. Anything else (locale-formatted,
+// empty, ISO-with-time, garbage) is rejected so it never reaches a raw
+// `$n::date` cast in SQL — an invalid cast surfaces as a deterministic 500
+// that no client retry can recover from.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 @Injectable()
 export class ReportsService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
+  /**
+   * Normalise a caller-supplied date param to a safe `YYYY-MM-DD` string.
+   * A well-formed value is also range-checked (Postgres would reject e.g.
+   * `2026-13-40`); anything invalid falls back to `fallback` so the query
+   * can never 500 on a bad `::date` cast. Behaviour for valid input is
+   * unchanged — every previously-200 request stays 200 with the same shape.
+   */
+  private safeDate(value: unknown, fallback: string): string {
+    if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) return fallback;
+    const ts = Date.parse(`${value}T00:00:00Z`);
+    if (Number.isNaN(ts)) return fallback;
+    // Reject overflow dates that match the regex but aren't real (e.g. 02-30).
+    if (new Date(ts).toISOString().slice(0, 10) !== value) return fallback;
+    return value;
+  }
+
+  private firstOfMonth(): string {
+    const n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), 1).toISOString().split('T')[0];
+  }
+
+  private todayISO(): string {
+    return new Date().toISOString().split('T')[0];
+  }
+
   async getFinancial(tenantID: string, query: any) {
-    const dateFrom =
-      query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-    const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
+    const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
+    const dateTo = this.safeDate(query?.dateTo, this.todayISO());
 
     const { rows } = await this.pool.query(
       `SELECT
@@ -62,9 +93,8 @@ export class ReportsService {
    * kept around, only marked deleted_at), so the join still resolves.
    */
   async getDefectWriteoffReport(tenantID: string, query: { from?: string; to?: string }) {
-    const dateFrom =
-      query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-    const dateTo = query.to || new Date().toISOString().split('T')[0];
+    const dateFrom = this.safeDate(query?.from, this.firstOfMonth());
+    const dateTo = this.safeDate(query?.to, this.todayISO());
 
     const { rows } = await this.pool.query(
       `SELECT
@@ -110,9 +140,8 @@ export class ReportsService {
    * error, just an empty funnel.
    */
   async getCallFunnel(tenantID: string, query: { dateFrom?: string; dateTo?: string }) {
-    const dateFrom =
-      query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-    const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
+    const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
+    const dateTo = this.safeDate(query?.dateTo, this.todayISO());
 
     // Contact stats from sms_history
     const { rows: contactRows } = await this.pool.query(
@@ -184,10 +213,18 @@ export class ReportsService {
   }
 
   async getCashFlow(tenantID: string, query: any) {
-    const dateFrom =
-      query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-    const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
-    const masterId = query.masterId || null;
+    const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
+    const dateTo = this.safeDate(query?.dateTo, this.todayISO());
+    // masterId reaches a raw `master_id = $n` (uuid) comparison; a non-uuid
+    // value triggers "invalid input syntax for type uuid" → 500. Ignore an
+    // invalid filter rather than blow up (an invalid master = no such master,
+    // so dropping the filter would over-report — instead force an empty set).
+    const rawMaster = query?.masterId;
+    const masterId = typeof rawMaster === 'string' && UUID_RE.test(rawMaster) ? rawMaster : null;
+    const masterInvalid = !!rawMaster && masterId === null;
+    if (masterInvalid) {
+      return { days: [], totals: { cash: 0, card: 0, warranty: 0, total: 0 } };
+    }
 
     const params: any[] = [tenantID, dateFrom, dateTo];
     let masterFilter = '';
@@ -409,15 +446,18 @@ export class ReportsService {
    * before the window started.
    */
   async clientsNewVsReturning(tenantID: string, params: { from: string; to: string }) {
-    if (!params.from || !params.to) {
+    const from = this.safeDate(params?.from, '');
+    const to = this.safeDate(params?.to, '');
+    if (!from || !to) {
       return {
         newCount: 0,
         returningCount: 0,
         newRevenue: 0,
         returningRevenue: 0,
-        period: { from: params.from ?? '', to: params.to ?? '' },
+        period: { from: params?.from ?? '', to: params?.to ?? '' },
       };
     }
+    params = { from, to };
     const { rows } = await this.pool.query(
       `WITH first_visits AS (
          SELECT client_id, MIN(date) AS first_date
@@ -570,9 +610,12 @@ export class ReportsService {
 
   /** Aggregate revenue by weekday for the period. */
   async bestDayOfWeek(tenantID: string, params: { from: string; to: string }) {
-    if (!params.from || !params.to) {
+    const from = this.safeDate(params?.from, '');
+    const to = this.safeDate(params?.to, '');
+    if (!from || !to) {
       return { days: [], best: 0, worst: 0 };
     }
+    params = { from, to };
     const { rows } = await this.pool.query(
       `SELECT EXTRACT(DOW FROM date)::int AS weekday,
               COALESCE(SUM(total_revenue), 0) AS revenue,

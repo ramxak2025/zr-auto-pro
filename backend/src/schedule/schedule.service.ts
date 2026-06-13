@@ -14,6 +14,18 @@ import { PG_POOL } from '../database.module';
 const ALLOWED_SHIFT_STATUSES = new Set(['worked', 'dayoff', 'sick', 'short', 'long', 'absent']);
 const DEFAULT_SHIFT_STATUSES = ['worked', 'short'];
 
+// `schedule_entries.date` is a `DATE NOT NULL` column; the listing compares it
+// against caller-supplied `dateFrom`/`dateTo` text params which Postgres casts
+// to date. A malformed value ("", locale string, ISO-with-time) yields
+// "invalid input syntax for type date" → a deterministic 500 that no client
+// retry can recover from. Validate before the query touches the cast.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function isIsoDate(s: unknown): s is string {
+  if (typeof s !== 'string' || !ISO_DATE_RE.test(s)) return false;
+  const ts = Date.parse(`${s}T00:00:00Z`);
+  return !Number.isNaN(ts) && new Date(ts).toISOString().slice(0, 10) === s;
+}
+
 @Injectable()
 export class ScheduleService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
@@ -155,10 +167,12 @@ export class ScheduleService {
   }
 
   async getAll(tenantID: string, query: any) {
-    const dateFrom = query.dateFrom;
-    const dateTo = query.dateTo;
+    const dateFrom = query?.dateFrom;
+    const dateTo = query?.dateTo;
 
-    if (!dateFrom || !dateTo) {
+    // Missing OR malformed range → empty list (never a 500). The grid screen
+    // always sends a valid month range; an invalid one means "nothing to show".
+    if (!isIsoDate(dateFrom) || !isIsoDate(dateTo)) {
       return [];
     }
 

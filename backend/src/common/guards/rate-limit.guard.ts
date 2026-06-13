@@ -1,5 +1,6 @@
 import { Injectable, CanActivate, ExecutionContext, HttpException, HttpStatus } from '@nestjs/common';
 import { Request } from 'express';
+import * as crypto from 'crypto';
 
 /**
  * Global rate limiter with different limits per endpoint TYPE.
@@ -9,8 +10,27 @@ import { Request } from 'express';
  *                               per page, multiplied by office NAT shared IPs)
  * Write endpoints:     150/min
  *
- * Bucket key = IP + Authorization (first 16 chars of token), so that multiple
- * users behind the same NAT (autoservice office Wi-Fi) don't share a quota.
+ * Bucket key = IP + a per-TOKEN fingerprint, so that multiple users behind the
+ * same NAT (autoservice office Wi-Fi) don't share a quota.
+ *
+ * IMPORTANT — token fingerprint, not a fixed token slice:
+ *   The previous implementation used `auth.slice(7, 23)` — the first 16 chars
+ *   of the JWT. A JWT is `base64url(header).base64url(payload).signature`, and
+ *   the header is ALWAYS `{"alg":"HS256","typ":"JWT"}` → its base64url prefix
+ *   `eyJhbGciOiJIUzI1...` is byte-for-byte IDENTICAL for every token this
+ *   server issues. The two tokens only diverge at char ~48 (inside the
+ *   payload). So the "per-user" key collapsed to a single constant per IP:
+ *   EVERY authenticated user behind one public IP shared ONE 600/min read
+ *   bucket and ONE 150/min write bucket. In a real autoservice office (shared
+ *   NAT + several staff + data-heavy pages) that bucket is exhausted in
+ *   seconds → 429 storms. The web client tolerates 429, but the mobile client
+ *   surfaces it as a screen error, and retries hit the same exhausted bucket,
+ *   so the failure is deterministic ("retry does not help").
+ *
+ *   We now fingerprint the WHOLE token with a fast non-cryptographic-strength
+ *   hash (SHA-1, truncated). This is per-token unique, fixed length, and never
+ *   stores the bearer itself in memory — only a digest. Two different users
+ *   (or two sessions of one user) now get genuinely distinct buckets.
  *
  * /auth/me, /auth/avatar, /auth/refresh are NOT rate-limited as auth — they
  * use the regular read/write buckets. Only /auth/login and /auth/register
@@ -38,10 +58,14 @@ export class RateLimitGuard implements CanActivate {
     const path = request.path || request.url || '';
     const now = Date.now();
 
-    // Identify the user behind a shared NAT by their JWT (first 16 chars
-    // is enough for uniqueness and avoids storing the full secret in memory).
+    // Identify the user behind a shared NAT by a fingerprint of their JWT.
+    // We hash the FULL token (not a fixed slice — see the class doc: the first
+    // ~48 chars are identical across all tokens, so a slice collapses every
+    // user into one bucket). The digest is per-token unique, fixed length, and
+    // we never keep the raw bearer in memory.
     const auth = (request.headers['authorization'] as string | undefined) || '';
-    const userKey = auth.startsWith('Bearer ') ? auth.slice(7, 23) : 'anon';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    const userKey = token ? crypto.createHash('sha1').update(token).digest('base64').slice(0, 22) : 'anon';
     const idKey = `${ip}:${userKey}`;
 
     // Determine bucket and limit
