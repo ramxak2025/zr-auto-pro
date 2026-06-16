@@ -62,6 +62,20 @@ export class AttachmentDto {
   @IsOptional()
   @IsNumber()
   size?: number;
+
+  /**
+   * Attachment kind. Optional + backward-compatible: legacy attachments without
+   * `type` are kept as-is (the service treats them as document/image). Only
+   * `type: 'video'` triggers the video-URL whitelist check in the service.
+   */
+  @IsOptional()
+  @IsIn(['image', 'video', 'document'])
+  type?: 'image' | 'video' | 'document';
+
+  /** For `type: 'video'` — how the `url` is embedded/played. */
+  @IsOptional()
+  @IsIn(['youtube', 'vk', 'embed'])
+  videoType?: 'youtube' | 'vk' | 'embed';
 }
 
 // ─── Articles ───────────────────────────────────────────────────────────────
@@ -203,6 +217,15 @@ export class ListArticlesQueryDto {
   @IsOptional()
   @IsString()
   pinned?: string;
+
+  /**
+   * Optional facet: keep only articles whose attachments contain at least one
+   * attachment of this kind (e.g. 'video' for "статьи с видео"). Purely
+   * additive — omitting it leaves the existing title+body search untouched.
+   */
+  @IsOptional()
+  @IsIn(['image', 'video', 'document'])
+  hasAttachmentType?: 'image' | 'video' | 'document';
 }
 
 // ─── A. Учебный центр — courses, lessons, quizzes ─────────────────────────────

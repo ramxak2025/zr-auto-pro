@@ -36,6 +36,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
+import ProductMovementHistoryModal from '../components/ProductMovementHistoryModal';
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import FreshnessBadge from '../components/FreshnessBadge';
@@ -348,6 +349,11 @@ export default function ProductsScreen() {
   // Per-product action sheet (only on main warehouse): edit / move to
   // defect / move to used. Opened by long-press on a product row.
   const [actionsForProduct, setActionsForProduct] = useState<Product | null>(null);
+
+  // «История движения товара» — read-only журнал stock-movements по одному
+  // товару. Открывается из action-sheet (long-press) и из окна
+  // редактирования товара. null → модалка закрыта.
+  const [historyProduct, setHistoryProduct] = useState<Product | null>(null);
 
   // "Установить цену" — inline-редактор розничной цены для товаров
   // склада Б/У. Открывается тапом по CTA «Установить цену» на карточке
@@ -1850,6 +1856,22 @@ export default function ProductsScreen() {
             />
           </View>
         </View>
+        {editingProduct && (
+          <TouchableOpacity
+            style={[styles.historyLink, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}
+            onPress={() => {
+              const p = editingProduct;
+              closeModal();
+              setHistoryProduct(p);
+            }}
+          >
+            <Ionicons name="swap-horizontal-outline" size={18} color={palette.accent.primary} />
+            <Text style={[styles.historyLinkText, { color: palette.text.primary }]}>
+              {'\u0418\u0441\u0442\u043E\u0440\u0438\u044F \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F'}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
         <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
           <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeModal}>
             <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>
@@ -2585,6 +2607,25 @@ export default function ProductsScreen() {
           onPress={() => {
             const p = actionsForProduct;
             setActionsForProduct(null);
+            if (p) setHistoryProduct(p);
+          }}
+        >
+          <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+            <Ionicons name="swap-horizontal-outline" size={22} color={palette.accent.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'История движения'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              {'Поступления, расход, списания, переносы'}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => {
+            const p = actionsForProduct;
+            setActionsForProduct(null);
             if (p) openEdit(p);
           }}
         >
@@ -2628,6 +2669,16 @@ export default function ProductsScreen() {
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
       </Modal>
+
+      {/* «История движения товара» — read-only журнал stock-movements.
+          Full-screen modal, FlashList, cache-first. Открывается из
+          action-sheet (long-press) и из окна редактирования товара. */}
+      <ProductMovementHistoryModal
+        visible={!!historyProduct}
+        onClose={() => setHistoryProduct(null)}
+        productId={historyProduct?.id ?? null}
+        productName={historyProduct?.name}
+      />
 
       {/* Transfer qty dialog — same shape for defect_transfer and
           used_transfer; only the action title and movement type differ. */}
@@ -3037,6 +3088,21 @@ const styles = StyleSheet.create({
   },
   formHint: { fontSize: 11, color: colors.gray[400], marginTop: 4 },
   formRowFields: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[4] },
+  historyLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[2],
+  },
+  historyLinkText: {
+    flex: 1,
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.medium,
+  },
   formActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',

@@ -111,6 +111,90 @@ export class ChecksService {
     }
   }
 
+  /**
+   * Apply the side-effects of a deferred draft becoming a real (active) check,
+   * INSIDE the caller's already-open transaction:
+   *   1) decrement product stock for every product line of the check;
+   *   2) spawn warranty_claims for any product/service line whose master
+   *      record has warranty_days set — exactly the same way create() does.
+   *
+   * MUST only be invoked on a genuine is_deferred true→false transition (the
+   * caller verifies the PRIOR is_deferred straight from the DB). Reading the
+   * persisted lines from the DB — instead of trusting in-memory arrays — makes
+   * this the single source of truth for both the line-rewriting close
+   * (fullUpdate) and a bare isDeferred toggle.
+   *
+   * IDEMPOTENT against double-spend:
+   *   - stock is only ever decremented here on the one transition, never on a
+   *     normal active-check edit (caller gate);
+   *   - warranty_claims are skipped entirely if this check already has ANY
+   *     claim row, so a re-run can never duplicate guarantees.
+   */
+  private async applyDeferredActivation(
+    client: PoolClient,
+    tenantID: string,
+    checkId: string,
+    checkDate: string,
+    clientId: string | null,
+    carId: string | null,
+  ): Promise<void> {
+    // ── 1) Decrement stock from the persisted product lines ───────────────
+    // Aggregate per product so a product appearing on several lines is
+    // decremented once by the summed quantity. GREATEST(...,0) clamps to 0,
+    // matching create()'s stock write exactly. Tenant-scoped on both ends.
+    const { rows: prodRows } = await client.query(
+      `SELECT product_id, COALESCE(SUM(quantity), 0) AS qty
+         FROM check_product_lines
+        WHERE check_id = $1 AND product_id IS NOT NULL
+        GROUP BY product_id`,
+      [checkId],
+    );
+    for (const r of prodRows) {
+      const qty = parseFloat(r.qty) || 0;
+      if (qty <= 0) continue;
+      await client.query(`UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2 AND tenant_id = $3`, [
+        qty,
+        r.product_id,
+        tenantID,
+      ]);
+    }
+
+    // ── 2) Create warranty_claims (idempotent) ────────────────────────────
+    // Never duplicate: if this check already carries any warranty claim we
+    // skip the whole step. A deferred draft skips warranty at create()-time,
+    // so on the first activation there are none, and createFromCheckLines
+    // runs exactly once across the lifetime of the check.
+    const { rows: existingWarranty } = await client.query(
+      `SELECT 1 FROM warranty_claims WHERE tenant_id = $1 AND check_id = $2 LIMIT 1`,
+      [tenantID, checkId],
+    );
+    if (existingWarranty.length > 0) return;
+
+    const warrantyLines: Array<{
+      kind: 'product' | 'service';
+      productId?: string | null;
+      serviceId?: string | null;
+      itemName?: string | null;
+    }> = [];
+    const { rows: svcLines } = await client.query(
+      `SELECT service_id, name FROM check_service_lines WHERE check_id = $1 AND service_id IS NOT NULL`,
+      [checkId],
+    );
+    for (const s of svcLines) {
+      warrantyLines.push({ kind: 'service', serviceId: s.service_id, itemName: s.name });
+    }
+    const { rows: prodLinesForWarranty } = await client.query(
+      `SELECT product_id, name FROM check_product_lines WHERE check_id = $1 AND product_id IS NOT NULL`,
+      [checkId],
+    );
+    for (const p of prodLinesForWarranty) {
+      warrantyLines.push({ kind: 'product', productId: p.product_id, itemName: p.name });
+    }
+    if (warrantyLines.length > 0) {
+      await this.warranty.createFromCheckLines(client, tenantID, checkId, checkDate, clientId, carId, warrantyLines);
+    }
+  }
+
   private invalidateReports(tenantID: string) {
     invalidateReportsForTenant(tenantID);
   }
@@ -702,6 +786,15 @@ export class ChecksService {
       return this.fullUpdate(id, tenantID, userRole, dto, actorUserId);
     }
 
+    // Closing a deferred draft WITHOUT re-sending lines (bare `isDeferred:false`
+    // toggle) is also an activation — route it through the transactional
+    // activator so stock + warranties are applied on the true→false transition.
+    // Any other isDeferred value (or no flip at all) falls through to the plain
+    // field-update below unchanged.
+    if (dto.isDeferred === false) {
+      return this.activateDeferred(id, tenantID, userRole, dto, actorUserId);
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -781,6 +874,112 @@ export class ChecksService {
     return this.getById(id, tenantID);
   }
 
+  /**
+   * Close a deferred draft via a bare `isDeferred:false` toggle (no line
+   * arrays). Flips the flag and applies the SAME activation side-effects as
+   * fullUpdate — stock decrement + warranty creation — but only on a genuine
+   * is_deferred true→false transition (authority = prior is_deferred read from
+   * the DB inside the transaction).
+   *
+   * Idempotent / double-spend safe:
+   *   - if the check is ALREADY active (no transition), this is a plain field
+   *     update — no stock touched, no warranties created;
+   *   - applyDeferredActivation itself skips warranties when any already exist.
+   *
+   * Permission: a master may close only THEIR OWN draft; director/admin/
+   * superadmin may close any.
+   */
+  private async activateDeferred(id: string, tenantID: string, userRole: string, dto: any, actorUserId: string | null) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Lock the row so two concurrent closes can't both observe
+      // is_deferred=true and both decrement stock / create warranties.
+      const { rows: checkRows } = await client.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
+        id,
+        tenantID,
+      ]);
+      if (checkRows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      }
+
+      // Authority for the transition is the prior persisted flag. The caller
+      // only routes here when dto.isDeferred === false, so a currently-deferred
+      // check means a genuine true→false activation; an already-active check is
+      // a no-op re-save that must NOT re-apply effects.
+      const isActivating = checkRows[0].is_deferred === true;
+
+      // PERMISSION: master can close only their own draft.
+      if (isActivating && userRole === 'master') {
+        if (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId)) {
+          await client.query('ROLLBACK');
+          throw new ForbiddenException({ message: 'Мастер может закрывать только свой отложенный заказ-наряд' });
+        }
+      }
+
+      // Build the field update (the same fields the plain path supports for a
+      // close), always including is_deferred=false.
+      const sets: string[] = ['is_deferred=false'];
+      const vals: any[] = [];
+      let ui = 1;
+      if (dto.paymentMethod !== undefined) {
+        sets.push(`payment_method=$${ui++}`);
+        vals.push(dto.paymentMethod);
+      }
+      if (dto.comment !== undefined) {
+        sets.push(`comment=$${ui++}`);
+        vals.push(dto.comment);
+      }
+      if (dto.cashAmount !== undefined) {
+        sets.push(`cash_amount=$${ui++}`);
+        vals.push(dto.cashAmount);
+      }
+      if (dto.cardAmount !== undefined) {
+        sets.push(`card_amount=$${ui++}`);
+        vals.push(dto.cardAmount);
+      }
+      if (dto.paymentStatus !== undefined) {
+        sets.push(`payment_status=$${ui++}`);
+        vals.push(dto.paymentStatus);
+      }
+      vals.push(id, tenantID);
+      await client.query(`UPDATE checks SET ${sets.join(', ')} WHERE id=$${ui++} AND tenant_id=$${ui}`, vals);
+
+      // Side-effects ONLY on the real transition.
+      if (isActivating) {
+        const checkDate =
+          checkRows[0].date instanceof Date
+            ? (checkRows[0].date as Date).toISOString()
+            : String(checkRows[0].date ?? new Date().toISOString());
+        await this.applyDeferredActivation(
+          client,
+          tenantID,
+          id,
+          checkDate,
+          checkRows[0].client_id ?? null,
+          checkRows[0].car_id ?? null,
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back above */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    this.invalidateReports(tenantID);
+    this.emitCashChanged(tenantID, actorUserId);
+    return this.getById(id, tenantID);
+  }
+
   private async fullUpdate(
     id: string,
     tenantID: string,
@@ -794,13 +993,40 @@ export class ChecksService {
       tenantID,
     ]);
     if (checkRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
-    if (!checkRows[0].is_deferred) {
+    // Prior persisted state — the authority for the true→false transition.
+    const wasDeferred: boolean = checkRows[0].is_deferred === true;
+    if (!wasDeferred) {
       throw new ForbiddenException({ message: 'Редактирование доступно только для отложенных чеков' });
+    }
+
+    // A genuine activation = this draft is being closed (is_deferred true→false).
+    // `dto.isDeferred` is OPTIONAL: only an explicit `false` flips the flag; if
+    // the caller omits it the draft stays a draft and no effects fire.
+    const isActivating = wasDeferred && dto.isDeferred === false;
+
+    // PERMISSION: a master may only close (activate) THEIR OWN draft. Plain
+    // re-edits of a still-deferred draft keep the existing rules; the extra
+    // gate applies only to the close transition. Director/admin/superadmin may
+    // close any draft. actorUserId is the JWT userID of the caller.
+    if (isActivating && userRole === 'master') {
+      if (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId)) {
+        throw new ForbiddenException({ message: 'Мастер может закрывать только свой отложенный заказ-наряд' });
+      }
     }
 
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+
+      // Re-read the prior is_deferred under a row lock so two concurrent closes
+      // can't BOTH see is_deferred=true and both decrement stock. The locked
+      // value is the authority for whether to fire activation effects below.
+      const { rows: lockedRows } = await client.query(
+        'SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        [id, tenantID],
+      );
+      if (lockedRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      const lockedIsActivating = lockedRows[0].is_deferred === true && dto.isDeferred === false;
 
       const services = dto.services || [];
       const products = dto.products || [];
@@ -1029,6 +1255,24 @@ export class ChecksService {
             prod.totalCost,
           ],
         );
+      }
+
+      // ── Deferred → active side-effects ───────────────────────────────────
+      // ONLY on the genuine true→false transition: now that the final lines are
+      // persisted (deleted + re-inserted above), decrement stock and spawn
+      // warranties exactly like create() does for a non-deferred sale. Runs in
+      // THIS transaction so stock + warranties + the check commit atomically.
+      // Idempotent: gated by the prior is_deferred from the DB, and warranties
+      // are skipped if any already exist for this check (no double-spend, no
+      // duplicate guarantees on a re-save).
+      if (lockedIsActivating) {
+        const effectiveClientId = dto.clientId !== undefined ? dto.clientId || null : (checkRows[0].client_id ?? null);
+        const effectiveCarId = dto.carId !== undefined ? dto.carId || null : (checkRows[0].car_id ?? null);
+        const checkDate =
+          checkRows[0].date instanceof Date
+            ? (checkRows[0].date as Date).toISOString()
+            : String(checkRows[0].date ?? new Date().toISOString());
+        await this.applyDeferredActivation(client, tenantID, id, checkDate, effectiveClientId, effectiveCarId);
       }
 
       await client.query('COMMIT');

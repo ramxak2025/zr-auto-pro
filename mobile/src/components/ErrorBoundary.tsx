@@ -5,11 +5,28 @@ import { captureException } from '../sentry';
 
 interface Props {
   children: ReactNode;
+  /**
+   * When any value here changes between renders, a previously-caught error is
+   * cleared automatically. Pass e.g. `[route.key]` so re-entering a screen — or
+   * a data dependency changing — retries the render instead of stranding the
+   * user on the fallback. Compared with `Object.is`, matching React's own
+   * reconciliation semantics.
+   */
+  resetKeys?: ReadonlyArray<unknown>;
+  /** Invoked whenever the boundary clears its error (manual retry or resetKeys). */
+  onReset?: () => void;
 }
 
 interface State {
   hasError: boolean;
   error: Error | null;
+}
+
+/** True when the two key arrays differ by length or by any `Object.is` slot. */
+function resetKeysChanged(a?: ReadonlyArray<unknown>, b?: ReadonlyArray<unknown>): boolean {
+  if (a === b) return false;
+  if (!a || !b || a.length !== b.length) return true;
+  return a.some((value, i) => !Object.is(value, b[i]));
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -25,8 +42,22 @@ export class ErrorBoundary extends Component<Props, State> {
     captureException(error, { componentStack: info.componentStack });
   }
 
-  handleReset = () => {
+  componentDidUpdate(prevProps: Props) {
+    // Auto-recover once the caller signals the underlying cause may be gone
+    // (navigated back into the screen, query refetched, …). Without this the
+    // user would be stuck on the fallback until they tapped «Попробовать снова».
+    if (this.state.hasError && resetKeysChanged(prevProps.resetKeys, this.props.resetKeys)) {
+      this.reset();
+    }
+  }
+
+  private reset() {
     this.setState({ hasError: false, error: null });
+    this.props.onReset?.();
+  }
+
+  handleReset = () => {
+    this.reset();
   };
 
   render() {
@@ -44,6 +75,26 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return this.props.children;
   }
+}
+
+/**
+ * React Navigation `screenLayout` helper: wraps every screen in a navigator in
+ * its own ErrorBoundary, so a render-time crash stays contained to that one
+ * screen instead of bubbling to the single root boundary and blanking the whole
+ * app. `resetKeys={[route.key]}` auto-clears the error when the user re-enters
+ * the screen. Stable module-scope identity — safe to pass directly as the
+ * `screenLayout` prop without remounting screens.
+ *
+ * Usage: `<Stack.Navigator screenLayout={screenErrorBoundaryLayout}>`
+ */
+export function screenErrorBoundaryLayout({
+  route,
+  children,
+}: {
+  route: { key: string };
+  children: ReactNode;
+}): React.ReactElement {
+  return <ErrorBoundary resetKeys={[route.key]}>{children}</ErrorBoundary>;
 }
 
 const styles = StyleSheet.create({

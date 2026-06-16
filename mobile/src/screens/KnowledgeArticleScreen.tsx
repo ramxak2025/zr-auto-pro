@@ -30,6 +30,7 @@ import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
 import CachedImage from '../components/CachedImage';
 import Markdown from '../components/knowledge/Markdown';
+import VideoEmbed from '../components/knowledge/VideoEmbed';
 import { Text } from '../platform/Typography';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useColors } from '../contexts/ThemeContext';
@@ -97,6 +98,17 @@ export default function KnowledgeArticleScreen() {
   });
 
   const isRegulation = article?.type === 'regulation';
+
+  // Split attachments: videos render as inline players (VideoEmbed), the rest
+  // (documents / images) keep the existing tap-to-open file list.
+  const videoAttachments = React.useMemo(
+    () => (article?.attachments ?? []).filter((a) => a.type === 'video'),
+    [article?.attachments],
+  );
+  const fileAttachments = React.useMemo(
+    () => (article?.attachments ?? []).filter((a) => a.type !== 'video'),
+    [article?.attachments],
+  );
 
   // Read the locally-remembered acked version once we know the id.
   React.useEffect(() => {
@@ -314,6 +326,15 @@ export default function KnowledgeArticleScreen() {
             </View>
           ) : null}
 
+          {/* Видео (inline) — отображаются над текстом, как «обложка» темы */}
+          {videoAttachments.length > 0 ? (
+            <View style={styles.videoSection}>
+              {videoAttachments.map((att, i) => (
+                <VideoEmbed key={`${att.url}-${i}`} attachment={att} />
+              ))}
+            </View>
+          ) : null}
+
           {/* Body */}
           <View style={styles.bodyWrap}>
             {article.body?.trim() ? (
@@ -386,14 +407,14 @@ export default function KnowledgeArticleScreen() {
             </View>
           </View>
 
-          {/* Attachments */}
-          {article.attachments && article.attachments.length > 0 ? (
+          {/* Attachments (документы / изображения — видео вынесены выше) */}
+          {fileAttachments.length > 0 ? (
             <View style={styles.attachments}>
               <Text variant="label" style={{ color: palette.text.tertiary, marginBottom: spacing[2] }}>
                 Вложения
               </Text>
               <View style={{ gap: spacing[2] }}>
-                {article.attachments.map((att, i) => (
+                {fileAttachments.map((att, i) => (
                   <Pressable
                     key={`${att.url}-${i}`}
                     onPress={() => openAttachment(att.url)}
@@ -620,6 +641,8 @@ const styles = StyleSheet.create({
   },
 
   bodyWrap: { marginTop: spacing[1] },
+
+  videoSection: { marginTop: spacing[2], marginBottom: spacing[2], gap: spacing[3] },
 
   attachments: { marginTop: spacing[5] },
   attachRow: {

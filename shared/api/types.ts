@@ -355,6 +355,8 @@ export interface UpdateTenantRequest {
   monthlyPrice?: number;
   subscriptionEnd?: string;
   subscriptionNote?: string;
+  /** 070 — flip the «Смены» (shifts) subsystem on/off for the tenant. */
+  shiftsEnabled?: boolean;
 }
 
 /** POST /tenants/:id/extend — extend the tenant's subscription by N days. */
@@ -559,6 +561,12 @@ export interface ListArticlesParams {
   search?: string;
   /** Send 'true' to return only pinned articles. */
   pinned?: 'true' | 'false';
+  /**
+   * Optional facet — keep only articles that carry at least one attachment of
+   * this kind (e.g. 'video' for "статьи с видео"). Additive: omit to leave the
+   * existing search/listing untouched.
+   */
+  hasAttachmentType?: 'image' | 'video' | 'document';
 }
 
 // ───────────────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@ import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
+import type { UserPermissions, SubscriptionInfo, SectionVisibility } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
@@ -53,6 +53,12 @@ interface MenuItem {
 
 interface MenuSection {
   title: string;
+  /**
+   * 071 — logical section bucket. The owner toggles visibility per employee by
+   * this key (work|finance|warehouse|marketing|other); a hidden section drops
+   * the whole group AND its items from this user's «Ещё» menu.
+   */
+  sectionKey: SectionVisibility['sectionKey'];
   items: MenuItem[];
 }
 
@@ -78,6 +84,7 @@ interface MenuSection {
 const menuSections: MenuSection[] = [
   {
     title: 'Работа',
+    sectionKey: 'work',
     items: [
       {
         label: 'Расписание',
@@ -102,10 +109,11 @@ const menuSections: MenuSection[] = [
         iconColor: colors.blue[600],
       },
       {
-        label: 'База знаний',
-        // NEW (#17) — placeholder. Future: учебный центр, регламенты,
-        // база знаний с поиском. Screen is a friendly "coming soon" stub.
-        description: 'Учебный центр и регламенты',
+        // Родительский пункт назван шире, чем внутренняя группа «База знаний»,
+        // чтобы имя не дублировалось: экран содержит три группы — Учебный
+        // центр, Регламенты и База знаний (статьи).
+        label: 'Обучение и база знаний',
+        description: 'Курсы, регламенты и статьи',
         screen: 'KnowledgeBase',
         icon: 'book-outline',
         iconBg: colors.cyan[50],
@@ -115,6 +123,7 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Финансы',
+    sectionKey: 'finance',
     items: [
       {
         label: 'Движение денег',
@@ -157,6 +166,7 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Склад',
+    sectionKey: 'warehouse',
     items: [
       {
         // Re-added after the menu regroup dropped it (#bugD). The route
@@ -202,6 +212,7 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Маркетинг',
+    sectionKey: 'marketing',
     items: [
       {
         label: 'Отзывы и репутация',
@@ -245,6 +256,7 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Остальное',
+    sectionKey: 'other',
     items: [
       {
         label: 'Сотрудники',
@@ -352,7 +364,7 @@ const MenuRow = React.memo(function MenuRow({
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
-  const { user, logout, hasPermission, refreshUser } = useAuth();
+  const { user, logout, hasPermission, refreshUser, isSectionVisible } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
@@ -509,6 +521,11 @@ export default function MoreScreen() {
 
         {/* Grouped sections — iOS Settings pattern */}
         {menuSections.map((section) => {
+          // 071 — owner-controlled per-employee section visibility. A hidden
+          // section drops the entire group (and its items) for this user. Runs
+          // BEFORE the per-item role/permission filter so the cheap check
+          // short-circuits a wholly-hidden group.
+          if (!isSectionVisible(section.sectionKey)) return null;
           const visibleItems = section.items.filter(filterItem);
           if (visibleItems.length === 0) return null;
 

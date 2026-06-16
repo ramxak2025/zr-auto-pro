@@ -5,6 +5,7 @@ import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdateSectionVisibilityDto } from './dto/section-visibility.dto';
 
 // Roles allowed to manage other users (create / update / delete / reorder /
 // edit per-product commissions). Masters and admin-light users CANNOT touch
@@ -77,6 +78,26 @@ export class UsersController {
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.usersService.remove(id, user.tenantID, user.userID, user.role);
+  }
+
+  // ─── Section Visibility (071) ───────────────────────────────────────
+  // Only owner-class roles may read or change which top-level sections an
+  // employee sees. Both routes are tenant-scoped via the JWT in the service.
+
+  @Roles(...MANAGER_ROLES)
+  @Get(':id/section-visibility')
+  getSectionVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.getSectionVisibility(id, user.tenantID);
+  }
+
+  @Roles(...MANAGER_ROLES)
+  @Patch(':id/section-visibility')
+  updateSectionVisibility(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateSectionVisibilityDto,
+  ) {
+    return this.usersService.updateSectionVisibility(id, user.tenantID, dto.sections);
   }
 
   // ─── Product Commissions ────────────────────────────────────────────

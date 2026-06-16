@@ -4,21 +4,42 @@
  * Status chips (Все / Активные / Истёкшие) filter the list; tapping a row
  * pushes AdminTenantDetailScreen onto the tab's native-stack (Apple-Mail
  * pattern — the admin bar stays visible).
+ *
+ * The «+» header opens a create/edit sheet (same visual language as
+ * AdminPlansScreen) so the superadmin can register a new car service without
+ * leaving the app:
+ *   • Компания — название (обяз.), телефон, адрес, email.
+ *   • Подписка — тариф (plansApi), макс. польз., дата окончания.
+ *   • Директор — имя, телефон, пароль (опционально, только при создании).
+ *   • Активен — тумблер (только при редактировании).
  */
 import React from 'react';
-import { View, StyleSheet, TextInput, Pressable, ScrollView, FlatList } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  TextInput,
+  Pressable,
+  ScrollView,
+  FlatList,
+  Modal,
+  Switch,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { tenantsApi } from '../../api/services';
+import { tenantsApi, plansApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
-import { spacing, borderRadius } from '../../theme';
+import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Tenant } from '../../../../shared/types';
+import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
+import type { Tenant, Plan } from '../../../../shared/types';
+import type { CreateTenantRequest, UpdateTenantRequest } from '../../../../shared/api/types';
 import { formatMoney, isExpired, tenantStatus, StatusChip, InitialAvatar } from './adminShared';
 
 type FilterKey = 'all' | 'active' | 'expired';
@@ -29,18 +50,85 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'expired', label: 'Истёкшие' },
 ];
 
+/** Editable form state. Everything is a string for controlled inputs; coerced on save. */
+interface TenantDraft {
+  id?: string;
+  // Company
+  name: string;
+  phone: string;
+  address: string;
+  email: string;
+  // Subscription
+  planId: string | null;
+  maxUsers: string;
+  subscriptionEnd: string; // YYYY-MM-DD
+  // Director (create only)
+  directorName: string;
+  directorPhone: string;
+  directorPassword: string;
+  // Edit only
+  isActive: boolean;
+}
+
+/** ISO date (or null) → YYYY-MM-DD for the input. */
+function toDateInput(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+}
+
+function toDraft(tenant?: Tenant): TenantDraft {
+  return {
+    id: tenant?.id,
+    name: tenant?.name ?? '',
+    phone: tenant?.phone ? formatPhone(tenant.phone) : '',
+    address: tenant?.address ?? '',
+    email: tenant?.email ?? '',
+    planId: tenant?.planId ?? null,
+    maxUsers: tenant ? String(tenant.maxUsers) : '',
+    subscriptionEnd: toDateInput(tenant?.subscriptionEnd),
+    directorName: '',
+    directorPhone: '',
+    directorPassword: '',
+    isActive: tenant ? tenant.isActive : true,
+  };
+}
+
+/** Parse a YYYY-MM-DD draft into an ISO string; returns undefined when empty/invalid. */
+function parseDate(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (!m) return undefined;
+  const d = new Date(`${trimmed}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toISOString();
+}
+
 export default function AdminTenantsScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
+  const queryClient = useQueryClient();
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const [search, setSearch] = React.useState('');
   const [filter, setFilter] = React.useState<FilterKey>('all');
+  const [editing, setEditing] = React.useState<TenantDraft | null>(null);
+  const [planPickerOpen, setPlanPickerOpen] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
 
   const { data: tenants = [] } = useQuery<Tenant[]>({
     queryKey: ['admin-tenants'],
     queryFn: async () => (await tenantsApi.getAll()).data,
   });
+
+  const { data: plans = [] } = useQuery<Plan[]>({
+    queryKey: ['admin-plans'],
+    queryFn: async () => (await plansApi.getAll()).data,
+  });
+
+  const activePlans = React.useMemo(() => plans.filter((p) => p.isActive), [plans]);
 
   const filtered = React.useMemo(() => {
     let list = tenants;
@@ -48,9 +136,7 @@ export default function AdminTenantsScreen() {
     if (q) {
       list = list.filter(
         (t) =>
-          t.name.toLowerCase().includes(q) ||
-          t.phone?.toLowerCase().includes(q) ||
-          t.email?.toLowerCase().includes(q),
+          t.name.toLowerCase().includes(q) || t.phone?.toLowerCase().includes(q) || t.email?.toLowerCase().includes(q),
       );
     }
     if (filter === 'active') list = list.filter((t) => t.isActive && !isExpired(t.subscriptionEnd));
@@ -58,9 +144,112 @@ export default function AdminTenantsScreen() {
     return [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [tenants, search, filter]);
 
+  const invalidate = React.useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
+    queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+  }, [queryClient]);
+
+  const saveMutation = useMutation({
+    mutationFn: async (draft: TenantDraft) => {
+      setSaving(true);
+      const selectedPlan = draft.planId ? activePlans.find((p) => p.id === draft.planId) : undefined;
+      const maxUsers = parseInt(draft.maxUsers, 10);
+      const subscriptionEnd = parseDate(draft.subscriptionEnd);
+
+      if (draft.id) {
+        const payload: UpdateTenantRequest = {
+          name: draft.name.trim(),
+          phone: draft.phone.trim() ? normalizePhone(draft.phone) : '',
+          address: draft.address.trim(),
+          email: draft.email.trim(),
+          isActive: draft.isActive,
+          planId: draft.planId ?? undefined,
+          ...(Number.isFinite(maxUsers) && maxUsers > 0 ? { maxUsers } : {}),
+          ...(selectedPlan ? { monthlyPrice: selectedPlan.monthlyPrice } : {}),
+          ...(subscriptionEnd ? { subscriptionEnd } : {}),
+        };
+        await tenantsApi.update(draft.id, payload);
+      } else {
+        const payload: CreateTenantRequest = {
+          name: draft.name.trim(),
+          ...(draft.phone.trim() ? { phone: normalizePhone(draft.phone) } : {}),
+          ...(draft.address.trim() ? { address: draft.address.trim() } : {}),
+          ...(draft.email.trim() ? { email: draft.email.trim() } : {}),
+          ...(draft.planId ? { planId: draft.planId } : {}),
+          ...(selectedPlan ? { monthlyPrice: selectedPlan.monthlyPrice } : {}),
+          ...(Number.isFinite(maxUsers) && maxUsers > 0
+            ? { maxUsers }
+            : selectedPlan
+              ? { maxUsers: selectedPlan.maxUsers }
+              : {}),
+          ...(subscriptionEnd ? { subscriptionEnd } : {}),
+          ...(draft.directorName.trim() ? { directorName: draft.directorName.trim() } : {}),
+          ...(draft.directorPhone.trim() ? { directorPhone: normalizePhone(draft.directorPhone) } : {}),
+          ...(draft.directorPassword ? { directorPassword: draft.directorPassword } : {}),
+        };
+        await tenantsApi.create(payload);
+      }
+    },
+    onSuccess: () => {
+      haptic('success');
+      setEditing(null);
+      invalidate();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', editing?.id ? 'Не удалось сохранить изменения' : 'Не удалось создать автосервис');
+    },
+    onSettled: () => setSaving(false),
+  });
+
+  const handleSave = React.useCallback(() => {
+    if (!editing) return;
+    if (!editing.name.trim()) {
+      haptic('error');
+      Alert.alert('Укажите название', 'Название автосервиса не может быть пустым.');
+      return;
+    }
+    if (editing.phone.trim() && !isValidPhone(editing.phone)) {
+      haptic('error');
+      Alert.alert('Неверный телефон', 'Введите корректный номер телефона.');
+      return;
+    }
+    if (editing.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editing.email.trim())) {
+      haptic('error');
+      Alert.alert('Неверный email', 'Введите корректный адрес электронной почты.');
+      return;
+    }
+    if (editing.subscriptionEnd.trim() && !parseDate(editing.subscriptionEnd)) {
+      haptic('error');
+      Alert.alert('Неверная дата', 'Введите дату окончания в формате ГГГГ-ММ-ДД.');
+      return;
+    }
+    saveMutation.mutate(editing);
+  }, [editing, saveMutation]);
+
+  const selectedPlanName = React.useMemo(() => {
+    if (!editing?.planId) return null;
+    return activePlans.find((p) => p.id === editing.planId)?.name ?? null;
+  }, [editing?.planId, activePlans]);
+
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Тенанты" subtitle={`${tenants.length} организаций`} />
+      <IosScreenHeader
+        title="Тенанты"
+        subtitle={`${tenants.length} организаций`}
+        trailing={
+          <Pressable
+            onPress={() => {
+              haptic('tap');
+              setEditing(toDraft());
+            }}
+            style={[styles.headerAdd, { backgroundColor: palette.accent.primary }]}
+            hitSlop={6}
+          >
+            <Ionicons name="add" size={22} color={colors.white} />
+          </Pressable>
+        }
+      />
 
       <View style={styles.controls}>
         {/* Search */}
@@ -148,12 +337,283 @@ export default function AdminTenantsScreen() {
           </Pressable>
         )}
       />
+
+      {/* Create / edit sheet */}
+      <Modal
+        visible={!!editing}
+        transparent
+        statusBarTranslucent
+        animationType="slide"
+        onRequestClose={() => setEditing(null)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
+            <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
+              <Pressable onPress={() => setEditing(null)} hitSlop={8}>
+                <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
+              </Pressable>
+              <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
+                {editing?.id ? 'Автосервис' : 'Новый автосервис'}
+              </Text>
+              <Pressable onPress={handleSave} disabled={saving} hitSlop={8}>
+                {saving ? (
+                  <ActivityIndicator size="small" color={palette.accent.primary} />
+                ) : (
+                  <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Сохранить</Text>
+                )}
+              </Pressable>
+            </View>
+
+            {editing && (
+              <ScrollView
+                contentContainerStyle={styles.sheetScroll}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {/* ── Компания ── */}
+                <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Компания</Text>
+                <Field label="Название" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, { color: palette.text.primary }]}
+                    placeholder="Например, Автосервис на Ленина"
+                    placeholderTextColor={palette.text.tertiary}
+                    value={editing.name}
+                    onChangeText={(v) => setEditing({ ...editing, name: v })}
+                    autoCorrect={false}
+                  />
+                </Field>
+                <Field label="Телефон" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, { color: palette.text.primary }]}
+                    placeholder="+7 (___) ___-__-__"
+                    placeholderTextColor={palette.text.tertiary}
+                    keyboardType="phone-pad"
+                    value={editing.phone}
+                    onChangeText={(v) => setEditing({ ...editing, phone: formatPhone(v) })}
+                  />
+                </Field>
+                <Field label="Адрес" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, { color: palette.text.primary }]}
+                    placeholder="Город, улица, дом"
+                    placeholderTextColor={palette.text.tertiary}
+                    value={editing.address}
+                    onChangeText={(v) => setEditing({ ...editing, address: v })}
+                  />
+                </Field>
+                <Field label="Email" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, { color: palette.text.primary }]}
+                    placeholder="mail@example.com"
+                    placeholderTextColor={palette.text.tertiary}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    value={editing.email}
+                    onChangeText={(v) => setEditing({ ...editing, email: v })}
+                  />
+                </Field>
+
+                {/* ── Подписка ── */}
+                <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Подписка</Text>
+                <View style={styles.field}>
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Тариф</Text>
+                  <Pressable
+                    onPress={() => {
+                      if (activePlans.length === 0) {
+                        Alert.alert('Нет тарифов', 'Сначала создайте тариф в разделе «Тарифы».');
+                        return;
+                      }
+                      haptic('tap');
+                      setPlanPickerOpen(true);
+                    }}
+                    style={[styles.pickerRow, surface.cardCompact]}
+                  >
+                    <Text
+                      style={[
+                        styles.pickerValue,
+                        { color: selectedPlanName ? palette.text.primary : palette.text.tertiary },
+                      ]}
+                    >
+                      {selectedPlanName ?? 'Не выбран'}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                  </Pressable>
+                </View>
+                <View style={styles.fieldRow}>
+                  <Field label="Макс. польз." palette={palette} surface={surface} flex>
+                    <TextInput
+                      style={[styles.input, { color: palette.text.primary }]}
+                      placeholder="1"
+                      placeholderTextColor={palette.text.tertiary}
+                      keyboardType="number-pad"
+                      value={editing.maxUsers}
+                      onChangeText={(v) => setEditing({ ...editing, maxUsers: v.replace(/[^0-9]/g, '') })}
+                    />
+                  </Field>
+                  <Field label="Оплачено до" palette={palette} surface={surface} flex>
+                    <TextInput
+                      style={[styles.input, { color: palette.text.primary }]}
+                      placeholder="ГГГГ-ММ-ДД"
+                      placeholderTextColor={palette.text.tertiary}
+                      keyboardType="numbers-and-punctuation"
+                      autoCorrect={false}
+                      value={editing.subscriptionEnd}
+                      onChangeText={(v) => setEditing({ ...editing, subscriptionEnd: v.replace(/[^0-9-]/g, '') })}
+                    />
+                  </Field>
+                </View>
+
+                {/* ── Директор (только при создании) ── */}
+                {!editing.id ? (
+                  <>
+                    <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Директор</Text>
+                    <Text style={[styles.sectionHint, { color: palette.text.tertiary }]}>
+                      Необязательно. Если указать, будет создан владелец автосервиса.
+                    </Text>
+                    <Field label="Имя" palette={palette} surface={surface}>
+                      <TextInput
+                        style={[styles.input, { color: palette.text.primary }]}
+                        placeholder="Имя директора"
+                        placeholderTextColor={palette.text.tertiary}
+                        value={editing.directorName}
+                        onChangeText={(v) => setEditing({ ...editing, directorName: v })}
+                      />
+                    </Field>
+                    <Field label="Телефон" palette={palette} surface={surface}>
+                      <TextInput
+                        style={[styles.input, { color: palette.text.primary }]}
+                        placeholder="+7 (___) ___-__-__"
+                        placeholderTextColor={palette.text.tertiary}
+                        keyboardType="phone-pad"
+                        value={editing.directorPhone}
+                        onChangeText={(v) => setEditing({ ...editing, directorPhone: formatPhone(v) })}
+                      />
+                    </Field>
+                    <Field label="Пароль" palette={palette} surface={surface}>
+                      <TextInput
+                        style={[styles.input, { color: palette.text.primary }]}
+                        placeholder="Минимум 6 символов"
+                        placeholderTextColor={palette.text.tertiary}
+                        secureTextEntry
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        value={editing.directorPassword}
+                        onChangeText={(v) => setEditing({ ...editing, directorPassword: v })}
+                      />
+                    </Field>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Статус</Text>
+                    <View style={[styles.switchBox, surface.cardCompact]}>
+                      <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
+                        {editing.isActive ? 'Активен' : 'Отключён'}
+                      </Text>
+                      <Switch
+                        value={editing.isActive}
+                        onValueChange={(v) => {
+                          haptic('select');
+                          setEditing({ ...editing, isActive: v });
+                        }}
+                        trackColor={{ true: palette.accent.primary }}
+                      />
+                    </View>
+                  </>
+                )}
+
+                <View style={{ height: spacing[8] }} />
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Plan picker (nested over the sheet) */}
+      <Modal
+        visible={planPickerOpen}
+        transparent
+        statusBarTranslucent
+        animationType="fade"
+        onRequestClose={() => setPlanPickerOpen(false)}
+      >
+        <Pressable style={styles.pickerBackdrop} onPress={() => setPlanPickerOpen(false)}>
+          <Pressable style={[styles.pickerSheet, { backgroundColor: palette.bg.canvas }]} onPress={() => {}}>
+            <Text style={[styles.pickerTitle, { color: palette.text.primary }]}>Выберите тариф</Text>
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.pickerList}>
+              {activePlans.map((p) => {
+                const active = editing?.planId === p.id;
+                return (
+                  <Pressable
+                    key={p.id}
+                    onPress={() => {
+                      haptic('select');
+                      setEditing((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              planId: p.id,
+                              // Auto-suggest the plan's seat limit when none typed yet.
+                              maxUsers: prev.maxUsers.trim() ? prev.maxUsers : String(p.maxUsers),
+                            }
+                          : prev,
+                      );
+                      setPlanPickerOpen(false);
+                    }}
+                    style={[styles.pickerOption, { borderBottomColor: palette.border.subtle }]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.pickerOptionName, { color: palette.text.primary }]}>{p.name}</Text>
+                      <Text style={[styles.pickerOptionMeta, { color: palette.text.tertiary }]}>
+                        {formatMoney(p.monthlyPrice)}/мес · до {p.maxUsers} польз.
+                      </Text>
+                    </View>
+                    {active ? <Ionicons name="checkmark" size={20} color={palette.accent.primary} /> : null}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <Pressable
+              onPress={() => {
+                haptic('select');
+                setEditing((prev) => (prev ? { ...prev, planId: null } : prev));
+                setPlanPickerOpen(false);
+              }}
+              style={styles.pickerClear}
+            >
+              <Text style={[styles.pickerClearText, { color: palette.text.secondary }]}>Без тарифа</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </View>
+  );
+}
+
+function Field({
+  label,
+  children,
+  palette,
+  surface,
+  flex,
+}: {
+  label: string;
+  children: React.ReactNode;
+  palette: ReturnType<typeof useColors>;
+  surface: ReturnType<typeof useIosSurface>;
+  flex?: boolean;
+}) {
+  return (
+    <View style={[styles.field, flex && styles.fieldFlex]}>
+      <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>{label}</Text>
+      <View style={[styles.inputWrap, surface.cardCompact]}>{children}</View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  headerAdd: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   controls: { paddingHorizontal: spacing[4], gap: spacing[2.5], paddingBottom: spacing[2] },
   searchRow: {
     flexDirection: 'row',
@@ -178,4 +638,88 @@ const styles = StyleSheet.create({
   meta: { fontSize: 12, marginTop: 2 },
   emptyBlock: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[16], gap: spacing[2] },
   emptyText: { fontSize: 14 },
+  // Sheet
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
+  sheet: {
+    maxHeight: '92%',
+    borderTopLeftRadius: borderRadius['3xl'],
+    borderTopRightRadius: borderRadius['3xl'],
+    paddingTop: spacing[2],
+  },
+  sheetHandleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  sheetCancel: { fontSize: 15, fontWeight: '500' },
+  sheetTitle: { fontSize: 16, fontWeight: '700' },
+  sheetSave: { fontSize: 15, fontWeight: '700' },
+  sheetScroll: { padding: spacing[4], gap: spacing[3] },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginTop: spacing[2],
+    marginLeft: spacing[1],
+  },
+  sectionHint: { fontSize: 12, marginLeft: spacing[1], marginTop: -spacing[1] },
+  field: { gap: spacing[1.5] },
+  fieldRow: { flexDirection: 'row', gap: spacing[3] },
+  fieldFlex: { flex: 1 },
+  fieldLabel: { fontSize: 12, fontWeight: '600', marginLeft: spacing[1] },
+  inputWrap: { paddingHorizontal: spacing[3] },
+  input: { fontSize: 16, paddingVertical: spacing[3] },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3.5],
+  },
+  pickerValue: { fontSize: 16, flex: 1 },
+  switchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+  },
+  switchLabel: { fontSize: 15, fontWeight: '600' },
+  // Plan picker
+  pickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[6],
+  },
+  pickerSheet: {
+    width: '100%',
+    maxHeight: '70%',
+    borderRadius: borderRadius['2xl'],
+    paddingVertical: spacing[4],
+  },
+  pickerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    paddingHorizontal: spacing[5],
+    paddingBottom: spacing[3],
+  },
+  pickerList: { flexGrow: 0 },
+  pickerOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[3.5],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  pickerOptionName: { fontSize: 16, fontWeight: '600' },
+  pickerOptionMeta: { fontSize: 12, marginTop: 2 },
+  pickerClear: { alignItems: 'center', paddingTop: spacing[3.5] },
+  pickerClearText: { fontSize: 15, fontWeight: '600' },
 });

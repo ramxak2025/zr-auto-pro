@@ -18,6 +18,7 @@ interface HttpClient {
 }
 import type {
   User,
+  SectionVisibility,
   Tenant,
   Plan,
   Client,
@@ -174,6 +175,12 @@ export function createUsersApi(api: HttpClient) {
     listDismissed: () => api.get<User[]>('/users/dismissed'),
     restore: (id: string) => api.post<User>(`/users/${id}/restore`),
     purge: (id: string) => api.post(`/users/${id}/purge`),
+    // 071 — per-employee section visibility overrides. The list returns ONLY the
+    // explicit overrides; an absent section falls back to its default (visible).
+    getSectionVisibility: (userId: string) =>
+      api.get<SectionVisibility[]>(`/users/${userId}/section-visibility`),
+    updateSectionVisibility: (userId: string, sections: SectionVisibility[]) =>
+      api.patch<SectionVisibility[]>(`/users/${userId}/section-visibility`, { sections }),
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
     setProductCommissions: (
       id: string,

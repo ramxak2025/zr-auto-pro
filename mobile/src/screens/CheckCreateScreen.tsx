@@ -34,6 +34,7 @@ import {
   checkTemplatesApi,
   checkPhotosApi,
   subscriptionApi,
+  warrantyApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -43,6 +44,7 @@ import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
+import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
 import { haptic } from '../platform/haptics';
@@ -63,6 +65,7 @@ import type {
   CheckTemplate,
   CheckPhoto,
   SubscriptionInfo,
+  ActiveWarranty,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
@@ -326,31 +329,6 @@ const plateBadgeMediumStyles = makePlateBadgeStyles(PLATE_BADGE_H_MEDIUM);
 const plateBadgeLargeStyles = makePlateBadgeStyles(PLATE_BADGE_H_LARGE);
 const plateBadgeMiniStyles = makePlateBadgeStyles(PLATE_BADGE_H_MINI);
 
-const paymentOptions: {
-  key: PaymentMethod;
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  color: string;
-  bg: string;
-}[] = [
-  { key: 'cash' as PaymentMethod, label: 'Нал', icon: 'cash-outline', color: colors.green[600], bg: colors.green[50] },
-  { key: 'card' as PaymentMethod, label: 'Карта', icon: 'card-outline', color: colors.blue[600], bg: colors.blue[50] },
-  {
-    key: 'cash_card' as PaymentMethod,
-    label: 'Сплит',
-    icon: 'swap-horizontal-outline',
-    color: colors.purple[700],
-    bg: colors.purple[50],
-  },
-  {
-    key: 'warranty' as PaymentMethod,
-    label: 'Гар.',
-    icon: 'shield-checkmark-outline',
-    color: colors.amber[600],
-    bg: colors.amber[50],
-  },
-];
-
 export default function CheckCreateScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -451,6 +429,8 @@ export default function CheckCreateScreen() {
   const [showWarehouseSheet, setShowWarehouseSheet] = useState(false);
   // M2: быстрый «Создать клиента» из состояния «Клиент не найден».
   const [showQuickCreate, setShowQuickCreate] = useState(false);
+  // Центральная модалка выбора способа оплаты (заменила инлайновый ряд кнопок).
+  const [showPaymentPicker, setShowPaymentPicker] = useState(false);
 
   // Service search
   const [serviceSearch, setServiceSearch] = useState('');
@@ -750,6 +730,40 @@ export default function CheckCreateScreen() {
   const selectedClient = clientData || plateClients?.find((c) => c.id === clientId);
   const selectedCar = clientCars?.find((c) => c.id === carId) ?? clientCars?.[0];
 
+  // Редактируем отложенный (черновик) чек: пользователь пришёл сюда по
+  // «Продолжить» из деталки. Берём флаг из ЗАГРУЖЕННОГО серверного чека, а не
+  // из локального тоггла `isDeferred` — хинт должен оставаться видимым, пока
+  // открыт этот черновик, даже если пользователь снимет галочку «Отложить»,
+  // чтобы провести оплату. Снимая галочку и сохраняя, он переводит draft→active
+  // (бэк сам списывает склад/гарантии при этом переходе).
+  const isEditingDeferred = !!editId && !!editCheck?.isDeferred;
+
+  // #12: активные гарантии выбранного клиента — переиспользуем ТОТ ЖЕ ключ
+  // и endpoint, что и <ActiveWarrantiesSection/> (['warranty-active-client',
+  // clientId, undefined]), так что отдельного сетевого запроса не возникает:
+  // оба читателя бьют в один кеш. Из ответа строим set имён ТОВАРНЫХ гарантий
+  // (kind === 'product'), нормализованных так же, как в строке пикера
+  // (trim + lower-case), чтобы подсветить «На гарантии» на совпавших товарах.
+  // У контракта `ActiveWarranty` нет productId — сопоставление возможно
+  // только по имени; это аккуратная презентационная подсказка, не логика.
+  const warrantyClientId = clientId || undefined;
+  const { data: clientWarranties } = useQuery<ActiveWarranty[]>({
+    queryKey: ['warranty-active-client', warrantyClientId, undefined],
+    queryFn: async () => {
+      const res = await warrantyApi.active({ clientId: warrantyClientId });
+      return Array.isArray(res.data) ? res.data : [];
+    },
+    enabled: !!warrantyClientId,
+    staleTime: 60_000,
+  });
+  const warrantyProductNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const w of clientWarranties || []) {
+      if (w.kind === 'product' && w.name) set.add(w.name.trim().toLowerCase());
+    }
+    return set;
+  }, [clientWarranties]);
+
   // ── Inline feature-gate check for "check_photos" ──────────────────────────
   // FeatureGate is a full-screen paywall (it replaces the screen if the
   // plan lacks the feature) — that would hide the entire cash form. For
@@ -1030,6 +1044,14 @@ export default function CheckCreateScreen() {
       for (const queryKey of heavyKeys) {
         queryClient.invalidateQueries({ queryKey, refetchType: 'inactive' });
       }
+
+      // #12: гарантии могли измениться этим чеком (гарантийный случай мог
+      // быть погашен на сервере, либо новые услуги/товары добавили гарантию).
+      // Без сброса кеша карточка клиента до 60с показывала бы устаревший
+      // список «На гарантии» — отсюда жалоба «не всегда правильная инфо».
+      // Сбрасываем по префиксу — это покрывает любой clientId/carId-ключ.
+      queryClient.invalidateQueries({ queryKey: ['warranty-active-client'] });
+      queryClient.invalidateQueries({ queryKey: ['last-visit'] });
 
       // Upload pending local photos (create-mode only — in edit mode they
       // were already uploaded immediately on pick). Snapshot the list
@@ -1390,6 +1412,17 @@ export default function CheckCreateScreen() {
               <Ionicons name="person-circle-outline" size={18} color={colors.blue[600]} />
               <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Информация о клиенте</Text>
             </View>
+
+            {/* Хинт «Редактируется отложенный чек» — виден только когда мы
+                открыли черновик по «Продолжить» из деталки. Подсказывает, что
+                снятие галочки «Отложить» внизу + сохранение закроет черновик
+                и проведёт его в выручку (бэк спишет склад/гарантии). */}
+            {isEditingDeferred && (
+              <View style={styles.deferredEditHint}>
+                <Ionicons name="pause-circle" size={16} color={colors.amber[600]} />
+                <Text style={styles.deferredEditHintText}>Редактируется отложенный чек</Text>
+              </View>
+            )}
 
             {/* Date/Time — only when editing an existing check.
                 For new checks the timestamp is set automatically on save
@@ -1864,6 +1897,7 @@ export default function CheckCreateScreen() {
                           },
                         ]}
                         keyboardType="numeric"
+                        selectTextOnFocus
                       />
                     </View>
                     <View style={{ width: 60 }}>
@@ -1880,6 +1914,7 @@ export default function CheckCreateScreen() {
                           },
                         ]}
                         keyboardType="numeric"
+                        selectTextOnFocus
                       />
                     </View>
                     <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
@@ -1956,6 +1991,7 @@ export default function CheckCreateScreen() {
                           },
                         ]}
                         keyboardType="numeric"
+                        selectTextOnFocus
                       />
                     </View>
                     <View style={{ width: 60 }}>
@@ -1972,6 +2008,7 @@ export default function CheckCreateScreen() {
                           },
                         ]}
                         keyboardType="numeric"
+                        selectTextOnFocus
                       />
                     </View>
                     <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
@@ -2107,33 +2144,35 @@ export default function CheckCreateScreen() {
               <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
             </View>
 
-            <View style={styles.paymentRow}>
-              {paymentOptions.map((pm) => {
-                const active = paymentMethod === pm.key;
-                return (
-                  <TouchableOpacity
-                    key={pm.key}
-                    style={[
-                      styles.paymentBtn,
-                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      active && { borderColor: pm.color, backgroundColor: pm.bg },
-                    ]}
-                    onPress={() => setPaymentMethod(pm.key)}
-                  >
-                    <Ionicons name={pm.icon as any} size={20} color={active ? pm.color : palette.text.tertiary} />
-                    <Text
-                      style={[
-                        styles.paymentBtnText,
-                        { color: palette.text.secondary },
-                        active && { color: pm.color, fontWeight: fontWeight.bold },
-                      ]}
-                    >
-                      {pm.label}
+            {/* Одна кнопка «Оплата» открывает центральную модалку выбора.
+                Текущий способ показан компактно: цветной тайл-иконка + подпись.
+                Inline-ряд из четырёх кнопок заменён на этот аккуратный селектор. */}
+            {(() => {
+              const visual = paymentMethodVisual(paymentMethod);
+              return (
+                <TouchableOpacity
+                  style={[styles.paymentSelector, { backgroundColor: palette.bg.muted, borderColor: visual.color }]}
+                  onPress={() => {
+                    haptic('tap');
+                    setShowPaymentPicker(true);
+                  }}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
+                >
+                  <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
+                    <Ionicons name={visual.icon} size={20} color={visual.color} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>Способ оплаты</Text>
+                    <Text style={[styles.paymentSelectorValue, { color: palette.text.primary }]} numberOfLines={1}>
+                      {paymentMethodLabel(paymentMethod)}
                     </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+                  </View>
+                  <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              );
+            })()}
 
             {paymentMethod === ('cash' as PaymentMethod) && (
               <View
@@ -2387,6 +2426,7 @@ export default function CheckCreateScreen() {
         title={'Товары'}
         showCostPrice={canSeeCostPrice}
         warehouseId={pickerWarehouseId}
+        warrantyNames={warrantyProductNames}
         warehouseSwitcher={{
           value: pickerWarehouseId,
           label: warehouseChipLabel,
@@ -2477,6 +2517,18 @@ export default function CheckCreateScreen() {
           if (existingCarId) setCarId(existingCarId);
           setPlateSearch('');
         }}
+      />
+
+      {/* Центральная модалка выбора способа оплаты. Закрывается сразу после
+          выбора; sub-UI для cash / cash_card живёт в секции оплаты как прежде. */}
+      <PaymentMethodModal
+        visible={showPaymentPicker}
+        value={paymentMethod}
+        onSelect={(m) => {
+          setPaymentMethod(m);
+          setShowPaymentPicker(false);
+        }}
+        onClose={() => setShowPaymentPicker(false)}
       />
 
       {/* Legacy bottom-sheet kept dormant — replaced by the inline
@@ -3022,18 +3074,25 @@ const styles = StyleSheet.create({
   summaryTotalLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   summaryTotalValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[600] },
   // Payment
-  paymentRow: { flexDirection: 'row', gap: spacing[2] },
-  paymentBtn: {
-    flex: 1,
+  // Селектор способа оплаты — одна строка-кнопка, открывает PaymentMethodModal.
+  paymentSelector: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing[3],
     paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
     borderRadius: borderRadius.xl,
     borderWidth: 1.5,
-    borderColor: colors.green[200],
-    backgroundColor: colors.white,
-    gap: spacing[1],
   },
-  paymentBtnText: { fontSize: 11, fontWeight: fontWeight.medium, color: colors.gray[500] },
+  paymentSelectorIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  paymentSelectorHint: { fontSize: 11, fontWeight: fontWeight.medium, letterSpacing: -0.1 },
+  paymentSelectorValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.2, marginTop: 1 },
   splitWrap: {
     backgroundColor: colors.white,
     borderRadius: borderRadius.xl,
@@ -3071,6 +3130,19 @@ const styles = StyleSheet.create({
     padding: spacing[3],
   },
   deferToggleActive: { borderColor: colors.amber[200], backgroundColor: colors.amber[50] },
+  deferredEditHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    backgroundColor: colors.amber[50],
+    borderWidth: 1,
+    borderColor: colors.amber[200],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    marginBottom: spacing[3],
+  },
+  deferredEditHintText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.amber[600] },
   deferLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
   deferHint: { fontSize: 11, color: colors.gray[400] },
   // Submit

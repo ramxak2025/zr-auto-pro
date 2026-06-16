@@ -35,6 +35,12 @@ export interface Tenant {
   kpp?: string;
   ogrn?: string;
   receiptFooter?: string;
+  /**
+   * 070 — per-tenant master toggle for the «Смены» (shifts) subsystem.
+   * Absent on legacy payloads → treat as `false`. Mutable through the existing
+   * PATCH /my-company update (Partial<Tenant>) — no dedicated endpoint.
+   */
+  shiftsEnabled?: boolean;
   users?: User[];
   userCount?: number;
   createdAt: string;
@@ -160,6 +166,17 @@ export interface AuditLogEntry {
   createdAt: string;
 }
 
+/**
+ * 071 — per-employee top-level section visibility override.
+ * `sectionKey` buckets navigation into five logical groups; a stored row with
+ * `isVisible: false` hides that group for the user. The absence of a row means
+ * "use the default" (visible) — only explicit overrides are persisted.
+ */
+export interface SectionVisibility {
+  sectionKey: 'work' | 'finance' | 'warehouse' | 'marketing' | 'other';
+  isVisible: boolean;
+}
+
 export interface User {
   id: string;
   username?: string;
@@ -175,6 +192,12 @@ export interface User {
   isActive: boolean;
   /** Free-text team grouping. Null/empty → "Без группы" on the FE. */
   team?: string | null;
+  /**
+   * 071 — explicit per-section visibility overrides for this employee. Absent /
+   * empty → every section uses its default (visible). Sections not listed here
+   * also fall back to the default.
+   */
+  sectionVisibility?: SectionVisibility[];
   /** Per-employee permission to submit /expenses entries. Off by default. */
   canAddExpenses?: boolean;
   /** When set, non-privileged users' daily expense submissions auto-flip to 'pending' once the total crosses this number. */
@@ -894,6 +917,19 @@ export interface EmployeeFullProfile {
     bestDay?: { date: string; value: number };
     bestMonth?: { ym: string; value: number };
     topCarBrands: { brand: string; count: number }[];
+    /** Most-sold products by this employee, descending by count. Optional / additive. */
+    topProducts?: { productId: string; name: string; count: number; photo?: string }[];
+  };
+  /**
+   * Shift / attendance summary for the employee. Populated only for tenants
+   * with the «Смены» feature enabled (070 `shiftsEnabled`); omitted otherwise.
+   */
+  shifts?: {
+    total: number;
+    lateCount: number;
+    avgLateMinutes: number;
+    bestDay?: { date: string; checksCount: number };
+    worstDay?: { date: string; checksCount: number };
   };
   yearHeatmap: { day: string; checks: number; revenue: number }[];
   teamRank: {
@@ -1154,6 +1190,13 @@ export interface KnowledgeAttachment {
   url: string;
   name: string;
   size?: number;
+  /**
+   * Attachment kind. Absent on legacy attachments → treat as 'document'.
+   * 'video' attachments may additionally carry `videoType`.
+   */
+  type?: 'image' | 'video' | 'document';
+  /** For `type: 'video'` — how the `url` should be embedded/played. */
+  videoType?: 'youtube' | 'vk' | 'embed';
 }
 
 /** 'article' = free-form KB article; 'regulation' = requires acknowledgment. */

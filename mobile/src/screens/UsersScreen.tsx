@@ -28,7 +28,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { User, UserPermissions, Product } from '../../../shared/types';
+import type { User, UserPermissions, Product, SectionVisibility } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -94,6 +94,44 @@ const permissionGroups: {
   },
 ];
 
+// ── Section visibility (#071) ─────────────────────────────────────────
+// Owner toggles which top-level «Ещё» groups an employee sees. Five buckets
+// mirror MoreScreen's groups. Default is visible — only an explicit
+// `isVisible: false` override hides a section for that user.
+type SectionKey = SectionVisibility['sectionKey'];
+
+const SECTION_DEFS: { key: SectionKey; label: string; description: string }[] = [
+  { key: 'work', label: 'Работа', description: 'Расписание, клиенты, база знаний' },
+  { key: 'finance', label: 'Финансы', description: 'Движение денег, зарплата, расходы, отчёты' },
+  { key: 'warehouse', label: 'Склад', description: 'Услуги, поставщики, имущество, аналитика' },
+  { key: 'marketing', label: 'Маркетинг', description: 'Отзывы, звонки, рассылки, интеграции' },
+  { key: 'other', label: 'Остальное', description: 'Сотрудники, пользователи, компания, подписка' },
+];
+
+type SectionVisibilityMap = Record<SectionKey, boolean>;
+
+const defaultSectionVisibility: SectionVisibilityMap = {
+  work: true,
+  finance: true,
+  warehouse: true,
+  marketing: true,
+  other: true,
+};
+
+/** Fold the contract's sparse override list into a full key→bool map. */
+function toVisibilityMap(overrides: SectionVisibility[] | undefined): SectionVisibilityMap {
+  const map = { ...defaultSectionVisibility };
+  for (const o of overrides ?? []) {
+    if (o.sectionKey in map) map[o.sectionKey] = o.isVisible;
+  }
+  return map;
+}
+
+/** Expand the full key→bool map into the contract's explicit override list. */
+function mapToSections(map: SectionVisibilityMap): SectionVisibility[] {
+  return SECTION_DEFS.map(({ key }) => ({ sectionKey: key, isVisible: map[key] }));
+}
+
 const defaultPermissions: UserPermissions = {
   checks_view: true,
   checks_create: true,
@@ -132,6 +170,7 @@ interface UserForm {
   hiddenFromSchedule: boolean;
   hiddenEverywhere: boolean;
   permissions: UserPermissions;
+  sectionVisibility: SectionVisibilityMap;
 }
 
 // ── UserCard ──────────────────────────────────────────────────────────
@@ -252,6 +291,7 @@ const emptyForm: UserForm = {
   hiddenFromSchedule: false,
   hiddenEverywhere: false,
   permissions: { ...defaultPermissions },
+  sectionVisibility: { ...defaultSectionVisibility },
 };
 
 interface CommissionItem {
@@ -300,9 +340,23 @@ export default function UsersScreen() {
 
   const users = data ?? [];
 
+  // Section visibility (#071) is persisted via its own endpoint AFTER the user
+  // row exists. On create we only have the id from the create response, so the
+  // follow-up save is chained in onSuccess; on update we already have the id.
   const createMutation = useMutation({
-    mutationFn: (d: any) => usersApi.create(d),
-    onSuccess: () => {
+    mutationFn: (d: any) => {
+      // Strip the transient section-visibility carrier — it's persisted via its
+      // own endpoint in onSuccess, never sent in the create body.
+      const { __sectionVisibility, ...body } = d;
+      void __sectionVisibility;
+      return usersApi.create(body);
+    },
+    onSuccess: async (res, variables) => {
+      const newId = (res?.data as User | undefined)?.id;
+      const sections = (variables as { __sectionVisibility?: SectionVisibilityMap }).__sectionVisibility;
+      if (newId && sections) {
+        await usersApi.updateSectionVisibility(newId, mapToSections(sections)).catch(() => {});
+      }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       Alert.alert('Готово', 'Сотрудник создан');
       closeModal();
@@ -311,8 +365,13 @@ export default function UsersScreen() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => usersApi.update(id, data),
-    onSuccess: () => {
+    mutationFn: ({ id, data }: { id: string; data: any; __sectionVisibility?: SectionVisibilityMap }) =>
+      usersApi.update(id, data),
+    onSuccess: async (_res, variables) => {
+      const sections = variables.__sectionVisibility;
+      if (sections) {
+        await usersApi.updateSectionVisibility(variables.id, mapToSections(sections)).catch(() => {});
+      }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       Alert.alert('Готово', 'Сотрудник обновлён');
       closeModal();
@@ -374,8 +433,20 @@ export default function UsersScreen() {
       hiddenFromSchedule: !!user.hiddenFromSchedule,
       hiddenEverywhere: !!user.hiddenEverywhere,
       permissions: { ...defaultPermissions, ...user.permissions },
+      // Seed from whatever the list payload already carries (avoids a flash of
+      // wrong toggles); the authoritative overrides are then refetched below.
+      sectionVisibility: toVisibilityMap(user.sectionVisibility),
     });
     setModalOpen(true);
+    // 071 — fetch the authoritative per-section overrides for this employee.
+    // The list endpoint may omit them; this guarantees the toggles reflect the
+    // stored state. Failure is non-fatal — we keep the optimistic seed above.
+    usersApi
+      .getSectionVisibility(user.id)
+      .then((res) => {
+        setForm((prev) => ({ ...prev, sectionVisibility: toVisibilityMap(res.data) }));
+      })
+      .catch(() => {});
   }, []);
 
   const openCommissions = useCallback(async (user: User) => {
@@ -468,10 +539,17 @@ export default function UsersScreen() {
 
     if (!editingUser) {
       payload.password = form.password;
-      createMutation.mutate(payload);
+      // Carry section visibility alongside the create payload so onSuccess can
+      // persist it once the new user id exists. `__sectionVisibility` is NOT
+      // part of the create body — it's stripped out before the API call.
+      createMutation.mutate({ ...payload, __sectionVisibility: form.sectionVisibility });
     } else {
       if (form.password) payload.password = form.password;
-      updateMutation.mutate({ id: editingUser.id, data: payload });
+      updateMutation.mutate({
+        id: editingUser.id,
+        data: payload,
+        __sectionVisibility: form.sectionVisibility,
+      });
     }
   };
 
@@ -479,6 +557,13 @@ export default function UsersScreen() {
     setForm((prev) => ({
       ...prev,
       permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
+    }));
+  };
+
+  const toggleSection = (key: SectionKey) => {
+    setForm((prev) => ({
+      ...prev,
+      sectionVisibility: { ...prev.sectionVisibility, [key]: !prev.sectionVisibility[key] },
     }));
   };
 
@@ -670,7 +755,11 @@ export default function UsersScreen() {
                 onChangeText={(v) => setForm({ ...form, salaryPercent: Number(v) || 0 })}
                 style={[
                   styles.formInput,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
                 ]}
                 keyboardType="numeric"
                 placeholder="0"
@@ -684,7 +773,11 @@ export default function UsersScreen() {
                 onChangeText={(v) => setForm({ ...form, productSalaryPercent: Number(v) || 0 })}
                 style={[
                   styles.formInput,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
                 ]}
                 keyboardType="numeric"
                 placeholder="0"
@@ -731,9 +824,7 @@ export default function UsersScreen() {
 
               <View style={styles.visibilityRow}>
                 <View style={styles.visibilityTextWrap}>
-                  <Text style={[styles.visibilityTitle, { color: palette.text.primary }]}>
-                    Скрыть везде
-                  </Text>
+                  <Text style={[styles.visibilityTitle, { color: palette.text.primary }]}>Скрыть везде</Text>
                   <Text style={[styles.visibilitySub, { color: palette.text.tertiary }]}>
                     Сотрудник не появится в списках, и на него нельзя будет создать чек в Кассе.
                   </Text>
@@ -744,6 +835,46 @@ export default function UsersScreen() {
                   trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
                   thumbColor={form.hiddenEverywhere ? colors.primary[600] : palette.bg.card}
                 />
+              </View>
+            </View>
+          )}
+
+          {/* Section visibility (#071) — owner picks which top-level «Ещё»
+              groups this employee sees. Director/superadmin only, same as the
+              hidden-from-schedule controls above. */}
+          {isDirectorOrSuperadmin && (
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, { color: palette.text.secondary, marginBottom: spacing[2] }]}>
+                Видимость разделов
+              </Text>
+              <Text style={[styles.sectionVisHint, { color: palette.text.tertiary }]}>
+                Выключенные разделы не появятся у сотрудника в меню «Ещё».
+              </Text>
+              <View
+                style={[
+                  styles.visibilityGroup,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, marginTop: spacing[2] },
+                ]}
+              >
+                {SECTION_DEFS.map((section, idx) => (
+                  <React.Fragment key={section.key}>
+                    {idx > 0 && <View style={[styles.visibilityDivider, { backgroundColor: palette.border.subtle }]} />}
+                    <View style={styles.visibilityRow}>
+                      <View style={styles.visibilityTextWrap}>
+                        <Text style={[styles.visibilityTitle, { color: palette.text.primary }]}>{section.label}</Text>
+                        <Text style={[styles.visibilitySub, { color: palette.text.tertiary }]}>
+                          {section.description}
+                        </Text>
+                      </View>
+                      <Switch
+                        value={form.sectionVisibility[section.key]}
+                        onValueChange={() => toggleSection(section.key)}
+                        trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
+                        thumbColor={form.sectionVisibility[section.key] ? colors.primary[600] : palette.bg.card}
+                      />
+                    </View>
+                  </React.Fragment>
+                ))}
               </View>
             </View>
           )}
@@ -777,10 +908,7 @@ export default function UsersScreen() {
           </View>
 
           <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
-            <TouchableOpacity
-              style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
-              onPress={closeModal}
-            >
+            <TouchableOpacity style={[styles.cancelBtn, { borderColor: palette.border.strong }]} onPress={closeModal}>
               <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={isSaving}>
@@ -855,9 +983,7 @@ export default function UsersScreen() {
                 }}
               >
                 <Ionicons name="gift-outline" size={20} color={palette.text.tertiary} />
-                <Text style={[styles.commEmptyText, { color: palette.text.tertiary }]}>
-                  Добавить акционный товар
-                </Text>
+                <Text style={[styles.commEmptyText, { color: palette.text.tertiary }]}>Добавить акционный товар</Text>
               </TouchableOpacity>
             ) : (
               commissionItems.map((item) => {
@@ -1109,6 +1235,7 @@ const styles = StyleSheet.create({
   visibilityTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   visibilitySub: { fontSize: 11, lineHeight: 15, marginTop: 2 },
   visibilityDivider: { height: 1 },
+  sectionVisHint: { fontSize: 11, lineHeight: 15 },
   // Permissions — grouped
   permGroup: {
     marginBottom: spacing[3],

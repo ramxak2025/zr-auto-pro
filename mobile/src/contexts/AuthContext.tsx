@@ -27,7 +27,10 @@ import { clearWidgetData } from '../utils/widgetBridge';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { toLocalISODate } from '../utils/dates';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
-import type { User, UserPermissions, UserRole } from '../../../shared/types';
+import type { User, UserPermissions, UserRole, SectionVisibility } from '../../../shared/types';
+
+/** Logical top-level section bucket used by MoreScreen + visibility overrides (#071). */
+type SectionKey = SectionVisibility['sectionKey'];
 
 interface AuthContextType {
   user: User | null;
@@ -38,6 +41,13 @@ interface AuthContextType {
   refreshUser: () => Promise<void>;
   hasPermission: (perm: keyof UserPermissions) => boolean;
   isRole: (...roles: UserRole[]) => boolean;
+  /**
+   * 071 — is a top-level navigation section visible for the current user?
+   * Default is visible: only an explicit `{ isVisible: false }` override on the
+   * user's `sectionVisibility` hides a section. Owners always retain «Работа»
+   * (superadmin/director can't lock themselves out of the daily-work group).
+   */
+  isSectionVisible: (sectionKey: SectionKey) => boolean;
   /**
    * True while the superadmin is impersonating a tenant owner (a 30-min
    * director token is installed instead of the superadmin's own). Drives the
@@ -735,6 +745,22 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     [user],
   );
 
+  const isSectionVisible = useCallback(
+    (sectionKey: SectionKey): boolean => {
+      if (!user) return false;
+      // Owners (superadmin/director) always keep «Работа» — the daily-work group
+      // is their primary surface and can't be locked off by an override.
+      if (sectionKey === 'work' && (user.role === 'superadmin' || user.role === 'director')) {
+        return true;
+      }
+      // Default visible: only an explicit `isVisible: false` override hides a
+      // section. Absent row → fall back to visible (matches the #071 contract).
+      const override = user.sectionVisibility?.find((s) => s.sectionKey === sectionKey);
+      return override ? override.isVisible : true;
+    },
+    [user],
+  );
+
   // Memoise the context value so AuthContext.Provider doesn't broadcast a
   // fresh object reference on every AuthProvider render (e.g. when only
   // `loading` flips). With the memo, consumers see a stable value as
@@ -749,6 +775,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       refreshUser,
       hasPermission,
       isRole,
+      isSectionVisible,
       isImpersonating,
       beginImpersonation,
       endImpersonation,
@@ -762,6 +789,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       refreshUser,
       hasPermission,
       isRole,
+      isSectionVisible,
       isImpersonating,
       beginImpersonation,
       endImpersonation,

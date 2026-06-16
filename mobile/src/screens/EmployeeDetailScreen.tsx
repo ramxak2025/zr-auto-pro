@@ -341,7 +341,7 @@ export default function EmployeeDetailScreen() {
     );
   }
 
-  const { profile, stats, lifetime, yearHeatmap, achievements } = full;
+  const { profile, stats, lifetime, yearHeatmap, achievements, serviceMastery } = full;
 
   // ── Dismissed / purged read-only guard ───────────────────────────────
   // The row still resolves so historical чеки / смены keep the name, and a
@@ -595,10 +595,17 @@ export default function EmployeeDetailScreen() {
           </View>
         </Card>
 
-        {/* ── 1. ЕГО ГРАФИК (сегодня) ─────────────────────────────────── */}
+        {/* ── 1. ЕГО СТАТИСТИКА (смены + товары + услуга) ─────────────── */}
         <Card palette={palette}>
-          <CardHeader icon="calendar-outline" title="График" palette={palette} />
-          <TodayBlock today={today} palette={palette} />
+          <CardHeader icon="stats-chart-outline" title="Статистика" palette={palette} />
+          <StatsSummary
+            today={today}
+            shifts={full.shifts}
+            topProducts={lifetime.topProducts}
+            serviceMastery={serviceMastery}
+            accent={rankInfo.accent}
+            palette={palette}
+          />
         </Card>
 
         {/* ── 2. ЕГО ПОКАЗАТЕЛИ ───────────────────────────────────────── */}
@@ -1002,51 +1009,217 @@ function StatTile({
   );
 }
 
-function TodayBlock({ today, palette }: { today?: TodayEmployeeStatus; palette: Palette }) {
-  // Bug fix: shiftStart/shiftEnd from backend are "HH:mm" strings (TEXT
-  // column), so we route them through formatHM() instead of
-  // `new Date(...).toLocaleTimeString(...)`.
-  const startStr = formatHM(today?.shiftStart);
-  const endStr = formatHM(today?.shiftEnd);
-  const arrival = today?.actualArrival ? formatHM(today.actualArrival) : '—';
-  const progress = computeShiftProgress(today);
+/**
+ * StatsSummary — заменяет «простыню смен» на компактную сводку:
+ *   1. сегодняшняя смена (тонкая строка сверху — только если она есть);
+ *   2. метрики смен (Смены / Опоздания / Лучший день);
+ *   3. ТОП-3 товара (lifetime.topProducts, с фото если есть);
+ *   4. ТОП услуга (serviceMastery — первая, самая «прокачанная»).
+ *
+ * `shifts` приходит только у тенантов с включённой фичей «Смены» (070) —
+ * если её нет, блок метрик смен скрываем целиком, не показываем нули.
+ */
+function StatsSummary({
+  today,
+  shifts,
+  topProducts,
+  serviceMastery,
+  accent,
+  palette,
+}: {
+  today?: TodayEmployeeStatus;
+  shifts?: EmployeeFullProfile['shifts'];
+  topProducts?: NonNullable<EmployeeFullProfile['lifetime']['topProducts']>;
+  serviceMastery: EmployeeFullProfile['serviceMastery'];
+  accent: string;
+  palette: Palette;
+}) {
+  const products = (topProducts ?? []).slice(0, 3);
+  const topService = serviceMastery.length > 0 ? serviceMastery[0] : null;
+  const hasShifts = !!shifts && shifts.total > 0;
+
+  // Когда вообще нет ни смен, ни товаров, ни услуги — единый empty-state.
+  if (!hasShifts && products.length === 0 && !topService && !today) {
+    return (
+      <Text style={[styles.mutedText, { color: palette.text.tertiary }]}>
+        Пока недостаточно данных — статистика появится после первых смен и чеков.
+      </Text>
+    );
+  }
 
   return (
-    <View>
-      {progress ? (
-        <View style={[styles.shiftCard, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.shiftCardLabel, { color: palette.text.tertiary }]}>Идёт смена</Text>
-            <Text style={[styles.shiftCardTimer, { color: palette.text.primary }]}>
-              {formatHmDuration(progress.elapsedMs)}
-            </Text>
-            <Text style={[styles.shiftCardSub, { color: palette.text.secondary }]}>{`${startStr} – ${endStr}`}</Text>
-          </View>
-          <ShiftProgressRing progress={progress.ratio} />
+    <View style={{ gap: spacing[3.5] }}>
+      <TodayShiftStrip today={today} palette={palette} />
+
+      {/* ── Метрики смен ─────────────────────────────────────────────── */}
+      {hasShifts ? (
+        <View style={styles.tilesRow}>
+          <MetricTile label="Смены" value={String(shifts!.total)} palette={palette} />
+          <MetricTile
+            label="Опоздания"
+            value={shifts!.lateCount > 0 ? String(shifts!.lateCount) : '0'}
+            palette={palette}
+          />
+          <MetricTile
+            label="Лучший день"
+            value={shifts!.bestDay ? formatShortDate(shifts!.bestDay.date) : '—'}
+            palette={palette}
+          />
         </View>
       ) : null}
 
-      <View style={styles.tilesRow}>
-        <MetricTile
-          label="Смена"
-          value={today?.shiftStart && today?.shiftEnd ? `${startStr} – ${endStr}` : today?.isDayOff ? 'Выходной' : '—'}
-          palette={palette}
-        />
-        <MetricTile label="Пришёл" value={arrival} palette={palette} />
-        <MetricTile
-          label="Опоздание"
-          value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'}
-          palette={palette}
-        />
-      </View>
-      {today?.note ? (
-        <View style={styles.todayNote}>
-          <Text style={styles.todayNoteText}>{today.note}</Text>
+      {/* ── ТОП-3 товара ─────────────────────────────────────────────── */}
+      {products.length > 0 ? (
+        <View style={{ gap: spacing[2] }}>
+          <Text style={[styles.subSectionTitle, { color: palette.text.tertiary }]}>Топ товаров</Text>
+          <View style={{ gap: spacing[2] }}>
+            {products.map((p, i) => (
+              <TopProductRow key={p.productId} rank={i + 1} product={p} accent={accent} palette={palette} />
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {/* ── ТОП услуга ───────────────────────────────────────────────── */}
+      {topService ? (
+        <View style={{ gap: spacing[2] }}>
+          <Text style={[styles.subSectionTitle, { color: palette.text.tertiary }]}>Топ услуга</Text>
+          <TopServiceRow service={topService} palette={palette} />
         </View>
       ) : null}
     </View>
   );
 }
+
+/**
+ * TodayShiftStrip — компактная строка о сегодняшней смене. Рисуется только
+ * когда у сотрудника сегодня есть смена (start+end) или явный выходной;
+ * иначе — ничего (без пустого «—»). shiftStart/shiftEnd — это "HH:mm" TEXT,
+ * поэтому через formatHM().
+ */
+function TodayShiftStrip({ today, palette }: { today?: TodayEmployeeStatus; palette: Palette }) {
+  const hasShift = !!(today?.shiftStart && today?.shiftEnd);
+  if (!hasShift && !today?.isDayOff) return null;
+
+  const startStr = formatHM(today?.shiftStart);
+  const endStr = formatHM(today?.shiftEnd);
+  const progress = computeShiftProgress(today);
+
+  if (today?.isDayOff && !hasShift) {
+    return (
+      <View style={[styles.todayStrip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+        <View style={[styles.todayStripIcon, { backgroundColor: palette.bg.card }]}>
+          <Ionicons name="bed-outline" size={16} color={palette.text.tertiary} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.todayStripLabel, { color: palette.text.tertiary }]}>Сегодня</Text>
+          <Text style={[styles.todayStripValue, { color: palette.text.primary }]}>Выходной</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const lateText = today && today.lateMinutes > 0 ? `опоздал на ${today.lateMinutes} мин` : null;
+  const arrivalText = today?.actualArrival ? `пришёл в ${formatHM(today.actualArrival)}` : null;
+
+  return (
+    <View style={[styles.todayStrip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+      {progress ? (
+        <ShiftProgressRing progress={progress.ratio} />
+      ) : (
+        <View style={[styles.todayStripIcon, { backgroundColor: palette.bg.card }]}>
+          <Ionicons name="calendar-outline" size={16} color={colors.primary[600]} />
+        </View>
+      )}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.todayStripLabel, { color: palette.text.tertiary }]}>
+          {progress ? 'Идёт смена' : 'Смена сегодня'}
+        </Text>
+        <Text style={[styles.todayStripValue, { color: palette.text.primary }]} numberOfLines={1}>
+          {`${startStr} – ${endStr}`}
+        </Text>
+        {arrivalText || lateText ? (
+          <Text
+            style={[styles.todayStripSub, { color: lateText ? colors.orange[600] : palette.text.secondary }]}
+            numberOfLines={1}
+          >
+            {lateText ?? arrivalText}
+          </Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** TopProductRow — строка топ-товара: ранг + фото (если есть) + имя + кол-во. */
+function TopProductRow({
+  rank,
+  product,
+  accent,
+  palette,
+}: {
+  rank: number;
+  product: NonNullable<EmployeeFullProfile['lifetime']['topProducts']>[number];
+  accent: string;
+  palette: Palette;
+}) {
+  return (
+    <View style={[styles.topRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+      <View style={[styles.topRank, { backgroundColor: accent }]}>
+        <Text style={styles.topRankText}>{rank}</Text>
+      </View>
+      {product.photo ? (
+        <CachedImage source={{ uri: product.photo }} style={styles.topPhoto} />
+      ) : (
+        <View style={[styles.topPhoto, styles.topPhotoPlaceholder, { backgroundColor: palette.bg.card }]}>
+          <Ionicons name="cube-outline" size={16} color={palette.text.tertiary} />
+        </View>
+      )}
+      <Text style={[styles.topName, { color: palette.text.primary }]} numberOfLines={1}>
+        {product.name}
+      </Text>
+      <Text style={[styles.topCount, { color: palette.text.secondary }]}>{`${product.count} шт`}</Text>
+    </View>
+  );
+}
+
+/** TopServiceRow — строка топ-услуги: иконка + имя + tier-бейдж + кол-во. */
+function TopServiceRow({
+  service,
+  palette,
+}: {
+  service: EmployeeFullProfile['serviceMastery'][number];
+  palette: Palette;
+}) {
+  const tier = SERVICE_TIER_META[service.tier];
+  return (
+    <View style={[styles.topRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+      <View style={[styles.topPhoto, styles.topPhotoPlaceholder, { backgroundColor: palette.bg.card }]}>
+        <Ionicons name="construct-outline" size={16} color={tier.color} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.topName, { color: palette.text.primary }]} numberOfLines={1}>
+          {service.name}
+        </Text>
+        <View style={[styles.tierBadge, { backgroundColor: tier.bg }]}>
+          <Text style={[styles.tierBadgeText, { color: tier.color }]}>{tier.label}</Text>
+        </View>
+      </View>
+      <Text style={[styles.topCount, { color: palette.text.secondary }]}>{`${service.count} раз`}</Text>
+    </View>
+  );
+}
+
+/** Цвета/подписи tier'ов service-mastery (semantic palette). */
+const SERVICE_TIER_META: Record<
+  EmployeeFullProfile['serviceMastery'][number]['tier'],
+  { label: string; color: string; bg: string }
+> = {
+  bronze: { label: 'Бронза', color: colors.orange[600], bg: colors.orange[50] },
+  silver: { label: 'Серебро', color: colors.slate[600], bg: colors.gray[100] },
+  gold: { label: 'Золото', color: colors.amber[700], bg: colors.amber[50] },
+  platinum: { label: 'Платина', color: colors.indigo[600], bg: colors.indigo[50] },
+};
 
 function ShiftProgressRing({ progress }: { progress: number }) {
   const pct = Math.max(0, Math.min(1, progress));
@@ -1724,14 +1897,6 @@ function computeShiftProgress(s?: TodayEmployeeStatus): { ratio: number; elapsed
   return { ratio, elapsedMs: now.getTime() - start.getTime() };
 }
 
-function formatHmDuration(ms: number): string {
-  const totalMin = Math.max(0, Math.round(ms / 60000));
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  if (h > 0) return `${h}ч ${m}м`;
-  return `${m}м`;
-}
-
 // ──────────────────────────────────────────────────────────────────────────
 //  Styles
 // ──────────────────────────────────────────────────────────────────────────
@@ -1990,29 +2155,70 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
   tileValue: { fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
 
-  todayNote: {
-    marginTop: spacing[3],
-    backgroundColor: colors.amber[50],
-    borderWidth: 1,
-    borderColor: colors.amber[100],
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    borderRadius: borderRadius.lg,
+  // ── Statистика: подзаголовок секции ─────────────────────────────────
+  subSectionTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
-  todayNoteText: { fontSize: 12, color: colors.amber[800] },
 
-  shiftCard: {
+  // ── Сегодняшняя смена (тонкая строка сверху статистики) ─────────────
+  todayStrip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
     padding: spacing[3],
     borderRadius: borderRadius.xl,
     borderWidth: 1,
-    marginBottom: spacing[2],
   },
-  shiftCardLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
-  shiftCardTimer: { fontSize: 20, fontWeight: '800', marginTop: 2, fontVariant: ['tabular-nums'] },
-  shiftCardSub: { fontSize: 12, marginTop: 1 },
+  todayStripIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todayStripLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
+  todayStripValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+    marginTop: 1,
+    fontVariant: ['tabular-nums'],
+  },
+  todayStripSub: { fontSize: 12, fontWeight: '500', marginTop: 1 },
+
+  // ── Топ товаров / услуги ────────────────────────────────────────────
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingVertical: 8,
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  topRank: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topRankText: { fontSize: 11, fontWeight: '800', color: colors.white, fontVariant: ['tabular-nums'] },
+  topPhoto: { width: 32, height: 32, borderRadius: 10 },
+  topPhotoPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  topName: { flex: 1, minWidth: 0, fontSize: 13, fontWeight: '600' },
+  topCount: { fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  tierBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  tierBadgeText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.2 },
 
   ringWrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   ringTrack: {

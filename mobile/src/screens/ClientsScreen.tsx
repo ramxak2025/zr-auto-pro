@@ -542,6 +542,14 @@ export default function ClientsScreen() {
   // Row tap → ClientDetail. Stable for the memoised row.
   const openClientDetail = useCallback((id: string) => navigation.navigate('ClientDetail', { id }), [navigation]);
 
+  // Stable keyExtractors — hoisted out of the FlashList JSX so they keep a
+  // constant identity across re-renders. An inline `(item) => item.id` is a
+  // NEW function on every render; while FlashList tolerates it, a stable ref
+  // lets the recycler skip needless key-fn churn during pagination (when
+  // `isFetchingNextPage` flips mid-scroll). Pure id maths → no deps.
+  const clientKeyExtractor = useCallback((item: Client) => item.id, []);
+  const plateKeyExtractor = useCallback((item: { client: Client; car: Car }) => `${item.client.id}-${item.car.id}`, []);
+
   // ── Row renderer (client mode) ──────────────────────────────────────
   // The row is a module-scope React.memo component (ClientListRow) whose
   // swipe wrapper is RNGH's ReanimatedSwipeable (UI-thread shared values,
@@ -682,7 +690,7 @@ export default function ClientsScreen() {
 
           <FlashList
             data={plateResults}
-            keyExtractor={(item) => `${item.client.id}-${item.car.id}`}
+            keyExtractor={plateKeyExtractor}
             renderItem={renderPlateResult}
             ListHeaderComponent={retailHeader}
             ListEmptyComponent={
@@ -798,7 +806,7 @@ export default function ClientsScreen() {
           ) : (
             <FlashList
               data={displayClients}
-              keyExtractor={(item) => item.id}
+              keyExtractor={clientKeyExtractor}
               renderItem={renderClient}
               ListHeaderComponent={showRetailPin ? retailHeader : null}
               ListEmptyComponent={

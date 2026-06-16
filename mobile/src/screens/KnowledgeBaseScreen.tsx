@@ -1,14 +1,19 @@
 /**
- * KnowledgeBaseScreen — «База знаний» home (#17, Wave 1).
+ * KnowledgeBaseScreen — «Обучение и база знаний» home (#15 / #17).
  *
- * Layout (premium, balanced, iOS Settings-grade):
- *   • Search bar (debounced → listArticles({search})) — when there's a query
- *     the screen collapses into a flat search-results list.
- *   • «Регламенты» highlight — only when the user has pending acknowledgments
- *     (regulationsPendingCount > 0). Tap → filtered regulation list.
- *   • «Закреплённые» — pinned articles (horizontal scroller of rows).
- *   • Category tiles — icon + name (Ionicons names from listCategories).
- *   • «Недавние» — most-recently-updated articles.
+ * Три понятные группы (имя экрана шире, чем внутренняя группа «База знаний», —
+ * родительский пункт в «Ещё» назван «Обучение и база знаний», чтобы имя не
+ * дублировалось):
+ *   1. Учебный центр — курсы + справочник неисправностей.
+ *   2. Регламенты — всегда доступная точка входа (жёлтый акцент при долге).
+ *   3. База знаний — закреплённые + категории + недавние статьи.
+ *
+ * Умный поиск:
+ *   • Search bar (debounced → listArticles({search})) — бэкенд ищет по
+ *     title + body. При наличии запроса экран сворачивается в плоский список.
+ *   • Фасеты по типу вложения (С видео / С документами / С фото) →
+ *     listArticles({ hasAttachmentType }). Активный фасет сам запускает поиск,
+ *     даже без текста; комбинируется с текстом.
  *
  * Managers (director/admin/superadmin) get a «+» in the header that opens the
  * editor.
@@ -27,6 +32,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import ArticleRow from '../components/knowledge/ArticleRow';
+import FilterChips from '../components/knowledge/FilterChips';
 import { Text } from '../platform/Typography';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -41,6 +47,13 @@ import type { KnowledgeArticle, KnowledgeCategory, KnowledgeCourse } from '../..
 
 const STALE = 60_000;
 
+/** Search facet: human label → backend `hasAttachmentType` value. */
+const FACETS: { label: string; value: 'video' | 'document' | 'image' }[] = [
+  { label: 'С видео', value: 'video' },
+  { label: 'С документами', value: 'document' },
+  { label: 'С фото', value: 'image' },
+];
+
 export default function KnowledgeBaseScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
@@ -50,7 +63,11 @@ export default function KnowledgeBaseScreen() {
 
   const [search, setSearch] = React.useState('');
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
-  const isSearching = debouncedSearch.length > 0;
+  // Attachment-type facet (null = любые). Active facet alone (без текста) тоже
+  // запускает поиск — например «показать все статьи с видео».
+  const [facetLabel, setFacetLabel] = React.useState<string | null>(null);
+  const facetValue = React.useMemo(() => FACETS.find((f) => f.label === facetLabel)?.value ?? null, [facetLabel]);
+  const isSearching = debouncedSearch.length > 0 || facetValue !== null;
 
   // ── Categories ──────────────────────────────────────────────────────────
   const { data: categories, refetch: refetchCategories } = useQuery<KnowledgeCategory[]>({
@@ -124,8 +141,14 @@ export default function KnowledgeBaseScreen() {
     isError: searchError,
     refetch: refetchSearch,
   } = useQuery<KnowledgeArticle[]>({
-    queryKey: ['knowledge-articles', 'search', debouncedSearch],
-    queryFn: async () => (await knowledgeApi.listArticles({ search: debouncedSearch })).data,
+    queryKey: ['knowledge-articles', 'search', debouncedSearch, facetValue],
+    queryFn: async () =>
+      (
+        await knowledgeApi.listArticles({
+          ...(debouncedSearch ? { search: debouncedSearch } : {}),
+          ...(facetValue ? { hasAttachmentType: facetValue } : {}),
+        })
+      ).data,
     enabled: isSearching,
     staleTime: 30_000,
     retry: 1,
@@ -178,7 +201,7 @@ export default function KnowledgeBaseScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="База знаний" onBack={() => navigation.goBack()} trailing={headerTrailing} />
+      <IosScreenHeader title="Обучение и база знаний" onBack={() => navigation.goBack()} trailing={headerTrailing} />
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[4] }]}
@@ -197,6 +220,17 @@ export default function KnowledgeBaseScreen() {
         }
       >
         <SearchInput value={search} onChange={setSearch} placeholder="Поиск по базе знаний" />
+
+        {/* Фасеты — фильтр по типу вложения. Виден всегда; выбор фасета сам
+            запускает поиск (даже без текста). */}
+        <View style={styles.facets}>
+          <FilterChips
+            options={FACETS.map((f) => f.label)}
+            value={facetLabel}
+            onChange={setFacetLabel}
+            allLabel="Любые"
+          />
+        </View>
 
         {isSearching ? (
           // ── SEARCH RESULTS — honest state machine: skeleton → error
@@ -219,82 +253,131 @@ export default function KnowledgeBaseScreen() {
               <EmptyState
                 icon="search"
                 title="Ничего не найдено"
-                description={`По запросу «${debouncedSearch}» статей нет. Попробуйте другие слова.`}
+                description={
+                  debouncedSearch
+                    ? `По запросу «${debouncedSearch}»${facetLabel ? ` (${facetLabel.toLowerCase()})` : ''} статей нет. Попробуйте другие слова.`
+                    : `Статей с фильтром «${facetLabel}» пока нет.`
+                }
               />
             )}
           </View>
         ) : (
           <>
-            {/* ── Регламенты highlight ─────────────────────────────────── */}
-            {pendingCount > 0 ? (
+            {/* ═══ Группа 1 — УЧЕБНЫЙ ЦЕНТР ════════════════════════════════
+                Курсы + справочник неисправностей: всё, что про обучение. */}
+            <View style={styles.section}>
+              <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
+                Учебный центр
+              </Text>
+              <View style={styles.featureRow}>
+                <Pressable
+                  onPress={openCourses}
+                  style={({ pressed }) => [
+                    styles.feature,
+                    {
+                      backgroundColor: palette.bg.card,
+                      borderColor: palette.border.subtle,
+                      opacity: pressed ? 0.8 : 1,
+                    },
+                  ]}
+                >
+                  <View style={[styles.featureIcon, { backgroundColor: palette.accent.primarySoft }]}>
+                    <Ionicons name="school" size={22} color={palette.accent.primary} />
+                  </View>
+                  <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
+                    Курсы
+                  </Text>
+                  {courseProgress !== null ? (
+                    <Text variant="caption" style={{ color: palette.accent.primary, fontWeight: '600' }}>
+                      Пройдено {courseProgress}%
+                    </Text>
+                  ) : (
+                    <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
+                      Курсы и аттестация
+                    </Text>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  onPress={openTroubleshooting}
+                  style={({ pressed }) => [
+                    styles.feature,
+                    {
+                      backgroundColor: palette.bg.card,
+                      borderColor: palette.border.subtle,
+                      opacity: pressed ? 0.8 : 1,
+                    },
+                  ]}
+                >
+                  <View style={[styles.featureIcon, { backgroundColor: colors.amber[50] }]}>
+                    <Ionicons name="construct" size={22} color={colors.amber[600]} />
+                  </View>
+                  <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
+                    Неисправности
+                  </Text>
+                  <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
+                    Симптом → решение
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            {/* ═══ Группа 2 — РЕГЛАМЕНТЫ ═══════════════════════════════════
+                Всегда доступная точка входа; жёлтый акцент при долге. */}
+            <View style={styles.section}>
+              <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Регламенты</Text>
               <Pressable
                 onPress={openRegulations}
                 style={({ pressed }) => [
                   styles.regBanner,
-                  { backgroundColor: colors.amber[50], borderColor: colors.amber[200], opacity: pressed ? 0.85 : 1 },
+                  pendingCount > 0
+                    ? { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }
+                    : { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  { opacity: pressed ? 0.85 : 1 },
                 ]}
               >
-                <View style={[styles.regIcon, { backgroundColor: colors.amber[100] }]}>
-                  <Ionicons name="shield-checkmark" size={22} color={colors.amber[600]} />
+                <View
+                  style={[
+                    styles.regIcon,
+                    { backgroundColor: pendingCount > 0 ? colors.amber[100] : palette.accent.primarySoft },
+                  ]}
+                >
+                  <Ionicons
+                    name="shield-checkmark"
+                    size={22}
+                    color={pendingCount > 0 ? colors.amber[600] : palette.accent.primary}
+                  />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text variant="bodyEmph" style={{ color: colors.amber[800] }}>
-                    Регламенты ждут ознакомления
+                  <Text
+                    variant="bodyEmph"
+                    style={{ color: pendingCount > 0 ? colors.amber[800] : palette.text.primary }}
+                  >
+                    {pendingCount > 0 ? 'Регламенты ждут ознакомления' : 'Регламенты автосервиса'}
                   </Text>
-                  <Text variant="footnote" style={{ color: colors.amber[700] }}>
-                    {pendingCount === 1
-                      ? '1 документ требует вашего «Ознакомлен»'
-                      : `${pendingCount} документов требуют вашего «Ознакомлен»`}
+                  <Text
+                    variant="footnote"
+                    style={{ color: pendingCount > 0 ? colors.amber[700] : palette.text.tertiary }}
+                  >
+                    {pendingCount > 0
+                      ? pendingCount === 1
+                        ? '1 документ требует вашего «Ознакомлен»'
+                        : `${pendingCount} документов требуют вашего «Ознакомлен»`
+                      : 'Открыть и подтвердить ознакомление'}
                   </Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.amber[600]} />
-              </Pressable>
-            ) : null}
-
-            {/* ── Учебный центр + Справочник неисправностей ────────────── */}
-            <View style={styles.featureRow}>
-              <Pressable
-                onPress={openCourses}
-                style={({ pressed }) => [
-                  styles.feature,
-                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, opacity: pressed ? 0.8 : 1 },
-                ]}
-              >
-                <View style={[styles.featureIcon, { backgroundColor: palette.accent.primarySoft }]}>
-                  <Ionicons name="school" size={22} color={palette.accent.primary} />
-                </View>
-                <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
-                  Учебный центр
-                </Text>
-                {courseProgress !== null ? (
-                  <Text variant="caption" style={{ color: palette.accent.primary, fontWeight: '600' }}>
-                    Пройдено {courseProgress}%
-                  </Text>
-                ) : (
-                  <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
-                    Курсы и аттестация
-                  </Text>
-                )}
-              </Pressable>
-
-              <Pressable
-                onPress={openTroubleshooting}
-                style={({ pressed }) => [
-                  styles.feature,
-                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, opacity: pressed ? 0.8 : 1 },
-                ]}
-              >
-                <View style={[styles.featureIcon, { backgroundColor: colors.amber[50] }]}>
-                  <Ionicons name="construct" size={22} color={colors.amber[600]} />
-                </View>
-                <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
-                  Неисправности
-                </Text>
-                <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
-                  Симптом → решение
-                </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color={pendingCount > 0 ? colors.amber[600] : palette.text.tertiary}
+                />
               </Pressable>
             </View>
+
+            {/* ═══ Группа 3 — БАЗА ЗНАНИЙ (статьи) ═════════════════════════ */}
+            <Text style={[iosSectionLabel, styles.sectionTitle, styles.groupHeader, { color: palette.text.secondary }]}>
+              База знаний
+            </Text>
 
             {/* ── Закреплённые ─────────────────────────────────────────── */}
             {pinned && pinned.length > 0 ? (
@@ -394,7 +477,9 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing[4], paddingTop: spacing[2] },
   section: { marginBottom: spacing[5] },
   sectionTitle: { marginLeft: spacing[1], marginBottom: spacing[2] },
+  groupHeader: { marginTop: spacing[1] },
   rowList: { gap: spacing[2] },
+  facets: { marginTop: spacing[2], marginBottom: spacing[3] },
 
   headerBtn: {
     width: 36,
@@ -412,7 +497,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[3],
-    marginBottom: spacing[5],
   },
   regIcon: {
     width: 44,
@@ -422,7 +506,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  featureRow: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[5] },
+  featureRow: { flexDirection: 'row', gap: spacing[3] },
   feature: {
     flex: 1,
     borderRadius: borderRadius['2xl'],

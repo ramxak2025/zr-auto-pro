@@ -45,6 +45,7 @@ export class TenantsService {
       kpp: row.kpp,
       ogrn: row.ogrn,
       receiptFooter: row.receipt_footer,
+      shiftsEnabled: row.shifts_enabled === true,
       userCount: row.user_count !== undefined ? parseInt(row.user_count) : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -665,6 +666,10 @@ export class TenantsService {
     if (dto.receiptFooter !== undefined) {
       sets.push(`receipt_footer=$${idx++}`);
       vals.push(dto.receiptFooter);
+    }
+    if (dto.shiftsEnabled !== undefined) {
+      sets.push(`shifts_enabled=$${idx++}`);
+      vals.push(dto.shiftsEnabled === true);
     }
 
     if (sets.length === 0) return this.getMyCompany(tenantId);

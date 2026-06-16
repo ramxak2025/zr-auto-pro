@@ -39,6 +39,7 @@ import {
   reportsApi,
   warehouseAnalyticsApi,
   productsApi,
+  myCompanyApi,
 } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -60,8 +61,17 @@ import type {
   WarehouseSummary,
   ReorderItem,
   Product,
+  Tenant,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
+import { usePreference, prefKey } from '../hooks/usePreference';
+import {
+  DASHBOARD_WIDGETS_PREF,
+  isWidgetVisible,
+  type DashboardWidgetDef,
+  type WidgetVisibility,
+} from './dashboard/dashboardWidgets';
+import DashboardWidgetsModal from './dashboard/DashboardWidgetsModal';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { updateWidgetData } from '../utils/widgetBridge';
 import { haptic } from '../platform/haptics';
@@ -2746,26 +2756,84 @@ function OwnerFreshnessBadge() {
   );
 }
 
+// ── Configurable owner widgets ───────────────────────────────────────────────
+// Реестр настраиваемых виджетов: id + русский лейбл + сам компонент. Порядок
+// здесь = порядок на дашборде. Hero / KPI / график / снапшот-строка — НЕ тут,
+// это фиксированный скелет (его не отключают). Видимость хранится локально
+// per-user (AsyncStorage через usePreference). По умолчанию все включены.
+const DASHBOARD_WIDGETS: DashboardWidgetDef[] = [
+  { id: 'cash-position', label: 'Касса сегодня', Component: CashPositionCard },
+  { id: 'margin', label: 'Маржинальность', Component: MarginCard },
+  { id: 'deferred', label: 'Зависшие отложенные', Component: DeferredCard },
+  { id: 'warehouse-analytics', label: 'Склад', Component: WarehouseAnalyticsWidget },
+  { id: 'low-stock', label: 'Заканчиваются товары', Component: LowStockCard },
+  { id: 'clients-new-returning', label: 'Новые и постоянные клиенты', Component: ClientsNewVsReturningCard },
+  { id: 'call-funnel', label: 'Воронка звонков', Component: CallFunnelWidget },
+  { id: 'retention', label: 'Retention клиентов', Component: RetentionCard },
+  { id: 'best-day-week', label: 'Лучший день недели', Component: BestDayOfWeekCard },
+  { id: 'recent-reviews', label: 'Последние отзывы', Component: RecentReviewsCard },
+  { id: 'personal-record', label: 'Личный рекорд', Component: PersonalRecordCard },
+  { id: 'month-forecast', label: 'Прогноз конца месяца', Component: MonthForecastCard },
+];
+
 function AdminDashboard({ name }: { name: string }) {
+  const { user } = useAuth();
+  const palette = useColors();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Видимость виджетов — локально, per-user. Пустая сохранёнка / отсутствие
+  // ключа = все включены (дефолт-фолбэк зашит в isWidgetVisible).
+  const {
+    value: visibility,
+    setValue,
+    reset,
+  } = usePreference<WidgetVisibility>(prefKey(DASHBOARD_WIDGETS_PREF, user?.id), {});
+
+  const handleToggle = useCallback(
+    (id: string, next: boolean) => {
+      setValue({ ...visibility, [id]: next });
+    },
+    [visibility, setValue],
+  );
+
+  const visibleWidgets = DASHBOARD_WIDGETS.filter((w) => isWidgetVisible(visibility, w.id));
+
   return (
     <View style={{ gap: spacing[5] }}>
-      <OwnerFreshnessBadge />
+      <View style={styles.adminTopRow}>
+        <View style={{ flex: 1 }}>
+          <OwnerFreshnessBadge />
+        </View>
+        <TouchableOpacity
+          style={[styles.widgetsBtn, { backgroundColor: palette.bg.muted }]}
+          onPress={() => {
+            haptic('tap');
+            setSettingsOpen(true);
+          }}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Настроить виджеты"
+        >
+          <Ionicons name="options-outline" size={15} color={palette.text.secondary} />
+          <Text style={[styles.widgetsBtnText, { color: palette.text.secondary }]}>Виджеты</Text>
+        </TouchableOpacity>
+      </View>
       <OwnerHero name={name} />
       <KpiStrip />
       <OwnerAnalyticsChart />
       <TodaySnapshotRow />
-      <CashPositionCard />
-      <MarginCard />
-      <DeferredCard />
-      <WarehouseAnalyticsWidget />
-      <LowStockCard />
-      <ClientsNewVsReturningCard />
-      <CallFunnelWidget />
-      <RetentionCard />
-      <BestDayOfWeekCard />
-      <RecentReviewsCard />
-      <PersonalRecordCard />
-      <MonthForecastCard />
+      {visibleWidgets.map((w) => (
+        <w.Component key={w.id} />
+      ))}
+
+      <DashboardWidgetsModal
+        visible={settingsOpen}
+        widgets={DASHBOARD_WIDGETS}
+        visibility={visibility}
+        onToggle={handleToggle}
+        onReset={reset}
+        onClose={() => setSettingsOpen(false)}
+      />
     </View>
   );
 }
@@ -3443,6 +3511,19 @@ export default function DashboardScreen() {
   const isOwner = user?.role === UserRole.DIRECTOR || user?.role === UserRole.SUPERADMIN;
   const [refreshing, setRefreshing] = useState(false);
 
+  // #7 — ShiftControl (карточка «Открыть/закрыть смену») показывается мастеру
+  // ТОЛЬКО если у тенанта включена фича «Смены» (shiftsEnabled). Источник —
+  // тот же `my-company` query, что использует экран настроек компании; здесь
+  // он лёгкий read-only потребитель (мастеру эндпоинт доступен). Отсутствие
+  // поля на легаси-пейлоаде ⇒ false (смены выключены).
+  const { data: myCompany } = useQuery<Tenant>({
+    queryKey: ['my-company'],
+    queryFn: async () => (await myCompanyApi.get()).data,
+    staleTime: 5 * 60 * 1000,
+    enabled: isMaster,
+  });
+  const shiftsEnabled = myCompany?.shiftsEnabled === true;
+
   const onRefresh = async () => {
     setRefreshing(true);
     // Invalidate only the queries THIS role's dashboard actually reads. The
@@ -3542,7 +3623,7 @@ export default function DashboardScreen() {
               </Text>
               <Text style={[styles.headerSub, { color: palette.text.tertiary }]}>Обзор показателей автосервиса</Text>
             </View>
-            <ShiftControl />
+            {shiftsEnabled && <ShiftControl />}
             <MasterDashboard />
           </>
         ) : isOwner || user?.role === UserRole.ADMIN ? (
@@ -3562,6 +3643,24 @@ const styles = StyleSheet.create({
   scrollContent: { padding: spacing[4], gap: spacing[4] },
   // OwnerFreshnessBadge slot — sits above the hero card, right-aligned.
   ownerFreshnessRow: { alignItems: 'flex-end', minHeight: 14, marginBottom: -spacing[2] },
+
+  // Admin top row — freshness badge (left, flex) + «Виджеты» button (right).
+  adminTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 28,
+    marginBottom: -spacing[2],
+  },
+  widgetsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+  },
+  widgetsBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
 
   // Master-only header
   headerSection: { marginBottom: spacing[1] },

@@ -20,6 +20,7 @@ import AdminTenantDetailScreen from '../screens/admin/AdminTenantDetailScreen';
 import AdminPlansScreen from '../screens/admin/AdminPlansScreen';
 import AdminBroadcastScreen from '../screens/admin/AdminBroadcastScreen';
 import AdminMoreScreen from '../screens/admin/AdminMoreScreen';
+import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 
 const AdminTab = createBottomTabNavigator();
 const TenantsStack = createNativeStackNavigator();
@@ -32,7 +33,7 @@ const TRANSPARENT_STACK_OPTIONS = {
 // Tenants tab is a native-stack: list → detail pushes, admin bar stays.
 function AdminTenantsStackNavigator() {
   return (
-    <TenantsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+    <TenantsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <TenantsStack.Screen name="AdminTenantsHome" component={AdminTenantsScreen} />
       <TenantsStack.Screen name="AdminTenantDetail" component={AdminTenantDetailScreen} />
     </TenantsStack.Navigator>
@@ -44,7 +45,7 @@ function AdminTenantsStackNavigator() {
 const OverviewStack = createNativeStackNavigator();
 function AdminOverviewStackNavigator() {
   return (
-    <OverviewStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+    <OverviewStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <OverviewStack.Screen name="AdminOverviewHome" component={AdminOverviewScreen} />
       <OverviewStack.Screen name="AdminTenantDetail" component={AdminTenantDetailScreen} />
     </OverviewStack.Navigator>
@@ -66,6 +67,7 @@ export default function AdminShellNavigator() {
       }}
       // eslint-disable-next-line react/no-unstable-nested-components
       tabBar={(props) => <AdminTabBar {...props} />}
+      screenLayout={screenErrorBoundaryLayout}
     >
       <AdminTab.Screen name="AdminOverview" component={AdminOverviewStackNavigator} />
       <AdminTab.Screen name="AdminTenants" component={AdminTenantsStackNavigator} />

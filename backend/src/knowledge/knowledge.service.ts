@@ -21,7 +21,15 @@ import {
   QuizQuestionDto,
 } from './dto/knowledge.dto';
 
-type Attachment = { url: string; name: string; size?: number };
+type AttachmentType = 'image' | 'video' | 'document';
+type VideoType = 'youtube' | 'vk' | 'embed';
+type Attachment = {
+  url: string;
+  name: string;
+  size?: number;
+  type?: AttachmentType;
+  videoType?: VideoType;
+};
 type QuizQuestion = { question: string; options: string[]; correctIndex: number };
 
 // Default categories + starter articles seeded once per tenant on first read.
@@ -549,8 +557,34 @@ export class KnowledgeService {
     if (query.search && query.search.trim()) {
       const term = `%${query.search.trim()}%`;
       // Both predicates run against raw indexed columns → GIN trigram usable.
+      // Body IS part of the search (title OR body), so a term that only appears
+      // in the article body still matches.
       where.push(`(title ILIKE $${i} OR body ILIKE $${i})`);
       params.push(term);
+      i++;
+    }
+    if (query.hasAttachmentType) {
+      // Additive facet: keep articles whose `attachments` JSONB array holds at
+      // least one element of the requested kind. `document` ALSO matches legacy
+      // attachments stored without a `type` key (treated as documents) so the
+      // facet stays backward-compatible with pre-video data. This is a pure
+      // post-filter — it never touches the title+body search above.
+      if (query.hasAttachmentType === 'document') {
+        where.push(
+          `EXISTS (
+             SELECT 1 FROM jsonb_array_elements(attachments) AS att
+             WHERE att->>'type' = $${i} OR (att->>'type') IS NULL
+           )`,
+        );
+      } else {
+        where.push(
+          `EXISTS (
+             SELECT 1 FROM jsonb_array_elements(attachments) AS att
+             WHERE att->>'type' = $${i}
+           )`,
+        );
+      }
+      params.push(query.hasAttachmentType);
       i++;
     }
 
@@ -1635,6 +1669,41 @@ function parseAttachments(raw: unknown): Attachment[] {
   return [];
 }
 
+const ATTACHMENT_TYPES: readonly AttachmentType[] = ['image', 'video', 'document'];
+const VIDEO_TYPES: readonly VideoType[] = ['youtube', 'vk', 'embed'];
+
+// Only these hosts are accepted for `type: 'video'` attachments. Keeps untrusted
+// arbitrary URLs out of an embeddable <iframe>/player surface.
+const ALLOWED_VIDEO_HOSTS: readonly string[] = ['youtube.com', 'youtu.be', 'vk.com', 'vimeo.com'];
+
+/**
+ * True when `url` is a well-formed http(s) URL on a whitelisted video host
+ * (or one of its subdomains, e.g. `www.youtube.com`, `m.vk.com`). Anything else
+ * — javascript:, data:, foreign hosts, malformed strings — is rejected so a
+ * `type: 'video'` attachment can never smuggle an arbitrary embed URL.
+ */
+function isValidVideoUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  return ALLOWED_VIDEO_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
+/**
+ * Normalise the attachments array before persisting / returning.
+ *
+ * Backward-compatible: legacy attachments have no `type` and are kept untouched
+ * (no `type` field added — the client treats an absent type as document/image).
+ * When `type` is present it must be a known kind, else it's dropped. For
+ * `type: 'video'` the URL must pass `isValidVideoUrl` (youtube/youtu.be/vk/
+ * vimeo) — an invalid video attachment is discarded entirely. `videoType` is
+ * only carried through for video attachments and must be a known value.
+ */
 function sanitizeAttachments(input: unknown): Attachment[] {
   if (!Array.isArray(input)) return [];
   const out: Attachment[] = [];
@@ -1643,9 +1712,27 @@ function sanitizeAttachments(input: unknown): Attachment[] {
     const url = (raw as any).url;
     const name = (raw as any).name;
     if (typeof url !== 'string' || !url) continue;
+
+    const rawType = (raw as any).type;
+    const type =
+      typeof rawType === 'string' && ATTACHMENT_TYPES.includes(rawType as AttachmentType)
+        ? (rawType as AttachmentType)
+        : undefined;
+
+    // Drop a video attachment whose URL isn't on the whitelist (security:
+    // arbitrary embeddable URLs). Legacy / non-video attachments are unaffected.
+    if (type === 'video' && !isValidVideoUrl(url)) continue;
+
     const att: Attachment = { url, name: typeof name === 'string' && name ? name : url };
     const size = (raw as any).size;
     if (typeof size === 'number' && Number.isFinite(size)) att.size = size;
+    if (type) att.type = type;
+    if (type === 'video') {
+      const rawVideoType = (raw as any).videoType;
+      if (typeof rawVideoType === 'string' && VIDEO_TYPES.includes(rawVideoType as VideoType)) {
+        att.videoType = rawVideoType as VideoType;
+      }
+    }
     out.push(att);
   }
   return out;

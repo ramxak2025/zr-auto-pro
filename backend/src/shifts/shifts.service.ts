@@ -1,4 +1,4 @@
-import { Injectable, Inject, InternalServerErrorException, Logger } from '@nestjs/common';
+import { Injectable, Inject, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 
@@ -7,6 +7,20 @@ export class ShiftsService {
   private readonly logger = new Logger('ShiftsService');
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * Per-tenant master toggle for the «Смены» subsystem (migration 070,
+   * tenants.shifts_enabled). Reads the flag straight from the tenant row by
+   * tenantID; throws 403 when the feature is OFF. Default is false, so any
+   * tenant that has not explicitly enabled shifts is blocked — matching the
+   * additive/opt-in contract. Called from the controller before open/close/getMy.
+   */
+  private async ensureShiftsEnabled(tenantID: string) {
+    const { rows } = await this.pool.query(`SELECT shifts_enabled FROM tenants WHERE id = $1`, [tenantID]);
+    if (rows.length === 0 || rows[0].shifts_enabled !== true) {
+      throw new ForbiddenException({ message: 'Учёт смен отключён для вашей компании' });
+    }
+  }
 
   private mapShift(row: any) {
     const shift: any = {
@@ -42,6 +56,7 @@ export class ShiftsService {
   }
 
   async getMy(userID: string, tenantID: string) {
+    await this.ensureShiftsEnabled(tenantID);
     const { rows } = await this.pool.query(
       `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
        FROM shifts s JOIN users u ON u.id = s.user_id
@@ -53,6 +68,7 @@ export class ShiftsService {
   }
 
   async open(userID: string, tenantID: string) {
+    await this.ensureShiftsEnabled(tenantID);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -118,6 +134,7 @@ export class ShiftsService {
   }
 
   async close(id: string, tenantID: string, userID?: string) {
+    await this.ensureShiftsEnabled(tenantID);
     // Directors/admins can close any shift, masters only their own
     const ownerCheck = userID ? ` AND user_id = $3` : '';
     const params = userID ? [id, tenantID, userID] : [id, tenantID];

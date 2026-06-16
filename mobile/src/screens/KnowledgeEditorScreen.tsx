@@ -32,6 +32,7 @@ import { knowledgeApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
+import { parseVideoUrl, videoProviderLabel } from '../components/knowledge/videoUrl';
 import type {
   KnowledgeArticle,
   KnowledgeArticleType,
@@ -62,6 +63,9 @@ export default function KnowledgeEditorScreen() {
   const [published, setPublished] = React.useState(true);
   const [uploading, setUploading] = React.useState(false);
   const [hydrated, setHydrated] = React.useState(false);
+  // «Ссылка на видео» field (YouTube / VK). Empty until the user types.
+  const [videoUrl, setVideoUrl] = React.useState('');
+  const [videoError, setVideoError] = React.useState<string | null>(null);
 
   // ── Categories ────────────────────────────────────────────────────────
   const { data: categories } = useQuery<KnowledgeCategory[]>({
@@ -172,6 +176,37 @@ export default function KnowledgeEditorScreen() {
     } finally {
       setUploading(false);
     }
+  };
+
+  // ── Video link (YouTube / VK) → type:'video' attachment ───────────────
+  const addVideo = () => {
+    const raw = videoUrl.trim();
+    if (!raw) {
+      setVideoError('Вставьте ссылку на видео.');
+      return;
+    }
+    const parsed = parseVideoUrl(raw);
+    if (!parsed) {
+      setVideoError('Не похоже на ссылку. Пример: https://youtu.be/…');
+      return;
+    }
+    if (parsed.provider === 'embed') {
+      // Valid URL, but not a recognised YouTube/VK link — guide the owner.
+      setVideoError('Поддерживаются YouTube и VK. Проверьте ссылку.');
+      return;
+    }
+    haptic('success');
+    setVideoError(null);
+    setAttachments((prev) => [
+      ...prev,
+      {
+        url: parsed.url,
+        name: videoProviderLabel(parsed.provider),
+        type: 'video',
+        videoType: parsed.provider,
+      },
+    ]);
+    setVideoUrl('');
   };
 
   // ── New category (minimal management) ─────────────────────────────────
@@ -292,10 +327,7 @@ export default function KnowledgeEditorScreen() {
                 }}
                 style={[styles.segmentItem, active && { backgroundColor: palette.bg.card }]}
               >
-                <Text
-                  variant="bodyEmph"
-                  style={{ color: active ? palette.text.primary : palette.text.secondary }}
-                >
+                <Text variant="bodyEmph" style={{ color: active ? palette.text.primary : palette.text.secondary }}>
                   {t === 'article' ? 'Статья' : 'Регламент'}
                 </Text>
               </Pressable>
@@ -332,9 +364,7 @@ export default function KnowledgeEditorScreen() {
         </ScrollView>
 
         {/* Body */}
-        <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>
-          Текст (Markdown)
-        </Text>
+        <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>Текст (Markdown)</Text>
         <TextInput
           value={body}
           onChangeText={setBody}
@@ -349,6 +379,57 @@ export default function KnowledgeEditorScreen() {
           ]}
         />
 
+        {/* Видео (YouTube / VK) */}
+        <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>
+          Ссылка на видео (YouTube / VK)
+        </Text>
+        <View style={styles.videoRow}>
+          <TextInput
+            value={videoUrl}
+            onChangeText={(t) => {
+              setVideoUrl(t);
+              if (videoError) setVideoError(null);
+            }}
+            onSubmitEditing={addVideo}
+            placeholder="https://youtu.be/… или vk.com/video…"
+            placeholderTextColor={palette.text.tertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            returnKeyType="done"
+            style={[
+              styles.input,
+              styles.videoInput,
+              {
+                backgroundColor: inputBg,
+                borderColor: videoError ? colors.red[300] : inputBorder,
+                color: palette.text.primary,
+              },
+            ]}
+          />
+          <Pressable
+            onPress={addVideo}
+            hitSlop={8}
+            style={[styles.videoAddBtn, { backgroundColor: palette.accent.primary }]}
+            accessibilityRole="button"
+            accessibilityLabel="Добавить видео"
+          >
+            <Ionicons name="add" size={22} color={colors.white} />
+          </Pressable>
+        </View>
+        {videoError ? (
+          <Text variant="caption" style={{ color: colors.red[600], marginTop: spacing[1.5], marginLeft: spacing[1] }}>
+            {videoError}
+          </Text>
+        ) : (
+          <Text
+            variant="caption"
+            style={{ color: palette.text.tertiary, marginTop: spacing[1.5], marginLeft: spacing[1] }}
+          >
+            Видео покажется в статье прямо над текстом.
+          </Text>
+        )}
+
         {/* Attachments */}
         <View style={styles.catHeader}>
           <Text style={[iosSectionLabel, styles.labelInline, { color: palette.text.secondary }]}>Вложения</Text>
@@ -360,20 +441,34 @@ export default function KnowledgeEditorScreen() {
           </Pressable>
         </View>
         <View style={{ gap: spacing[2] }}>
-          {attachments.map((att, i) => (
-            <View
-              key={`${att.url}-${i}`}
-              style={[styles.attachRow, { backgroundColor: inputBg, borderColor: inputBorder }]}
-            >
-              <Ionicons name="document-attach-outline" size={18} color={palette.text.secondary} />
-              <Text variant="bodyEmph" numberOfLines={1} style={{ flex: 1, color: palette.text.primary }}>
-                {att.name}
-              </Text>
-              <Pressable onPress={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))} hitSlop={8}>
-                <Ionicons name="trash-outline" size={18} color={colors.red[500]} />
-              </Pressable>
-            </View>
-          ))}
+          {attachments.map((att, i) => {
+            const isVideo = att.type === 'video';
+            return (
+              <View
+                key={`${att.url}-${i}`}
+                style={[styles.attachRow, { backgroundColor: inputBg, borderColor: inputBorder }]}
+              >
+                <Ionicons
+                  name={isVideo ? 'play-circle-outline' : 'document-attach-outline'}
+                  size={18}
+                  color={isVideo ? palette.accent.primary : palette.text.secondary}
+                />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
+                    {att.name}
+                  </Text>
+                  {isVideo ? (
+                    <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
+                      {att.url}
+                    </Text>
+                  ) : null}
+                </View>
+                <Pressable onPress={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))} hitSlop={8}>
+                  <Ionicons name="trash-outline" size={18} color={colors.red[500]} />
+                </Pressable>
+              </View>
+            );
+          })}
           {attachments.length === 0 ? (
             <Text variant="footnote" style={{ color: palette.text.tertiary }}>
               Вложений нет.
@@ -452,7 +547,12 @@ function ToggleRow({
   divider?: boolean;
 }) {
   return (
-    <View style={[styles.toggleRow, divider && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border.subtle }]}>
+    <View
+      style={[
+        styles.toggleRow,
+        divider && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border.subtle },
+      ]}
+    >
       <View style={{ flex: 1 }}>
         <Text variant="bodyEmph" style={{ color: palette.text.primary }}>
           {label}
@@ -550,6 +650,16 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[3],
+  },
+
+  videoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  videoInput: { flex: 1 },
+  videoAddBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   toggleCard: {

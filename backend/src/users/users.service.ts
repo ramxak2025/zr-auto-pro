@@ -12,6 +12,7 @@ import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser } from '../common/auth-cache';
+import { SECTION_KEYS, SectionKey } from './dto/section-visibility.dto';
 
 // Roles that may be assigned through this service. Anything outside this set
 // is rejected up front so a manipulated DTO can't sneak a role string past
@@ -396,10 +397,10 @@ export class UsersService {
       return { message: 'Сотрудник уже уволен' };
     }
 
-    await this.pool.query(
-      `UPDATE users SET dismissed_at = now(), updated_at = now() WHERE id=$1 AND tenant_id=$2`,
-      [id, tenantID],
-    );
+    await this.pool.query(`UPDATE users SET dismissed_at = now(), updated_at = now() WHERE id=$1 AND tenant_id=$2`, [
+      id,
+      tenantID,
+    ]);
     // Drop the dismissed user's cached JWT validations so their token starts
     // being re-checked against the DB on the next request.
     invalidateAuthUser(id);
@@ -440,10 +441,10 @@ export class UsersService {
    * permanently retired for history and cannot return).
    */
   async restore(id: string, tenantID: string) {
-    const { rows } = await this.pool.query(
-      'SELECT dismissed_at, purged_at FROM users WHERE id=$1 AND tenant_id=$2',
-      [id, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT dismissed_at, purged_at FROM users WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
     if (rows[0].purged_at) {
       throw new BadRequestException({ message: 'Сотрудник удалён навсегда и не может быть восстановлен' });
@@ -497,6 +498,120 @@ export class UsersService {
     // The user can never authenticate again — drop any cached validations.
     invalidateAuthUser(id);
     return { message: 'Сотрудник удалён навсегда' };
+  }
+
+  // ─── Section Visibility (071) ───────────────────────────────────────
+  //
+  // Owners (director / admin / superadmin — enforced by the controller's
+  // RolesGuard) decide, per employee, which of the five top-level navigation
+  // groups that employee may see. We persist ONLY explicit overrides; an absent
+  // row means "use the default" (visible). The read materializes all five keys
+  // (defaults merged with overrides) so the client always gets a complete map.
+
+  /** Stamp `dismissed_at`/role guard once and return the target's role. */
+  private async loadVisibilityTarget(userId: string, tenantID: string) {
+    const { rows } = await this.pool.query('SELECT role FROM users WHERE id=$1 AND tenant_id=$2', [userId, tenantID]);
+    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    return rows[0].role as string;
+  }
+
+  /**
+   * Resolve the effective visibility map for a user: every one of the five
+   * sections, defaulting to `isVisible: true`, with any stored override applied.
+   * Always returns all five keys in a stable order so the client never has to
+   * know the default itself.
+   */
+  async getSectionVisibility(userId: string, tenantID: string) {
+    // Tenant-scoped existence check — a forged id from another tenant 404s here
+    // rather than silently returning a full default map.
+    await this.loadVisibilityTarget(userId, tenantID);
+
+    const { rows } = await this.pool.query(
+      `SELECT section_key, is_visible
+       FROM section_visibility
+       WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantID, userId],
+    );
+
+    const overrides = new Map<string, boolean>(rows.map((r) => [r.section_key as string, !!r.is_visible]));
+
+    return SECTION_KEYS.map((sectionKey) => ({
+      sectionKey,
+      isVisible: overrides.has(sectionKey) ? (overrides.get(sectionKey) as boolean) : true,
+    }));
+  }
+
+  /**
+   * Upsert the supplied overrides, then return the freshly-materialized map.
+   * Business rules (self-lockout protection):
+   *  - You can never hide ALL five sections — at least one must stay visible.
+   *  - A director / superadmin (owner-class) account must keep the `work`
+   *    section visible — that's their floor of access, so a misconfiguration
+   *    (theirs or anyone editing them) can't brick the owner out of the app.
+   * Both are evaluated against the RESULTING state (existing overrides merged
+   * with this request), not just the request body, so partial PATCHes are safe.
+   */
+  async updateSectionVisibility(
+    userId: string,
+    tenantID: string,
+    sections: Array<{ sectionKey: SectionKey; isVisible: boolean }>,
+  ) {
+    const targetRole = await this.loadVisibilityTarget(userId, tenantID);
+
+    // Collapse duplicate keys in the body (last write wins) so the resulting
+    // map and the upsert are deterministic.
+    const requested = new Map<SectionKey, boolean>();
+    for (const s of sections) requested.set(s.sectionKey, s.isVisible);
+
+    // Compute the resulting effective map = current stored overrides + request.
+    const { rows: existing } = await this.pool.query(
+      `SELECT section_key, is_visible FROM section_visibility WHERE tenant_id=$1 AND user_id=$2`,
+      [tenantID, userId],
+    );
+    const effective = new Map<SectionKey, boolean>(SECTION_KEYS.map((k) => [k, true]));
+    for (const r of existing) effective.set(r.section_key as SectionKey, !!r.is_visible);
+    for (const [k, v] of requested) effective.set(k, v);
+
+    // Rule 1 — never hide every section.
+    const anyVisible = SECTION_KEYS.some((k) => effective.get(k) === true);
+    if (!anyVisible) {
+      throw new BadRequestException({ message: 'Нельзя скрыть все разделы — хотя бы один должен оставаться видимым' });
+    }
+
+    // Rule 2 — owner-class accounts keep `work` (the access floor) visible.
+    const isOwnerClass = targetRole === 'director' || targetRole === 'superadmin';
+    if (isOwnerClass && effective.get('work') !== true) {
+      throw new BadRequestException({
+        message: 'Раздел «Работа» нельзя скрыть у директора или владельца',
+      });
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [sectionKey, isVisible] of requested) {
+        await client.query(
+          `INSERT INTO section_visibility (tenant_id, user_id, section_key, is_visible)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (tenant_id, user_id, section_key)
+           DO UPDATE SET is_visible = EXCLUDED.is_visible, updated_at = now()`,
+          [tenantID, userId, sectionKey, isVisible],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`updateSectionVisibility error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сохранения видимости разделов' });
+    } finally {
+      client.release();
+    }
+
+    // Changing what an employee can see is a permission-ish change — drop their
+    // cached auth so the next request reflects it without waiting for the TTL.
+    invalidateAuthUser(userId);
+
+    return this.getSectionVisibility(userId, tenantID);
   }
 
   // ─── Product Commissions ────────────────────────────────────────────

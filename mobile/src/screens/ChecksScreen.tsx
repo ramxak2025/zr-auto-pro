@@ -1133,34 +1133,36 @@ export default function ChecksScreen() {
           {/* Kind filter chips — drive `journalApi.warehouseDocs({type})`.
               Horizontal scroll so all 7 chips fit on small screens. */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.kindChipsRow}>
-            {KIND_CHIPS.map((chip) => {
-              const active = warehouseKind === chip.key;
-              const visual = chip.key ? journalKindVisual[chip.key] : null;
-              return (
-                <TouchableOpacity
-                  key={chip.key ?? 'all'}
-                  onPress={() => setWarehouseKind(chip.key)}
-                  activeOpacity={0.7}
-                  style={[
-                    styles.kindChip,
-                    {
-                      backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
-                      borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
-                    },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  accessibilityLabel={chip.label}
-                >
-                  {visual && (
-                    <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
-                  )}
-                  <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
-                    {chip.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            <View style={styles.kindChipsRowInner}>
+              {KIND_CHIPS.map((chip) => {
+                const active = warehouseKind === chip.key;
+                const visual = chip.key ? journalKindVisual[chip.key] : null;
+                return (
+                  <TouchableOpacity
+                    key={chip.key ?? 'all'}
+                    onPress={() => setWarehouseKind(chip.key)}
+                    activeOpacity={0.7}
+                    style={[
+                      styles.kindChip,
+                      {
+                        backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
+                        borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={chip.label}
+                  >
+                    {visual && (
+                      <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
+                    )}
+                    <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
+                      {chip.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </ScrollView>
 
           {/* Cold-start path: skeleton only on the very first fetch.
@@ -1417,19 +1419,28 @@ const styles = StyleSheet.create({
   kindChipsRow: {
     paddingHorizontal: spacing[4],
     paddingBottom: spacing[2],
-    gap: spacing[1.5],
+    // Центрируем по вертикали, чтобы чипы не растягивались на всю
+    // высоту горизонтального ScrollView (cross-axis stretch).
+    alignItems: 'center',
+  },
+  kindChipsRowInner: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
   },
   kindChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    gap: spacing[1],
+    height: 32,
+    minHeight: 32,
     paddingHorizontal: spacing[2.5],
-    paddingVertical: 6,
+    paddingVertical: spacing[1.5],
     borderRadius: borderRadius.full,
     borderWidth: 1,
   },
-  kindChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
+  kindChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
   // ── Segmented Control ───────────────────────────────────────────
   segmentedWrap: {

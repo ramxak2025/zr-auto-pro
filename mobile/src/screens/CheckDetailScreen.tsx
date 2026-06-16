@@ -517,6 +517,30 @@ export default function CheckDetailScreen() {
     ]);
   };
 
+  // ── «Продолжить» по отложенному чеку ──────────────────────────────
+  // Открываем кассу в режиме редактирования этого черновика (route.params
+  // id). CheckCreateScreen уже умеет гидрировать форму из ['check', id] и
+  // показывает хинт «Редактируется отложенный чек». Сняв там галочку
+  // «Отложить» и сохранив, пользователь проводит draft→active.
+  const handleContinueDraft = () => {
+    if (!check) return;
+    haptic('select');
+    navigation.navigate('CheckCreate', { id: check.id });
+  };
+
+  // ── «Удалить черновик» ─────────────────────────────────────────────
+  // Отдельная формулировка от обычного удаления чека: черновик ничего не
+  // списал со склада (бэк делает это только при draft→active), поэтому
+  // удаление безопасно. Переиспользуем deleteMutation — тот же endpoint.
+  const handleDeleteDraft = () => {
+    if (!check) return;
+    haptic('warning');
+    Alert.alert('Удалить черновик?', `Отложенный чек #${check.number} будет удалён. Это действие необратимо.`, [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate() },
+    ]);
+  };
+
   // ── Return mutation ──────────────────────────────────────────────
   // POST /checks/:id/returns. На бэке атомарно:
   //   1. Помечает чек `isReturned=true` + сохраняет reason / returnedAt.
@@ -841,6 +865,50 @@ export default function CheckDetailScreen() {
               </>
             )}
           </TouchableOpacity>
+        )}
+
+        {/* Зона действий для отложенного чека: «Продолжить» (открыть кассу в
+            режиме редактирования черновика) и «Удалить черновик» (с
+            подтверждением). Видна только при isDeferred. «Продолжить»
+            требует права на редактирование, удаление — права на удаление. */}
+        {isDeferred && (canEdit || canDelete) && (
+          <View style={styles.draftActionsRow}>
+            {canEdit && (
+              <TouchableOpacity
+                style={[
+                  styles.draftContinueBtn,
+                  { borderColor: colors.primary[300], backgroundColor: palette.bg.card },
+                ]}
+                onPress={handleContinueDraft}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Продолжить отложенный чек"
+              >
+                <Ionicons name="create-outline" size={17} color={colors.primary[600]} />
+                <Text style={[styles.draftContinueBtnText, { color: colors.primary[600] }]}>Продолжить</Text>
+              </TouchableOpacity>
+            )}
+            {canDelete && (
+              <TouchableOpacity
+                style={[styles.draftDeleteBtn, { borderColor: colors.red[200], backgroundColor: colors.red[50] }]}
+                onPress={handleDeleteDraft}
+                disabled={deleteMutation.isPending}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Удалить черновик"
+                accessibilityState={{ disabled: deleteMutation.isPending }}
+              >
+                {deleteMutation.isPending ? (
+                  <ActivityIndicator color={colors.red[600]} size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="trash-outline" size={17} color={colors.red[600]} />
+                    <Text style={styles.draftDeleteBtnText}>Удалить черновик</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
         )}
 
         {/* Client & info — modern glassmorphism style card */}
@@ -1595,6 +1663,31 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   acceptPaymentBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
+
+  // Draft (отложенный чек) actions — Продолжить / Удалить черновик
+  draftActionsRow: { flexDirection: 'row', gap: spacing[2.5], marginTop: spacing[2.5] },
+  draftContinueBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    borderWidth: 1,
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+  },
+  draftContinueBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  draftDeleteBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    borderWidth: 1,
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+  },
+  draftDeleteBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.red[600] },
 
   // Info card
   infoCard: {

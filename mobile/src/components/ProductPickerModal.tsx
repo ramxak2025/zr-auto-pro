@@ -90,6 +90,15 @@ interface ProductPickerModalProps {
   warehouseId?: string | null;
   /** Inline warehouse switcher (rendered as an in-modal dropdown). */
   warehouseSwitcher?: WarehouseSwitcherInline;
+  /**
+   * #12: имена товаров, на которые у текущего клиента ЕСТЬ активная гарантия
+   * (из `warrantyApi.active` — поле `name`, нормализованное lower-case+trim).
+   * Чисто презентационная подсказка: на совпавших строках рисуется бейдж
+   * «На гарантии». Опционально — без него (или для retail-покупателя)
+   * пикер работает как раньше. Контракт API не трогаем: у `ActiveWarranty`
+   * нет productId, поэтому сопоставление идёт по имени.
+   */
+  warrantyNames?: ReadonlySet<string>;
 }
 
 /**
@@ -111,6 +120,8 @@ interface PickerProductRowItemProps {
   product: Product;
   cartQty: number;
   showCostPrice: boolean;
+  /** #12: товар на гарантии у текущего клиента — рисуем бейдж. */
+  underWarranty?: boolean;
   onPress: (product: Product) => void;
 }
 
@@ -129,6 +140,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
   product,
   cartQty,
   showCostPrice,
+  underWarranty,
   onPress,
 }: PickerProductRowItemProps) {
   const lowStock = product.stock <= product.minStock && product.minStock > 0;
@@ -151,6 +163,12 @@ const PickerProductRow = React.memo(function PickerProductRow({
           <Text style={styles.productName} numberOfLines={2}>
             {product.name}
           </Text>
+          {underWarranty ? (
+            <View style={styles.warrantyBadge}>
+              <Ionicons name="shield-checkmark" size={11} color={colors.amber[700]} />
+              <Text style={styles.warrantyBadgeText}>На гарантии</Text>
+            </View>
+          ) : null}
           {categoryLeaf ? <Text style={styles.productCategory}>{categoryLeaf}</Text> : null}
           <View style={styles.productPrices}>
             <Text style={styles.productSellPrice}>{formatMoney(product.sellPrice)}</Text>
@@ -228,6 +246,7 @@ export default function ProductPickerModal({
   folderAnnotations,
   warehouseId,
   warehouseSwitcher,
+  warrantyNames,
 }: ProductPickerModalProps) {
   const [productPath, setProductPath] = useState<string[]>([]);
   // Inline warehouse-switcher dropdown — local state. NOT a nested
@@ -503,11 +522,18 @@ export default function ProductPickerModal({
         return <FolderGridRow entries={item.entries} annotations={item.annotations} onSelect={handleEnterFolder} />;
       }
       const qty = getCartQty ? getCartQty(item.product.id) : 0;
+      const underWarranty = warrantyNames ? warrantyNames.has(item.product.name.trim().toLowerCase()) : false;
       return (
-        <PickerProductRow product={item.product} cartQty={qty} showCostPrice={showCostPrice} onPress={handleSelect} />
+        <PickerProductRow
+          product={item.product}
+          cartQty={qty}
+          showCostPrice={showCostPrice}
+          underWarranty={underWarranty}
+          onPress={handleSelect}
+        />
       );
     },
-    [getCartQty, handleEnterFolder, handleSelect, showCostPrice],
+    [getCartQty, handleEnterFolder, handleSelect, showCostPrice, warrantyNames],
   );
 
   const keyExtractor = useCallback((item: Row, index: number) => {
@@ -928,6 +954,22 @@ const styles = StyleSheet.create({
     letterSpacing: -0.1,
   },
   productCategory: { fontSize: 11, color: colors.gray[400], marginTop: 1 },
+  // #12: бейдж «На гарантии» — янтарный, в семействе с гарантийными чипами
+  // карточки клиента. Self-hiding: рисуется только при underWarranty.
+  warrantyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 3,
+    marginTop: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: colors.amber[50],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.amber[200],
+  },
+  warrantyBadgeText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.amber[700], letterSpacing: 0.1 },
   productPrices: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: 2 },
   productSellPrice: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[700] },
   productCostPrice: { fontSize: 11, color: colors.gray[400] },

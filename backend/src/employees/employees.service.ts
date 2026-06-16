@@ -436,6 +436,7 @@ export class EmployeesService {
         bestDay: undefined as { date: string; value: number } | undefined,
         bestMonth: undefined as { ym: string; value: number } | undefined,
         topCarBrands: [] as Array<{ brand: string; count: number }>,
+        topProducts: [] as Array<{ productId: string; name: string; count: number; photo?: string }>,
       },
       yearHeatmap: [] as Array<{ day: string; checks: number; revenue: number }>,
       teamRank: { revenueRank: 0, disciplineRank: 0, ratingRank: 0, total: 1 },
@@ -554,6 +555,15 @@ export class EmployeesService {
       }));
     }
 
+    // Shift / attendance summary — only for tenants with «Смены» enabled (070).
+    // When the feature is off we omit the `shifts` key entirely (it's optional
+    // in the contract) and skip the schedule scan.
+    const { rows: tenantRows } = await this.pool.query(`SELECT shifts_enabled FROM tenants WHERE id=$1 LIMIT 1`, [
+      tenantID,
+    ]);
+    const shiftsEnabled = tenantRows[0]?.shifts_enabled === true;
+    const shifts = shiftsEnabled ? await this.computeShifts(tenantID, employeeId) : undefined;
+
     // Team ranks
     const teamRank = await this.computeTeamRank(tenantID, employeeId);
 
@@ -639,6 +649,8 @@ export class EmployeesService {
       stats: { efficiency, discipline, activity, rating, quality },
       streaks,
       lifetime,
+      // Optional / additive — only present when the tenant has «Смены» on.
+      ...(shifts ? { shifts } : {}),
       yearHeatmap,
       teamRank,
       serviceMastery,
@@ -751,6 +763,23 @@ export class EmployeesService {
       [tenantID, employeeId],
     );
 
+    // Top-3 products this master sold. check_product_lines has no master_id of
+    // its own — it inherits the check's master via the checks join. We JOIN to
+    // products by id (rows where product_id is null = free-text lines are
+    // skipped) so we can carry a stable id + current name + photo. SUM(quantity)
+    // counts units sold, not line rows.
+    const { rows: topProductRows } = await this.pool.query(
+      `SELECT p.id, p.name, p.photo, COALESCE(SUM(cpl.quantity), 0) AS cnt
+         FROM check_product_lines cpl
+         JOIN checks ch ON ch.id = cpl.check_id
+         JOIN products p ON p.id = cpl.product_id
+        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false
+        GROUP BY p.id, p.name, p.photo
+        ORDER BY cnt DESC, p.name ASC
+        LIMIT 3`,
+      [tenantID, employeeId],
+    );
+
     const totalRevenue = parseFloat(totals[0]?.revenue) || 0;
     const totalChecks = parseInt(totals[0]?.check_count) || 0;
     const clientsServed = parseInt(totals[0]?.clients) || 0;
@@ -777,7 +806,67 @@ export class EmployeesService {
       bestDay,
       bestMonth,
       topCarBrands: topBrands.map((r) => ({ brand: r.brand as string, count: parseInt(r.cnt) || 0 })),
+      topProducts: topProductRows.map((r) => ({
+        productId: r.id as string,
+        name: r.name as string,
+        count: parseInt(r.cnt) || 0,
+        // `photo` is optional in the contract — only emit it when present so the
+        // payload stays clean for products without an image.
+        ...(r.photo ? { photo: r.photo as string } : {}),
+      })),
     };
+  }
+
+  /**
+   * Shift / attendance summary for the employee, built from schedule_entries.
+   * Returned only when the tenant has the «Смены» feature ON (070
+   * `shifts_enabled`) — otherwise `fullProfile` omits the `shifts` key entirely
+   * (it is optional in the contract). `total` counts worked shifts (not
+   * days-off); `lateCount` / `avgLateMinutes` use the existing late_status /
+   * late_minutes columns. bestDay / worstDay are the calendar days with the
+   * most / fewest checks this master closed (joined from `checks`).
+   */
+  private async computeShifts(tenantID: string, employeeId: string) {
+    // Attendance aggregates. is_day_off rows are excluded from the worked-shift
+    // count and from the late stats. avg is over LATE shifts only, so a master
+    // who is rarely late doesn't get their average diluted by on-time zeros.
+    const { rows: attRows } = await this.pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE is_day_off = false) AS total,
+         COUNT(*) FILTER (WHERE is_day_off = false
+                            AND late_status IN ('late_minor','late_major')) AS late_count,
+         COALESCE(
+           AVG(NULLIF(late_minutes, 0)) FILTER (WHERE is_day_off = false
+                            AND late_status IN ('late_minor','late_major')),
+           0
+         ) AS avg_late_minutes
+       FROM schedule_entries
+       WHERE user_id=$1 AND tenant_id=$2`,
+      [employeeId, tenantID],
+    );
+    const total = parseInt(attRows[0]?.total) || 0;
+    const lateCount = parseInt(attRows[0]?.late_count) || 0;
+    const avgLateMinutes = Math.round(parseFloat(attRows[0]?.avg_late_minutes) || 0);
+
+    // Best / worst day by number of checks closed. Single pass: most-checks day
+    // ASC/DESC. worstDay only differs from bestDay when the master has >1 active
+    // day, otherwise it mirrors bestDay (which the FE renders fine).
+    const { rows: byDay } = await this.pool.query(
+      `SELECT date::date AS day, COUNT(*) AS checks_count
+         FROM checks
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+        GROUP BY date::date
+        ORDER BY checks_count DESC, day DESC`,
+      [tenantID, employeeId],
+    );
+    const toDayStat = (r: { day: unknown; checks_count: unknown }) => ({
+      date: typeof r.day === 'string' ? r.day.slice(0, 10) : new Date(r.day as string).toISOString().slice(0, 10),
+      checksCount: parseInt(String(r.checks_count)) || 0,
+    });
+    const bestDay = byDay.length > 0 ? toDayStat(byDay[0]) : undefined;
+    const worstDay = byDay.length > 0 ? toDayStat(byDay[byDay.length - 1]) : undefined;
+
+    return { total, lateCount, avgLateMinutes, bestDay, worstDay };
   }
 
   private async computeTeamRank(tenantID: string, employeeId: string) {

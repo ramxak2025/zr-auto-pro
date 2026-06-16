@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Switch,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,9 +19,11 @@ import { myCompanyApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Tenant } from '../../../shared/types';
+import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 interface CompanyForm {
@@ -34,6 +37,7 @@ interface CompanyForm {
   kpp: string;
   ogrn: string;
   receiptFooter: string;
+  shiftsEnabled: boolean;
 }
 
 export default function CompanySettingsScreen() {
@@ -41,6 +45,12 @@ export default function CompanySettingsScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
+  const { user } = useAuth();
+  // Тумблер «Смены» доступен только директору/владельцу — это управление
+  // фичей тенанта, не персональная настройка. (Мастеру экран настроек
+  // компании и так недоступен, но гейтим явно.)
+  const canManageShifts =
+    user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN || user?.role === UserRole.SUPERADMIN;
 
   const { data: company, isLoading } = useQuery<Tenant>({
     queryKey: ['my-company'],
@@ -58,6 +68,7 @@ export default function CompanySettingsScreen() {
     kpp: '',
     ogrn: '',
     receiptFooter: '',
+    shiftsEnabled: false,
   });
   const [dirty, setDirty] = useState(false);
 
@@ -74,6 +85,7 @@ export default function CompanySettingsScreen() {
         kpp: company.kpp || '',
         ogrn: company.ogrn || '',
         receiptFooter: company.receiptFooter || '',
+        shiftsEnabled: company.shiftsEnabled === true,
       });
       setDirty(false);
     }
@@ -106,6 +118,9 @@ export default function CompanySettingsScreen() {
       kpp: form.kpp || undefined,
       ogrn: form.ogrn || undefined,
       receiptFooter: form.receiptFooter || undefined,
+      // Boolean toggle — отправляем всегда (включая false), иначе выключить
+      // фичу было бы невозможно (`undefined` бэкенд игнорирует).
+      ...(canManageShifts ? { shiftsEnabled: form.shiftsEnabled } : null),
     });
   };
 
@@ -283,9 +298,40 @@ export default function CompanySettingsScreen() {
             </View>
           </AnimatedCard>
 
+          {/* Shifts subsystem toggle — directors/owners only. */}
+          {canManageShifts && (
+            <AnimatedCard index={2}>
+              <View style={cardStyle}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="time-outline" size={16} color={palette.text.tertiary} />
+                  <Text style={cardTitleStyle}>Смены</Text>
+                </View>
+
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleTextWrap}>
+                    <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>
+                      Сотрудники открывают смены сами
+                    </Text>
+                    <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
+                      На главном экране у сотрудников появится кнопка «Открыть смену». Выключите, если смены ведёт
+                      администратор.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={form.shiftsEnabled}
+                    onValueChange={(v) => update({ shiftsEnabled: v })}
+                    trackColor={{ false: palette.border.subtle, true: palette.accent.primary }}
+                    thumbColor={Platform.OS === 'android' ? colors.white : undefined}
+                    ios_backgroundColor={palette.border.subtle}
+                  />
+                </View>
+              </View>
+            </AnimatedCard>
+          )}
+
           {/* Save */}
           {dirty && (
-            <AnimatedCard index={2}>
+            <AnimatedCard index={3}>
               <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={mutation.isPending}>
                 {mutation.isPending ? (
                   <ActivityIndicator color={colors.white} size="small" />
@@ -333,6 +379,10 @@ const styles = StyleSheet.create({
   hint: { fontSize: 11, color: colors.gray[400], marginTop: 4 },
   rowFields: { flexDirection: 'row', gap: spacing[3] },
   rowFields3: { flexDirection: 'row', gap: spacing[2] },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  toggleTextWrap: { flex: 1, minWidth: 0 },
+  toggleLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  toggleSub: { fontSize: 12, lineHeight: 17, marginTop: 2 },
   saveBtn: {
     flexDirection: 'row',
     alignItems: 'center',

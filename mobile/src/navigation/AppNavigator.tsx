@@ -50,6 +50,7 @@ import MailingsScreen from '../screens/MailingsScreen';
 import IntegrationsScreen from '../screens/IntegrationsScreen';
 import WarehouseAnalyticsScreen from '../screens/WarehouseAnalyticsScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 import FeatureGate from '../components/FeatureGate';
 import AdminShellNavigator from './AdminShellNavigator';
 import ImpersonationBanner from '../components/ImpersonationBanner';
@@ -202,7 +203,7 @@ const TRANSPARENT_STACK_OPTIONS = {
 
 function MoreStackNavigator() {
   return (
-    <MoreStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+    <MoreStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <MoreStack.Screen name="MoreHome" component={MoreScreen} />
       {/*
         Section detail screens live INSIDE the MoreStack so that a tap
@@ -275,7 +276,7 @@ function MoreStackNavigator() {
  */
 function ChecksStackNavigator() {
   return (
-    <ChecksStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+    <ChecksStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <ChecksStack.Screen name="ChecksHome" component={ChecksScreen} />
       <ChecksStack.Screen name="CheckDetail" component={CheckDetailScreen} />
     </ChecksStack.Navigator>
@@ -294,7 +295,7 @@ function ChecksStackNavigator() {
  */
 function ProductsStackNavigator() {
   return (
-    <ProductsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+    <ProductsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <ProductsStack.Screen name="ProductsHome" component={ProductsScreen} />
     </ProductsStack.Navigator>
   );
@@ -309,7 +310,7 @@ function ProductsStackNavigator() {
  */
 function EquipmentStackNavigator() {
   return (
-    <EquipmentStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+    <EquipmentStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <EquipmentStack.Screen name="EquipmentHome" component={EquipmentScreen} />
       <EquipmentStack.Screen name="EquipmentEmployee" component={EquipmentEmployeeScreen} />
     </EquipmentStack.Navigator>
@@ -361,6 +362,7 @@ function TabNavigator() {
       // Platform-adaptive bar: Metro resolves TabBar.ios.tsx / TabBar.android.tsx
       // eslint-disable-next-line react/no-unstable-nested-components
       tabBar={(props) => <PlatformTabBar {...props} />}
+      screenLayout={screenErrorBoundaryLayout}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Products" component={ProductsStackNavigator} />
@@ -492,7 +494,7 @@ export default function AppNavigator() {
   }
 
   return (
-    <Stack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS}>
+    <Stack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       {!user ? (
         <Stack.Screen name="Login" component={LoginScreen} />
       ) : (
